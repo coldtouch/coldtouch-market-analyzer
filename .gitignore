@@ -1,0 +1,12 @@
+# Python local-only tools
+companion.py
+test_nats.py
+__pycache__/
+*.pyc
+
+# Large source file (items.txt is the raw dump, items.json is the processed version we keep)
+items.txt
+
+# OS
+Thumbs.db
+.DS_Store

@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description"
+        content="Coldtouch Market Flip and Craft Analyzer for Albion Online – find arbitrage routes, crafting profits, and live market data.">
+    <title>Coldtouch Market Flip and Craft Analyzer</title>
+    <link rel="stylesheet" href="style.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+
+<body>
+    <header>
+        <div class="header-content">
+            <h1 class="sleek-title">Coldtouch Market Flip and Craft Analyzer</h1>
+            <p>Find the best arbitrage routes and crafting profits</p>
+            <div id="companion-status" class="companion-status offline">
+                <span class="status-dot"></span>
+                <span class="status-text">Companion: Offline</span>
+            </div>
+        </div>
+    </header>
+
+    <main>
+        <div class="controls">
+            <div class="control-group">
+                <label for="server-select">Server:</label>
+                <select id="server-select">
+                    <option value="west">Americas (West)</option>
+                    <option value="east">Asia (East)</option>
+                    <option value="europe">Europe</option>
+                </select>
+            </div>
+            <div class="control-group">
+                <label for="quality-select">Item Quality:</label>
+                <select id="quality-select">
+                    <option value="all">Any Quality</option>
+                    <option value="1">Normal</option>
+                    <option value="2">Good</option>
+                    <option value="3">Outstanding</option>
+                    <option value="4">Excellent</option>
+                    <option value="5">Masterpiece</option>
+                </select>
+            </div>
+            <div class="control-group">
+                <label for="category-select">Item Category:</label>
+                <select id="category-select">
+                    <option value="all">All Items</option>
+                    <option value="bags">Bags & Capes</option>
+                    <option value="materials">Materials & Resources</option>
+                    <option value="gear">Weapons & Armor</option>
+                </select>
+            </div>
+            <div class="control-group search-group">
+                <label for="item-search">Custom Search:</label>
+                <div class="search-input-wrapper">
+                    <input type="text" id="item-search" placeholder="e.g. Bag or T4_BAG" autocomplete="off">
+                    <div id="autocomplete-list" class="autocomplete-items hidden"></div>
+                </div>
+            </div>
+            <div class="control-group checkbox-group">
+                <label>
+                    <input type="checkbox" id="include-black-market" checked>
+                    Include Black Market
+                </label>
+            </div>
+            <button id="refresh-btn">Scan Markets</button>
+        </div>
+
+        <nav class="tabs">
+            <button class="tab-btn active" data-tab="arbitrage">Market Flipping</button>
+            <button class="tab-btn" data-tab="crafting">Crafting Profits</button>
+        </nav>
+
+        <section id="results-section">
+            <div class="loading-state hidden" id="loading-spinner">
+                <div class="spinner"></div>
+                <p>Scraping Black Market and City data...</p>
+            </div>
+
+            <div id="error-message" class="hidden"></div>
+
+            <div class="tab-pane active" id="pane-arbitrage">
+                <div class="results-grid" id="arbitrage-results">
+                    <!-- Arbitrage Results injected here via JS -->
+                </div>
+            </div>
+
+            <div class="tab-pane hidden" id="pane-crafting">
+                <div class="results-grid" id="crafting-results">
+                    <!-- Crafting Results injected here via JS -->
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <template id="trade-card-template">
+        <div class="trade-card">
+            <div class="card-header">
+                <img class="item-icon" src="" alt="Item Icon">
+                <div class="header-titles">
+                    <h3 class="item-name">Item Name</h3>
+                    <span class="item-quality badge">Quality: Normal</span>
+                </div>
+            </div>
+            <div class="trade-route">
+                <div class="city buy-city">
+                    <span class="label">Buy in</span>
+                    <strong class="city-name">City A</strong>
+                    <span class="price buy-price">100 💰</span>
+                </div>
+                <div class="arrow">➔</div>
+                <div class="city sell-city">
+                    <span class="label">Sell in</span>
+                    <strong class="city-name">City B</strong>
+                    <span class="price sell-price">200 💰</span>
+                </div>
+            </div>
+            <div class="profit-section">
+                <div class="profit-row">
+                    <span>Tax (6.5%):</span>
+                    <span class="tax-amount text-red">-13 💰</span>
+                </div>
+                <div class="profit-row total">
+                    <span>Net Profit:</span>
+                    <strong class="profit-amount text-green">87 💰</strong>
+                </div>
+                <div class="roi-row">
+                    <span>ROI:</span>
+                    <strong class="roi-percent">87%</strong>
+                </div>
+            </div>
+            <div class="timestamp-row">
+                <span class="time-ago label">Updated: Just now</span>
+                <button class="btn-refresh-item" data-item="" title="Force Refresh API Data">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M23 4v6h-6"></path>
+                        <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path>
+                    </svg>
+                </button>
+            </div>
+            <button class="btn-graph" data-item="">Show Historical Graph</button>
+        </div>
+    </template>
+
+    <template id="crafting-card-template">
+        <div class="trade-card">
+            <div class="card-header">
+                <img class="item-icon" src="" alt="Finished Item Icon">
+                <div class="header-titles">
+                    <h3 class="item-name">Finished Good Name</h3>
+                    <span class="item-quality badge">Quality: Normal</span>
+                </div>
+            </div>
+            <div class="crafting-route">
+                <div class="materials-list">
+                    <span class="label">Required Materials (Cost)</span>
+                    <div class="mats-container">
+                        <!-- Filled by JS -->
+                    </div>
+                    <div class="total-mat-cost">Total Cost: <span>0 💰</span></div>
+                </div>
+                <div class="sell-route">
+                    <span class="label">Sell Finished Good in</span>
+                    <strong class="city-name text-accent">City B</strong>
+                    <span class="price sell-price">200 💰</span>
+                </div>
+            </div>
+            <div class="profit-section">
+                <div class="profit-row">
+                    <span>Tax (6.5%):</span>
+                    <span class="tax-amount text-red">-13 💰</span>
+                </div>
+                <div class="profit-row total">
+                    <span>Net Profit:</span>
+                    <strong class="profit-amount text-green">87 💰</strong>
+                </div>
+                <div class="roi-row">
+                    <span>ROI:</span>
+                    <strong class="roi-percent">87%</strong>
+                </div>
+            </div>
+            <div class="timestamp-row">
+                <span class="time-ago label">Updated: Just now</span>
+                <button class="btn-refresh-item" data-item="" title="Force Refresh API Data">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M23 4v6h-6"></path>
+                        <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path>
+                    </svg>
+                </button>
+            </div>
+            <button class="btn-graph" data-item="">Show Historical Graph</button>
+        </div>
+    </template>
+
+    <!-- Chart Modal -->
+    <div id="chart-modal" class="modal hidden">
+        <div class="modal-content">
+            <span class="close-btn">&times;</span>
+            <h2 id="chart-title">Item Price History (7 Days)</h2>
+            <div class="chart-container">
+                <canvas id="priceChart"></canvas>
+            </div>
+        </div>
+    </div>
+
+    <footer>
+        <p>Coldtouch Market Flip & Craft Analyzer &copy; 2026 &mdash; Powered by <a
+                href="https://www.albion-online-data.com/" target="_blank">Albion Online Data Project</a></p>
+    </footer>
+
+    <script src="app.js"></script>
+</body>
+
+</html>
