@@ -1,72 +1,972 @@
 {
     "T4_BAG": {
         "materials": [
-            {"id": "T4_CLOTH", "qty": 8},
-            {"id": "T4_LEATHER", "qty": 8}
+            {
+                "id": "T4_CLOTH",
+                "qty": 8
+            },
+            {
+                "id": "T4_LEATHER",
+                "qty": 8
+            }
         ],
         "category": "bags"
     },
     "T5_BAG": {
         "materials": [
-            {"id": "T5_CLOTH", "qty": 8},
-            {"id": "T5_LEATHER", "qty": 8}
+            {
+                "id": "T5_CLOTH",
+                "qty": 8
+            },
+            {
+                "id": "T5_LEATHER",
+                "qty": 8
+            }
         ],
         "category": "bags"
     },
     "T4_CAPE": {
         "materials": [
-            {"id": "T4_CLOTH", "qty": 4},
-            {"id": "T4_LEATHER", "qty": 4}
+            {
+                "id": "T4_CLOTH",
+                "qty": 4
+            },
+            {
+                "id": "T4_LEATHER",
+                "qty": 4
+            }
         ],
         "category": "bags"
     },
     "T5_CAPE": {
         "materials": [
-            {"id": "T5_CLOTH", "qty": 4},
-            {"id": "T5_LEATHER", "qty": 4}
+            {
+                "id": "T5_CLOTH",
+                "qty": 4
+            },
+            {
+                "id": "T5_LEATHER",
+                "qty": 4
+            }
         ],
         "category": "bags"
     },
-    
-    "T4_HEAD_PLATE_SET1": { "materials": [{"id": "T4_METALBAR", "qty": 8}], "category": "gear" },
-    "T5_HEAD_PLATE_SET1": { "materials": [{"id": "T5_METALBAR", "qty": 8}], "category": "gear" },
-    "T4_ARMOR_PLATE_SET1": { "materials": [{"id": "T4_METALBAR", "qty": 16}], "category": "gear" },
-    "T5_ARMOR_PLATE_SET1": { "materials": [{"id": "T5_METALBAR", "qty": 16}], "category": "gear" },
-    "T4_SHOES_PLATE_SET1": { "materials": [{"id": "T4_METALBAR", "qty": 8}], "category": "gear" },
-    
-    "T4_HEAD_LEATHER_SET1": { "materials": [{"id": "T4_LEATHER", "qty": 8}], "category": "gear" },
-    "T5_HEAD_LEATHER_SET1": { "materials": [{"id": "T5_LEATHER", "qty": 8}], "category": "gear" },
-    "T4_ARMOR_LEATHER_SET1": { "materials": [{"id": "T4_LEATHER", "qty": 16}], "category": "gear" },
-    "T5_ARMOR_LEATHER_SET1": { "materials": [{"id": "T5_LEATHER", "qty": 16}], "category": "gear" },
-    "T4_SHOES_LEATHER_SET1": { "materials": [{"id": "T4_LEATHER", "qty": 8}], "category": "gear" },
-    
-    "T4_HEAD_CLOTH_SET1": { "materials": [{"id": "T4_CLOTH", "qty": 8}], "category": "gear" },
-    "T5_HEAD_CLOTH_SET1": { "materials": [{"id": "T5_CLOTH", "qty": 8}], "category": "gear" },
-    "T4_ARMOR_CLOTH_SET1": { "materials": [{"id": "T4_CLOTH", "qty": 16}], "category": "gear" },
-    "T5_ARMOR_CLOTH_SET1": { "materials": [{"id": "T5_CLOTH", "qty": 16}], "category": "gear" },
-    "T4_SHOES_CLOTH_SET1": { "materials": [{"id": "T4_CLOTH", "qty": 8}], "category": "gear" },
-    
-    "T4_MAIN_SWORD": { "materials": [{"id": "T4_METALBAR", "qty": 16}, {"id": "T4_LEATHER", "qty": 8}], "category": "gear" },
-    "T5_MAIN_SWORD": { "materials": [{"id": "T5_METALBAR", "qty": 16}, {"id": "T5_LEATHER", "qty": 8}], "category": "gear" },
-    
-    "T4_2H_BOW": { "materials": [{"id": "T4_PLANKS", "qty": 32}], "category": "gear" },
-    "T5_2H_BOW": { "materials": [{"id": "T5_PLANKS", "qty": 32}], "category": "gear" },
-    
-    "T4_MAIN_FIRESTAFF": { "materials": [{"id": "T4_PLANKS", "qty": 16}, {"id": "T4_METALBAR", "qty": 8}], "category": "gear" },
-    
-    "T4_PLANKS": { "materials": [{"id": "T4_WOOD", "qty": 2}, {"id": "T3_PLANKS", "qty": 1}], "category": "materials" },
-    "T5_PLANKS": { "materials": [{"id": "T5_WOOD", "qty": 3}, {"id": "T4_PLANKS", "qty": 1}], "category": "materials" },
-    "T6_PLANKS": { "materials": [{"id": "T6_WOOD", "qty": 4}, {"id": "T5_PLANKS", "qty": 1}], "category": "materials" },
-
-    "T4_METALBAR": { "materials": [{"id": "T4_ORE", "qty": 2}, {"id": "T3_METALBAR", "qty": 1}], "category": "materials" },
-    "T5_METALBAR": { "materials": [{"id": "T5_ORE", "qty": 3}, {"id": "T4_METALBAR", "qty": 1}], "category": "materials" },
-    "T6_METALBAR": { "materials": [{"id": "T6_ORE", "qty": 4}, {"id": "T5_METALBAR", "qty": 1}], "category": "materials" },
-
-    "T4_LEATHER": { "materials": [{"id": "T4_HIDE", "qty": 2}, {"id": "T3_LEATHER", "qty": 1}], "category": "materials" },
-    "T5_LEATHER": { "materials": [{"id": "T5_HIDE", "qty": 3}, {"id": "T4_LEATHER", "qty": 1}], "category": "materials" },
-    "T6_LEATHER": { "materials": [{"id": "T6_HIDE", "qty": 4}, {"id": "T5_LEATHER", "qty": 1}], "category": "materials" },
-
-    "T4_CLOTH": { "materials": [{"id": "T4_FIBER", "qty": 2}, {"id": "T3_CLOTH", "qty": 1}], "category": "materials" },
-    "T5_CLOTH": { "materials": [{"id": "T5_FIBER", "qty": 3}, {"id": "T4_CLOTH", "qty": 1}], "category": "materials" },
-    "T6_CLOTH": { "materials": [{"id": "T6_FIBER", "qty": 4}, {"id": "T5_CLOTH", "qty": 1}], "category": "materials" }
+    "T4_HEAD_PLATE_SET1": {
+        "materials": [
+            {
+                "id": "T4_METALBAR",
+                "qty": 8
+            }
+        ],
+        "category": "gear"
+    },
+    "T5_HEAD_PLATE_SET1": {
+        "materials": [
+            {
+                "id": "T5_METALBAR",
+                "qty": 8
+            }
+        ],
+        "category": "gear"
+    },
+    "T4_ARMOR_PLATE_SET1": {
+        "materials": [
+            {
+                "id": "T4_METALBAR",
+                "qty": 16
+            }
+        ],
+        "category": "gear"
+    },
+    "T5_ARMOR_PLATE_SET1": {
+        "materials": [
+            {
+                "id": "T5_METALBAR",
+                "qty": 16
+            }
+        ],
+        "category": "gear"
+    },
+    "T4_SHOES_PLATE_SET1": {
+        "materials": [
+            {
+                "id": "T4_METALBAR",
+                "qty": 8
+            }
+        ],
+        "category": "gear"
+    },
+    "T4_HEAD_LEATHER_SET1": {
+        "materials": [
+            {
+                "id": "T4_LEATHER",
+                "qty": 8
+            }
+        ],
+        "category": "gear"
+    },
+    "T5_HEAD_LEATHER_SET1": {
+        "materials": [
+            {
+                "id": "T5_LEATHER",
+                "qty": 8
+            }
+        ],
+        "category": "gear"
+    },
+    "T4_ARMOR_LEATHER_SET1": {
+        "materials": [
+            {
+                "id": "T4_LEATHER",
+                "qty": 16
+            }
+        ],
+        "category": "gear"
+    },
+    "T5_ARMOR_LEATHER_SET1": {
+        "materials": [
+            {
+                "id": "T5_LEATHER",
+                "qty": 16
+            }
+        ],
+        "category": "gear"
+    },
+    "T4_SHOES_LEATHER_SET1": {
+        "materials": [
+            {
+                "id": "T4_LEATHER",
+                "qty": 8
+            }
+        ],
+        "category": "gear"
+    },
+    "T4_HEAD_CLOTH_SET1": {
+        "materials": [
+            {
+                "id": "T4_CLOTH",
+                "qty": 8
+            }
+        ],
+        "category": "gear"
+    },
+    "T5_HEAD_CLOTH_SET1": {
+        "materials": [
+            {
+                "id": "T5_CLOTH",
+                "qty": 8
+            }
+        ],
+        "category": "gear"
+    },
+    "T4_ARMOR_CLOTH_SET1": {
+        "materials": [
+            {
+                "id": "T4_CLOTH",
+                "qty": 16
+            }
+        ],
+        "category": "gear"
+    },
+    "T5_ARMOR_CLOTH_SET1": {
+        "materials": [
+            {
+                "id": "T5_CLOTH",
+                "qty": 16
+            }
+        ],
+        "category": "gear"
+    },
+    "T4_SHOES_CLOTH_SET1": {
+        "materials": [
+            {
+                "id": "T4_CLOTH",
+                "qty": 8
+            }
+        ],
+        "category": "gear"
+    },
+    "T4_MAIN_SWORD": {
+        "materials": [
+            {
+                "id": "T4_METALBAR",
+                "qty": 16
+            },
+            {
+                "id": "T4_LEATHER",
+                "qty": 8
+            }
+        ],
+        "category": "gear"
+    },
+    "T5_MAIN_SWORD": {
+        "materials": [
+            {
+                "id": "T5_METALBAR",
+                "qty": 16
+            },
+            {
+                "id": "T5_LEATHER",
+                "qty": 8
+            }
+        ],
+        "category": "gear"
+    },
+    "T4_2H_BOW": {
+        "materials": [
+            {
+                "id": "T4_PLANKS",
+                "qty": 32
+            }
+        ],
+        "category": "gear"
+    },
+    "T5_2H_BOW": {
+        "materials": [
+            {
+                "id": "T5_PLANKS",
+                "qty": 32
+            }
+        ],
+        "category": "gear"
+    },
+    "T4_MAIN_FIRESTAFF": {
+        "materials": [
+            {
+                "id": "T4_PLANKS",
+                "qty": 16
+            },
+            {
+                "id": "T4_METALBAR",
+                "qty": 8
+            }
+        ],
+        "category": "gear"
+    },
+    "T4_PLANKS": {
+        "materials": [
+            {
+                "id": "T4_WOOD",
+                "qty": 2
+            },
+            {
+                "id": "T3_PLANKS",
+                "qty": 1
+            }
+        ],
+        "category": "materials"
+    },
+    "T5_PLANKS": {
+        "materials": [
+            {
+                "id": "T5_WOOD",
+                "qty": 3
+            },
+            {
+                "id": "T4_PLANKS",
+                "qty": 1
+            }
+        ],
+        "category": "materials"
+    },
+    "T6_PLANKS": {
+        "materials": [
+            {
+                "id": "T6_WOOD",
+                "qty": 4
+            },
+            {
+                "id": "T5_PLANKS",
+                "qty": 1
+            }
+        ],
+        "category": "materials"
+    },
+    "T4_METALBAR": {
+        "materials": [
+            {
+                "id": "T4_ORE",
+                "qty": 2
+            },
+            {
+                "id": "T3_METALBAR",
+                "qty": 1
+            }
+        ],
+        "category": "materials"
+    },
+    "T5_METALBAR": {
+        "materials": [
+            {
+                "id": "T5_ORE",
+                "qty": 3
+            },
+            {
+                "id": "T4_METALBAR",
+                "qty": 1
+            }
+        ],
+        "category": "materials"
+    },
+    "T6_METALBAR": {
+        "materials": [
+            {
+                "id": "T6_ORE",
+                "qty": 4
+            },
+            {
+                "id": "T5_METALBAR",
+                "qty": 1
+            }
+        ],
+        "category": "materials"
+    },
+    "T4_LEATHER": {
+        "materials": [
+            {
+                "id": "T4_HIDE",
+                "qty": 2
+            },
+            {
+                "id": "T3_LEATHER",
+                "qty": 1
+            }
+        ],
+        "category": "materials"
+    },
+    "T5_LEATHER": {
+        "materials": [
+            {
+                "id": "T5_HIDE",
+                "qty": 3
+            },
+            {
+                "id": "T4_LEATHER",
+                "qty": 1
+            }
+        ],
+        "category": "materials"
+    },
+    "T6_LEATHER": {
+        "materials": [
+            {
+                "id": "T6_HIDE",
+                "qty": 4
+            },
+            {
+                "id": "T5_LEATHER",
+                "qty": 1
+            }
+        ],
+        "category": "materials"
+    },
+    "T4_CLOTH": {
+        "materials": [
+            {
+                "id": "T4_FIBER",
+                "qty": 2
+            },
+            {
+                "id": "T3_CLOTH",
+                "qty": 1
+            }
+        ],
+        "category": "materials"
+    },
+    "T5_CLOTH": {
+        "materials": [
+            {
+                "id": "T5_FIBER",
+                "qty": 3
+            },
+            {
+                "id": "T4_CLOTH",
+                "qty": 1
+            }
+        ],
+        "category": "materials"
+    },
+    "T6_CLOTH": {
+        "materials": [
+            {
+                "id": "T6_FIBER",
+                "qty": 4
+            },
+            {
+                "id": "T5_CLOTH",
+                "qty": 1
+            }
+        ],
+        "category": "materials"
+    },
+    "T5_SHOES_PLATE_SET1": {
+        "materials": [
+            {
+                "id": "T5_METALBAR",
+                "qty": 8
+            }
+        ],
+        "category": "gear"
+    },
+    "T5_SHOES_LEATHER_SET1": {
+        "materials": [
+            {
+                "id": "T5_LEATHER",
+                "qty": 8
+            }
+        ],
+        "category": "gear"
+    },
+    "T5_SHOES_CLOTH_SET1": {
+        "materials": [
+            {
+                "id": "T5_CLOTH",
+                "qty": 8
+            }
+        ],
+        "category": "gear"
+    },
+    "T5_MAIN_FIRESTAFF": {
+        "materials": [
+            {
+                "id": "T5_PLANKS",
+                "qty": 16
+            },
+            {
+                "id": "T5_METALBAR",
+                "qty": 8
+            }
+        ],
+        "category": "gear"
+    },
+    "T6_BAG": {
+        "materials": [
+            {
+                "id": "T6_CLOTH",
+                "qty": 8
+            },
+            {
+                "id": "T6_LEATHER",
+                "qty": 8
+            }
+        ],
+        "category": "bags"
+    },
+    "T6_CAPE": {
+        "materials": [
+            {
+                "id": "T6_CLOTH",
+                "qty": 4
+            },
+            {
+                "id": "T6_LEATHER",
+                "qty": 4
+            }
+        ],
+        "category": "bags"
+    },
+    "T6_HEAD_PLATE_SET1": {
+        "materials": [
+            {
+                "id": "T6_METALBAR",
+                "qty": 8
+            }
+        ],
+        "category": "gear"
+    },
+    "T6_ARMOR_PLATE_SET1": {
+        "materials": [
+            {
+                "id": "T6_METALBAR",
+                "qty": 16
+            }
+        ],
+        "category": "gear"
+    },
+    "T6_SHOES_PLATE_SET1": {
+        "materials": [
+            {
+                "id": "T6_METALBAR",
+                "qty": 8
+            }
+        ],
+        "category": "gear"
+    },
+    "T6_HEAD_LEATHER_SET1": {
+        "materials": [
+            {
+                "id": "T6_LEATHER",
+                "qty": 8
+            }
+        ],
+        "category": "gear"
+    },
+    "T6_ARMOR_LEATHER_SET1": {
+        "materials": [
+            {
+                "id": "T6_LEATHER",
+                "qty": 16
+            }
+        ],
+        "category": "gear"
+    },
+    "T6_SHOES_LEATHER_SET1": {
+        "materials": [
+            {
+                "id": "T6_LEATHER",
+                "qty": 8
+            }
+        ],
+        "category": "gear"
+    },
+    "T6_HEAD_CLOTH_SET1": {
+        "materials": [
+            {
+                "id": "T6_CLOTH",
+                "qty": 8
+            }
+        ],
+        "category": "gear"
+    },
+    "T6_ARMOR_CLOTH_SET1": {
+        "materials": [
+            {
+                "id": "T6_CLOTH",
+                "qty": 16
+            }
+        ],
+        "category": "gear"
+    },
+    "T6_SHOES_CLOTH_SET1": {
+        "materials": [
+            {
+                "id": "T6_CLOTH",
+                "qty": 8
+            }
+        ],
+        "category": "gear"
+    },
+    "T6_MAIN_SWORD": {
+        "materials": [
+            {
+                "id": "T6_METALBAR",
+                "qty": 16
+            },
+            {
+                "id": "T6_LEATHER",
+                "qty": 8
+            }
+        ],
+        "category": "gear"
+    },
+    "T6_2H_BOW": {
+        "materials": [
+            {
+                "id": "T6_PLANKS",
+                "qty": 32
+            }
+        ],
+        "category": "gear"
+    },
+    "T6_MAIN_FIRESTAFF": {
+        "materials": [
+            {
+                "id": "T6_PLANKS",
+                "qty": 16
+            },
+            {
+                "id": "T6_METALBAR",
+                "qty": 8
+            }
+        ],
+        "category": "gear"
+    },
+    "T7_BAG": {
+        "materials": [
+            {
+                "id": "T7_CLOTH",
+                "qty": 8
+            },
+            {
+                "id": "T7_LEATHER",
+                "qty": 8
+            }
+        ],
+        "category": "bags"
+    },
+    "T7_CAPE": {
+        "materials": [
+            {
+                "id": "T7_CLOTH",
+                "qty": 4
+            },
+            {
+                "id": "T7_LEATHER",
+                "qty": 4
+            }
+        ],
+        "category": "bags"
+    },
+    "T7_HEAD_PLATE_SET1": {
+        "materials": [
+            {
+                "id": "T7_METALBAR",
+                "qty": 8
+            }
+        ],
+        "category": "gear"
+    },
+    "T7_ARMOR_PLATE_SET1": {
+        "materials": [
+            {
+                "id": "T7_METALBAR",
+                "qty": 16
+            }
+        ],
+        "category": "gear"
+    },
+    "T7_SHOES_PLATE_SET1": {
+        "materials": [
+            {
+                "id": "T7_METALBAR",
+                "qty": 8
+            }
+        ],
+        "category": "gear"
+    },
+    "T7_HEAD_LEATHER_SET1": {
+        "materials": [
+            {
+                "id": "T7_LEATHER",
+                "qty": 8
+            }
+        ],
+        "category": "gear"
+    },
+    "T7_ARMOR_LEATHER_SET1": {
+        "materials": [
+            {
+                "id": "T7_LEATHER",
+                "qty": 16
+            }
+        ],
+        "category": "gear"
+    },
+    "T7_SHOES_LEATHER_SET1": {
+        "materials": [
+            {
+                "id": "T7_LEATHER",
+                "qty": 8
+            }
+        ],
+        "category": "gear"
+    },
+    "T7_HEAD_CLOTH_SET1": {
+        "materials": [
+            {
+                "id": "T7_CLOTH",
+                "qty": 8
+            }
+        ],
+        "category": "gear"
+    },
+    "T7_ARMOR_CLOTH_SET1": {
+        "materials": [
+            {
+                "id": "T7_CLOTH",
+                "qty": 16
+            }
+        ],
+        "category": "gear"
+    },
+    "T7_SHOES_CLOTH_SET1": {
+        "materials": [
+            {
+                "id": "T7_CLOTH",
+                "qty": 8
+            }
+        ],
+        "category": "gear"
+    },
+    "T7_MAIN_SWORD": {
+        "materials": [
+            {
+                "id": "T7_METALBAR",
+                "qty": 16
+            },
+            {
+                "id": "T7_LEATHER",
+                "qty": 8
+            }
+        ],
+        "category": "gear"
+    },
+    "T7_2H_BOW": {
+        "materials": [
+            {
+                "id": "T7_PLANKS",
+                "qty": 32
+            }
+        ],
+        "category": "gear"
+    },
+    "T7_MAIN_FIRESTAFF": {
+        "materials": [
+            {
+                "id": "T7_PLANKS",
+                "qty": 16
+            },
+            {
+                "id": "T7_METALBAR",
+                "qty": 8
+            }
+        ],
+        "category": "gear"
+    },
+    "T7_PLANKS": {
+        "materials": [
+            {
+                "id": "T7_WOOD",
+                "qty": 5
+            },
+            {
+                "id": "T6_PLANKS",
+                "qty": 1
+            }
+        ],
+        "category": "materials"
+    },
+    "T7_METALBAR": {
+        "materials": [
+            {
+                "id": "T7_ORE",
+                "qty": 5
+            },
+            {
+                "id": "T6_METALBAR",
+                "qty": 1
+            }
+        ],
+        "category": "materials"
+    },
+    "T7_LEATHER": {
+        "materials": [
+            {
+                "id": "T7_HIDE",
+                "qty": 5
+            },
+            {
+                "id": "T6_LEATHER",
+                "qty": 1
+            }
+        ],
+        "category": "materials"
+    },
+    "T7_CLOTH": {
+        "materials": [
+            {
+                "id": "T7_FIBER",
+                "qty": 5
+            },
+            {
+                "id": "T6_CLOTH",
+                "qty": 1
+            }
+        ],
+        "category": "materials"
+    },
+    "T8_BAG": {
+        "materials": [
+            {
+                "id": "T8_CLOTH",
+                "qty": 8
+            },
+            {
+                "id": "T8_LEATHER",
+                "qty": 8
+            }
+        ],
+        "category": "bags"
+    },
+    "T8_CAPE": {
+        "materials": [
+            {
+                "id": "T8_CLOTH",
+                "qty": 4
+            },
+            {
+                "id": "T8_LEATHER",
+                "qty": 4
+            }
+        ],
+        "category": "bags"
+    },
+    "T8_HEAD_PLATE_SET1": {
+        "materials": [
+            {
+                "id": "T8_METALBAR",
+                "qty": 8
+            }
+        ],
+        "category": "gear"
+    },
+    "T8_ARMOR_PLATE_SET1": {
+        "materials": [
+            {
+                "id": "T8_METALBAR",
+                "qty": 16
+            }
+        ],
+        "category": "gear"
+    },
+    "T8_SHOES_PLATE_SET1": {
+        "materials": [
+            {
+                "id": "T8_METALBAR",
+                "qty": 8
+            }
+        ],
+        "category": "gear"
+    },
+    "T8_HEAD_LEATHER_SET1": {
+        "materials": [
+            {
+                "id": "T8_LEATHER",
+                "qty": 8
+            }
+        ],
+        "category": "gear"
+    },
+    "T8_ARMOR_LEATHER_SET1": {
+        "materials": [
+            {
+                "id": "T8_LEATHER",
+                "qty": 16
+            }
+        ],
+        "category": "gear"
+    },
+    "T8_SHOES_LEATHER_SET1": {
+        "materials": [
+            {
+                "id": "T8_LEATHER",
+                "qty": 8
+            }
+        ],
+        "category": "gear"
+    },
+    "T8_HEAD_CLOTH_SET1": {
+        "materials": [
+            {
+                "id": "T8_CLOTH",
+                "qty": 8
+            }
+        ],
+        "category": "gear"
+    },
+    "T8_ARMOR_CLOTH_SET1": {
+        "materials": [
+            {
+                "id": "T8_CLOTH",
+                "qty": 16
+            }
+        ],
+        "category": "gear"
+    },
+    "T8_SHOES_CLOTH_SET1": {
+        "materials": [
+            {
+                "id": "T8_CLOTH",
+                "qty": 8
+            }
+        ],
+        "category": "gear"
+    },
+    "T8_MAIN_SWORD": {
+        "materials": [
+            {
+                "id": "T8_METALBAR",
+                "qty": 16
+            },
+            {
+                "id": "T8_LEATHER",
+                "qty": 8
+            }
+        ],
+        "category": "gear"
+    },
+    "T8_2H_BOW": {
+        "materials": [
+            {
+                "id": "T8_PLANKS",
+                "qty": 32
+            }
+        ],
+        "category": "gear"
+    },
+    "T8_MAIN_FIRESTAFF": {
+        "materials": [
+            {
+                "id": "T8_PLANKS",
+                "qty": 16
+            },
+            {
+                "id": "T8_METALBAR",
+                "qty": 8
+            }
+        ],
+        "category": "gear"
+    },
+    "T8_PLANKS": {
+        "materials": [
+            {
+                "id": "T8_WOOD",
+                "qty": 5
+            },
+            {
+                "id": "T7_PLANKS",
+                "qty": 1
+            }
+        ],
+        "category": "materials"
+    },
+    "T8_METALBAR": {
+        "materials": [
+            {
+                "id": "T8_ORE",
+                "qty": 5
+            },
+            {
+                "id": "T7_METALBAR",
+                "qty": 1
+            }
+        ],
+        "category": "materials"
+    },
+    "T8_LEATHER": {
+        "materials": [
+            {
+                "id": "T8_HIDE",
+                "qty": 5
+            },
+            {
+                "id": "T7_LEATHER",
+                "qty": 1
+            }
+        ],
+        "category": "materials"
+    },
+    "T8_CLOTH": {
+        "materials": [
+            {
+                "id": "T8_FIBER",
+                "qty": 5
+            },
+            {
+                "id": "T7_CLOTH",
+                "qty": 1
+            }
+        ],
+        "category": "materials"
+    }
 }
