@@ -47,6 +47,17 @@
                 </select>
             </div>
             <div class="control-group">
+                <label for="tier-select">Item Tier:</label>
+                <select id="tier-select">
+                    <option value="all">All Tiers</option>
+                    <option value="4">Tier 4</option>
+                    <option value="5">Tier 5</option>
+                    <option value="6">Tier 6</option>
+                    <option value="7">Tier 7</option>
+                    <option value="8">Tier 8</option>
+                </select>
+            </div>
+            <div class="control-group">
                 <label for="category-select">Item Category:</label>
                 <select id="category-select">
                     <option value="all">All Items</option>
@@ -109,13 +120,13 @@
             </div>
             <div class="trade-route">
                 <div class="city buy-city">
-                    <span class="label">Buy in</span>
+                    <span class="label">Instant Buy from</span>
                     <strong class="city-name">City A</strong>
                     <span class="price buy-price">100 💰</span>
                 </div>
                 <div class="arrow">➔</div>
                 <div class="city sell-city">
-                    <span class="label">Sell in</span>
+                    <span class="label">Instant Sell to</span>
                     <strong class="city-name">City B</strong>
                     <span class="price sell-price">200 💰</span>
                 </div>
@@ -165,7 +176,7 @@
                     <div class="total-mat-cost">Total Cost: <span>0 💰</span></div>
                 </div>
                 <div class="sell-route">
-                    <span class="label">Sell Finished Good in</span>
+                    <span class="label">Instant Sell Finished Good to</span>
                     <strong class="city-name text-accent">City B</strong>
                     <span class="price sell-price">200 💰</span>
                 </div>

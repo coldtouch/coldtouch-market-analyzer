@@ -46,6 +46,7 @@ const templateCrafting = document.getElementById('crafting-card-template');
 const tabBtns = document.querySelectorAll('.tab-btn');
 const categorySelect = document.getElementById('category-select');
 const qualitySelect = document.getElementById('quality-select');
+const tierSelect = document.getElementById('tier-select');
 const searchInput = document.getElementById('item-search');
 const toggleBlackMarket = document.getElementById('include-black-market');
 
@@ -255,6 +256,11 @@ function processArbitrage(data, isSingleItemMode = false) {
 
     data.forEach(entry => {
         if (sq !== 'all' && entry.quality.toString() !== sq) return;
+
+        // Tier Filtering
+        const tier = tierSelect.value;
+        if (tier !== 'all' && !entry.item_id.startsWith('T' + tier)) return;
+
         if (entry.sell_price_min === 0 && entry.buy_price_max === 0) return;
         const itemKey = `${entry.item_id}_${entry.quality}`;
         if (!itemsData[itemKey]) itemsData[itemKey] = {};
@@ -344,6 +350,11 @@ function processCrafting(data, isSingleItemMode = false) {
 
     data.forEach(entry => {
         if (sq !== 'all' && entry.quality.toString() !== sq) return;
+
+        // Tier Filtering
+        const tier = tierSelect.value;
+        if (tier !== 'all' && !entry.item_id.startsWith('T' + tier)) return;
+
         if (entry.sell_price_min === 0) return;
         if (!prices[entry.item_id]) prices[entry.item_id] = {};
         if (!prices[entry.item_id][entry.quality]) prices[entry.item_id][entry.quality] = {};
@@ -734,7 +745,46 @@ btnRefresh.addEventListener('click', async () => {
     }
 
     if (itemsToFetch.length > 500) {
-        showError(`Cannot fetch ${itemsToFetch.length} items at once to prevent API abuse. Please select a specific category or search for a single item.`);
+        // Try companion full cache first
+        try {
+            const liveRes = await fetch(`http://localhost:8081/api/all_prices?server=${server}`);
+            if (liveRes.ok) {
+                const dict = await liveRes.json();
+                const flatData = [];
+                for (const [itemId, qualities] of Object.entries(dict)) {
+                    for (const [quality, cities] of Object.entries(qualities)) {
+                        for (const [city, pdata] of Object.entries(cities)) {
+                            flatData.push({
+                                item_id: itemId,
+                                quality: parseInt(quality),
+                                city: city,
+                                sell_price_min: pdata.sell,
+                                sell_price_min_date: pdata.updateDate,
+                                buy_price_max: pdata.buy,
+                                buy_price_max_date: pdata.updateDate,
+                                is_live: false
+                            });
+                        }
+                    }
+                }
+
+                if (flatData.length > 0) {
+                    spinner.classList.add('hidden');
+                    if (currentMode === 'arbitrage') {
+                        const topTrades = processArbitrage(flatData, isSingleItemMode);
+                        renderArbitrage(topTrades, isSingleItemMode);
+                    } else {
+                        const topCrafts = processCrafting(flatData, isSingleItemMode);
+                        renderCrafting(topCrafts, isSingleItemMode);
+                    }
+                    return; // Skip public API fallback
+                }
+            }
+        } catch (e) {
+            console.log("Companion all_prices failed, falling back...");
+        }
+
+        showError(`Cannot fetch ${itemsToFetch.length} items at once from public API. Please run the Companion App or select a specific category. (Make sure Companion is running!)`);
         return;
     }
 
