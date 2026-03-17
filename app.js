@@ -61,6 +61,18 @@ function extractTier(itemId) {
     return m ? m[1] : null;
 }
 
+function extractEnchantment(itemId) {
+    if (!itemId || !itemId.includes('@')) return '0';
+    return itemId.split('@')[1];
+}
+
+function getTierEnchLabel(itemId) {
+    const tier = extractTier(itemId);
+    const ench = extractEnchantment(itemId);
+    if (!tier) return '';
+    return ench !== '0' ? `T${tier}.${ench}` : `T${tier}`;
+}
+
 function getEnchantmentBadge(itemId) {
     if (!itemId || !itemId.includes('@')) return '';
     const level = itemId.split('@')[1];
@@ -242,25 +254,54 @@ function initTabs() {
 function filterBrowserItems() {
     const searchVal = document.getElementById('browser-search').value.toLowerCase().trim();
     const tierVal = document.getElementById('browser-tier').value;
+    const enchVal = document.getElementById('browser-enchantment').value;
     const catVal = document.getElementById('browser-category').value;
 
-    const searchWords = searchVal.split(' ').filter(w => w);
+    // Smart search: parse Albion notation like "rootbound 6.2" or "T6.2 rootbound"
+    let searchWords = searchVal.split(' ').filter(w => w);
+    let parsedTier = null;
+    let parsedEnch = null;
+    const remainingWords = [];
+
+    for (const word of searchWords) {
+        // Match patterns like "6.2", "T6.2", "t6.2", "8.3"
+        const tierEnchMatch = word.match(/^t?(\d)\.(\d)$/i);
+        if (tierEnchMatch) {
+            parsedTier = tierEnchMatch[1];
+            parsedEnch = tierEnchMatch[2];
+            continue;
+        }
+        // Match standalone tier like "T6" or "t6" (only if exactly 2 chars)
+        const tierOnlyMatch = word.match(/^t(\d)$/i);
+        if (tierOnlyMatch) {
+            parsedTier = tierOnlyMatch[1];
+            continue;
+        }
+        remainingWords.push(word);
+    }
 
     browserFilteredItems = itemsList.filter(id => {
-        // Tier filter
-        if (tierVal !== 'all') {
-            const t = extractTier(id);
-            if (t !== tierVal) return false;
-        }
+        // Tier filter (dropdown or parsed from search)
+        const itemTier = extractTier(id);
+        const effectiveTier = tierVal !== 'all' ? tierVal : parsedTier;
+        if (effectiveTier && itemTier !== effectiveTier) return false;
+
+        // Enchantment filter (dropdown or parsed from search)
+        const itemEnch = extractEnchantment(id);
+        const effectiveEnch = enchVal !== 'all' ? enchVal : parsedEnch;
+        if (effectiveEnch && itemEnch !== effectiveEnch) return false;
+
         // Category filter
         if (catVal !== 'all') {
             if (categorizeItem(id) !== catVal) return false;
         }
-        // Search filter
-        if (searchWords.length > 0) {
+
+        // Text search (remaining words after extracting tier/ench notation)
+        if (remainingWords.length > 0) {
             const name = getFriendlyName(id);
-            const target = (name + ' ' + id.replace(/_/g, ' ')).toLowerCase();
-            return searchWords.every(w => target.includes(w));
+            const tierEnchLabel = getTierEnchLabel(id);
+            const target = (name + ' ' + id.replace(/_/g, ' ') + ' ' + tierEnchLabel).toLowerCase();
+            return remainingWords.every(w => target.includes(w));
         }
         return true;
     });
@@ -326,7 +367,7 @@ async function renderBrowser() {
                 </div>
                 <div class="item-card-info">
                     <div class="item-card-name" title="${name}">${name}</div>
-                    <div class="item-card-id">${id} ${tier ? `<span class="tier-badge">T${tier}</span>` : ''}</div>
+                    <div class="item-card-id">${id} <span class="tier-badge">${getTierEnchLabel(id)}</span></div>
                 </div>
             </div>
             <div class="item-card-prices">
@@ -1088,7 +1129,7 @@ function setupAutocomplete(inputId, listId, onSelect) {
         const matches = [];
         for (const item of itemsList) {
             const name = getFriendlyName(item);
-            const target = (name + ' ' + item.replace(/_/g, ' ')).toLowerCase();
+            const target = (name + ' ' + item.replace(/_/g, ' ') + ' ' + getTierEnchLabel(item)).toLowerCase();
             if (words.every(w => target.includes(w))) {
                 matches.push({ id: item, name });
                 if (matches.length >= 8) break;
@@ -1153,7 +1194,7 @@ async function init() {
 
     // Browser search/filters
     let browserDebounce = null;
-    const browserInputs = ['browser-search', 'browser-tier', 'browser-category'];
+    const browserInputs = ['browser-search', 'browser-tier', 'browser-enchantment', 'browser-category'];
     browserInputs.forEach(id => {
         document.getElementById(id).addEventListener(id === 'browser-search' ? 'input' : 'change', () => {
             clearTimeout(browserDebounce);
