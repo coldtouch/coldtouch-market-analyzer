@@ -5,214 +5,253 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="description"
-        content="Coldtouch Market Flip and Craft Analyzer for Albion Online – find arbitrage routes, crafting profits, and live market data.">
-    <title>Coldtouch Market Flip and Craft Analyzer</title>
+        content="Coldtouch Market Analyzer for Albion Online – scan the entire market, find arbitrage routes, compare cities, and calculate crafting profits.">
+    <title>Coldtouch Market Analyzer – Albion Online</title>
     <link rel="stylesheet" href="style.css">
     <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
 
 <body>
+    <!-- ====== HEADER ====== -->
     <header>
         <div class="header-content">
-            <h1 class="sleek-title">Coldtouch Market Flip and Craft Analyzer</h1>
-            <p>Find the best arbitrage routes and crafting profits</p>
-            <div id="companion-status" class="companion-status offline">
-                <span class="status-dot"></span>
-                <span class="status-text">Companion: Offline</span>
-            </div>
+            <h1 class="sleek-title">Coldtouch Market Analyzer</h1>
+            <p class="header-subtitle">Scan the entire Albion market &bull; Find flips &bull; Compare cities &bull; Profit</p>
         </div>
     </header>
 
-    <main>
-        <div class="controls">
-            <div class="control-group">
-                <label for="server-select">Server:</label>
-                <select id="server-select">
-                    <option value="west">Americas (West)</option>
-                    <option value="east">Asia (East)</option>
-                    <option value="europe">Europe</option>
-                </select>
-            </div>
-            <div class="control-group">
-                <label for="quality-select">Item Quality:</label>
-                <select id="quality-select">
-                    <option value="all">Any Quality</option>
-                    <option value="1">Normal</option>
-                    <option value="2">Good</option>
-                    <option value="3">Outstanding</option>
-                    <option value="4">Excellent</option>
-                    <option value="5">Masterpiece</option>
-                </select>
-            </div>
-            <div class="control-group">
-                <label for="tier-select">Item Tier:</label>
-                <select id="tier-select">
-                    <option value="all">All Tiers</option>
-                    <option value="4">Tier 4</option>
-                    <option value="5">Tier 5</option>
-                    <option value="6">Tier 6</option>
-                    <option value="7">Tier 7</option>
-                    <option value="8">Tier 8</option>
-                </select>
-            </div>
-            <div class="control-group">
-                <label for="category-select">Item Category:</label>
-                <select id="category-select">
-                    <option value="all">All Items</option>
-                    <option value="bags">Bags & Capes</option>
-                    <option value="materials">Materials & Resources</option>
-                    <option value="gear">Weapons & Armor</option>
-                </select>
-            </div>
-            <div class="control-group search-group">
-                <label for="item-search">Custom Search:</label>
-                <div class="search-input-wrapper">
-                    <input type="text" id="item-search" placeholder="e.g. Bag or T4_BAG" autocomplete="off">
-                    <div id="autocomplete-list" class="autocomplete-items hidden"></div>
+    <!-- ====== TOP BAR (Server + Scan All) ====== -->
+    <div class="top-bar">
+        <div class="top-bar-inner">
+            <div class="top-bar-left">
+                <div class="control-group">
+                    <label for="server-select">Server</label>
+                    <select id="server-select">
+                        <option value="west">Americas (West)</option>
+                        <option value="east">Asia (East)</option>
+                        <option value="europe">Europe</option>
+                    </select>
+                </div>
+                <div class="db-status" id="db-status">
+                    <span class="db-status-dot"></span>
+                    <span class="db-status-text">No data scanned</span>
                 </div>
             </div>
-            <div class="control-group checkbox-group">
-                <label>
-                    <input type="checkbox" id="include-black-market" checked>
-                    Include Black Market
-                </label>
+            <div class="top-bar-right">
+                <button id="scan-all-btn" class="btn-scan-all">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M21 12a9 9 0 1 1-6.22-8.56"></path>
+                        <path d="M21 3v6h-6"></path>
+                    </svg>
+                    Scan All Market
+                </button>
             </div>
-            <button id="refresh-btn">Scan Markets</button>
         </div>
+        <!-- Progress bar (hidden by default) -->
+        <div id="scan-progress-wrap" class="scan-progress-wrap hidden">
+            <div class="scan-progress-info">
+                <span id="scan-progress-text">Scanning...</span>
+                <span id="scan-progress-percent">0%</span>
+            </div>
+            <div class="scan-progress-bar">
+                <div id="scan-progress-fill" class="scan-progress-fill" style="width: 0%"></div>
+            </div>
+        </div>
+    </div>
 
-        <nav class="tabs">
-            <button class="tab-btn active" data-tab="arbitrage">Market Flipping</button>
-            <button class="tab-btn" data-tab="crafting">Crafting Profits</button>
-        </nav>
+    <!-- ====== NAVIGATION TABS ====== -->
+    <nav class="main-nav">
+        <div class="main-nav-inner">
+            <button class="nav-tab active" data-tab="browser">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="3" y="14" width="7" height="7"></rect><rect x="14" y="14" width="7" height="7"></rect></svg>
+                Market Browser
+            </button>
+            <button class="nav-tab" data-tab="arbitrage">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"></polyline><polyline points="17 6 23 6 23 12"></polyline></svg>
+                Market Flipping
+            </button>
+            <button class="nav-tab" data-tab="compare">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="20" x2="18" y2="10"></line><line x1="12" y1="20" x2="12" y2="4"></line><line x1="6" y1="20" x2="6" y2="14"></line></svg>
+                City Comparison
+            </button>
+            <button class="nav-tab" data-tab="crafting">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"></path></svg>
+                Crafting Profits
+            </button>
+        </div>
+    </nav>
 
-        <section id="results-section">
-            <div class="loading-state hidden" id="loading-spinner">
+    <main>
+        <!-- ====== TAB: MARKET BROWSER ====== -->
+        <section class="tab-pane active" id="pane-browser">
+            <div class="controls-panel">
+                <div class="control-group search-group">
+                    <label for="browser-search">Search Items</label>
+                    <div class="search-input-wrapper">
+                        <input type="text" id="browser-search" placeholder="Search by name or item ID..." autocomplete="off">
+                        <svg class="search-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+                    </div>
+                </div>
+                <div class="control-group">
+                    <label for="browser-tier">Tier</label>
+                    <select id="browser-tier">
+                        <option value="all">All Tiers</option>
+                        <option value="2">T2</option>
+                        <option value="3">T3</option>
+                        <option value="4">T4</option>
+                        <option value="5">T5</option>
+                        <option value="6">T6</option>
+                        <option value="7">T7</option>
+                        <option value="8">T8</option>
+                    </select>
+                </div>
+                <div class="control-group">
+                    <label for="browser-category">Category</label>
+                    <select id="browser-category">
+                        <option value="all">All Items</option>
+                        <option value="weapons">Weapons</option>
+                        <option value="armor">Armor</option>
+                        <option value="accessories">Bags & Capes</option>
+                        <option value="offhand">Off-Hands</option>
+                        <option value="resources">Raw Resources</option>
+                        <option value="materials">Refined Materials</option>
+                        <option value="consumables">Consumables</option>
+                        <option value="mounts">Mounts</option>
+                        <option value="other">Other</option>
+                    </select>
+                </div>
+            </div>
+            <div class="browser-status-bar">
+                <span id="browser-count">0 items</span>
+                <div class="pagination" id="browser-pagination"></div>
+            </div>
+            <div class="results-grid" id="browser-results"></div>
+            <div class="pagination-bottom" id="browser-pagination-bottom"></div>
+        </section>
+
+        <!-- ====== TAB: MARKET FLIPPING ====== -->
+        <section class="tab-pane hidden" id="pane-arbitrage">
+            <div class="controls-panel">
+                <div class="control-group search-group">
+                    <label for="arb-search">Search Item</label>
+                    <div class="search-input-wrapper">
+                        <input type="text" id="arb-search" placeholder="e.g. Bag, T4_BAG..." autocomplete="off">
+                        <svg class="search-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+                        <div id="arb-autocomplete" class="autocomplete-items hidden"></div>
+                    </div>
+                </div>
+                <div class="control-group">
+                    <label for="arb-quality">Quality</label>
+                    <select id="arb-quality">
+                        <option value="all">Any Quality</option>
+                        <option value="1">Normal</option>
+                        <option value="2">Good</option>
+                        <option value="3">Outstanding</option>
+                        <option value="4">Excellent</option>
+                        <option value="5">Masterpiece</option>
+                    </select>
+                </div>
+                <div class="control-group">
+                    <label for="arb-tier">Tier</label>
+                    <select id="arb-tier">
+                        <option value="all">All Tiers</option>
+                        <option value="4">T4</option>
+                        <option value="5">T5</option>
+                        <option value="6">T6</option>
+                        <option value="7">T7</option>
+                        <option value="8">T8</option>
+                    </select>
+                </div>
+                <div class="control-group">
+                    <label for="arb-category">Category</label>
+                    <select id="arb-category">
+                        <option value="all">All Items</option>
+                        <option value="bags">Bags & Capes</option>
+                        <option value="materials">Materials & Resources</option>
+                        <option value="gear">Weapons & Armor</option>
+                    </select>
+                </div>
+                <div class="control-group checkbox-group">
+                    <label><input type="checkbox" id="include-black-market" checked> Include Black Market</label>
+                </div>
+                <button id="arb-scan-btn" class="btn-primary">Scan Markets</button>
+            </div>
+            <div class="loading-state hidden" id="arb-spinner">
                 <div class="spinner"></div>
-                <p>Scraping Black Market and City data...</p>
+                <p>Fetching market data...</p>
             </div>
+            <div id="arb-error" class="error-message hidden"></div>
+            <div class="results-grid" id="arbitrage-results"></div>
+        </section>
 
-            <div id="error-message" class="hidden"></div>
-
-            <div class="tab-pane active" id="pane-arbitrage">
-                <div class="results-grid" id="arbitrage-results">
-                    <!-- Arbitrage Results injected here via JS -->
+        <!-- ====== TAB: CITY COMPARISON ====== -->
+        <section class="tab-pane hidden" id="pane-compare">
+            <div class="controls-panel">
+                <div class="control-group search-group" style="flex:1; max-width: 400px;">
+                    <label for="compare-search">Select an Item to Compare</label>
+                    <div class="search-input-wrapper">
+                        <input type="text" id="compare-search" placeholder="Type item name..." autocomplete="off">
+                        <svg class="search-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+                        <div id="compare-autocomplete" class="autocomplete-items hidden"></div>
+                    </div>
                 </div>
+                <button id="compare-fetch-btn" class="btn-primary">Fetch Live Prices</button>
             </div>
+            <div class="loading-state hidden" id="compare-spinner">
+                <div class="spinner"></div>
+                <p>Fetching city prices...</p>
+            </div>
+            <div id="compare-results" class="compare-container"></div>
+        </section>
 
-            <div class="tab-pane hidden" id="pane-crafting">
-                <div class="results-grid" id="crafting-results">
-                    <!-- Crafting Results injected here via JS -->
+        <!-- ====== TAB: CRAFTING PROFITS ====== -->
+        <section class="tab-pane hidden" id="pane-crafting">
+            <div class="controls-panel">
+                <div class="control-group search-group">
+                    <label for="craft-search">Search Recipe</label>
+                    <div class="search-input-wrapper">
+                        <input type="text" id="craft-search" placeholder="e.g. Bag, Sword..." autocomplete="off">
+                        <svg class="search-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+                        <div id="craft-autocomplete" class="autocomplete-items hidden"></div>
+                    </div>
                 </div>
+                <div class="control-group">
+                    <label for="craft-tier">Tier</label>
+                    <select id="craft-tier">
+                        <option value="all">All Tiers</option>
+                        <option value="4">T4</option>
+                        <option value="5">T5</option>
+                        <option value="6">T6</option>
+                        <option value="7">T7</option>
+                        <option value="8">T8</option>
+                    </select>
+                </div>
+                <div class="control-group">
+                    <label for="craft-sort">Sort By</label>
+                    <select id="craft-sort">
+                        <option value="profit">Highest Profit</option>
+                        <option value="roi">Highest ROI</option>
+                        <option value="name">Name</option>
+                    </select>
+                </div>
+                <button id="craft-scan-btn" class="btn-primary">Calculate Profits</button>
             </div>
+            <div class="loading-state hidden" id="craft-spinner">
+                <div class="spinner"></div>
+                <p>Crunching numbers...</p>
+            </div>
+            <div id="craft-error" class="error-message hidden"></div>
+            <div class="results-grid" id="crafting-results"></div>
         </section>
     </main>
 
-    <template id="trade-card-template">
-        <div class="trade-card">
-            <div class="card-header">
-                <img class="item-icon" src="" alt="Item Icon">
-                <div class="header-titles">
-                    <h3 class="item-name">Item Name</h3>
-                    <span class="item-quality badge">Quality: Normal</span>
-                </div>
-            </div>
-            <div class="trade-route">
-                <div class="city buy-city">
-                    <span class="label">Instant Buy from</span>
-                    <strong class="city-name">City A</strong>
-                    <span class="price buy-price">100 💰</span>
-                </div>
-                <div class="arrow">➔</div>
-                <div class="city sell-city">
-                    <span class="label">Instant Sell to</span>
-                    <strong class="city-name">City B</strong>
-                    <span class="price sell-price">200 💰</span>
-                </div>
-            </div>
-            <div class="profit-section">
-                <div class="profit-row">
-                    <span>Tax (6.5%):</span>
-                    <span class="tax-amount text-red">-13 💰</span>
-                </div>
-                <div class="profit-row total">
-                    <span>Net Profit:</span>
-                    <strong class="profit-amount text-green">87 💰</strong>
-                </div>
-                <div class="roi-row">
-                    <span>ROI:</span>
-                    <strong class="roi-percent">87%</strong>
-                </div>
-            </div>
-            <div class="timestamp-row">
-                <span class="time-ago label">Updated: Just now</span>
-                <button class="btn-refresh-item" data-item="" title="Force Refresh API Data">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <path d="M23 4v6h-6"></path>
-                        <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path>
-                    </svg>
-                </button>
-            </div>
-            <button class="btn-graph" data-item="">Show Historical Graph</button>
-        </div>
-    </template>
-
-    <template id="crafting-card-template">
-        <div class="trade-card">
-            <div class="card-header">
-                <img class="item-icon" src="" alt="Finished Item Icon">
-                <div class="header-titles">
-                    <h3 class="item-name">Finished Good Name</h3>
-                    <span class="item-quality badge">Quality: Normal</span>
-                </div>
-            </div>
-            <div class="crafting-route">
-                <div class="materials-list">
-                    <span class="label">Required Materials (Cost)</span>
-                    <div class="mats-container">
-                        <!-- Filled by JS -->
-                    </div>
-                    <div class="total-mat-cost">Total Cost: <span>0 💰</span></div>
-                </div>
-                <div class="sell-route">
-                    <span class="label">Instant Sell Finished Good to</span>
-                    <strong class="city-name text-accent">City B</strong>
-                    <span class="price sell-price">200 💰</span>
-                </div>
-            </div>
-            <div class="profit-section">
-                <div class="profit-row">
-                    <span>Tax (6.5%):</span>
-                    <span class="tax-amount text-red">-13 💰</span>
-                </div>
-                <div class="profit-row total">
-                    <span>Net Profit:</span>
-                    <strong class="profit-amount text-green">87 💰</strong>
-                </div>
-                <div class="roi-row">
-                    <span>ROI:</span>
-                    <strong class="roi-percent">87%</strong>
-                </div>
-            </div>
-            <div class="timestamp-row">
-                <span class="time-ago label">Updated: Just now</span>
-                <button class="btn-refresh-item" data-item="" title="Force Refresh API Data">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <path d="M23 4v6h-6"></path>
-                        <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path>
-                    </svg>
-                </button>
-            </div>
-            <button class="btn-graph" data-item="">Show Historical Graph</button>
-        </div>
-    </template>
-
-    <!-- Chart Modal -->
+    <!-- ====== CHART MODAL ====== -->
     <div id="chart-modal" class="modal hidden">
         <div class="modal-content">
-            <span class="close-btn">&times;</span>
-            <h2 id="chart-title">Item Price History (7 Days)</h2>
+            <button class="close-btn" id="chart-close-btn">&times;</button>
+            <h2 id="chart-title">Price History</h2>
             <div class="chart-container">
                 <canvas id="priceChart"></canvas>
             </div>
@@ -220,10 +259,12 @@
     </div>
 
     <footer>
-        <p>Coldtouch Market Flip & Craft Analyzer &copy; 2026 &mdash; Powered by <a
-                href="https://www.albion-online-data.com/" target="_blank">Albion Online Data Project</a></p>
+        <p>Coldtouch Market Analyzer &copy; 2026 &mdash; Powered by
+            <a href="https://www.albion-online-data.com/" target="_blank">Albion Online Data Project</a>
+        </p>
     </footer>
 
+    <script src="db.js"></script>
     <script src="app.js"></script>
 </body>
 

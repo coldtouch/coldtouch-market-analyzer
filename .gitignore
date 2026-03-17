@@ -1,10 +1,11 @@
-# Python local-only tools
+# Python companion & test tools (not needed for the web app)
 companion.py
 test_nats.py
+patch_recipes.py
 __pycache__/
 *.pyc
 
-# Large source file (items.txt is the raw dump, items.json is the processed version we keep)
+# Large source file (items.txt is the raw dump; items.json is the processed version we keep)
 items.txt
 
 # OS
