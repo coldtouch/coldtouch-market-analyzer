@@ -61,6 +61,12 @@ function extractTier(itemId) {
     return m ? m[1] : null;
 }
 
+function getEnchantmentBadge(itemId) {
+    if (!itemId || !itemId.includes('@')) return '';
+    const level = itemId.split('@')[1];
+    return `<div class="enchantment-badge ench-${level}">${level}</div>`;
+}
+
 function categorizeItem(itemId) {
     const id = itemId.toUpperCase();
     if (id.includes('MAIN_') || id.includes('2H_') && !id.includes('TOOL_')) {
@@ -314,7 +320,10 @@ async function renderBrowser() {
         card.className = 'item-card';
         card.innerHTML = `
             <div class="item-card-header">
-                <img class="item-card-icon" src="https://render.albiononline.com/v1/item/${id}.png" alt="" loading="lazy">
+                <div style="position: relative;">
+                    <img class="item-card-icon" src="https://render.albiononline.com/v1/item/${id}.png" alt="" loading="lazy">
+                    ${getEnchantmentBadge(id)}
+                </div>
                 <div class="item-card-info">
                     <div class="item-card-name" title="${name}">${name}</div>
                     <div class="item-card-id">${id} ${tier ? `<span class="tier-badge">T${tier}</span>` : ''}</div>
@@ -517,7 +526,10 @@ function renderArbitrage(trades, isSingleItem = false) {
         card.className = 'trade-card';
         card.innerHTML = `
             <div class="card-header">
-                <img class="item-icon" src="https://render.albiononline.com/v1/item/${trade.itemId}.png" alt="" loading="lazy">
+                <div style="position: relative; display: flex;">
+                    <img class="item-icon" src="https://render.albiononline.com/v1/item/${trade.itemId}.png" alt="" loading="lazy">
+                    ${getEnchantmentBadge(trade.itemId)}
+                </div>
                 <div class="header-titles">
                     <div class="item-name">${getFriendlyName(trade.itemId)}</div>
                     <span class="item-quality">${getQualityName(trade.quality)}</span>
@@ -689,7 +701,10 @@ async function doCompare() {
         // Render header
         container.innerHTML = `
             <div class="compare-header">
-                <img src="https://render.albiononline.com/v1/item/${itemId}.png" alt="">
+                <div style="position: relative;">
+                    <img src="https://render.albiononline.com/v1/item/${itemId}.png" alt="">
+                    ${getEnchantmentBadge(itemId)}
+                </div>
                 <div>
                     <h3>${name}</h3>
                     <span style="color:var(--text-muted);font-size:0.8rem;">${itemId}</span>
@@ -870,7 +885,10 @@ function renderCrafting(crafts) {
             matsHTML += `
                 <div class="mat-item">
                     <div class="mat-info">
-                        <img class="mat-icon" src="https://render.albiononline.com/v1/item/${mat.id}.png" alt="" loading="lazy">
+                        <div style="position: relative; display: flex;">
+                            <img class="mat-icon" src="https://render.albiononline.com/v1/item/${mat.id}.png" alt="" loading="lazy">
+                            ${getEnchantmentBadge(mat.id)}
+                        </div>
                         <span>${mat.qty}x ${getFriendlyName(mat.id)} <span class="mat-city">from ${mat.city}</span></span>
                     </div>
                     <span>${mat.total.toLocaleString()} 💰</span>
@@ -884,7 +902,10 @@ function renderCrafting(crafts) {
 
         card.innerHTML = `
             <div class="card-header">
-                <img class="item-icon" src="https://render.albiononline.com/v1/item/${craft.itemId}.png" alt="" loading="lazy">
+                <div style="position: relative; display: flex;">
+                    <img class="item-icon" src="https://render.albiononline.com/v1/item/${craft.itemId}.png" alt="" loading="lazy">
+                    ${getEnchantmentBadge(craft.itemId)}
+                </div>
                 <div class="header-titles">
                     <div class="item-name">${getFriendlyName(craft.itemId)}</div>
                     <span class="item-quality">${getQualityName(craft.quality)}</span>
