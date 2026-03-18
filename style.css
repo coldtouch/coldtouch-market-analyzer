@@ -22,6 +22,8 @@
     --blue: #60a5fa;
     --purple: #a78bfa;
     --black-market: #8b5cf6;
+    --green: #4ade80;
+    --red: #ef4444;
     --radius: 8px;
     --radius-sm: 4px;
     --radius-lg: 12px;
@@ -1302,3 +1304,11 @@ footer a:hover {
 .ench-2 { background: linear-gradient(135deg, #3b82f6, #1e3a8a); box-shadow: 0 0 8px rgba(59,130,246,0.6); }
 .ench-3 { background: linear-gradient(135deg, #a855f7, #581c87); box-shadow: 0 0 8px rgba(168,85,247,0.6); }
 .ench-4 { background: linear-gradient(135deg, #eab308, #854d0e); box-shadow: 0 0 8px rgba(234,179,8,0.6); color: #222; }
+
+/* Detail rows in compare table */
+.compare-table .detail-row td {
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+    padding-top: 0.3rem;
+    padding-bottom: 0.3rem;
+}

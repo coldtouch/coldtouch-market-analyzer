@@ -704,6 +704,7 @@ async function doCompare() {
 
     const spinner = document.getElementById('compare-spinner');
     const container = document.getElementById('compare-results');
+    const qualityFilter = document.getElementById('compare-quality').value;
 
     spinner.classList.remove('hidden');
     container.innerHTML = '';
@@ -713,8 +714,12 @@ async function doCompare() {
     const server = getServer();
 
     try {
-        // Fetch live data for this item
-        const data = await fetchMarketChunk(server, [itemId]);
+        // Fetch all qualities for this item
+        const qualitiesParam = '&qualities=1,2,3,4,5';
+        const url = `${API_URLS[server]}/${itemId}.json?${qualitiesParam}`;
+        const response = await fetch(url);
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const data = await response.json();
         if (data.length > 0) await MarketDB.saveMarketData(data);
 
         spinner.classList.add('hidden');
@@ -723,19 +728,22 @@ async function doCompare() {
         const byQuality = {};
         for (const entry of data) {
             const q = entry.quality || 1;
+            if (qualityFilter !== 'all' && q.toString() !== qualityFilter) continue;
             if (!byQuality[q]) byQuality[q] = {};
             let city = entry.city;
             if (city && city.includes('Black Market')) city = 'Black Market';
             byQuality[q][city] = {
-                sell: entry.sell_price_min || 0,
-                buy: entry.buy_price_max || 0,
+                sellMin: entry.sell_price_min || 0,
+                sellMax: entry.sell_price_max || 0,
+                buyMin: entry.buy_price_min || 0,
+                buyMax: entry.buy_price_max || 0,
                 sellDate: entry.sell_price_min_date || '',
                 buyDate: entry.buy_price_max_date || ''
             };
         }
 
         if (Object.keys(byQuality).length === 0) {
-            container.innerHTML = `<div class="empty-state"><p>No price data available for this item.</p></div>`;
+            container.innerHTML = `<div class="empty-state"><p>No price data available for this item${qualityFilter !== 'all' ? ' at this quality' : ''}.</p></div>`;
             return;
         }
 
@@ -747,7 +755,7 @@ async function doCompare() {
                     ${getEnchantmentBadge(itemId)}
                 </div>
                 <div>
-                    <h3>${name}</h3>
+                    <h3>${name} <span class="tier-badge">${getTierEnchLabel(itemId)}</span></h3>
                     <span style="color:var(--text-muted);font-size:0.8rem;">${itemId}</span>
                 </div>
             </div>
@@ -759,37 +767,83 @@ async function doCompare() {
             const orderedCities = CITIES.filter(c => cities[c]);
             if (orderedCities.length === 0) continue;
 
-            // Find best/worst
-            const sells = orderedCities.map(c => cities[c].sell).filter(v => v > 0);
-            const buys = orderedCities.map(c => cities[c].buy).filter(v => v > 0);
-            const minSell = sells.length > 0 ? Math.min(...sells) : 0;
-            const maxBuy = buys.length > 0 ? Math.max(...buys) : 0;
+            // Calculate bests for highlighting
+            const buyNowPrices = orderedCities.map(c => cities[c].sellMin).filter(v => v > 0);
+            const sellNowPrices = orderedCities.map(c => cities[c].buyMax).filter(v => v > 0);
+            const bestBuyNow = buyNowPrices.length > 0 ? Math.min(...buyNowPrices) : 0;
+            const bestSellNow = sellNowPrices.length > 0 ? Math.max(...sellNowPrices) : 0;
 
             let tableHTML = `<h4 style="color:var(--accent);margin:1.5rem 0 0.5rem;font-size:0.9rem;">${qualName} Quality</h4>`;
             tableHTML += `<table class="compare-table"><thead><tr><th></th>`;
             orderedCities.forEach(c => tableHTML += `<th>${c}</th>`);
             tableHTML += `</tr></thead><tbody>`;
 
-            // Sell prices row
-            tableHTML += `<tr><td>Sell Order Min</td>`;
+            // Row 1: Buy Now (instant buy = cheapest sell order)
+            tableHTML += `<tr><td title="Cheapest sell order — the price to instantly buy this item">💰 Buy Now</td>`;
             orderedCities.forEach(c => {
-                const v = cities[c].sell;
-                const cls = v > 0 && v === minSell ? 'best-price' : '';
+                const v = cities[c].sellMin;
+                const cls = v > 0 && v === bestBuyNow ? 'best-price' : '';
                 tableHTML += `<td class="${cls}">${v > 0 ? v.toLocaleString() : '—'}</td>`;
             });
             tableHTML += `</tr>`;
 
-            // Buy prices row
-            tableHTML += `<tr><td>Buy Order Max</td>`;
+            // Row 2: Sell Now (instant sell = highest buy order)
+            tableHTML += `<tr><td title="Highest buy order — the price you'll receive if you sell instantly">💸 Sell Now</td>`;
             orderedCities.forEach(c => {
-                const v = cities[c].buy;
-                const cls = v > 0 && v === maxBuy ? 'best-price' : '';
+                const v = cities[c].buyMax;
+                const cls = v > 0 && v === bestSellNow ? 'best-price' : '';
                 tableHTML += `<td class="${cls}">${v > 0 ? v.toLocaleString() : '—'}</td>`;
             });
             tableHTML += `</tr>`;
 
-            // Updated row
-            tableHTML += `<tr class="updated-row"><td>Last Updated</td>`;
+            // Row 3: Sell Order Range
+            tableHTML += `<tr class="detail-row"><td title="Range of current sell orders (min - max)">📊 Sell Orders</td>`;
+            orderedCities.forEach(c => {
+                const lo = cities[c].sellMin;
+                const hi = cities[c].sellMax;
+                if (lo > 0 && hi > 0 && lo !== hi) {
+                    tableHTML += `<td>${lo.toLocaleString()} – ${hi.toLocaleString()}</td>`;
+                } else if (lo > 0) {
+                    tableHTML += `<td>${lo.toLocaleString()}</td>`;
+                } else {
+                    tableHTML += `<td>—</td>`;
+                }
+            });
+            tableHTML += `</tr>`;
+
+            // Row 4: Buy Order Range
+            tableHTML += `<tr class="detail-row"><td title="Range of current buy orders (min - max)">📊 Buy Orders</td>`;
+            orderedCities.forEach(c => {
+                const lo = cities[c].buyMin;
+                const hi = cities[c].buyMax;
+                if (lo > 0 && hi > 0 && lo !== hi) {
+                    tableHTML += `<td>${lo.toLocaleString()} – ${hi.toLocaleString()}</td>`;
+                } else if (hi > 0) {
+                    tableHTML += `<td>${hi.toLocaleString()}</td>`;
+                } else {
+                    tableHTML += `<td>—</td>`;
+                }
+            });
+            tableHTML += `</tr>`;
+
+            // Row 5: Spread (profit margin if you buy & sell in same city)
+            tableHTML += `<tr class="detail-row"><td title="Difference between Sell Now and Buy Now in same city">📈 Spread</td>`;
+            orderedCities.forEach(c => {
+                const buy = cities[c].sellMin;
+                const sell = cities[c].buyMax;
+                if (buy > 0 && sell > 0) {
+                    const spread = sell - buy;
+                    const pct = ((spread / buy) * 100).toFixed(1);
+                    const color = spread >= 0 ? 'var(--green)' : 'var(--red, #ef4444)';
+                    tableHTML += `<td style="color:${color}">${spread >= 0 ? '+' : ''}${spread.toLocaleString()} (${pct}%)</td>`;
+                } else {
+                    tableHTML += `<td>—</td>`;
+                }
+            });
+            tableHTML += `</tr>`;
+
+            // Row 6: Last Updated
+            tableHTML += `<tr class="updated-row"><td>🕐 Updated</td>`;
             orderedCities.forEach(c => {
                 const d = cities[c].sellDate || cities[c].buyDate;
                 tableHTML += `<td>${timeAgo(d)}</td>`;

@@ -203,10 +203,43 @@
                 <div class="control-group search-group" style="flex:1; max-width: 400px;">
                     <label for="compare-search">Select an Item to Compare</label>
                     <div class="search-input-wrapper">
-                        <input type="text" id="compare-search" placeholder="Type item name..." autocomplete="off">
+                        <input type="text" id="compare-search" placeholder="Type item name or T6.2 staff..." autocomplete="off">
                         <svg class="search-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
                         <div id="compare-autocomplete" class="autocomplete-items hidden"></div>
                     </div>
+                </div>
+                <div class="control-group">
+                    <label for="compare-tier">Tier</label>
+                    <select id="compare-tier">
+                        <option value="all">All Tiers</option>
+                        <option value="4">T4</option>
+                        <option value="5">T5</option>
+                        <option value="6">T6</option>
+                        <option value="7">T7</option>
+                        <option value="8">T8</option>
+                    </select>
+                </div>
+                <div class="control-group">
+                    <label for="compare-enchantment">Enchantment</label>
+                    <select id="compare-enchantment">
+                        <option value="all">All</option>
+                        <option value="0">.0 (Base)</option>
+                        <option value="1">.1</option>
+                        <option value="2">.2</option>
+                        <option value="3">.3</option>
+                        <option value="4">.4</option>
+                    </select>
+                </div>
+                <div class="control-group">
+                    <label for="compare-quality">Quality</label>
+                    <select id="compare-quality">
+                        <option value="all">Any Quality</option>
+                        <option value="1">Normal</option>
+                        <option value="2">Good</option>
+                        <option value="3">Outstanding</option>
+                        <option value="4">Excellent</option>
+                        <option value="5">Masterpiece</option>
+                    </select>
                 </div>
                 <button id="compare-fetch-btn" class="btn-primary">Fetch Live Prices</button>
             </div>
