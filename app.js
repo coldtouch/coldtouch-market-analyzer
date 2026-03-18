@@ -372,13 +372,13 @@ async function renderBrowser() {
             </div>
             <div class="item-card-prices">
                 <div class="price-cell">
-                    <div class="pc-label">Best Sell</div>
-                    <div class="pc-value text-green">${bestSell ? bestSell.sell_price_min.toLocaleString() + ' 💰' : '—'}</div>
+                    <div class="pc-label">Buy Price</div>
+                    <div class="pc-value text-accent">${bestSell ? bestSell.sell_price_min.toLocaleString() + ' 💰' : '—'}</div>
                     <div class="pc-city">${bestSell ? bestSell.city : ''}</div>
                 </div>
                 <div class="price-cell">
-                    <div class="pc-label">Best Buy</div>
-                    <div class="pc-value text-accent">${bestBuy ? bestBuy.buy_price_max.toLocaleString() + ' 💰' : '—'}</div>
+                    <div class="pc-label">Sell Price</div>
+                    <div class="pc-value text-green">${bestBuy ? bestBuy.buy_price_max.toLocaleString() + ' 💰' : '—'}</div>
                     <div class="pc-city">${bestBuy ? bestBuy.city : ''}</div>
                 </div>
             </div>
