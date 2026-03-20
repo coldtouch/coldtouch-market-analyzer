@@ -6,6 +6,7 @@ All notable changes to the Coldtouch Market Analyzer will be documented in this 
 ### Added
 - **Market Browser Quality Filter**: Added a dropdown to filter the best Buy and Sell prices for a selected quality (Normal to Masterpiece).
 - **Market Browser Sort Option**: Added a dropdown to sort the displayed items by Name (A-Z), Lowest Buy Price, or Highest Sell Price.
+- **Market Browser Autocomplete**: The search bar in the Market Browser now features an autocomplete dropdown to quickly find specific items by name.
 - **Git Push Automation**: Automated pushing changes to the GitHub repository upon request.
 
 ### Fixed

@@ -1277,6 +1277,12 @@ async function init() {
     document.getElementById('craft-search').addEventListener('input', () => { craftSearchExactId = null; });
 
     // Browser search/filters
+    setupAutocomplete('browser-search', 'browser-autocomplete', (id) => {
+        document.getElementById('browser-search').value = getFriendlyName(id);
+        browserPage = 1;
+        renderBrowser();
+    });
+
     let browserDebounce = null;
     const browserInputs = ['browser-search', 'browser-tier', 'browser-enchantment', 'browser-category', 'browser-quality', 'browser-sort'];
     browserInputs.forEach(id => {
