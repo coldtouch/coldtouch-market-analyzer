@@ -305,8 +305,6 @@ function filterBrowserItems() {
         }
         return true;
     });
-
-    browserPage = 1;
 }
 
 async function renderBrowser() {
@@ -329,6 +327,37 @@ async function renderBrowser() {
             priceMap[p.item_id].push(p);
         }
     } catch (e) { /* no data yet */ }
+
+    const sortVal = document.getElementById('browser-sort').value;
+    const qualityVal = document.getElementById('browser-quality').value;
+
+    if (sortVal === 'name') {
+        browserFilteredItems.sort((a, b) => getFriendlyName(a).localeCompare(getFriendlyName(b)));
+    } else {
+        const tempArr = browserFilteredItems.map(id => {
+            const prices = priceMap[id] || [];
+            let bestBuy = 0;
+            let bestSell = Infinity;
+            for (const p of prices) {
+                if (qualityVal !== 'all' && p.quality.toString() !== qualityVal) continue;
+                if (p.sell_price_min > 0 && p.sell_price_min < bestSell) bestSell = p.sell_price_min;
+                if (p.buy_price_max > 0 && p.buy_price_max > bestBuy) bestBuy = p.buy_price_max;
+            }
+            if (bestSell === Infinity) bestSell = 0;
+            return { id, bestBuy, bestSell };
+        });
+
+        if (sortVal === 'buy_low') {
+            tempArr.sort((a, b) => {
+                const aVal = a.bestSell > 0 ? a.bestSell : Infinity;
+                const bVal = b.bestSell > 0 ? b.bestSell : Infinity;
+                return aVal - bVal;
+            });
+        } else if (sortVal === 'sell_high') {
+            tempArr.sort((a, b) => b.bestBuy - a.bestBuy);
+        }
+        browserFilteredItems = tempArr.map(x => x.id);
+    }
 
     const start = (browserPage - 1) * ITEMS_PER_PAGE;
     const pageItems = browserFilteredItems.slice(start, start + ITEMS_PER_PAGE);
@@ -353,6 +382,7 @@ async function renderBrowser() {
         // Find best sell (lowest sell_price_min) and best buy (highest buy_price_max)
         let bestSell = null, bestBuy = null;
         for (const p of prices) {
+            if (qualityVal !== 'all' && p.quality.toString() !== qualityVal) continue;
             if (p.sell_price_min > 0 && (!bestSell || p.sell_price_min < bestSell.sell_price_min)) bestSell = p;
             if (p.buy_price_max > 0 && (!bestBuy || p.buy_price_max > bestBuy.buy_price_max)) bestBuy = p;
         }
@@ -1248,11 +1278,14 @@ async function init() {
 
     // Browser search/filters
     let browserDebounce = null;
-    const browserInputs = ['browser-search', 'browser-tier', 'browser-enchantment', 'browser-category'];
+    const browserInputs = ['browser-search', 'browser-tier', 'browser-enchantment', 'browser-category', 'browser-quality', 'browser-sort'];
     browserInputs.forEach(id => {
         document.getElementById(id).addEventListener(id === 'browser-search' ? 'input' : 'change', () => {
             clearTimeout(browserDebounce);
-            browserDebounce = setTimeout(() => renderBrowser(), 200);
+            browserDebounce = setTimeout(() => {
+                browserPage = 1;
+                renderBrowser();
+            }, 200);
         });
     });
 
