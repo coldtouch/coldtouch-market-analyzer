@@ -514,11 +514,12 @@ function buildPaginationHTML(totalPages) {
 // ============================================================
 // MARKET FLIPPING (ARBITRAGE)
 // ============================================================
-function processArbitrage(data, quality, tier, includeBM, isSingleItem = false) {
+function processArbitrage(data, quality, tier, enchantment, includeBM, isSingleItem = false) {
     const itemsData = {};
     data.forEach(entry => {
         if (quality !== 'all' && entry.quality.toString() !== quality) return;
         if (tier !== 'all' && !entry.item_id.startsWith('T' + tier)) return;
+        if (enchantment !== 'all' && extractEnchantment(entry.item_id) !== enchantment) return;
         if (entry.sell_price_min === 0 && entry.buy_price_max === 0) return;
 
         const itemKey = `${entry.item_id}_${entry.quality}`;
@@ -647,6 +648,7 @@ async function doArbScan() {
     const searchInput = document.getElementById('arb-search');
     const quality = document.getElementById('arb-quality').value;
     const tier = document.getElementById('arb-tier').value;
+    const enchantment = document.getElementById('arb-enchantment').value;
     const category = document.getElementById('arb-category').value;
     const includeBM = document.getElementById('include-black-market').checked;
 
@@ -688,7 +690,7 @@ async function doArbScan() {
                     });
                 }
 
-                const trades = processArbitrage(filteredData, quality, tier, includeBM, isSingleItem);
+                const trades = processArbitrage(filteredData, quality, tier, enchantment, includeBM, isSingleItem);
                 renderArbitrage(trades, isSingleItem);
                 return;
             }
@@ -704,7 +706,7 @@ async function doArbScan() {
         const data = await fetchMarketData(server, itemsToFetch);
         if (data.length > 0) await MarketDB.saveMarketData(data);
         spinner.classList.add('hidden');
-        const trades = processArbitrage(data, quality, tier, includeBM, isSingleItem);
+        const trades = processArbitrage(data, quality, tier, enchantment, includeBM, isSingleItem);
         renderArbitrage(trades, isSingleItem);
         await updateDbStatus();
     } catch (e) {
