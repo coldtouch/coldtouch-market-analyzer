@@ -6,7 +6,7 @@ ctx = ssl.create_default_context()
 ctx.check_hostname = False
 ctx.verify_mode = ssl.CERT_NONE
 
-url = "https://raw.githubusercontent.com/broderickhyman/ao-bin-dumps/master/formatted/items.json"
+url = "https://raw.githubusercontent.com/ao-data/ao-bin-dumps/master/formatted/items.json"
 try:
     print("Downloading updated items list...")
     req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})

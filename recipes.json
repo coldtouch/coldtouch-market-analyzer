@@ -9769,6 +9769,526 @@
     ],
     "category": "weapons"
   },
+  "T4_2H_SHAPESHIFTER_SET1": {
+    "materials": [
+      {
+        "id": "T4_PLANKS",
+        "qty": 20
+      },
+      {
+        "id": "T4_LEATHER",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T4_2H_SHAPESHIFTER_SET1@1": {
+    "materials": [
+      {
+        "id": "T4_PLANKS_LEVEL1@1",
+        "qty": 20
+      },
+      {
+        "id": "T4_LEATHER_LEVEL1@1",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T4_2H_SHAPESHIFTER_SET1@2": {
+    "materials": [
+      {
+        "id": "T4_PLANKS_LEVEL2@2",
+        "qty": 20
+      },
+      {
+        "id": "T4_LEATHER_LEVEL2@2",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T4_2H_SHAPESHIFTER_SET1@3": {
+    "materials": [
+      {
+        "id": "T4_PLANKS_LEVEL3@3",
+        "qty": 20
+      },
+      {
+        "id": "T4_LEATHER_LEVEL3@3",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T4_2H_SHAPESHIFTER_SET1@4": {
+    "materials": [
+      {
+        "id": "T4_PLANKS_LEVEL4@4",
+        "qty": 20
+      },
+      {
+        "id": "T4_LEATHER_LEVEL4@4",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T4_2H_SHAPESHIFTER_SET2": {
+    "materials": [
+      {
+        "id": "T4_PLANKS",
+        "qty": 20
+      },
+      {
+        "id": "T4_LEATHER",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T4_2H_SHAPESHIFTER_SET2@1": {
+    "materials": [
+      {
+        "id": "T4_PLANKS_LEVEL1@1",
+        "qty": 20
+      },
+      {
+        "id": "T4_LEATHER_LEVEL1@1",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T4_2H_SHAPESHIFTER_SET2@2": {
+    "materials": [
+      {
+        "id": "T4_PLANKS_LEVEL2@2",
+        "qty": 20
+      },
+      {
+        "id": "T4_LEATHER_LEVEL2@2",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T4_2H_SHAPESHIFTER_SET2@3": {
+    "materials": [
+      {
+        "id": "T4_PLANKS_LEVEL3@3",
+        "qty": 20
+      },
+      {
+        "id": "T4_LEATHER_LEVEL3@3",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T4_2H_SHAPESHIFTER_SET2@4": {
+    "materials": [
+      {
+        "id": "T4_PLANKS_LEVEL4@4",
+        "qty": 20
+      },
+      {
+        "id": "T4_LEATHER_LEVEL4@4",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T4_2H_SHAPESHIFTER_SET3": {
+    "materials": [
+      {
+        "id": "T4_PLANKS",
+        "qty": 20
+      },
+      {
+        "id": "T4_LEATHER",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T4_2H_SHAPESHIFTER_SET3@1": {
+    "materials": [
+      {
+        "id": "T4_PLANKS_LEVEL1@1",
+        "qty": 20
+      },
+      {
+        "id": "T4_LEATHER_LEVEL1@1",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T4_2H_SHAPESHIFTER_SET3@2": {
+    "materials": [
+      {
+        "id": "T4_PLANKS_LEVEL2@2",
+        "qty": 20
+      },
+      {
+        "id": "T4_LEATHER_LEVEL2@2",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T4_2H_SHAPESHIFTER_SET3@3": {
+    "materials": [
+      {
+        "id": "T4_PLANKS_LEVEL3@3",
+        "qty": 20
+      },
+      {
+        "id": "T4_LEATHER_LEVEL3@3",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T4_2H_SHAPESHIFTER_SET3@4": {
+    "materials": [
+      {
+        "id": "T4_PLANKS_LEVEL4@4",
+        "qty": 20
+      },
+      {
+        "id": "T4_LEATHER_LEVEL4@4",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T4_2H_SHAPESHIFTER_MORGANA": {
+    "materials": [
+      {
+        "id": "T4_PLANKS",
+        "qty": 20
+      },
+      {
+        "id": "T4_LEATHER",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T4_2H_SHAPESHIFTER_MORGANA@1": {
+    "materials": [
+      {
+        "id": "T4_PLANKS_LEVEL1@1",
+        "qty": 20
+      },
+      {
+        "id": "T4_LEATHER_LEVEL1@1",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T4_2H_SHAPESHIFTER_MORGANA@2": {
+    "materials": [
+      {
+        "id": "T4_PLANKS_LEVEL2@2",
+        "qty": 20
+      },
+      {
+        "id": "T4_LEATHER_LEVEL2@2",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T4_2H_SHAPESHIFTER_MORGANA@3": {
+    "materials": [
+      {
+        "id": "T4_PLANKS_LEVEL3@3",
+        "qty": 20
+      },
+      {
+        "id": "T4_LEATHER_LEVEL3@3",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T4_2H_SHAPESHIFTER_MORGANA@4": {
+    "materials": [
+      {
+        "id": "T4_PLANKS_LEVEL4@4",
+        "qty": 20
+      },
+      {
+        "id": "T4_LEATHER_LEVEL4@4",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T4_2H_SHAPESHIFTER_HELL": {
+    "materials": [
+      {
+        "id": "T4_PLANKS",
+        "qty": 20
+      },
+      {
+        "id": "T4_LEATHER",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T4_2H_SHAPESHIFTER_HELL@1": {
+    "materials": [
+      {
+        "id": "T4_PLANKS_LEVEL1@1",
+        "qty": 20
+      },
+      {
+        "id": "T4_LEATHER_LEVEL1@1",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T4_2H_SHAPESHIFTER_HELL@2": {
+    "materials": [
+      {
+        "id": "T4_PLANKS_LEVEL2@2",
+        "qty": 20
+      },
+      {
+        "id": "T4_LEATHER_LEVEL2@2",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T4_2H_SHAPESHIFTER_HELL@3": {
+    "materials": [
+      {
+        "id": "T4_PLANKS_LEVEL3@3",
+        "qty": 20
+      },
+      {
+        "id": "T4_LEATHER_LEVEL3@3",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T4_2H_SHAPESHIFTER_HELL@4": {
+    "materials": [
+      {
+        "id": "T4_PLANKS_LEVEL4@4",
+        "qty": 20
+      },
+      {
+        "id": "T4_LEATHER_LEVEL4@4",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T4_2H_SHAPESHIFTER_KEEPER": {
+    "materials": [
+      {
+        "id": "T4_PLANKS",
+        "qty": 20
+      },
+      {
+        "id": "T4_LEATHER",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T4_2H_SHAPESHIFTER_KEEPER@1": {
+    "materials": [
+      {
+        "id": "T4_PLANKS_LEVEL1@1",
+        "qty": 20
+      },
+      {
+        "id": "T4_LEATHER_LEVEL1@1",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T4_2H_SHAPESHIFTER_KEEPER@2": {
+    "materials": [
+      {
+        "id": "T4_PLANKS_LEVEL2@2",
+        "qty": 20
+      },
+      {
+        "id": "T4_LEATHER_LEVEL2@2",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T4_2H_SHAPESHIFTER_KEEPER@3": {
+    "materials": [
+      {
+        "id": "T4_PLANKS_LEVEL3@3",
+        "qty": 20
+      },
+      {
+        "id": "T4_LEATHER_LEVEL3@3",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T4_2H_SHAPESHIFTER_KEEPER@4": {
+    "materials": [
+      {
+        "id": "T4_PLANKS_LEVEL4@4",
+        "qty": 20
+      },
+      {
+        "id": "T4_LEATHER_LEVEL4@4",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T4_2H_SHAPESHIFTER_AVALON": {
+    "materials": [
+      {
+        "id": "T4_PLANKS",
+        "qty": 20
+      },
+      {
+        "id": "T4_LEATHER",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T4_2H_SHAPESHIFTER_AVALON@1": {
+    "materials": [
+      {
+        "id": "T4_PLANKS_LEVEL1@1",
+        "qty": 20
+      },
+      {
+        "id": "T4_LEATHER_LEVEL1@1",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T4_2H_SHAPESHIFTER_AVALON@2": {
+    "materials": [
+      {
+        "id": "T4_PLANKS_LEVEL2@2",
+        "qty": 20
+      },
+      {
+        "id": "T4_LEATHER_LEVEL2@2",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T4_2H_SHAPESHIFTER_AVALON@3": {
+    "materials": [
+      {
+        "id": "T4_PLANKS_LEVEL3@3",
+        "qty": 20
+      },
+      {
+        "id": "T4_LEATHER_LEVEL3@3",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T4_2H_SHAPESHIFTER_AVALON@4": {
+    "materials": [
+      {
+        "id": "T4_PLANKS_LEVEL4@4",
+        "qty": 20
+      },
+      {
+        "id": "T4_LEATHER_LEVEL4@4",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T4_2H_SHAPESHIFTER_CRYSTAL": {
+    "materials": [
+      {
+        "id": "T4_PLANKS",
+        "qty": 20
+      },
+      {
+        "id": "T4_LEATHER",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T4_2H_SHAPESHIFTER_CRYSTAL@1": {
+    "materials": [
+      {
+        "id": "T4_PLANKS_LEVEL1@1",
+        "qty": 20
+      },
+      {
+        "id": "T4_LEATHER_LEVEL1@1",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T4_2H_SHAPESHIFTER_CRYSTAL@2": {
+    "materials": [
+      {
+        "id": "T4_PLANKS_LEVEL2@2",
+        "qty": 20
+      },
+      {
+        "id": "T4_LEATHER_LEVEL2@2",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T4_2H_SHAPESHIFTER_CRYSTAL@3": {
+    "materials": [
+      {
+        "id": "T4_PLANKS_LEVEL3@3",
+        "qty": 20
+      },
+      {
+        "id": "T4_LEATHER_LEVEL3@3",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T4_2H_SHAPESHIFTER_CRYSTAL@4": {
+    "materials": [
+      {
+        "id": "T4_PLANKS_LEVEL4@4",
+        "qty": 20
+      },
+      {
+        "id": "T4_LEATHER_LEVEL4@4",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
   "T4_OFF_SHIELD": {
     "materials": [
       {
@@ -19229,6 +19749,526 @@
       },
       {
         "id": "T5_CLOTH_LEVEL4@4",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T5_2H_SHAPESHIFTER_SET1": {
+    "materials": [
+      {
+        "id": "T5_PLANKS",
+        "qty": 20
+      },
+      {
+        "id": "T5_LEATHER",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T5_2H_SHAPESHIFTER_SET1@1": {
+    "materials": [
+      {
+        "id": "T5_PLANKS_LEVEL1@1",
+        "qty": 20
+      },
+      {
+        "id": "T5_LEATHER_LEVEL1@1",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T5_2H_SHAPESHIFTER_SET1@2": {
+    "materials": [
+      {
+        "id": "T5_PLANKS_LEVEL2@2",
+        "qty": 20
+      },
+      {
+        "id": "T5_LEATHER_LEVEL2@2",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T5_2H_SHAPESHIFTER_SET1@3": {
+    "materials": [
+      {
+        "id": "T5_PLANKS_LEVEL3@3",
+        "qty": 20
+      },
+      {
+        "id": "T5_LEATHER_LEVEL3@3",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T5_2H_SHAPESHIFTER_SET1@4": {
+    "materials": [
+      {
+        "id": "T5_PLANKS_LEVEL4@4",
+        "qty": 20
+      },
+      {
+        "id": "T5_LEATHER_LEVEL4@4",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T5_2H_SHAPESHIFTER_SET2": {
+    "materials": [
+      {
+        "id": "T5_PLANKS",
+        "qty": 20
+      },
+      {
+        "id": "T5_LEATHER",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T5_2H_SHAPESHIFTER_SET2@1": {
+    "materials": [
+      {
+        "id": "T5_PLANKS_LEVEL1@1",
+        "qty": 20
+      },
+      {
+        "id": "T5_LEATHER_LEVEL1@1",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T5_2H_SHAPESHIFTER_SET2@2": {
+    "materials": [
+      {
+        "id": "T5_PLANKS_LEVEL2@2",
+        "qty": 20
+      },
+      {
+        "id": "T5_LEATHER_LEVEL2@2",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T5_2H_SHAPESHIFTER_SET2@3": {
+    "materials": [
+      {
+        "id": "T5_PLANKS_LEVEL3@3",
+        "qty": 20
+      },
+      {
+        "id": "T5_LEATHER_LEVEL3@3",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T5_2H_SHAPESHIFTER_SET2@4": {
+    "materials": [
+      {
+        "id": "T5_PLANKS_LEVEL4@4",
+        "qty": 20
+      },
+      {
+        "id": "T5_LEATHER_LEVEL4@4",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T5_2H_SHAPESHIFTER_SET3": {
+    "materials": [
+      {
+        "id": "T5_PLANKS",
+        "qty": 20
+      },
+      {
+        "id": "T5_LEATHER",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T5_2H_SHAPESHIFTER_SET3@1": {
+    "materials": [
+      {
+        "id": "T5_PLANKS_LEVEL1@1",
+        "qty": 20
+      },
+      {
+        "id": "T5_LEATHER_LEVEL1@1",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T5_2H_SHAPESHIFTER_SET3@2": {
+    "materials": [
+      {
+        "id": "T5_PLANKS_LEVEL2@2",
+        "qty": 20
+      },
+      {
+        "id": "T5_LEATHER_LEVEL2@2",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T5_2H_SHAPESHIFTER_SET3@3": {
+    "materials": [
+      {
+        "id": "T5_PLANKS_LEVEL3@3",
+        "qty": 20
+      },
+      {
+        "id": "T5_LEATHER_LEVEL3@3",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T5_2H_SHAPESHIFTER_SET3@4": {
+    "materials": [
+      {
+        "id": "T5_PLANKS_LEVEL4@4",
+        "qty": 20
+      },
+      {
+        "id": "T5_LEATHER_LEVEL4@4",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T5_2H_SHAPESHIFTER_MORGANA": {
+    "materials": [
+      {
+        "id": "T5_PLANKS",
+        "qty": 20
+      },
+      {
+        "id": "T5_LEATHER",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T5_2H_SHAPESHIFTER_MORGANA@1": {
+    "materials": [
+      {
+        "id": "T5_PLANKS_LEVEL1@1",
+        "qty": 20
+      },
+      {
+        "id": "T5_LEATHER_LEVEL1@1",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T5_2H_SHAPESHIFTER_MORGANA@2": {
+    "materials": [
+      {
+        "id": "T5_PLANKS_LEVEL2@2",
+        "qty": 20
+      },
+      {
+        "id": "T5_LEATHER_LEVEL2@2",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T5_2H_SHAPESHIFTER_MORGANA@3": {
+    "materials": [
+      {
+        "id": "T5_PLANKS_LEVEL3@3",
+        "qty": 20
+      },
+      {
+        "id": "T5_LEATHER_LEVEL3@3",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T5_2H_SHAPESHIFTER_MORGANA@4": {
+    "materials": [
+      {
+        "id": "T5_PLANKS_LEVEL4@4",
+        "qty": 20
+      },
+      {
+        "id": "T5_LEATHER_LEVEL4@4",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T5_2H_SHAPESHIFTER_HELL": {
+    "materials": [
+      {
+        "id": "T5_PLANKS",
+        "qty": 20
+      },
+      {
+        "id": "T5_LEATHER",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T5_2H_SHAPESHIFTER_HELL@1": {
+    "materials": [
+      {
+        "id": "T5_PLANKS_LEVEL1@1",
+        "qty": 20
+      },
+      {
+        "id": "T5_LEATHER_LEVEL1@1",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T5_2H_SHAPESHIFTER_HELL@2": {
+    "materials": [
+      {
+        "id": "T5_PLANKS_LEVEL2@2",
+        "qty": 20
+      },
+      {
+        "id": "T5_LEATHER_LEVEL2@2",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T5_2H_SHAPESHIFTER_HELL@3": {
+    "materials": [
+      {
+        "id": "T5_PLANKS_LEVEL3@3",
+        "qty": 20
+      },
+      {
+        "id": "T5_LEATHER_LEVEL3@3",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T5_2H_SHAPESHIFTER_HELL@4": {
+    "materials": [
+      {
+        "id": "T5_PLANKS_LEVEL4@4",
+        "qty": 20
+      },
+      {
+        "id": "T5_LEATHER_LEVEL4@4",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T5_2H_SHAPESHIFTER_KEEPER": {
+    "materials": [
+      {
+        "id": "T5_PLANKS",
+        "qty": 20
+      },
+      {
+        "id": "T5_LEATHER",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T5_2H_SHAPESHIFTER_KEEPER@1": {
+    "materials": [
+      {
+        "id": "T5_PLANKS_LEVEL1@1",
+        "qty": 20
+      },
+      {
+        "id": "T5_LEATHER_LEVEL1@1",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T5_2H_SHAPESHIFTER_KEEPER@2": {
+    "materials": [
+      {
+        "id": "T5_PLANKS_LEVEL2@2",
+        "qty": 20
+      },
+      {
+        "id": "T5_LEATHER_LEVEL2@2",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T5_2H_SHAPESHIFTER_KEEPER@3": {
+    "materials": [
+      {
+        "id": "T5_PLANKS_LEVEL3@3",
+        "qty": 20
+      },
+      {
+        "id": "T5_LEATHER_LEVEL3@3",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T5_2H_SHAPESHIFTER_KEEPER@4": {
+    "materials": [
+      {
+        "id": "T5_PLANKS_LEVEL4@4",
+        "qty": 20
+      },
+      {
+        "id": "T5_LEATHER_LEVEL4@4",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T5_2H_SHAPESHIFTER_AVALON": {
+    "materials": [
+      {
+        "id": "T5_PLANKS",
+        "qty": 20
+      },
+      {
+        "id": "T5_LEATHER",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T5_2H_SHAPESHIFTER_AVALON@1": {
+    "materials": [
+      {
+        "id": "T5_PLANKS_LEVEL1@1",
+        "qty": 20
+      },
+      {
+        "id": "T5_LEATHER_LEVEL1@1",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T5_2H_SHAPESHIFTER_AVALON@2": {
+    "materials": [
+      {
+        "id": "T5_PLANKS_LEVEL2@2",
+        "qty": 20
+      },
+      {
+        "id": "T5_LEATHER_LEVEL2@2",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T5_2H_SHAPESHIFTER_AVALON@3": {
+    "materials": [
+      {
+        "id": "T5_PLANKS_LEVEL3@3",
+        "qty": 20
+      },
+      {
+        "id": "T5_LEATHER_LEVEL3@3",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T5_2H_SHAPESHIFTER_AVALON@4": {
+    "materials": [
+      {
+        "id": "T5_PLANKS_LEVEL4@4",
+        "qty": 20
+      },
+      {
+        "id": "T5_LEATHER_LEVEL4@4",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T5_2H_SHAPESHIFTER_CRYSTAL": {
+    "materials": [
+      {
+        "id": "T5_PLANKS",
+        "qty": 20
+      },
+      {
+        "id": "T5_LEATHER",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T5_2H_SHAPESHIFTER_CRYSTAL@1": {
+    "materials": [
+      {
+        "id": "T5_PLANKS_LEVEL1@1",
+        "qty": 20
+      },
+      {
+        "id": "T5_LEATHER_LEVEL1@1",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T5_2H_SHAPESHIFTER_CRYSTAL@2": {
+    "materials": [
+      {
+        "id": "T5_PLANKS_LEVEL2@2",
+        "qty": 20
+      },
+      {
+        "id": "T5_LEATHER_LEVEL2@2",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T5_2H_SHAPESHIFTER_CRYSTAL@3": {
+    "materials": [
+      {
+        "id": "T5_PLANKS_LEVEL3@3",
+        "qty": 20
+      },
+      {
+        "id": "T5_LEATHER_LEVEL3@3",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T5_2H_SHAPESHIFTER_CRYSTAL@4": {
+    "materials": [
+      {
+        "id": "T5_PLANKS_LEVEL4@4",
+        "qty": 20
+      },
+      {
+        "id": "T5_LEATHER_LEVEL4@4",
         "qty": 12
       }
     ],
@@ -28699,6 +29739,526 @@
     ],
     "category": "weapons"
   },
+  "T6_2H_SHAPESHIFTER_SET1": {
+    "materials": [
+      {
+        "id": "T6_PLANKS",
+        "qty": 20
+      },
+      {
+        "id": "T6_LEATHER",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T6_2H_SHAPESHIFTER_SET1@1": {
+    "materials": [
+      {
+        "id": "T6_PLANKS_LEVEL1@1",
+        "qty": 20
+      },
+      {
+        "id": "T6_LEATHER_LEVEL1@1",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T6_2H_SHAPESHIFTER_SET1@2": {
+    "materials": [
+      {
+        "id": "T6_PLANKS_LEVEL2@2",
+        "qty": 20
+      },
+      {
+        "id": "T6_LEATHER_LEVEL2@2",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T6_2H_SHAPESHIFTER_SET1@3": {
+    "materials": [
+      {
+        "id": "T6_PLANKS_LEVEL3@3",
+        "qty": 20
+      },
+      {
+        "id": "T6_LEATHER_LEVEL3@3",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T6_2H_SHAPESHIFTER_SET1@4": {
+    "materials": [
+      {
+        "id": "T6_PLANKS_LEVEL4@4",
+        "qty": 20
+      },
+      {
+        "id": "T6_LEATHER_LEVEL4@4",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T6_2H_SHAPESHIFTER_SET2": {
+    "materials": [
+      {
+        "id": "T6_PLANKS",
+        "qty": 20
+      },
+      {
+        "id": "T6_LEATHER",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T6_2H_SHAPESHIFTER_SET2@1": {
+    "materials": [
+      {
+        "id": "T6_PLANKS_LEVEL1@1",
+        "qty": 20
+      },
+      {
+        "id": "T6_LEATHER_LEVEL1@1",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T6_2H_SHAPESHIFTER_SET2@2": {
+    "materials": [
+      {
+        "id": "T6_PLANKS_LEVEL2@2",
+        "qty": 20
+      },
+      {
+        "id": "T6_LEATHER_LEVEL2@2",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T6_2H_SHAPESHIFTER_SET2@3": {
+    "materials": [
+      {
+        "id": "T6_PLANKS_LEVEL3@3",
+        "qty": 20
+      },
+      {
+        "id": "T6_LEATHER_LEVEL3@3",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T6_2H_SHAPESHIFTER_SET2@4": {
+    "materials": [
+      {
+        "id": "T6_PLANKS_LEVEL4@4",
+        "qty": 20
+      },
+      {
+        "id": "T6_LEATHER_LEVEL4@4",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T6_2H_SHAPESHIFTER_SET3": {
+    "materials": [
+      {
+        "id": "T6_PLANKS",
+        "qty": 20
+      },
+      {
+        "id": "T6_LEATHER",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T6_2H_SHAPESHIFTER_SET3@1": {
+    "materials": [
+      {
+        "id": "T6_PLANKS_LEVEL1@1",
+        "qty": 20
+      },
+      {
+        "id": "T6_LEATHER_LEVEL1@1",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T6_2H_SHAPESHIFTER_SET3@2": {
+    "materials": [
+      {
+        "id": "T6_PLANKS_LEVEL2@2",
+        "qty": 20
+      },
+      {
+        "id": "T6_LEATHER_LEVEL2@2",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T6_2H_SHAPESHIFTER_SET3@3": {
+    "materials": [
+      {
+        "id": "T6_PLANKS_LEVEL3@3",
+        "qty": 20
+      },
+      {
+        "id": "T6_LEATHER_LEVEL3@3",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T6_2H_SHAPESHIFTER_SET3@4": {
+    "materials": [
+      {
+        "id": "T6_PLANKS_LEVEL4@4",
+        "qty": 20
+      },
+      {
+        "id": "T6_LEATHER_LEVEL4@4",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T6_2H_SHAPESHIFTER_MORGANA": {
+    "materials": [
+      {
+        "id": "T6_PLANKS",
+        "qty": 20
+      },
+      {
+        "id": "T6_LEATHER",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T6_2H_SHAPESHIFTER_MORGANA@1": {
+    "materials": [
+      {
+        "id": "T6_PLANKS_LEVEL1@1",
+        "qty": 20
+      },
+      {
+        "id": "T6_LEATHER_LEVEL1@1",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T6_2H_SHAPESHIFTER_MORGANA@2": {
+    "materials": [
+      {
+        "id": "T6_PLANKS_LEVEL2@2",
+        "qty": 20
+      },
+      {
+        "id": "T6_LEATHER_LEVEL2@2",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T6_2H_SHAPESHIFTER_MORGANA@3": {
+    "materials": [
+      {
+        "id": "T6_PLANKS_LEVEL3@3",
+        "qty": 20
+      },
+      {
+        "id": "T6_LEATHER_LEVEL3@3",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T6_2H_SHAPESHIFTER_MORGANA@4": {
+    "materials": [
+      {
+        "id": "T6_PLANKS_LEVEL4@4",
+        "qty": 20
+      },
+      {
+        "id": "T6_LEATHER_LEVEL4@4",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T6_2H_SHAPESHIFTER_HELL": {
+    "materials": [
+      {
+        "id": "T6_PLANKS",
+        "qty": 20
+      },
+      {
+        "id": "T6_LEATHER",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T6_2H_SHAPESHIFTER_HELL@1": {
+    "materials": [
+      {
+        "id": "T6_PLANKS_LEVEL1@1",
+        "qty": 20
+      },
+      {
+        "id": "T6_LEATHER_LEVEL1@1",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T6_2H_SHAPESHIFTER_HELL@2": {
+    "materials": [
+      {
+        "id": "T6_PLANKS_LEVEL2@2",
+        "qty": 20
+      },
+      {
+        "id": "T6_LEATHER_LEVEL2@2",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T6_2H_SHAPESHIFTER_HELL@3": {
+    "materials": [
+      {
+        "id": "T6_PLANKS_LEVEL3@3",
+        "qty": 20
+      },
+      {
+        "id": "T6_LEATHER_LEVEL3@3",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T6_2H_SHAPESHIFTER_HELL@4": {
+    "materials": [
+      {
+        "id": "T6_PLANKS_LEVEL4@4",
+        "qty": 20
+      },
+      {
+        "id": "T6_LEATHER_LEVEL4@4",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T6_2H_SHAPESHIFTER_KEEPER": {
+    "materials": [
+      {
+        "id": "T6_PLANKS",
+        "qty": 20
+      },
+      {
+        "id": "T6_LEATHER",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T6_2H_SHAPESHIFTER_KEEPER@1": {
+    "materials": [
+      {
+        "id": "T6_PLANKS_LEVEL1@1",
+        "qty": 20
+      },
+      {
+        "id": "T6_LEATHER_LEVEL1@1",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T6_2H_SHAPESHIFTER_KEEPER@2": {
+    "materials": [
+      {
+        "id": "T6_PLANKS_LEVEL2@2",
+        "qty": 20
+      },
+      {
+        "id": "T6_LEATHER_LEVEL2@2",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T6_2H_SHAPESHIFTER_KEEPER@3": {
+    "materials": [
+      {
+        "id": "T6_PLANKS_LEVEL3@3",
+        "qty": 20
+      },
+      {
+        "id": "T6_LEATHER_LEVEL3@3",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T6_2H_SHAPESHIFTER_KEEPER@4": {
+    "materials": [
+      {
+        "id": "T6_PLANKS_LEVEL4@4",
+        "qty": 20
+      },
+      {
+        "id": "T6_LEATHER_LEVEL4@4",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T6_2H_SHAPESHIFTER_AVALON": {
+    "materials": [
+      {
+        "id": "T6_PLANKS",
+        "qty": 20
+      },
+      {
+        "id": "T6_LEATHER",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T6_2H_SHAPESHIFTER_AVALON@1": {
+    "materials": [
+      {
+        "id": "T6_PLANKS_LEVEL1@1",
+        "qty": 20
+      },
+      {
+        "id": "T6_LEATHER_LEVEL1@1",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T6_2H_SHAPESHIFTER_AVALON@2": {
+    "materials": [
+      {
+        "id": "T6_PLANKS_LEVEL2@2",
+        "qty": 20
+      },
+      {
+        "id": "T6_LEATHER_LEVEL2@2",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T6_2H_SHAPESHIFTER_AVALON@3": {
+    "materials": [
+      {
+        "id": "T6_PLANKS_LEVEL3@3",
+        "qty": 20
+      },
+      {
+        "id": "T6_LEATHER_LEVEL3@3",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T6_2H_SHAPESHIFTER_AVALON@4": {
+    "materials": [
+      {
+        "id": "T6_PLANKS_LEVEL4@4",
+        "qty": 20
+      },
+      {
+        "id": "T6_LEATHER_LEVEL4@4",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T6_2H_SHAPESHIFTER_CRYSTAL": {
+    "materials": [
+      {
+        "id": "T6_PLANKS",
+        "qty": 20
+      },
+      {
+        "id": "T6_LEATHER",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T6_2H_SHAPESHIFTER_CRYSTAL@1": {
+    "materials": [
+      {
+        "id": "T6_PLANKS_LEVEL1@1",
+        "qty": 20
+      },
+      {
+        "id": "T6_LEATHER_LEVEL1@1",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T6_2H_SHAPESHIFTER_CRYSTAL@2": {
+    "materials": [
+      {
+        "id": "T6_PLANKS_LEVEL2@2",
+        "qty": 20
+      },
+      {
+        "id": "T6_LEATHER_LEVEL2@2",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T6_2H_SHAPESHIFTER_CRYSTAL@3": {
+    "materials": [
+      {
+        "id": "T6_PLANKS_LEVEL3@3",
+        "qty": 20
+      },
+      {
+        "id": "T6_LEATHER_LEVEL3@3",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T6_2H_SHAPESHIFTER_CRYSTAL@4": {
+    "materials": [
+      {
+        "id": "T6_PLANKS_LEVEL4@4",
+        "qty": 20
+      },
+      {
+        "id": "T6_LEATHER_LEVEL4@4",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
   "T6_OFF_SHIELD": {
     "materials": [
       {
@@ -38164,6 +39724,526 @@
     ],
     "category": "weapons"
   },
+  "T7_2H_SHAPESHIFTER_SET1": {
+    "materials": [
+      {
+        "id": "T7_PLANKS",
+        "qty": 20
+      },
+      {
+        "id": "T7_LEATHER",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T7_2H_SHAPESHIFTER_SET1@1": {
+    "materials": [
+      {
+        "id": "T7_PLANKS_LEVEL1@1",
+        "qty": 20
+      },
+      {
+        "id": "T7_LEATHER_LEVEL1@1",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T7_2H_SHAPESHIFTER_SET1@2": {
+    "materials": [
+      {
+        "id": "T7_PLANKS_LEVEL2@2",
+        "qty": 20
+      },
+      {
+        "id": "T7_LEATHER_LEVEL2@2",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T7_2H_SHAPESHIFTER_SET1@3": {
+    "materials": [
+      {
+        "id": "T7_PLANKS_LEVEL3@3",
+        "qty": 20
+      },
+      {
+        "id": "T7_LEATHER_LEVEL3@3",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T7_2H_SHAPESHIFTER_SET1@4": {
+    "materials": [
+      {
+        "id": "T7_PLANKS_LEVEL4@4",
+        "qty": 20
+      },
+      {
+        "id": "T7_LEATHER_LEVEL4@4",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T7_2H_SHAPESHIFTER_SET2": {
+    "materials": [
+      {
+        "id": "T7_PLANKS",
+        "qty": 20
+      },
+      {
+        "id": "T7_LEATHER",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T7_2H_SHAPESHIFTER_SET2@1": {
+    "materials": [
+      {
+        "id": "T7_PLANKS_LEVEL1@1",
+        "qty": 20
+      },
+      {
+        "id": "T7_LEATHER_LEVEL1@1",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T7_2H_SHAPESHIFTER_SET2@2": {
+    "materials": [
+      {
+        "id": "T7_PLANKS_LEVEL2@2",
+        "qty": 20
+      },
+      {
+        "id": "T7_LEATHER_LEVEL2@2",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T7_2H_SHAPESHIFTER_SET2@3": {
+    "materials": [
+      {
+        "id": "T7_PLANKS_LEVEL3@3",
+        "qty": 20
+      },
+      {
+        "id": "T7_LEATHER_LEVEL3@3",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T7_2H_SHAPESHIFTER_SET2@4": {
+    "materials": [
+      {
+        "id": "T7_PLANKS_LEVEL4@4",
+        "qty": 20
+      },
+      {
+        "id": "T7_LEATHER_LEVEL4@4",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T7_2H_SHAPESHIFTER_SET3": {
+    "materials": [
+      {
+        "id": "T7_PLANKS",
+        "qty": 20
+      },
+      {
+        "id": "T7_LEATHER",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T7_2H_SHAPESHIFTER_SET3@1": {
+    "materials": [
+      {
+        "id": "T7_PLANKS_LEVEL1@1",
+        "qty": 20
+      },
+      {
+        "id": "T7_LEATHER_LEVEL1@1",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T7_2H_SHAPESHIFTER_SET3@2": {
+    "materials": [
+      {
+        "id": "T7_PLANKS_LEVEL2@2",
+        "qty": 20
+      },
+      {
+        "id": "T7_LEATHER_LEVEL2@2",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T7_2H_SHAPESHIFTER_SET3@3": {
+    "materials": [
+      {
+        "id": "T7_PLANKS_LEVEL3@3",
+        "qty": 20
+      },
+      {
+        "id": "T7_LEATHER_LEVEL3@3",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T7_2H_SHAPESHIFTER_SET3@4": {
+    "materials": [
+      {
+        "id": "T7_PLANKS_LEVEL4@4",
+        "qty": 20
+      },
+      {
+        "id": "T7_LEATHER_LEVEL4@4",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T7_2H_SHAPESHIFTER_MORGANA": {
+    "materials": [
+      {
+        "id": "T7_PLANKS",
+        "qty": 20
+      },
+      {
+        "id": "T7_LEATHER",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T7_2H_SHAPESHIFTER_MORGANA@1": {
+    "materials": [
+      {
+        "id": "T7_PLANKS_LEVEL1@1",
+        "qty": 20
+      },
+      {
+        "id": "T7_LEATHER_LEVEL1@1",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T7_2H_SHAPESHIFTER_MORGANA@2": {
+    "materials": [
+      {
+        "id": "T7_PLANKS_LEVEL2@2",
+        "qty": 20
+      },
+      {
+        "id": "T7_LEATHER_LEVEL2@2",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T7_2H_SHAPESHIFTER_MORGANA@3": {
+    "materials": [
+      {
+        "id": "T7_PLANKS_LEVEL3@3",
+        "qty": 20
+      },
+      {
+        "id": "T7_LEATHER_LEVEL3@3",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T7_2H_SHAPESHIFTER_MORGANA@4": {
+    "materials": [
+      {
+        "id": "T7_PLANKS_LEVEL4@4",
+        "qty": 20
+      },
+      {
+        "id": "T7_LEATHER_LEVEL4@4",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T7_2H_SHAPESHIFTER_HELL": {
+    "materials": [
+      {
+        "id": "T7_PLANKS",
+        "qty": 20
+      },
+      {
+        "id": "T7_LEATHER",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T7_2H_SHAPESHIFTER_HELL@1": {
+    "materials": [
+      {
+        "id": "T7_PLANKS_LEVEL1@1",
+        "qty": 20
+      },
+      {
+        "id": "T7_LEATHER_LEVEL1@1",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T7_2H_SHAPESHIFTER_HELL@2": {
+    "materials": [
+      {
+        "id": "T7_PLANKS_LEVEL2@2",
+        "qty": 20
+      },
+      {
+        "id": "T7_LEATHER_LEVEL2@2",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T7_2H_SHAPESHIFTER_HELL@3": {
+    "materials": [
+      {
+        "id": "T7_PLANKS_LEVEL3@3",
+        "qty": 20
+      },
+      {
+        "id": "T7_LEATHER_LEVEL3@3",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T7_2H_SHAPESHIFTER_HELL@4": {
+    "materials": [
+      {
+        "id": "T7_PLANKS_LEVEL4@4",
+        "qty": 20
+      },
+      {
+        "id": "T7_LEATHER_LEVEL4@4",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T7_2H_SHAPESHIFTER_KEEPER": {
+    "materials": [
+      {
+        "id": "T7_PLANKS",
+        "qty": 20
+      },
+      {
+        "id": "T7_LEATHER",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T7_2H_SHAPESHIFTER_KEEPER@1": {
+    "materials": [
+      {
+        "id": "T7_PLANKS_LEVEL1@1",
+        "qty": 20
+      },
+      {
+        "id": "T7_LEATHER_LEVEL1@1",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T7_2H_SHAPESHIFTER_KEEPER@2": {
+    "materials": [
+      {
+        "id": "T7_PLANKS_LEVEL2@2",
+        "qty": 20
+      },
+      {
+        "id": "T7_LEATHER_LEVEL2@2",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T7_2H_SHAPESHIFTER_KEEPER@3": {
+    "materials": [
+      {
+        "id": "T7_PLANKS_LEVEL3@3",
+        "qty": 20
+      },
+      {
+        "id": "T7_LEATHER_LEVEL3@3",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T7_2H_SHAPESHIFTER_KEEPER@4": {
+    "materials": [
+      {
+        "id": "T7_PLANKS_LEVEL4@4",
+        "qty": 20
+      },
+      {
+        "id": "T7_LEATHER_LEVEL4@4",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T7_2H_SHAPESHIFTER_AVALON": {
+    "materials": [
+      {
+        "id": "T7_PLANKS",
+        "qty": 20
+      },
+      {
+        "id": "T7_LEATHER",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T7_2H_SHAPESHIFTER_AVALON@1": {
+    "materials": [
+      {
+        "id": "T7_PLANKS_LEVEL1@1",
+        "qty": 20
+      },
+      {
+        "id": "T7_LEATHER_LEVEL1@1",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T7_2H_SHAPESHIFTER_AVALON@2": {
+    "materials": [
+      {
+        "id": "T7_PLANKS_LEVEL2@2",
+        "qty": 20
+      },
+      {
+        "id": "T7_LEATHER_LEVEL2@2",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T7_2H_SHAPESHIFTER_AVALON@3": {
+    "materials": [
+      {
+        "id": "T7_PLANKS_LEVEL3@3",
+        "qty": 20
+      },
+      {
+        "id": "T7_LEATHER_LEVEL3@3",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T7_2H_SHAPESHIFTER_AVALON@4": {
+    "materials": [
+      {
+        "id": "T7_PLANKS_LEVEL4@4",
+        "qty": 20
+      },
+      {
+        "id": "T7_LEATHER_LEVEL4@4",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T7_2H_SHAPESHIFTER_CRYSTAL": {
+    "materials": [
+      {
+        "id": "T7_PLANKS",
+        "qty": 20
+      },
+      {
+        "id": "T7_LEATHER",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T7_2H_SHAPESHIFTER_CRYSTAL@1": {
+    "materials": [
+      {
+        "id": "T7_PLANKS_LEVEL1@1",
+        "qty": 20
+      },
+      {
+        "id": "T7_LEATHER_LEVEL1@1",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T7_2H_SHAPESHIFTER_CRYSTAL@2": {
+    "materials": [
+      {
+        "id": "T7_PLANKS_LEVEL2@2",
+        "qty": 20
+      },
+      {
+        "id": "T7_LEATHER_LEVEL2@2",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T7_2H_SHAPESHIFTER_CRYSTAL@3": {
+    "materials": [
+      {
+        "id": "T7_PLANKS_LEVEL3@3",
+        "qty": 20
+      },
+      {
+        "id": "T7_LEATHER_LEVEL3@3",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T7_2H_SHAPESHIFTER_CRYSTAL@4": {
+    "materials": [
+      {
+        "id": "T7_PLANKS_LEVEL4@4",
+        "qty": 20
+      },
+      {
+        "id": "T7_LEATHER_LEVEL4@4",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
   "T7_OFF_SHIELD": {
     "materials": [
       {
@@ -47624,6 +49704,526 @@
       },
       {
         "id": "T8_CLOTH_LEVEL4@4",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T8_2H_SHAPESHIFTER_SET1": {
+    "materials": [
+      {
+        "id": "T8_PLANKS",
+        "qty": 20
+      },
+      {
+        "id": "T8_LEATHER",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T8_2H_SHAPESHIFTER_SET1@1": {
+    "materials": [
+      {
+        "id": "T8_PLANKS_LEVEL1@1",
+        "qty": 20
+      },
+      {
+        "id": "T8_LEATHER_LEVEL1@1",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T8_2H_SHAPESHIFTER_SET1@2": {
+    "materials": [
+      {
+        "id": "T8_PLANKS_LEVEL2@2",
+        "qty": 20
+      },
+      {
+        "id": "T8_LEATHER_LEVEL2@2",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T8_2H_SHAPESHIFTER_SET1@3": {
+    "materials": [
+      {
+        "id": "T8_PLANKS_LEVEL3@3",
+        "qty": 20
+      },
+      {
+        "id": "T8_LEATHER_LEVEL3@3",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T8_2H_SHAPESHIFTER_SET1@4": {
+    "materials": [
+      {
+        "id": "T8_PLANKS_LEVEL4@4",
+        "qty": 20
+      },
+      {
+        "id": "T8_LEATHER_LEVEL4@4",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T8_2H_SHAPESHIFTER_SET2": {
+    "materials": [
+      {
+        "id": "T8_PLANKS",
+        "qty": 20
+      },
+      {
+        "id": "T8_LEATHER",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T8_2H_SHAPESHIFTER_SET2@1": {
+    "materials": [
+      {
+        "id": "T8_PLANKS_LEVEL1@1",
+        "qty": 20
+      },
+      {
+        "id": "T8_LEATHER_LEVEL1@1",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T8_2H_SHAPESHIFTER_SET2@2": {
+    "materials": [
+      {
+        "id": "T8_PLANKS_LEVEL2@2",
+        "qty": 20
+      },
+      {
+        "id": "T8_LEATHER_LEVEL2@2",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T8_2H_SHAPESHIFTER_SET2@3": {
+    "materials": [
+      {
+        "id": "T8_PLANKS_LEVEL3@3",
+        "qty": 20
+      },
+      {
+        "id": "T8_LEATHER_LEVEL3@3",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T8_2H_SHAPESHIFTER_SET2@4": {
+    "materials": [
+      {
+        "id": "T8_PLANKS_LEVEL4@4",
+        "qty": 20
+      },
+      {
+        "id": "T8_LEATHER_LEVEL4@4",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T8_2H_SHAPESHIFTER_SET3": {
+    "materials": [
+      {
+        "id": "T8_PLANKS",
+        "qty": 20
+      },
+      {
+        "id": "T8_LEATHER",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T8_2H_SHAPESHIFTER_SET3@1": {
+    "materials": [
+      {
+        "id": "T8_PLANKS_LEVEL1@1",
+        "qty": 20
+      },
+      {
+        "id": "T8_LEATHER_LEVEL1@1",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T8_2H_SHAPESHIFTER_SET3@2": {
+    "materials": [
+      {
+        "id": "T8_PLANKS_LEVEL2@2",
+        "qty": 20
+      },
+      {
+        "id": "T8_LEATHER_LEVEL2@2",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T8_2H_SHAPESHIFTER_SET3@3": {
+    "materials": [
+      {
+        "id": "T8_PLANKS_LEVEL3@3",
+        "qty": 20
+      },
+      {
+        "id": "T8_LEATHER_LEVEL3@3",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T8_2H_SHAPESHIFTER_SET3@4": {
+    "materials": [
+      {
+        "id": "T8_PLANKS_LEVEL4@4",
+        "qty": 20
+      },
+      {
+        "id": "T8_LEATHER_LEVEL4@4",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T8_2H_SHAPESHIFTER_MORGANA": {
+    "materials": [
+      {
+        "id": "T8_PLANKS",
+        "qty": 20
+      },
+      {
+        "id": "T8_LEATHER",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T8_2H_SHAPESHIFTER_MORGANA@1": {
+    "materials": [
+      {
+        "id": "T8_PLANKS_LEVEL1@1",
+        "qty": 20
+      },
+      {
+        "id": "T8_LEATHER_LEVEL1@1",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T8_2H_SHAPESHIFTER_MORGANA@2": {
+    "materials": [
+      {
+        "id": "T8_PLANKS_LEVEL2@2",
+        "qty": 20
+      },
+      {
+        "id": "T8_LEATHER_LEVEL2@2",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T8_2H_SHAPESHIFTER_MORGANA@3": {
+    "materials": [
+      {
+        "id": "T8_PLANKS_LEVEL3@3",
+        "qty": 20
+      },
+      {
+        "id": "T8_LEATHER_LEVEL3@3",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T8_2H_SHAPESHIFTER_MORGANA@4": {
+    "materials": [
+      {
+        "id": "T8_PLANKS_LEVEL4@4",
+        "qty": 20
+      },
+      {
+        "id": "T8_LEATHER_LEVEL4@4",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T8_2H_SHAPESHIFTER_HELL": {
+    "materials": [
+      {
+        "id": "T8_PLANKS",
+        "qty": 20
+      },
+      {
+        "id": "T8_LEATHER",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T8_2H_SHAPESHIFTER_HELL@1": {
+    "materials": [
+      {
+        "id": "T8_PLANKS_LEVEL1@1",
+        "qty": 20
+      },
+      {
+        "id": "T8_LEATHER_LEVEL1@1",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T8_2H_SHAPESHIFTER_HELL@2": {
+    "materials": [
+      {
+        "id": "T8_PLANKS_LEVEL2@2",
+        "qty": 20
+      },
+      {
+        "id": "T8_LEATHER_LEVEL2@2",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T8_2H_SHAPESHIFTER_HELL@3": {
+    "materials": [
+      {
+        "id": "T8_PLANKS_LEVEL3@3",
+        "qty": 20
+      },
+      {
+        "id": "T8_LEATHER_LEVEL3@3",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T8_2H_SHAPESHIFTER_HELL@4": {
+    "materials": [
+      {
+        "id": "T8_PLANKS_LEVEL4@4",
+        "qty": 20
+      },
+      {
+        "id": "T8_LEATHER_LEVEL4@4",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T8_2H_SHAPESHIFTER_KEEPER": {
+    "materials": [
+      {
+        "id": "T8_PLANKS",
+        "qty": 20
+      },
+      {
+        "id": "T8_LEATHER",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T8_2H_SHAPESHIFTER_KEEPER@1": {
+    "materials": [
+      {
+        "id": "T8_PLANKS_LEVEL1@1",
+        "qty": 20
+      },
+      {
+        "id": "T8_LEATHER_LEVEL1@1",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T8_2H_SHAPESHIFTER_KEEPER@2": {
+    "materials": [
+      {
+        "id": "T8_PLANKS_LEVEL2@2",
+        "qty": 20
+      },
+      {
+        "id": "T8_LEATHER_LEVEL2@2",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T8_2H_SHAPESHIFTER_KEEPER@3": {
+    "materials": [
+      {
+        "id": "T8_PLANKS_LEVEL3@3",
+        "qty": 20
+      },
+      {
+        "id": "T8_LEATHER_LEVEL3@3",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T8_2H_SHAPESHIFTER_KEEPER@4": {
+    "materials": [
+      {
+        "id": "T8_PLANKS_LEVEL4@4",
+        "qty": 20
+      },
+      {
+        "id": "T8_LEATHER_LEVEL4@4",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T8_2H_SHAPESHIFTER_AVALON": {
+    "materials": [
+      {
+        "id": "T8_PLANKS",
+        "qty": 20
+      },
+      {
+        "id": "T8_LEATHER",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T8_2H_SHAPESHIFTER_AVALON@1": {
+    "materials": [
+      {
+        "id": "T8_PLANKS_LEVEL1@1",
+        "qty": 20
+      },
+      {
+        "id": "T8_LEATHER_LEVEL1@1",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T8_2H_SHAPESHIFTER_AVALON@2": {
+    "materials": [
+      {
+        "id": "T8_PLANKS_LEVEL2@2",
+        "qty": 20
+      },
+      {
+        "id": "T8_LEATHER_LEVEL2@2",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T8_2H_SHAPESHIFTER_AVALON@3": {
+    "materials": [
+      {
+        "id": "T8_PLANKS_LEVEL3@3",
+        "qty": 20
+      },
+      {
+        "id": "T8_LEATHER_LEVEL3@3",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T8_2H_SHAPESHIFTER_AVALON@4": {
+    "materials": [
+      {
+        "id": "T8_PLANKS_LEVEL4@4",
+        "qty": 20
+      },
+      {
+        "id": "T8_LEATHER_LEVEL4@4",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T8_2H_SHAPESHIFTER_CRYSTAL": {
+    "materials": [
+      {
+        "id": "T8_PLANKS",
+        "qty": 20
+      },
+      {
+        "id": "T8_LEATHER",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T8_2H_SHAPESHIFTER_CRYSTAL@1": {
+    "materials": [
+      {
+        "id": "T8_PLANKS_LEVEL1@1",
+        "qty": 20
+      },
+      {
+        "id": "T8_LEATHER_LEVEL1@1",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T8_2H_SHAPESHIFTER_CRYSTAL@2": {
+    "materials": [
+      {
+        "id": "T8_PLANKS_LEVEL2@2",
+        "qty": 20
+      },
+      {
+        "id": "T8_LEATHER_LEVEL2@2",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T8_2H_SHAPESHIFTER_CRYSTAL@3": {
+    "materials": [
+      {
+        "id": "T8_PLANKS_LEVEL3@3",
+        "qty": 20
+      },
+      {
+        "id": "T8_LEATHER_LEVEL3@3",
+        "qty": 12
+      }
+    ],
+    "category": "weapons"
+  },
+  "T8_2H_SHAPESHIFTER_CRYSTAL@4": {
+    "materials": [
+      {
+        "id": "T8_PLANKS_LEVEL4@4",
+        "qty": 20
+      },
+      {
+        "id": "T8_LEATHER_LEVEL4@4",
         "qty": 12
       }
     ],
