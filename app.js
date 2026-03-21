@@ -1286,16 +1286,17 @@ async function init() {
         renderBrowser();
     });
 
-    let browserDebounce = null;
-    const browserInputs = ['browser-search', 'browser-tier', 'browser-enchantment', 'browser-category', 'browser-quality', 'browser-sort'];
-    browserInputs.forEach(id => {
-        document.getElementById(id).addEventListener(id === 'browser-search' ? 'input' : 'change', () => {
-            clearTimeout(browserDebounce);
-            browserDebounce = setTimeout(() => {
-                browserPage = 1;
-                renderBrowser();
-            }, 200);
-        });
+    const doBrowserSearch = () => {
+        browserPage = 1;
+        renderBrowser();
+    };
+
+    document.getElementById('browser-search-btn').addEventListener('click', doBrowserSearch);
+    document.getElementById('browser-search').addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            doBrowserSearch();
+        }
     });
 
     // Chart modal close
