@@ -303,7 +303,7 @@ def generate_recipes():
             # Enchanted variants
             for ench in range(1, 5):
                 ench_id = f'{item_id}@{ench}'
-                ench_mats = [{'id': f'T{tier}_{res}@{ench}', 'qty': qty} for res, qty in mat_spec]
+                ench_mats = [{'id': f'T{tier}_{res}_LEVEL{ench}@{ench}', 'qty': qty} for res, qty in mat_spec]
                 recipes[ench_id] = {'materials': ench_mats, 'category': category}
     
     return recipes

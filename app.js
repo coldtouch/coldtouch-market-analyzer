@@ -1057,15 +1057,22 @@ function renderCraftDetail(itemId, recipe, data) {
 
         buyCities.forEach(c => {
             const p = matPrices[c];
-            const price = p ? p.sellMin : 0;
-            const totalCost = price > 0 ? Math.ceil(price * effectiveQty) : 0;
-            if (totalCost > 0) {
-                matCostByCity[c] += totalCost;
+            const sellPrice = p ? p.sellMin : 0;
+            const buyPrice = p ? p.buyMax : 0;
+            const totalSellCost = sellPrice > 0 ? Math.ceil(sellPrice * effectiveQty) : 0;
+            const totalBuyCost = buyPrice > 0 ? Math.ceil(buyPrice * effectiveQty) : 0;
+            
+            if (totalSellCost > 0) {
+                matCostByCity[c] += totalSellCost;
             } else {
                 matCostByCity[c] = Infinity;
             }
-            const isCheapest = price > 0 && price === cheapestPrice;
-            matTableHTML += `<td class="${isCheapest ? 'best-price' : ''}">${price > 0 ? totalCost.toLocaleString() : '—'}</td>`;
+            
+            const isCheapest = sellPrice > 0 && sellPrice === cheapestPrice;
+            matTableHTML += `<td class="${isCheapest ? 'best-price' : ''}">
+                <div style="font-weight:700" title="Cost if Insta-Bought">${totalSellCost > 0 ? totalSellCost.toLocaleString() : '—'}</div>
+                <div style="font-size:0.7rem; color:var(--text-muted); margin-top:2px;" title="Cost if Buy Ordered">B.O: ${totalBuyCost > 0 ? totalBuyCost.toLocaleString() : '—'}</div>
+            </td>`;
         });
         matTableHTML += `</tr>`;
 
@@ -1102,7 +1109,7 @@ function renderCraftDetail(itemId, recipe, data) {
         const v = p ? p.buyMax : 0;
         if (v > bestSellNow) bestSellNow = v;
     });
-    sellHTML += `<tr><td>Sell Now</td>`;
+    sellHTML += `<tr><td>Insta-Sell<br><small style="color:var(--text-muted);font-weight:normal;">(to highest Buy Order)</small></td>`;
     CITIES.forEach(c => {
         const p = finishedPrices[c];
         const v = p ? p.buyMax : 0;
@@ -1117,7 +1124,7 @@ function renderCraftDetail(itemId, recipe, data) {
         const v = p ? p.sellMin : 0;
         if (v > bestSellOrder) bestSellOrder = v;
     });
-    sellHTML += `<tr><td>Sell Order</td>`;
+    sellHTML += `<tr><td>Sell Order<br><small style="color:var(--text-muted);font-weight:normal;">(undercut lowest Sell Order)</small></td>`;
     CITIES.forEach(c => {
         const p = finishedPrices[c];
         const v = p ? p.sellMin : 0;
