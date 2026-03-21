@@ -286,40 +286,75 @@
         <section class="tab-pane hidden" id="pane-crafting">
             <div class="controls-panel">
                 <div class="control-group search-group">
-                    <label for="craft-search">Search Recipe</label>
+                    <label for="craft-search">Search Item</label>
                     <div class="search-input-wrapper">
-                        <input type="text" id="craft-search" placeholder="e.g. Bag, Sword..." autocomplete="off">
+                        <input type="text" id="craft-search" placeholder="e.g. Dawnsong, Bag, T6.2 Sword..." autocomplete="off">
                         <svg class="search-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
                         <div id="craft-autocomplete" class="autocomplete-items hidden"></div>
                     </div>
                 </div>
-                <div class="control-group">
-                    <label for="craft-tier">Tier</label>
-                    <select id="craft-tier">
-                        <option value="all">All Tiers</option>
-                        <option value="4">T4</option>
-                        <option value="5">T5</option>
-                        <option value="6">T6</option>
-                        <option value="7">T7</option>
-                        <option value="8">T8</option>
-                    </select>
-                </div>
-                <div class="control-group">
-                    <label for="craft-sort">Sort By</label>
-                    <select id="craft-sort">
-                        <option value="profit">Highest Profit</option>
-                        <option value="roi">Highest ROI</option>
-                        <option value="name">Name</option>
-                    </select>
-                </div>
-                <button id="craft-scan-btn" class="btn-primary">Calculate Profits</button>
+                <button id="craft-search-btn" class="btn-primary">Calculate</button>
             </div>
+
+            <!-- Crafting Settings -->
+            <div class="controls-panel craft-settings-panel" id="craft-settings" style="display:none;">
+                <div class="control-group checkbox-group">
+                    <label><input type="checkbox" id="craft-use-focus"> Use Focus</label>
+                </div>
+                <div class="control-group">
+                    <label for="craft-spec">Spec Level</label>
+                    <input type="number" id="craft-spec" min="0" max="100" value="0" style="width:70px;">
+                </div>
+                <div class="control-group">
+                    <label for="craft-mastery">Mastery</label>
+                    <input type="number" id="craft-mastery" min="0" max="100" value="0" style="width:70px;">
+                </div>
+                <div class="control-group">
+                    <label for="craft-city-bonus">City Bonus %</label>
+                    <input type="number" id="craft-city-bonus" min="0" max="50" value="0" step="1" style="width:70px;">
+                </div>
+                <div class="control-group">
+                    <label for="craft-fee">Station Fee %</label>
+                    <input type="number" id="craft-fee" min="0" max="100" value="0" step="0.5" style="width:70px;">
+                </div>
+                <button id="craft-recalc-btn" class="btn-secondary" style="margin-left:auto;">Recalculate</button>
+            </div>
+
             <div class="loading-state hidden" id="craft-spinner">
                 <div class="spinner"></div>
-                <p>Crunching numbers...</p>
+                <p>Fetching live prices...</p>
             </div>
             <div id="craft-error" class="error-message hidden"></div>
-            <div class="results-grid" id="crafting-results"></div>
+
+            <!-- Single item detail view -->
+            <div id="craft-detail-view" style="display:none;"></div>
+
+            <!-- Bulk scan section -->
+            <div id="craft-bulk-section">
+                <div class="controls-panel" style="margin-top:0.5rem; border-top:1px solid var(--border); padding-top:0.75rem;">
+                    <div class="control-group">
+                        <label for="craft-tier">Tier</label>
+                        <select id="craft-tier">
+                            <option value="all">All Tiers</option>
+                            <option value="4">T4</option>
+                            <option value="5">T5</option>
+                            <option value="6">T6</option>
+                            <option value="7">T7</option>
+                            <option value="8">T8</option>
+                        </select>
+                    </div>
+                    <div class="control-group">
+                        <label for="craft-sort">Sort By</label>
+                        <select id="craft-sort">
+                            <option value="profit">Highest Profit</option>
+                            <option value="roi">Highest ROI</option>
+                            <option value="name">Name</option>
+                        </select>
+                    </div>
+                    <button id="craft-scan-btn" class="btn-primary">Scan All Recipes</button>
+                </div>
+                <div class="results-grid" id="crafting-results"></div>
+            </div>
         </section>
     </main>
 

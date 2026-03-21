@@ -1312,3 +1312,202 @@ footer a:hover {
     padding-top: 0.3rem;
     padding-bottom: 0.3rem;
 }
+
+/* ====== CRAFTING CALCULATOR ====== */
+.craft-settings-panel {
+    margin-top: -0.5rem;
+    background: var(--bg-elevated);
+    border-color: rgba(212, 175, 55, 0.15);
+}
+
+.btn-secondary {
+    padding: 0.6rem 1.2rem;
+    background: var(--bg-card);
+    color: var(--accent);
+    font-weight: 700;
+    font-size: 0.85rem;
+    border: 1px solid var(--accent);
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    transition: all var(--transition);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.btn-secondary:hover {
+    background: var(--accent);
+    color: #000;
+    transform: translateY(-1px);
+}
+
+/* Summary Card */
+.craft-summary-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-lg);
+    padding: 1.5rem;
+    margin-bottom: 1.5rem;
+    animation: fadeInUp 0.3s ease-out both;
+}
+
+.craft-summary-header {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    margin-bottom: 1.25rem;
+    padding-bottom: 1rem;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.craft-summary-header h2 {
+    font-size: 1.3rem;
+    color: var(--text-primary);
+    margin: 0;
+}
+
+.craft-summary-stats {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: 0.75rem;
+    margin-bottom: 1rem;
+}
+
+.stat-box {
+    background: rgba(0, 0, 0, 0.25);
+    padding: 0.75rem;
+    border-radius: var(--radius);
+    text-align: center;
+}
+
+.stat-box.highlight {
+    border: 1px solid rgba(212, 175, 55, 0.3);
+    background: rgba(212, 175, 55, 0.05);
+}
+
+.stat-label {
+    font-size: 0.7rem;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+    margin-bottom: 0.25rem;
+}
+
+.stat-value {
+    font-size: 1.1rem;
+    font-weight: 700;
+    font-family: monospace;
+}
+
+/* Detail Sections */
+.craft-detail-section {
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-lg);
+    padding: 1.5rem;
+    margin-bottom: 1.5rem;
+    animation: fadeInUp 0.3s ease-out both;
+}
+
+.craft-detail-section h3 {
+    margin: 0 0 1rem;
+    font-size: 1rem;
+    color: var(--text-primary);
+}
+
+.craft-detail-info {
+    display: flex;
+    gap: 0.75rem;
+    margin-bottom: 1rem;
+}
+
+.rrr-badge {
+    display: inline-flex;
+    padding: 0.25rem 0.6rem;
+    background: rgba(74, 222, 128, 0.1);
+    color: var(--profit-green);
+    border-radius: 20px;
+    font-size: 0.8rem;
+    font-weight: 700;
+    border: 1px solid rgba(74, 222, 128, 0.2);
+}
+
+.focus-badge {
+    display: inline-flex;
+    padding: 0.25rem 0.6rem;
+    background: rgba(168, 85, 247, 0.1);
+    color: var(--purple);
+    border-radius: 20px;
+    font-size: 0.8rem;
+    font-weight: 700;
+    border: 1px solid rgba(168, 85, 247, 0.2);
+}
+
+/* Cost Table */
+.table-scroll-wrapper {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+}
+
+.craft-cost-table {
+    font-size: 0.8rem;
+    min-width: 700px;
+}
+
+.craft-cost-table th {
+    font-size: 0.7rem;
+    white-space: nowrap;
+}
+
+.craft-cost-table td {
+    white-space: nowrap;
+    font-family: monospace;
+    font-size: 0.8rem;
+}
+
+.mat-cell {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-family: inherit !important;
+    white-space: normal !important;
+}
+
+.mat-icon-sm {
+    width: 28px;
+    height: 28px;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border-color);
+    flex-shrink: 0;
+}
+
+.total-row td {
+    border-top: 2px solid var(--border-color);
+    font-weight: 700;
+    padding-top: 0.6rem;
+}
+
+/* Number inputs in crafting settings */
+.craft-settings-panel input[type="number"] {
+    padding: 0.6rem 0.5rem;
+    background: var(--bg-dark);
+    color: var(--text-primary);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    font-size: 0.85rem;
+    font-family: inherit;
+    transition: border-color var(--transition);
+}
+
+.craft-settings-panel input[type="number"]:focus {
+    outline: none;
+    border-color: var(--accent);
+}
+
+@media (max-width: 768px) {
+    .craft-summary-stats {
+        grid-template-columns: repeat(2, 1fr);
+    }
+    .craft-cost-table {
+        min-width: 500px;
+    }
+}

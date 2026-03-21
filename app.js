@@ -897,7 +897,313 @@ async function doCompare() {
 // ============================================================
 // CRAFTING PROFITS
 // ============================================================
+
+function calculateRRR(useFocus, cityBonusPct) {
+    const basePB = 18; // Royal city base production bonus
+    const focusPB = useFocus ? 59 : 0;
+    const totalPB = basePB + cityBonusPct + focusPB;
+    return 1 - 1 / (1 + totalPB / 100);
+}
+
+function calculateFocusCost(baseCost, specLevel, masteryLevel) {
+    const reduction = (specLevel * 0.6 + masteryLevel * 0.3);
+    return Math.max(1, Math.floor(baseCost * (1 - reduction / 100)));
+}
+
+// ====== SINGLE ITEM CRAFTING CALCULATOR ======
+let craftDetailItemId = null;
+
+async function doCraftSearch() {
+    if (itemsList.length === 0) await loadData();
+
+    const itemId = craftSearchExactId || document.getElementById('craft-search').value.trim();
+    if (!itemId) return;
+
+    // Resolve to exact ID
+    let resolvedId = craftSearchExactId;
+    if (!resolvedId) {
+        const searchLower = itemId.toLowerCase();
+        // Try exact match in recipes first
+        for (const id of Object.keys(recipesData)) {
+            if (getFriendlyName(id).toLowerCase() === searchLower || id.toLowerCase() === searchLower) {
+                resolvedId = id;
+                break;
+            }
+        }
+        if (!resolvedId) {
+            // Fuzzy search
+            const words = searchLower.split(' ').filter(w => w);
+            for (const id of Object.keys(recipesData)) {
+                const target = (getFriendlyName(id) + ' ' + id.replace(/_/g, ' ')).toLowerCase();
+                if (words.every(w => target.includes(w))) {
+                    resolvedId = id;
+                    break;
+                }
+            }
+        }
+    }
+
+    if (!resolvedId || !recipesData[resolvedId]) {
+        showError(document.getElementById('craft-error'), 'No recipe found for this item. Try another search.');
+        return;
+    }
+
+    craftDetailItemId = resolvedId;
+    const recipe = recipesData[resolvedId];
+
+    const spinner = document.getElementById('craft-spinner');
+    const errorEl = document.getElementById('craft-error');
+    hideError(errorEl);
+    spinner.classList.remove('hidden');
+
+    // Show settings panel
+    document.getElementById('craft-settings').style.display = 'flex';
+    document.getElementById('craft-detail-view').style.display = 'block';
+    document.getElementById('craft-bulk-section').style.display = 'none';
+
+    try {
+        const server = getServer();
+        // Fetch prices for finished item + all materials across all cities
+        const allItemIds = [resolvedId, ...recipe.materials.map(m => m.id)];
+        const uniqueIds = [...new Set(allItemIds)];
+        const data = await fetchMarketData(server, uniqueIds);
+        if (data.length > 0) await MarketDB.saveMarketData(data);
+
+        spinner.classList.add('hidden');
+        renderCraftDetail(resolvedId, recipe, data);
+        await updateDbStatus();
+    } catch (e) {
+        spinner.classList.add('hidden');
+        showError(errorEl, 'Failed to fetch data: ' + e.message);
+    }
+}
+
+function renderCraftDetail(itemId, recipe, data) {
+    const container = document.getElementById('craft-detail-view');
+    const name = getFriendlyName(itemId);
+
+    // Read settings
+    const useFocus = document.getElementById('craft-use-focus').checked;
+    const specLevel = parseInt(document.getElementById('craft-spec').value) || 0;
+    const masteryLevel = parseInt(document.getElementById('craft-mastery').value) || 0;
+    const cityBonusPct = parseFloat(document.getElementById('craft-city-bonus').value) || 0;
+    const stationFee = parseFloat(document.getElementById('craft-fee').value) || 0;
+    const rrr = calculateRRR(useFocus, cityBonusPct);
+    const effectiveMultiplier = 1 - rrr;
+
+    // Index prices by item_id → city
+    const priceIndex = {};
+    for (const entry of data) {
+        const id = entry.item_id;
+        let city = entry.city;
+        if (city && city.includes('Black Market')) city = 'Black Market';
+        if (!priceIndex[id]) priceIndex[id] = {};
+        const existing = priceIndex[id][city];
+        if (!existing) {
+            priceIndex[id][city] = {
+                sellMin: entry.sell_price_min || 0,
+                buyMax: entry.buy_price_max || 0,
+                sellDate: entry.sell_price_min_date || '',
+                buyDate: entry.buy_price_max_date || ''
+            };
+        } else {
+            if (entry.sell_price_min > 0 && (existing.sellMin === 0 || entry.sell_price_min < existing.sellMin)) {
+                existing.sellMin = entry.sell_price_min;
+            }
+            if (entry.buy_price_max > 0 && entry.buy_price_max > existing.buyMax) {
+                existing.buyMax = entry.buy_price_max;
+            }
+        }
+    }
+
+    const buyCities = CITIES.filter(c => c !== 'Black Market');
+
+    // ===== Material cost table =====
+    let matTableHTML = `<div class="craft-detail-section">
+        <h3>📦 Materials Required</h3>
+        <div class="craft-detail-info">
+            <span class="rrr-badge">RRR: ${(rrr * 100).toFixed(1)}%</span>
+            ${useFocus ? '<span class="focus-badge">🔮 Focus Active</span>' : ''}
+        </div>
+        <div class="table-scroll-wrapper">
+        <table class="compare-table craft-cost-table">
+            <thead><tr><th>Material</th><th>Qty</th><th>Eff. Qty</th>`;
+    buyCities.forEach(c => matTableHTML += `<th>${c}</th>`);
+    matTableHTML += `</tr></thead><tbody>`;
+
+    const matCostByCity = {}; // city → total cost
+    buyCities.forEach(c => matCostByCity[c] = 0);
+    let anyMissing = false;
+
+    for (const mat of recipe.materials) {
+        const effectiveQty = Math.ceil(mat.qty * effectiveMultiplier * 100) / 100;
+        const matPrices = priceIndex[mat.id] || {};
+        const matName = getFriendlyName(mat.id);
+
+        matTableHTML += `<tr>
+            <td class="mat-cell">
+                <img class="mat-icon-sm" src="https://render.albiononline.com/v1/item/${mat.id}.png" alt="" loading="lazy">
+                <span>${matName}</span>
+            </td>
+            <td>${mat.qty}</td>
+            <td class="text-accent">${effectiveQty.toFixed(1)}</td>`;
+
+        let cheapestPrice = Infinity;
+        buyCities.forEach(c => {
+            const p = matPrices[c];
+            const price = p ? p.sellMin : 0;
+            if (price > 0 && price < cheapestPrice) cheapestPrice = price;
+        });
+
+        buyCities.forEach(c => {
+            const p = matPrices[c];
+            const price = p ? p.sellMin : 0;
+            const totalCost = price > 0 ? Math.ceil(price * effectiveQty) : 0;
+            if (totalCost > 0) {
+                matCostByCity[c] += totalCost;
+            } else {
+                matCostByCity[c] = Infinity;
+            }
+            const isCheapest = price > 0 && price === cheapestPrice;
+            matTableHTML += `<td class="${isCheapest ? 'best-price' : ''}">${price > 0 ? totalCost.toLocaleString() : '—'}</td>`;
+        });
+        matTableHTML += `</tr>`;
+
+        if (cheapestPrice === Infinity) anyMissing = true;
+    }
+
+    // Totals row
+    matTableHTML += `<tr class="total-row"><td colspan="3"><strong>Total Material Cost</strong></td>`;
+    let cheapestTotal = Infinity;
+    buyCities.forEach(c => {
+        if (matCostByCity[c] < cheapestTotal && matCostByCity[c] !== Infinity) cheapestTotal = matCostByCity[c];
+    });
+    buyCities.forEach(c => {
+        const cost = matCostByCity[c];
+        const isBest = cost === cheapestTotal && cost !== Infinity;
+        matTableHTML += `<td class="${isBest ? 'best-price' : ''}">${cost !== Infinity ? cost.toLocaleString() : '—'}</td>`;
+    });
+    matTableHTML += `</tr></tbody></table></div></div>`;
+
+    // ===== Sell price comparison =====
+    const finishedPrices = priceIndex[itemId] || {};
+    let sellHTML = `<div class="craft-detail-section">
+        <h3>💰 Sell Price Comparison</h3>
+        <div class="table-scroll-wrapper">
+        <table class="compare-table craft-cost-table">
+            <thead><tr><th></th>`;
+    CITIES.forEach(c => sellHTML += `<th>${c}</th>`);
+    sellHTML += `</tr></thead><tbody>`;
+
+    // Sell Now (buy orders = buyMax)
+    let bestSellNow = 0;
+    CITIES.forEach(c => {
+        const p = finishedPrices[c];
+        const v = p ? p.buyMax : 0;
+        if (v > bestSellNow) bestSellNow = v;
+    });
+    sellHTML += `<tr><td>Sell Now</td>`;
+    CITIES.forEach(c => {
+        const p = finishedPrices[c];
+        const v = p ? p.buyMax : 0;
+        sellHTML += `<td class="${v > 0 && v === bestSellNow ? 'best-price' : ''}">${v > 0 ? v.toLocaleString() : '—'}</td>`;
+    });
+    sellHTML += `</tr>`;
+
+    // Place Sell Order (buy now price = sellMin)
+    let bestSellOrder = 0;
+    CITIES.forEach(c => {
+        const p = finishedPrices[c];
+        const v = p ? p.sellMin : 0;
+        if (v > bestSellOrder) bestSellOrder = v;
+    });
+    sellHTML += `<tr><td>Sell Order</td>`;
+    CITIES.forEach(c => {
+        const p = finishedPrices[c];
+        const v = p ? p.sellMin : 0;
+        sellHTML += `<td class="${v > 0 && v === bestSellOrder ? 'best-price' : ''}">${v > 0 ? v.toLocaleString() : '—'}</td>`;
+    });
+    sellHTML += `</tr>`;
+
+    // Profit row (using cheapest materials)
+    if (cheapestTotal !== Infinity) {
+        sellHTML += `<tr class="total-row"><td><strong>Net Profit</strong></td>`;
+        CITIES.forEach(c => {
+            const p = finishedPrices[c];
+            const sellPrice = p ? p.buyMax : 0;
+            if (sellPrice > 0) {
+                const tax = sellPrice * TAX_RATE;
+                const fee = cheapestTotal * (stationFee / 100);
+                const profit = sellPrice - cheapestTotal - tax - fee;
+                const cls = profit >= 0 ? 'text-green' : 'text-red';
+                sellHTML += `<td class="${cls}"><strong>${Math.floor(profit).toLocaleString()}</strong></td>`;
+            } else {
+                sellHTML += `<td>—</td>`;
+            }
+        });
+        sellHTML += `</tr>`;
+    }
+
+    sellHTML += `</tbody></table></div></div>`;
+
+    // ===== Summary card =====
+    let bestProfit = -Infinity, bestCity = '', bestSellPrice = 0;
+    CITIES.forEach(c => {
+        const p = finishedPrices[c];
+        const sellPrice = p ? p.buyMax : 0;
+        if (sellPrice > 0 && cheapestTotal !== Infinity) {
+            const tax = sellPrice * TAX_RATE;
+            const fee = cheapestTotal * (stationFee / 100);
+            const profit = sellPrice - cheapestTotal - tax - fee;
+            if (profit > bestProfit) {
+                bestProfit = profit;
+                bestCity = c;
+                bestSellPrice = sellPrice;
+            }
+        }
+    });
+
+    let summaryHTML = `<div class="craft-summary-card">
+        <div class="craft-summary-header">
+            <div style="position:relative;display:flex;">
+                <img class="item-icon" src="https://render.albiononline.com/v1/item/${itemId}.png" alt="" loading="lazy">
+                ${getEnchantmentBadge(itemId)}
+            </div>
+            <div>
+                <h2>${name} <span class="tier-badge">${getTierEnchLabel(itemId)}</span></h2>
+                <span style="color:var(--text-muted);font-size:0.8rem;">${itemId}</span>
+            </div>
+        </div>`;
+
+    if (bestProfit > -Infinity) {
+        const roi = cheapestTotal > 0 ? (bestProfit / cheapestTotal * 100).toFixed(1) : '0.0';
+        const gaugeWidth = Math.min(100, Math.abs(parseFloat(roi)));
+        summaryHTML += `
+        <div class="craft-summary-stats">
+            <div class="stat-box"><div class="stat-label">Cheapest Materials</div><div class="stat-value">${cheapestTotal.toLocaleString()} 💰</div></div>
+            <div class="stat-box"><div class="stat-label">Best Sell (${bestCity})</div><div class="stat-value text-accent">${bestSellPrice.toLocaleString()} 💰</div></div>
+            <div class="stat-box"><div class="stat-label">Tax (6.5%)</div><div class="stat-value text-red">-${Math.floor(bestSellPrice * TAX_RATE).toLocaleString()}</div></div>
+            ${stationFee > 0 ? `<div class="stat-box"><div class="stat-label">Station Fee (${stationFee}%)</div><div class="stat-value text-red">-${Math.floor(cheapestTotal * stationFee / 100).toLocaleString()}</div></div>` : ''}
+            <div class="stat-box highlight"><div class="stat-label">Net Profit</div><div class="stat-value ${bestProfit >= 0 ? 'text-green' : 'text-red'}">${Math.floor(bestProfit).toLocaleString()} 💰</div></div>
+            <div class="stat-box"><div class="stat-label">ROI</div><div class="stat-value ${bestProfit >= 0 ? 'text-green' : 'text-red'}">${roi}%</div></div>
+        </div>
+        <div class="profit-gauge"><div class="profit-gauge-fill ${bestProfit >= 0 ? 'positive' : 'negative'}" style="width:${gaugeWidth}%"></div></div>`;
+    } else {
+        summaryHTML += `<div class="craft-summary-stats"><div class="stat-box"><div class="stat-value">No profitable route found</div></div></div>`;
+    }
+    summaryHTML += `</div>`;
+
+    container.innerHTML = summaryHTML + matTableHTML + sellHTML;
+}
+
+// ====== BULK SCAN (legacy) ======
 function processCrafting(data, tier, sortBy) {
+    const useFocus = document.getElementById('craft-use-focus')?.checked || false;
+    const cityBonusPct = parseFloat(document.getElementById('craft-city-bonus')?.value) || 0;
+    const stationFee = parseFloat(document.getElementById('craft-fee')?.value) || 0;
+    const rrr = calculateRRR(useFocus, cityBonusPct);
+    const effectiveMultiplier = 1 - rrr;
+
     const prices = {};
     data.forEach(entry => {
         if (entry.sell_price_min === 0 && entry.buy_price_max === 0) return;
@@ -929,7 +1235,6 @@ function processCrafting(data, tier, sortBy) {
         if (!prices[finishedItem]) continue;
 
         for (const [quality, citiesObj] of Object.entries(prices[finishedItem])) {
-            // Find best sell city for the finished item
             let bestSellCity = null, bestSellPrice = 0, finalDate = '0001';
             for (const city of Object.keys(citiesObj)) {
                 if (citiesObj[city].buy > bestSellPrice) {
@@ -940,7 +1245,6 @@ function processCrafting(data, tier, sortBy) {
             }
             if (bestSellPrice === 0) continue;
 
-            // Calculate material costs
             let totalMatCost = 0, missingMat = false;
             const matBreakdown = [];
 
@@ -959,14 +1263,16 @@ function processCrafting(data, tier, sortBy) {
                     }
                 }
                 if (bestBuyPrice === Infinity) { missingMat = true; break; }
-                const cost = bestBuyPrice * mat.qty;
+                const effectiveQty = mat.qty * effectiveMultiplier;
+                const cost = bestBuyPrice * effectiveQty;
                 totalMatCost += cost;
-                matBreakdown.push({ id: mat.id, qty: mat.qty, city: bestBuyCity, unitPrice: bestBuyPrice, total: cost, updateDate: matDate });
+                matBreakdown.push({ id: mat.id, qty: mat.qty, effectiveQty: +effectiveQty.toFixed(1), city: bestBuyCity, unitPrice: bestBuyPrice, total: cost, updateDate: matDate });
             }
             if (missingMat) continue;
 
             const tax = bestSellPrice * TAX_RATE;
-            const profit = bestSellPrice - totalMatCost - tax;
+            const fee = totalMatCost * (stationFee / 100);
+            const profit = bestSellPrice - totalMatCost - tax - fee;
             const roi = (profit / totalMatCost) * 100;
 
             let oldestDate = finalDate;
@@ -976,13 +1282,12 @@ function processCrafting(data, tier, sortBy) {
 
             crafts.push({
                 itemId: finishedItem, quality, sellCity: bestSellCity, sellPrice: bestSellPrice,
-                matCost: totalMatCost, mats: matBreakdown, tax, profit, roi,
+                matCost: totalMatCost, mats: matBreakdown, tax, fee, profit, roi,
                 updateDate: oldestDate, category: recipe.category || 'other'
             });
         }
     }
 
-    // Sort
     if (sortBy === 'roi') crafts.sort((a, b) => b.roi - a.roi);
     else if (sortBy === 'name') crafts.sort((a, b) => getFriendlyName(a.itemId).localeCompare(getFriendlyName(b.itemId)));
     else crafts.sort((a, b) => b.profit - a.profit);
@@ -1017,14 +1322,13 @@ function renderCrafting(crafts) {
                             <img class="mat-icon" src="https://render.albiononline.com/v1/item/${mat.id}.png" alt="" loading="lazy">
                             ${getEnchantmentBadge(mat.id)}
                         </div>
-                        <span>${mat.qty}x ${getFriendlyName(mat.id)} <span class="mat-city">from ${mat.city}</span></span>
+                        <span>${mat.effectiveQty || mat.qty}x ${getFriendlyName(mat.id)} <span class="mat-city">from ${mat.city}</span></span>
                     </div>
-                    <span>${mat.total.toLocaleString()} 💰</span>
+                    <span>${Math.floor(mat.total).toLocaleString()} 💰</span>
                 </div>
             `;
         });
 
-        // Profit gauge width (capped at 100%)
         const gaugeWidth = Math.min(100, Math.abs(craft.roi));
         const gaugeClass = craft.profit >= 0 ? 'positive' : 'negative';
 
@@ -1040,7 +1344,7 @@ function renderCrafting(crafts) {
                 </div>
             </div>
             <div class="craft-materials">
-                <div class="craft-materials-title">Materials Required</div>
+                <div class="craft-materials-title">Materials Required (after ${(calculateRRR(document.getElementById('craft-use-focus')?.checked || false, parseFloat(document.getElementById('craft-city-bonus')?.value) || 0) * 100).toFixed(1)}% RRR)</div>
                 ${matsHTML}
                 <div class="total-mat-cost">Total Cost: ${Math.floor(craft.matCost).toLocaleString()} 💰</div>
             </div>
@@ -1053,6 +1357,7 @@ function renderCrafting(crafts) {
             </div>
             <div class="profit-section">
                 <div class="profit-row"><span>Tax (6.5%):</span><span class="text-red">-${Math.floor(craft.tax).toLocaleString()} 💰</span></div>
+                ${craft.fee > 0 ? `<div class="profit-row"><span>Station Fee:</span><span class="text-red">-${Math.floor(craft.fee).toLocaleString()} 💰</span></div>` : ''}
                 <div class="profit-row total"><span>Net Profit:</span><strong class="${craft.profit >= 0 ? 'text-green' : 'text-red'}">${Math.floor(craft.profit).toLocaleString()} 💰</strong></div>
                 <div class="roi-row"><span>ROI:</span><strong class="${craft.roi >= 0 ? 'text-green' : 'text-red'}">${craft.roi.toFixed(1)}%</strong></div>
                 <div class="profit-gauge"><div class="profit-gauge-fill ${gaugeClass}" style="width:${gaugeWidth}%"></div></div>
@@ -1081,6 +1386,9 @@ async function doCraftScan() {
 
     hideError(errorEl);
     document.getElementById('crafting-results').innerHTML = '';
+    document.getElementById('craft-detail-view').style.display = 'none';
+    document.getElementById('craft-bulk-section').style.display = 'block';
+    document.getElementById('craft-settings').style.display = 'flex';
     spinner.classList.remove('hidden');
 
     try {
@@ -1096,7 +1404,6 @@ async function doCraftScan() {
         const searchVal = (craftSearchExactId || document.getElementById('craft-search').value.trim()).toLowerCase();
         let filteredData = cachedData;
         if (searchVal) {
-            // Only process recipes that match the search
             const matchingRecipes = Object.keys(recipesData).filter(id => {
                 const name = getFriendlyName(id).toLowerCase();
                 return name.includes(searchVal) || id.toLowerCase().includes(searchVal);
@@ -1272,10 +1579,16 @@ async function init() {
     document.getElementById('compare-search').addEventListener('input', () => { compareSelectedId = null; });
 
     // Crafting tab
+    document.getElementById('craft-search-btn').addEventListener('click', doCraftSearch);
     document.getElementById('craft-scan-btn').addEventListener('click', doCraftScan);
+    document.getElementById('craft-recalc-btn').addEventListener('click', () => {
+        if (craftDetailItemId && recipesData[craftDetailItemId]) {
+            doCraftSearch(); // Re-fetch and re-render with new settings
+        }
+    });
     setupAutocomplete('craft-search', 'craft-autocomplete', (id) => { craftSearchExactId = id; });
     document.getElementById('craft-search').addEventListener('keydown', (e) => {
-        if (e.key === 'Enter') doCraftScan();
+        if (e.key === 'Enter') doCraftSearch();
     });
     document.getElementById('craft-search').addEventListener('input', () => { craftSearchExactId = null; });
 
