@@ -116,9 +116,10 @@ function hideError(container) {
 // ====== DATA LOADING ======
 async function loadData() {
     try {
+        const cb = '?v=' + Date.now();
         const [resItems, resRecipes] = await Promise.all([
-            fetch('items.json'),
-            fetch('recipes.json')
+            fetch('items.json' + cb),
+            fetch('recipes.json' + cb)
         ]);
         ITEM_NAMES = await resItems.json();
         itemsList = Object.keys(ITEM_NAMES).filter(k => k && ITEM_NAMES[k]);
