@@ -1487,33 +1487,77 @@ async function showGraph(itemId) {
         title.textContent = `${getFriendlyName(itemId)} – Price History (30 Days)`;
         const timestamps = data[0].data.timestamps.slice(-30);
         const avgPrices = data[0].data.prices_avg.slice(-30);
+        const volumes = data[0].data.item_count.slice(-30);
         const labels = timestamps.map(ts => new Date(ts).toLocaleDateString());
 
         priceChartInstance = new Chart(ctx, {
             type: 'line',
             data: {
                 labels,
-                datasets: [{
-                    label: 'Average Price',
-                    data: avgPrices,
-                    borderColor: '#d4af37',
-                    backgroundColor: 'rgba(212, 175, 55, 0.15)',
-                    fill: true,
-                    tension: 0.4,
-                    borderWidth: 2,
-                    pointRadius: 2,
-                    pointHoverRadius: 5
-                }]
+                datasets: [
+                    {
+                        label: 'Average Price',
+                        data: avgPrices,
+                        borderColor: '#d4af37',
+                        backgroundColor: 'rgba(212, 175, 55, 0.15)',
+                        fill: true,
+                        tension: 0.4,
+                        borderWidth: 2,
+                        pointRadius: 2,
+                        pointHoverRadius: 5,
+                        yAxisID: 'y'
+                    },
+                    {
+                        type: 'bar',
+                        label: 'Volume Sold',
+                        data: volumes,
+                        backgroundColor: 'rgba(100, 149, 237, 0.3)', // subtle blue
+                        borderWidth: 0,
+                        yAxisID: 'y1'
+                    }
+                ]
             },
             options: {
                 responsive: true,
                 maintainAspectRatio: false,
                 scales: {
-                    y: { beginAtZero: false, grid: { color: 'rgba(255,255,255,0.04)' }, ticks: { color: '#888' } },
-                    x: { grid: { color: 'rgba(255,255,255,0.04)' }, ticks: { color: '#888', maxRotation: 45 } }
+                    x: { 
+                        grid: { color: 'rgba(255,255,255,0.04)' }, 
+                        ticks: { color: '#888', maxRotation: 45 } 
+                    },
+                    y: { 
+                        type: 'linear',
+                        display: true,
+                        position: 'left',
+                        beginAtZero: false, 
+                        grid: { color: 'rgba(255,255,255,0.04)' }, 
+                        ticks: { color: '#d4af37' } 
+                    },
+                    y1: {
+                        type: 'linear',
+                        display: true,
+                        position: 'right',
+                        beginAtZero: true,
+                        grid: { drawOnChartArea: false }, // omit grid lines for secondary axis
+                        ticks: { color: 'rgba(100, 149, 237, 0.8)' }
+                    }
                 },
                 plugins: {
-                    legend: { labels: { color: '#e0e0e0' } }
+                    legend: { labels: { color: '#e0e0e0' } },
+                    tooltip: {
+                        callbacks: {
+                            label: function(context) {
+                                let label = context.dataset.label || '';
+                                if (label) {
+                                    label += ': ';
+                                }
+                                if (context.parsed.y !== null) {
+                                    label += Math.round(context.parsed.y).toLocaleString();
+                                }
+                                return label;
+                            }
+                        }
+                    }
                 }
             }
         });
