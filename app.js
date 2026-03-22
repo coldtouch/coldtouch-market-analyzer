@@ -1094,6 +1094,9 @@ function renderCraftDetail(itemId, recipe, data) {
 
     // ===== Sell price comparison =====
     const finishedPrices = priceIndex[itemId] || {};
+    const outputQty = recipe.output || 1;
+    const outputSuffix = outputQty > 1 ? ` (x${outputQty})` : '';
+
     let sellHTML = `<div class="craft-detail-section">
         <h3>💰 Sell Price Comparison</h3>
         <div class="table-scroll-wrapper">
@@ -1109,11 +1112,12 @@ function renderCraftDetail(itemId, recipe, data) {
         const v = p ? p.buyMax : 0;
         if (v > bestSellNow) bestSellNow = v;
     });
-    sellHTML += `<tr><td>Insta-Sell<br><small style="color:var(--text-muted);font-weight:normal;">(to highest Buy Order)</small></td>`;
+    sellHTML += `<tr><td>Insta-Sell${outputSuffix}<br><small style="color:var(--text-muted);font-weight:normal;">(to highest Buy Order)</small></td>`;
     CITIES.forEach(c => {
         const p = finishedPrices[c];
         const v = p ? p.buyMax : 0;
-        sellHTML += `<td class="${v > 0 && v === bestSellNow ? 'best-price' : ''}">${v > 0 ? v.toLocaleString() : '—'}</td>`;
+        const totalV = v * outputQty;
+        sellHTML += `<td class="${v > 0 && v === bestSellNow ? 'best-price' : ''}">${totalV > 0 ? totalV.toLocaleString() : '—'}</td>`;
     });
     sellHTML += `</tr>`;
 
@@ -1124,11 +1128,12 @@ function renderCraftDetail(itemId, recipe, data) {
         const v = p ? p.sellMin : 0;
         if (v > bestSellOrder) bestSellOrder = v;
     });
-    sellHTML += `<tr><td>Sell Order<br><small style="color:var(--text-muted);font-weight:normal;">(undercut lowest Sell Order)</small></td>`;
+    sellHTML += `<tr><td>Sell Order${outputSuffix}<br><small style="color:var(--text-muted);font-weight:normal;">(undercut lowest Sell Order)</small></td>`;
     CITIES.forEach(c => {
         const p = finishedPrices[c];
         const v = p ? p.sellMin : 0;
-        sellHTML += `<td class="${v > 0 && v === bestSellOrder ? 'best-price' : ''}">${v > 0 ? v.toLocaleString() : '—'}</td>`;
+        const totalV = v * outputQty;
+        sellHTML += `<td class="${v > 0 && v === bestSellOrder ? 'best-price' : ''}">${totalV > 0 ? totalV.toLocaleString() : '—'}</td>`;
     });
     sellHTML += `</tr>`;
 
@@ -1139,9 +1144,10 @@ function renderCraftDetail(itemId, recipe, data) {
             const p = finishedPrices[c];
             const sellPrice = p ? p.buyMax : 0;
             if (sellPrice > 0) {
-                const tax = sellPrice * TAX_RATE;
+                const totalRevenue = sellPrice * outputQty;
+                const tax = totalRevenue * TAX_RATE;
                 const fee = cheapestTotal * (stationFee / 100);
-                const profit = sellPrice - cheapestTotal - tax - fee;
+                const profit = totalRevenue - cheapestTotal - tax - fee;
                 const cls = profit >= 0 ? 'text-green' : 'text-red';
                 sellHTML += `<td class="${cls}"><strong>${Math.floor(profit).toLocaleString()}</strong></td>`;
             } else {

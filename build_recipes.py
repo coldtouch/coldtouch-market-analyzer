@@ -320,6 +320,14 @@ def generate_recipes():
 
 if __name__ == '__main__':
     recipes = generate_recipes()
+    
+    # Merge consumables if dump exists
+    import os
+    if os.path.exists('consumables_recipes_dump.json'):
+        with open('consumables_recipes_dump.json', 'r', encoding='utf-8') as cf:
+            consumables = json.load(cf)
+            recipes.update(consumables)
+
     with open('recipes.json', 'w', encoding='utf-8') as f:
         json.dump(recipes, f, indent=2)
     
