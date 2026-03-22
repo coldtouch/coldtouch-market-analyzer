@@ -1463,15 +1463,24 @@ function setupCardButtons(container) {
     });
 }
 
+let currentChartData = [];
+let currentChartItemId = null;
+
 async function showGraph(itemId) {
     const modal = document.getElementById('chart-modal');
     const title = document.getElementById('chart-title');
     const ctx = document.getElementById('priceChart').getContext('2d');
+    const citySelect = document.getElementById('chart-city-select');
 
     modal.classList.remove('hidden');
     title.textContent = `Loading history for ${getFriendlyName(itemId)}...`;
 
     if (priceChartInstance) priceChartInstance.destroy();
+    
+    if (citySelect) {
+        citySelect.innerHTML = '<option>Loading...</option>';
+        citySelect.disabled = true;
+    }
 
     try {
         const server = getServer();
@@ -1479,45 +1488,95 @@ async function showGraph(itemId) {
         if (!response.ok) throw new Error('Failed to fetch chart data');
         const data = await response.json();
 
-        if (data.length === 0 || !data[0].data || !data[0].data.timestamps) {
+        if (data.length === 0) {
             title.textContent = 'No history available';
             return;
         }
 
-        title.textContent = `${getFriendlyName(itemId)} – Price History (30 Days)`;
-        const timestamps = data[0].data.timestamps.slice(-30);
-        const avgPrices = data[0].data.prices_avg.slice(-30);
-        const volumes = data[0].data.item_count.slice(-30);
-        const labels = timestamps.map(ts => new Date(ts).toLocaleDateString());
+        currentChartData = data;
+        currentChartItemId = itemId;
+        
+        // Extract unique locations
+        const uniqueLocations = [...new Set(data.map(d => d.location).filter(Boolean))].sort();
+        
+        let defaultCity = null;
+        if (citySelect && uniqueLocations.length > 0) {
+            citySelect.innerHTML = '';
+            uniqueLocations.forEach(loc => {
+                const opt = document.createElement('option');
+                opt.value = loc;
+                opt.textContent = loc;
+                citySelect.appendChild(opt);
+            });
+            
+            // Default to non-BM city if possible
+            const nonBM = uniqueLocations.filter(c => c !== 'Black Market');
+            defaultCity = nonBM.length > 0 ? nonBM[0] : uniqueLocations[0];
+            citySelect.value = defaultCity;
+            citySelect.disabled = false;
+            
+            citySelect.onchange = () => {
+                renderChartForCity(citySelect.value);
+            };
+        } else {
+            defaultCity = data[0].location; // Fallback
+        }
 
-        priceChartInstance = new Chart(ctx, {
-            type: 'line',
-            data: {
-                labels,
-                datasets: [
-                    {
-                        label: 'Average Price',
-                        data: avgPrices,
-                        borderColor: '#d4af37',
-                        backgroundColor: 'rgba(212, 175, 55, 0.15)',
-                        fill: true,
-                        tension: 0.4,
-                        borderWidth: 2,
-                        pointRadius: 2,
-                        pointHoverRadius: 5,
-                        yAxisID: 'y'
-                    },
-                    {
-                        type: 'bar',
-                        label: 'Volume Sold',
-                        data: volumes,
-                        backgroundColor: 'rgba(100, 149, 237, 0.3)', // subtle blue
-                        borderWidth: 0,
-                        yAxisID: 'y1'
-                    }
-                ]
-            },
-            options: {
+        title.textContent = `${getFriendlyName(itemId)} – Price History (30 Days)`;
+        renderChartForCity(defaultCity);
+
+    } catch (e) {
+        title.textContent = 'Error: ' + e.message;
+    }
+}
+
+function renderChartForCity(city) {
+    const ctx = document.getElementById('priceChart').getContext('2d');
+    if (priceChartInstance) priceChartInstance.destroy();
+
+    const cityDataAll = currentChartData.filter(d => d.location === city);
+    let targetDataset = cityDataAll.find(d => d.quality === 1);
+    if (!targetDataset && cityDataAll.length > 0) {
+        targetDataset = cityDataAll[0];
+    }
+
+    if (!targetDataset || !targetDataset.data || !targetDataset.data.timestamps || targetDataset.data.timestamps.length === 0) {
+        return;
+    }
+
+    const timestamps = targetDataset.data.timestamps.slice(-30);
+    const avgPrices = targetDataset.data.prices_avg.slice(-30);
+    const volumes = targetDataset.data.item_count.slice(-30);
+    const labels = timestamps.map(ts => new Date(ts).toLocaleDateString());
+
+    priceChartInstance = new Chart(ctx, {
+        type: 'line',
+        data: {
+            labels,
+            datasets: [
+                {
+                    label: 'Average Price',
+                    data: avgPrices,
+                    borderColor: '#d4af37',
+                    backgroundColor: 'rgba(212, 175, 55, 0.15)',
+                    fill: true,
+                    tension: 0.4,
+                    borderWidth: 2,
+                    pointRadius: 2,
+                    pointHoverRadius: 5,
+                    yAxisID: 'y'
+                },
+                {
+                    type: 'bar',
+                    label: 'Volume Sold',
+                    data: volumes,
+                    backgroundColor: 'rgba(100, 149, 237, 0.3)', // subtle blue
+                    borderWidth: 0,
+                    yAxisID: 'y1'
+                }
+            ]
+        },
+        options: {
                 responsive: true,
                 maintainAspectRatio: false,
                 scales: {
@@ -1561,9 +1620,6 @@ async function showGraph(itemId) {
                 }
             }
         });
-    } catch (e) {
-        title.textContent = 'Error: ' + e.message;
-    }
 }
 
 // ====== AUTOCOMPLETE SETUP ======
