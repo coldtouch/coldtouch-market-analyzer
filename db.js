@@ -44,17 +44,38 @@ const MarketDB = (() => {
             for (const entry of entries) {
                 if (!entry.item_id || !entry.city) continue;
                 const key = makeKey(entry);
-                store.put({
-                    key,
-                    item_id: entry.item_id,
-                    quality: entry.quality || 1,
-                    city: entry.city,
-                    sell_price_min: entry.sell_price_min || 0,
-                    sell_price_min_date: entry.sell_price_min_date || '',
-                    buy_price_max: entry.buy_price_max || 0,
-                    buy_price_max_date: entry.buy_price_max_date || '',
-                    scan_timestamp: now
-                });
+                const req = store.get(key);
+                
+                req.onsuccess = (e) => {
+                    const existing = e.target.result;
+                    let sellPrice = entry.sell_price_min || 0;
+                    let sellDate = entry.sell_price_min_date || '';
+                    let buyPrice = entry.buy_price_max || 0;
+                    let buyDate = entry.buy_price_max_date || '';
+
+                    if (existing) {
+                        if (existing.sell_price_min_date && sellDate < existing.sell_price_min_date) {
+                            sellPrice = existing.sell_price_min;
+                            sellDate = existing.sell_price_min_date;
+                        }
+                        if (existing.buy_price_max_date && buyDate < existing.buy_price_max_date) {
+                            buyPrice = existing.buy_price_max;
+                            buyDate = existing.buy_price_max_date;
+                        }
+                    }
+
+                    store.put({
+                        key,
+                        item_id: entry.item_id,
+                        quality: entry.quality || 1,
+                        city: entry.city,
+                        sell_price_min: sellPrice,
+                        sell_price_min_date: sellDate,
+                        buy_price_max: buyPrice,
+                        buy_price_max_date: buyDate,
+                        scan_timestamp: now
+                    });
+                };
             }
             tx.oncomplete = () => resolve();
             tx.onerror = () => reject(tx.error);
