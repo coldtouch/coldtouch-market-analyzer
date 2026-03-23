@@ -515,7 +515,7 @@ function buildPaginationHTML(totalPages) {
 // ============================================================
 // MARKET FLIPPING (ARBITRAGE)
 // ============================================================
-function processArbitrage(data, quality, tier, enchantment, includeBM, isSingleItem = false) {
+function processArbitrage(data, quality, tier, enchantment, includeBM, cityFilter, isSingleItem = false) {
     const itemsData = {};
     data.forEach(entry => {
         if (quality !== 'all' && entry.quality.toString() !== quality) return;
@@ -556,6 +556,10 @@ function processArbitrage(data, quality, tier, enchantment, includeBM, isSingleI
                 const cityBuy = cities[i];
                 const citySell = cities[j];
                 if (cityBuy === 'Black Market') continue;
+
+                if (cityFilter !== 'all' && cityBuy !== cityFilter && citySell !== cityFilter) {
+                    continue;
+                }
 
                 const priceBuy = citiesObj[cityBuy].sellMin;
                 const priceSell = citiesObj[citySell].buyMax;
@@ -651,6 +655,7 @@ async function doArbScan() {
     const tier = document.getElementById('arb-tier').value;
     const enchantment = document.getElementById('arb-enchantment').value;
     const category = document.getElementById('arb-category').value;
+    const cityFilter = document.getElementById('arb-city').value;
     const includeBM = document.getElementById('include-black-market').checked;
 
     hideError(errorEl);
@@ -691,7 +696,7 @@ async function doArbScan() {
                     });
                 }
 
-                const trades = processArbitrage(filteredData, quality, tier, enchantment, includeBM, isSingleItem);
+                const trades = processArbitrage(filteredData, quality, tier, enchantment, includeBM, cityFilter, isSingleItem);
                 renderArbitrage(trades, isSingleItem);
                 return;
             }
@@ -707,7 +712,7 @@ async function doArbScan() {
         const data = await fetchMarketData(server, itemsToFetch);
         if (data.length > 0) await MarketDB.saveMarketData(data);
         spinner.classList.add('hidden');
-        const trades = processArbitrage(data, quality, tier, enchantment, includeBM, isSingleItem);
+        const trades = processArbitrage(data, quality, tier, enchantment, includeBM, cityFilter, isSingleItem);
         renderArbitrage(trades, isSingleItem);
         await updateDbStatus();
     } catch (e) {
