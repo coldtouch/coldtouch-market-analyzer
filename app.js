@@ -616,13 +616,23 @@ function renderArbitrage(trades, isSingleItem = false) {
                 <div class="city buy-city">
                     <span class="route-label">Buy from</span>
                     <strong class="city-name">${trade.buyCity}</strong>
-                    <span class="price">${Math.floor(trade.buyPrice).toLocaleString()} 💰</span>
+                    <div style="display:flex; align-items:center; gap:0.5rem; justify-content:center;">
+                        <span class="price">${Math.floor(trade.buyPrice).toLocaleString()} 💰</span>
+                        <button class="btn-refresh-item" data-item="${trade.itemId}" title="Refresh Prices" style="background:none; border:none; color:var(--text-muted); cursor:pointer; padding:0;">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 4v6h-6"></path><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path></svg>
+                        </button>
+                    </div>
                 </div>
                 <div class="arrow">➔</div>
                 <div class="city sell-city">
                     <span class="route-label">Sell to</span>
                     <strong class="city-name">${trade.sellCity}</strong>
-                    <span class="price">${Math.floor(trade.sellPrice).toLocaleString()} 💰</span>
+                    <div style="display:flex; align-items:center; gap:0.5rem; justify-content:center;">
+                        <span class="price">${Math.floor(trade.sellPrice).toLocaleString()} 💰</span>
+                        <button class="btn-refresh-item" data-item="${trade.itemId}" title="Refresh Prices" style="background:none; border:none; color:var(--text-muted); cursor:pointer; padding:0;">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 4v6h-6"></path><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path></svg>
+                        </button>
+                    </div>
                 </div>
             </div>
             <div class="profit-section">
@@ -632,9 +642,6 @@ function renderArbitrage(trades, isSingleItem = false) {
             </div>
             <div class="card-footer">
                 <span>Updated: ${timeAgo(trade.updateDate)}</span>
-                <button class="btn-refresh-item" data-item="${trade.itemId}" title="Refresh this item">
-                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 4v6h-6"></path><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path></svg>
-                </button>
             </div>
             <button class="btn-graph" data-item="${trade.itemId}">Show Price History</button>
         `;
