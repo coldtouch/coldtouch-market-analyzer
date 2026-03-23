@@ -77,7 +77,7 @@ function fireDiscordAlert(itemId, qual, sellLoc, sellPrice, buyLoc, buyPrice, pr
 }
 
 function connectWS() {
-    const ws = new WebSocket('ws://127.0.0.1:443', { rejectUnauthorized: false });
+    const ws = new WebSocket('wss://127.0.0.1:443', { rejectUnauthorized: false });
     
     ws.on('open', () => {
         console.log('Alerter connected to local WSS');
