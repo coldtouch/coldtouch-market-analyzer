@@ -648,7 +648,8 @@ function processArbitrage(data, quality, tier, enchantment, includeBM, buyCityFi
                             destSellOrder: destSellOrder,
                             tax, profit, roi: (profit / priceBuy) * 100,
                             soTax, soProfit, soRoi: destSellOrder > 0 ? (soProfit / priceBuy) * 100 : 0,
-                            updateDate: dateBuy < dateSell ? dateBuy : dateSell
+                            updateDate: dateBuy < dateSell ? dateBuy : dateSell,
+                            dateBuy: dateBuy, dateSell: dateSell
                         });
                     }
                 }
@@ -658,8 +659,118 @@ function processArbitrage(data, quality, tier, enchantment, includeBM, buyCityFi
     return trades.sort((a, b) => b.profit - a.profit).slice(0, 60);
 }
 
-function renderArbitrage(trades, isSingleItem = false) {
+function buildArbitrageCardDOM(trade) {
+    const card = document.createElement('div');
+    card.className = 'trade-card';
+    card.dataset.itemId = trade.itemId;
+    card.dataset.buyCity = trade.buyCity;
+    card.dataset.sellCity = trade.sellCity;
+    card.innerHTML = `
+        <div class="card-header">
+            <div style="position: relative; display: flex;">
+                <img class="item-icon" src="https://render.albiononline.com/v1/item/${trade.itemId}.png" alt="" loading="lazy">
+                ${getEnchantmentBadge(trade.itemId)}
+            </div>
+            <div class="header-titles">
+                <div class="item-name">${getFriendlyName(trade.itemId)}</div>
+                <span class="item-quality">${getQualityName(trade.quality)}</span>
+            </div>
+        </div>
+        <div class="trade-route">
+            <div class="city buy-city">
+                <span class="route-label">Buy from (Instant Buy)</span>
+                <strong class="city-name">${trade.buyCity}</strong>
+                <div style="display:flex; align-items:center; gap:0.5rem; justify-content:center;">
+                    <span class="price" title="Instant Buy (Cheapest Sell Order)">${Math.floor(trade.buyPrice).toLocaleString()} 💰</span>
+                </div>
+                <div style="font-size:0.8rem; color:var(--text-muted); margin-top:0.3rem;">
+                    Buy Order: <strong>${Math.floor(trade.originBuyOrder).toLocaleString()}</strong>
+                </div>
+            </div>
+            <div class="arrow">➔</div>
+            <div class="city sell-city">
+                <span class="route-label">Sell to (Instant Sell)</span>
+                <strong class="city-name">${trade.sellCity}</strong>
+                <div style="display:flex; align-items:center; gap:0.5rem; justify-content:center;">
+                    <span class="price" title="Instant Sell (Highest Buy Order)">${Math.floor(trade.sellPrice).toLocaleString()} 💰</span>
+                </div>
+                <div style="font-size:0.8rem; color:var(--text-muted); margin-top:0.3rem;">
+                    Sell Order: <strong>${Math.floor(trade.destSellOrder).toLocaleString()}</strong>
+                </div>
+            </div>
+        </div>
+        <div class="profit-section">
+            <div style="font-size:0.85rem; font-weight:bold; color:var(--text-muted); margin-bottom:0.3rem;">Instant Sell Profit</div>
+            <div class="profit-row"><span>Tax (6.5%):</span><span class="text-red">-${Math.floor(trade.tax).toLocaleString()} 💰</span></div>
+            <div class="profit-row total"><span>Net Profit:</span><strong class="${trade.profit >= 0 ? 'text-green' : 'text-red'}">${Math.floor(trade.profit).toLocaleString()} 💰</strong></div>
+            <div class="roi-row"><span>ROI:</span><strong class="${trade.roi >= 0 ? 'text-green' : 'text-red'}">${trade.roi.toFixed(1)}%</strong></div>
+        </div>
+        ${trade.destSellOrder > 0 ? `
+        <div class="profit-section" style="border-top:1px solid var(--border); margin-top:0.5rem; padding-top:0.5rem;">
+            <div style="font-size:0.85rem; font-weight:bold; color:var(--text-muted); margin-bottom:0.3rem;">Sell Order Profit</div>
+            <div class="profit-row"><span>Tax (6.5%):</span><span class="text-red">-${Math.floor(trade.soTax).toLocaleString()} 💰</span></div>
+            <div class="profit-row total"><span>Net Profit:</span><strong class="${trade.soProfit >= 0 ? 'text-green' : 'text-red'}">${Math.floor(trade.soProfit).toLocaleString()} 💰</strong></div>
+            <div class="roi-row"><span>ROI:</span><strong class="${trade.soRoi >= 0 ? 'text-green' : 'text-red'}">${trade.soRoi.toFixed(1)}%</strong></div>
+        </div>
+        ` : ''}
+        <div style="text-align:center; font-size:0.7rem; color:var(--text-muted); padding: 0.5rem 0 0 0; font-style:italic;">
+            <div style="display:flex; justify-content:center; gap:1rem;">
+                <span title="Buy Data Age">🕒 ${trade.buyCity}: ${timeAgo(trade.dateBuy)}</span>
+                <span title="Sell Data Age">🕒 ${trade.sellCity}: ${timeAgo(trade.dateSell)}</span>
+            </div>
+        </div>
+        <div class="item-card-actions">
+            <button class="btn-card-action" data-action="compare" data-item="${trade.itemId}" title="Compare prices across cities">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="20" x2="18" y2="10"></line><line x1="12" y1="20" x2="12" y2="4"></line><line x1="6" y1="20" x2="6" y2="14"></line></svg>
+                Compare
+            </button>
+            <button class="btn-card-action" data-action="refresh" data-item="${trade.itemId}" title="Refresh this item's data">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 4v6h-6"></path><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path></svg>
+                Refresh
+            </button>
+            <button class="btn-card-action" data-action="graph" data-item="${trade.itemId}" title="View price history">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"></polyline></svg>
+                Graph
+            </button>
+        </div>
+    `;
+    return card;
+}
+
+function renderArbitrage(trades, isSingleItem = false, targetItemId = null) {
     const container = document.getElementById('arbitrage-results');
+
+    if (targetItemId) {
+        let existingCards = Array.from(container.querySelectorAll('.trade-card[data-item-id="' + targetItemId + '"]'));
+        
+        trades.filter(t => t.itemId === targetItemId).forEach(t => {
+            const oldCardIndex = existingCards.findIndex(c => c.dataset.buyCity === t.buyCity && c.dataset.sellCity === t.sellCity);
+            let oldCard = null;
+            if (oldCardIndex > -1) {
+                oldCard = existingCards[oldCardIndex];
+                existingCards.splice(oldCardIndex, 1);
+            }
+            
+            const card = buildArbitrageCardDOM(t);
+            if (oldCard) {
+                oldCard.replaceWith(card);
+            } else {
+                // If no old card, append it. This might not maintain sort order,
+                // but for single item refresh, it's usually just updating existing.
+                container.appendChild(card);
+            }
+            setupCardButtons(card);
+        });
+
+        // Any leftover cards are no longer profitable for this item/route
+        existingCards.forEach(c => c.remove());
+        
+        // Update total counter logic if targetItemId is used (optional polish)
+        const countBar = document.querySelector('.result-count-bar strong');
+        if (countBar) countBar.textContent = document.querySelectorAll('.trade-card').length;
+        return;
+    }
+
     container.innerHTML = '';
 
     if (trades.length === 0) {
@@ -673,84 +784,14 @@ function renderArbitrage(trades, isSingleItem = false) {
     container.appendChild(countBar);
 
     trades.forEach(trade => {
-        const card = document.createElement('div');
-        card.className = 'trade-card';
-        card.innerHTML = `
-            <div class="card-header">
-                <div style="position: relative; display: flex;">
-                    <img class="item-icon" src="https://render.albiononline.com/v1/item/${trade.itemId}.png" alt="" loading="lazy">
-                    ${getEnchantmentBadge(trade.itemId)}
-                </div>
-                <div class="header-titles">
-                    <div class="item-name">${getFriendlyName(trade.itemId)}</div>
-                    <span class="item-quality">${getQualityName(trade.quality)}</span>
-                </div>
-            </div>
-            <div class="trade-route">
-                <div class="city buy-city">
-                    <span class="route-label">Buy from (Instant Buy)</span>
-                    <strong class="city-name">${trade.buyCity}</strong>
-                    <div style="display:flex; align-items:center; gap:0.5rem; justify-content:center;">
-                        <span class="price" title="Instant Buy (Cheapest Sell Order)">${Math.floor(trade.buyPrice).toLocaleString()} 💰</span>
-                        <button class="btn-refresh-item" data-item="${trade.itemId}" title="Refresh Prices" style="background:none; border:none; color:var(--text-muted); cursor:pointer; padding:0;">
-                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 4v6h-6"></path><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path></svg>
-                        </button>
-                    </div>
-                    <div style="font-size:0.8rem; color:var(--text-muted); margin-top:0.3rem;">
-                        Buy Order: <strong>${Math.floor(trade.originBuyOrder).toLocaleString()}</strong>
-                    </div>
-                </div>
-                <div class="arrow">➔</div>
-                <div class="city sell-city">
-                    <span class="route-label">Sell to (Instant Sell)</span>
-                    <strong class="city-name">${trade.sellCity}</strong>
-                    <div style="display:flex; align-items:center; gap:0.5rem; justify-content:center;">
-                        <span class="price" title="Instant Sell (Highest Buy Order)">${Math.floor(trade.sellPrice).toLocaleString()} 💰</span>
-                    </div>
-                    <div style="font-size:0.8rem; color:var(--text-muted); margin-top:0.3rem;">
-                        Sell Order: <strong>${Math.floor(trade.destSellOrder).toLocaleString()}</strong>
-                    </div>
-                </div>
-            </div>
-            <div class="profit-section">
-                <div style="font-size:0.85rem; font-weight:bold; color:var(--text-muted); margin-bottom:0.3rem;">Instant Sell Profit</div>
-                <div class="profit-row"><span>Tax (6.5%):</span><span class="text-red">-${Math.floor(trade.tax).toLocaleString()} 💰</span></div>
-                <div class="profit-row total"><span>Net Profit:</span><strong class="${trade.profit >= 0 ? 'text-green' : 'text-red'}">${Math.floor(trade.profit).toLocaleString()} 💰</strong></div>
-                <div class="roi-row"><span>ROI:</span><strong class="${trade.roi >= 0 ? 'text-green' : 'text-red'}">${trade.roi.toFixed(1)}%</strong></div>
-            </div>
-            ${trade.destSellOrder > 0 ? `
-            <div class="profit-section" style="border-top:1px solid var(--border); margin-top:0.5rem; padding-top:0.5rem;">
-                <div style="font-size:0.85rem; font-weight:bold; color:var(--text-muted); margin-bottom:0.3rem;">Sell Order Profit</div>
-                <div class="profit-row"><span>Tax (6.5%):</span><span class="text-red">-${Math.floor(trade.soTax).toLocaleString()} 💰</span></div>
-                <div class="profit-row total"><span>Net Profit:</span><strong class="${trade.soProfit >= 0 ? 'text-green' : 'text-red'}">${Math.floor(trade.soProfit).toLocaleString()} 💰</strong></div>
-                <div class="roi-row"><span>ROI:</span><strong class="${trade.soRoi >= 0 ? 'text-green' : 'text-red'}">${trade.soRoi.toFixed(1)}%</strong></div>
-            </div>
-            ` : ''}
-            <div style="text-align:center; font-size:0.7rem; color:var(--text-muted); padding: 0.5rem 0 0 0; font-style:italic;">
-                Updated: ${timeAgo(trade.updateDate)}
-            </div>
-            <div class="item-card-actions">
-                <button class="btn-card-action" data-action="compare" data-item="${trade.itemId}" title="Compare prices across cities">
-                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="20" x2="18" y2="10"></line><line x1="12" y1="20" x2="12" y2="4"></line><line x1="6" y1="20" x2="6" y2="14"></line></svg>
-                    Compare
-                </button>
-                <button class="btn-card-action" data-action="refresh" data-item="${trade.itemId}" title="Refresh this item's data">
-                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 4v6h-6"></path><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path></svg>
-                    Refresh
-                </button>
-                <button class="btn-card-action" data-action="graph" data-item="${trade.itemId}" title="View price history">
-                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"></polyline></svg>
-                    Graph
-                </button>
-            </div>
-        `;
+        const card = buildArbitrageCardDOM(trade);
         container.appendChild(card);
     });
 
     setupCardButtons(container);
 }
 
-async function doArbScan() {
+async function doArbScan(targetItemId = null) {
     if (itemsList.length === 0) await loadData();
 
     const spinner = document.getElementById('arb-spinner');
@@ -765,9 +806,11 @@ async function doArbScan() {
     const sellCityFilter = document.getElementById('arb-sell-city').value;
     const includeBM = document.getElementById('include-black-market').checked;
 
-    hideError(errorEl);
-    container.innerHTML = '';
-    spinner.classList.remove('hidden');
+    if (!targetItemId) {
+        hideError(errorEl);
+        container.innerHTML = '';
+        spinner.classList.remove('hidden');
+    }
 
     let searchVal = searchInput.value.trim();
     let isSingleItem = false;
@@ -804,7 +847,7 @@ async function doArbScan() {
                 }
 
                 const trades = processArbitrage(filteredData, quality, tier, enchantment, includeBM, buyCityFilter, sellCityFilter, isSingleItem);
-                renderArbitrage(trades, isSingleItem);
+                renderArbitrage(trades, isSingleItem, targetItemId);
                 return;
             }
         } catch (e) { /* fall through */ }
@@ -1577,15 +1620,23 @@ function setupCardButtons(container) {
             btn.disabled = true;
             btn.innerHTML = '<div class="spinner" style="width:12px;height:12px;border-width:2px;margin:0;"></div>';
             try {
-                const scrollY = window.scrollY;
                 const data = await fetchMarketChunk(getServer(), [itemId]);
                 if (data.length > 0) await MarketDB.saveMarketData(data);
                 await updateDbStatus();
-                // Rerender specific active tab completely seamlessly
-                if (currentTab === 'browser') await renderBrowser();
-                else if (currentTab === 'arbitrage') await doArbScan();
-                else if (currentTab === 'crafting') await doCraftScan();
-                window.scrollTo(0, scrollY);
+                
+                // Natively hot-swap via local targetItemId logic!
+                if (currentTab === 'browser') {
+                    // Temporarily using strict scroll restore for Browser 
+                    const scrollY = window.scrollY;
+                    await renderBrowser();
+                    window.scrollTo(0, scrollY);
+                }
+                else if (currentTab === 'arbitrage') await doArbScan(itemId);
+                else if (currentTab === 'crafting') {
+                    const scrollY = window.scrollY;
+                    await doCraftScan();
+                    window.scrollTo(0, scrollY);
+                }
             } catch (err) {
                 console.error('Refresh failed:', err);
             }
