@@ -385,7 +385,8 @@ async function renderBrowser() {
         const locQuery = cityVal !== 'all' ? `&locations=${cityVal}` : '';
         const hRes = await fetch(`${CHART_API_URLS[server]}/${batchIds}.json?time-scale=24${locQuery}`);
         if (hRes.ok) {
-            batchedHistory = await hRes.json();
+            const hData = await hRes.json();
+            if (Array.isArray(hData)) batchedHistory = hData;
         }
     } catch(e) {}
 
@@ -428,9 +429,14 @@ async function renderBrowser() {
             }
         }
 
-        const maxDateStr = (bestBuy && bestBuy.buy_price_max_date && bestSell && bestSell.sell_price_min_date) 
-            ? (bestBuy.buy_price_max_date > bestSell.sell_price_min_date ? bestBuy.buy_price_max_date : bestSell.sell_price_min_date)
-            : (bestBuy?.buy_price_max_date || bestSell?.sell_price_min_date || '');
+        let maxDateStr = '';
+        if (bestBuy && bestBuy.buy_price_max_date && bestSell && bestSell.sell_price_min_date) {
+            maxDateStr = bestBuy.buy_price_max_date > bestSell.sell_price_min_date ? bestBuy.buy_price_max_date : bestSell.sell_price_min_date;
+        } else if (bestBuy && bestBuy.buy_price_max_date) {
+            maxDateStr = bestBuy.buy_price_max_date;
+        } else if (bestSell && bestSell.sell_price_min_date) {
+            maxDateStr = bestSell.sell_price_min_date;
+        }
 
         const card = document.createElement('div');
         card.className = 'item-card';
