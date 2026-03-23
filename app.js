@@ -1927,7 +1927,7 @@ async function init() {
     document.getElementById('scan-all-btn').addEventListener('click', scanAllMarket);
 
     // Arbitrage tab
-    document.getElementById('arb-scan-btn').addEventListener('click', doArbScan);
+    document.getElementById('arb-scan-btn').addEventListener('click', () => doArbScan());
     setupAutocomplete('arb-search', 'arb-autocomplete', (id) => { arbSearchExactId = id; });
     document.getElementById('arb-search').addEventListener('keydown', (e) => {
         if (e.key === 'Enter') doArbScan();
