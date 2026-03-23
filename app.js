@@ -1831,8 +1831,83 @@ async function init() {
         document.getElementById('chart-modal').classList.add('hidden');
     });
 
+    // Initialize 0-Delay Live Sync
+    initLiveSync();
+    
     // Initial render
     renderBrowser();
+}
+
+// ====== 0-DELAY LIVE SYNC (VPS WEBSOCKET) ======
+let wsLink = null;
+const API_LOCALE_MAP = {
+    '0': 'Thetford',
+    '3': 'Lymhurst',
+    '4': 'Bridgewatch',
+    '1002': 'Martlock',
+    '2004': 'Fort Sterling',
+    '3005': 'Caerleon',
+    // NATS includes exact coordinate zones, but we map the major city indices
+};
+
+function initLiveSync() {
+    const statusDot = document.querySelector('.db-status-dot');
+    const statusText = document.querySelector('.db-status-text');
+    
+    // Connect to the new VPS Proxy 
+    wsLink = new WebSocket('wss://209-97-129-125.nip.io');
+    
+    wsLink.onopen = () => {
+        console.log("🟢 Connected to Live NATS Stream at 209-97-129-125");
+        if(statusText) statusText.textContent = "Live Market Sync Active";
+        if(statusDot) {
+            statusDot.style.background = '#00ff00';
+            statusDot.style.boxShadow = '0 0 8px #00ff00';
+        }
+    };
+
+    wsLink.onclose = () => {
+        console.log("🔴 Live Stream Disconnected. Reconnecting in 5s...");
+        if(statusText) statusText.textContent = "Live Sync Offline (Retrying)";
+        if(statusDot) {
+            statusDot.style.background = 'var(--loss-red)';
+            statusDot.style.boxShadow = '0 0 6px var(--loss-red)';
+        }
+        setTimeout(initLiveSync, 5000);
+    };
+
+    wsLink.onmessage = async (e) => {
+        try {
+            const data = JSON.parse(e.data);
+            
+            // Format incoming NATS string arrays back to the standardized MarketDB schema
+            const formattedUpdates = [];
+            
+            for (const payload of data) {
+                 if (!payload.LocationId || !API_LOCALE_MAP[payload.LocationId]) continue;
+                 
+                 formattedUpdates.push({
+                     item_id: payload.ItemTypeId,
+                     city: API_LOCALE_MAP[payload.LocationId],
+                     quality: payload.QualityLevel,
+                     sell_price_min: payload.AuctionType === 'offer' ? payload.UnitPriceSilver / 10000 : 0, 
+                     sell_price_min_date: payload.AuctionType === 'offer' ? payload.Expires : "1970-01-01T00:00:00",
+                     buy_price_max: payload.AuctionType === 'request' ? payload.UnitPriceSilver / 10000 : 0,
+                     buy_price_max_date: payload.AuctionType === 'request' ? payload.Expires : "1970-01-01T00:00:00"
+                 });
+            }
+
+            if (formattedUpdates.length > 0) {
+                 // Non-blocking background save to IndexedDB
+                 MarketDB.saveMarketData(formattedUpdates);
+                 // Note: We don't forcefully re-render the DOM here to avoid interrupting the user's scrolling,
+                 // but the database is now perfectly up to date with 0-second delays for the next interaction!
+            }
+            
+        } catch(err) {
+            // Silently drop unparseable packets to avoid console spam
+        }
+    };
 }
 
 window.addEventListener('load', init);
