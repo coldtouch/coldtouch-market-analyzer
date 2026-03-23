@@ -706,9 +706,6 @@ function renderArbitrage(trades, isSingleItem = false) {
                     <strong class="city-name">${trade.sellCity}</strong>
                     <div style="display:flex; align-items:center; gap:0.5rem; justify-content:center;">
                         <span class="price" title="Instant Sell (Highest Buy Order)">${Math.floor(trade.sellPrice).toLocaleString()} 💰</span>
-                        <button class="btn-refresh-item" data-item="${trade.itemId}" title="Refresh Prices" style="background:none; border:none; color:var(--text-muted); cursor:pointer; padding:0;">
-                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 4v6h-6"></path><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path></svg>
-                        </button>
                     </div>
                     <div style="font-size:0.8rem; color:var(--text-muted); margin-top:0.3rem;">
                         Sell Order: <strong>${Math.floor(trade.destSellOrder).toLocaleString()}</strong>
@@ -1580,6 +1577,7 @@ function setupCardButtons(container) {
             btn.disabled = true;
             btn.innerHTML = '<div class="spinner" style="width:12px;height:12px;border-width:2px;margin:0;"></div>';
             try {
+                const scrollY = window.scrollY;
                 const data = await fetchMarketChunk(getServer(), [itemId]);
                 if (data.length > 0) await MarketDB.saveMarketData(data);
                 await updateDbStatus();
@@ -1587,6 +1585,7 @@ function setupCardButtons(container) {
                 if (currentTab === 'browser') await renderBrowser();
                 else if (currentTab === 'arbitrage') await doArbScan();
                 else if (currentTab === 'crafting') await doCraftScan();
+                window.scrollTo(0, scrollY);
             } catch (err) {
                 console.error('Refresh failed:', err);
             }
@@ -1943,7 +1942,10 @@ let wsLink = null;
 const API_LOCALE_MAP = {
     '0': 'Thetford',
     '7': 'Thetford', 
+    '3004': 'Thetford',
+    '3': 'Lymhurst',
     '1002': 'Lymhurst',
+    '4': 'Bridgewatch',
     '2004': 'Bridgewatch',
     '3003': 'Black Market',
     '3005': 'Caerleon',
