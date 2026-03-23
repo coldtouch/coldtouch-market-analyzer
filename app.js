@@ -515,7 +515,7 @@ function buildPaginationHTML(totalPages) {
 // ============================================================
 // MARKET FLIPPING (ARBITRAGE)
 // ============================================================
-function processArbitrage(data, quality, tier, enchantment, includeBM, cityFilter, isSingleItem = false) {
+function processArbitrage(data, quality, tier, enchantment, includeBM, buyCityFilter, sellCityFilter, isSingleItem = false) {
     const itemsData = {};
     data.forEach(entry => {
         if (quality !== 'all' && entry.quality.toString() !== quality) return;
@@ -557,9 +557,8 @@ function processArbitrage(data, quality, tier, enchantment, includeBM, cityFilte
                 const citySell = cities[j];
                 if (cityBuy === 'Black Market') continue;
 
-                if (cityFilter !== 'all' && cityBuy !== cityFilter && citySell !== cityFilter) {
-                    continue;
-                }
+                if (buyCityFilter !== 'all' && cityBuy !== buyCityFilter) continue;
+                if (sellCityFilter !== 'all' && citySell !== sellCityFilter) continue;
 
                 const priceBuy = citiesObj[cityBuy].sellMin;
                 const priceSell = citiesObj[citySell].buyMax;
@@ -662,7 +661,8 @@ async function doArbScan() {
     const tier = document.getElementById('arb-tier').value;
     const enchantment = document.getElementById('arb-enchantment').value;
     const category = document.getElementById('arb-category').value;
-    const cityFilter = document.getElementById('arb-city').value;
+    const buyCityFilter = document.getElementById('arb-buy-city').value;
+    const sellCityFilter = document.getElementById('arb-sell-city').value;
     const includeBM = document.getElementById('include-black-market').checked;
 
     hideError(errorEl);
@@ -703,7 +703,7 @@ async function doArbScan() {
                     });
                 }
 
-                const trades = processArbitrage(filteredData, quality, tier, enchantment, includeBM, cityFilter, isSingleItem);
+                const trades = processArbitrage(filteredData, quality, tier, enchantment, includeBM, buyCityFilter, sellCityFilter, isSingleItem);
                 renderArbitrage(trades, isSingleItem);
                 return;
             }
@@ -719,7 +719,7 @@ async function doArbScan() {
         const data = await fetchMarketData(server, itemsToFetch);
         if (data.length > 0) await MarketDB.saveMarketData(data);
         spinner.classList.add('hidden');
-        const trades = processArbitrage(data, quality, tier, enchantment, includeBM, cityFilter, isSingleItem);
+        const trades = processArbitrage(data, quality, tier, enchantment, includeBM, buyCityFilter, sellCityFilter, isSingleItem);
         renderArbitrage(trades, isSingleItem);
         await updateDbStatus();
     } catch (e) {
