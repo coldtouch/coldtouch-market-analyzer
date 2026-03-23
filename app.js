@@ -1593,7 +1593,12 @@ function renderChartForCity(city) {
     const timestamps = targetDataset.data.timestamps.slice(-chartDays);
     const avgPrices = targetDataset.data.prices_avg.slice(-chartDays);
     const volumes = targetDataset.data.item_count.slice(-chartDays);
-    const labels = timestamps.map(ts => new Date(ts).toLocaleDateString());
+    const now = Date.now();
+    const labels = timestamps.map(ts => {
+        const diffHours = (now - new Date(ts).getTime()) / (1000 * 60 * 60);
+        if (diffHours < 48) return Math.round(diffHours) + 'h';
+        return Math.round(diffHours / 24) + 'd';
+    });
 
     const avgPriceDisplay = document.getElementById('chart-avg-price');
     if (avgPrices.length > 0) {
@@ -1672,7 +1677,9 @@ function renderChartForCity(city) {
                 },
                 scales: {
                     x: { 
-                        display: false 
+                        display: true,
+                        grid: { display: false, drawBorder: true, color: '#4a3e31' },
+                        ticks: { color: '#8e7c65', font: { weight: 'bold' }, maxRotation: 0, maxTicksLimit: 8 }
                     },
                     y: { 
                         type: 'linear',
