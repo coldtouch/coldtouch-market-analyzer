@@ -566,6 +566,15 @@ function processArbitrage(data, quality, tier, enchantment, includeBM, buyCityFi
                 if (priceBuy > 0 && priceSell > 0) {
                     const tax = priceSell * TAX_RATE;
                     const profit = priceSell - priceBuy - tax;
+                    
+                    const destSellOrder = citiesObj[citySell].sellMin;
+                    let soTax = 0;
+                    let soProfit = 0;
+                    if (destSellOrder > 0) {
+                        soTax = destSellOrder * TAX_RATE;
+                        soProfit = destSellOrder - priceBuy - soTax;
+                    }
+
                     if (profit > 0 || isSingleItem) {
                         const dateBuy = citiesObj[cityBuy].updateDate;
                         const dateSell = citiesObj[citySell].updateDate;
@@ -573,8 +582,9 @@ function processArbitrage(data, quality, tier, enchantment, includeBM, buyCityFi
                             itemId, quality: qual, buyCity: cityBuy, sellCity: citySell,
                             buyPrice: priceBuy, sellPrice: priceSell,
                             originBuyOrder: citiesObj[cityBuy].buyMax,
-                            destSellOrder: citiesObj[citySell].sellMin,
+                            destSellOrder: destSellOrder,
                             tax, profit, roi: (profit / priceBuy) * 100,
+                            soTax, soProfit, soRoi: destSellOrder > 0 ? (soProfit / priceBuy) * 100 : 0,
                             updateDate: dateBuy < dateSell ? dateBuy : dateSell
                         });
                     }
@@ -615,7 +625,7 @@ function renderArbitrage(trades, isSingleItem = false) {
             </div>
             <div class="trade-route">
                 <div class="city buy-city">
-                    <span class="route-label">Buy from</span>
+                    <span class="route-label">Buy from (Instant Buy)</span>
                     <strong class="city-name">${trade.buyCity}</strong>
                     <div style="display:flex; align-items:center; gap:0.5rem; justify-content:center;">
                         <span class="price" title="Instant Buy (Cheapest Sell Order)">${Math.floor(trade.buyPrice).toLocaleString()} 💰</span>
@@ -629,7 +639,7 @@ function renderArbitrage(trades, isSingleItem = false) {
                 </div>
                 <div class="arrow">➔</div>
                 <div class="city sell-city">
-                    <span class="route-label">Sell to</span>
+                    <span class="route-label">Sell to (Instant Sell)</span>
                     <strong class="city-name">${trade.sellCity}</strong>
                     <div style="display:flex; align-items:center; gap:0.5rem; justify-content:center;">
                         <span class="price" title="Instant Sell (Highest Buy Order)">${Math.floor(trade.sellPrice).toLocaleString()} 💰</span>
@@ -643,10 +653,19 @@ function renderArbitrage(trades, isSingleItem = false) {
                 </div>
             </div>
             <div class="profit-section">
+                <div style="font-size:0.85rem; font-weight:bold; color:var(--text-muted); margin-bottom:0.3rem;">Instant Sell Profit</div>
                 <div class="profit-row"><span>Tax (6.5%):</span><span class="text-red">-${Math.floor(trade.tax).toLocaleString()} 💰</span></div>
                 <div class="profit-row total"><span>Net Profit:</span><strong class="${trade.profit >= 0 ? 'text-green' : 'text-red'}">${Math.floor(trade.profit).toLocaleString()} 💰</strong></div>
                 <div class="roi-row"><span>ROI:</span><strong class="${trade.roi >= 0 ? 'text-green' : 'text-red'}">${trade.roi.toFixed(1)}%</strong></div>
             </div>
+            ${trade.destSellOrder > 0 ? `
+            <div class="profit-section" style="border-top:1px solid var(--border); margin-top:0.5rem; padding-top:0.5rem;">
+                <div style="font-size:0.85rem; font-weight:bold; color:var(--text-muted); margin-bottom:0.3rem;">Sell Order Profit</div>
+                <div class="profit-row"><span>Tax (6.5%):</span><span class="text-red">-${Math.floor(trade.soTax).toLocaleString()} 💰</span></div>
+                <div class="profit-row total"><span>Net Profit:</span><strong class="${trade.soProfit >= 0 ? 'text-green' : 'text-red'}">${Math.floor(trade.soProfit).toLocaleString()} 💰</strong></div>
+                <div class="roi-row"><span>ROI:</span><strong class="${trade.soRoi >= 0 ? 'text-green' : 'text-red'}">${trade.soRoi.toFixed(1)}%</strong></div>
+            </div>
+            ` : ''}
             <div class="card-footer">
                 <span>Updated: ${timeAgo(trade.updateDate)}</span>
             </div>
