@@ -1942,12 +1942,14 @@ async function init() {
 let wsLink = null;
 const API_LOCALE_MAP = {
     '0': 'Thetford',
-    '3': 'Lymhurst',
-    '4': 'Bridgewatch',
-    '1002': 'Martlock',
-    '2004': 'Fort Sterling',
+    '7': 'Thetford', 
+    '1002': 'Lymhurst',
+    '2004': 'Bridgewatch',
+    '3003': 'Black Market',
     '3005': 'Caerleon',
-    // NATS includes exact coordinate zones, but we map the major city indices
+    '3008': 'Fort Sterling',
+    '4000': 'Martlock',
+    '4300': 'Brecilien'
 };
 
 function initLiveSync() {
