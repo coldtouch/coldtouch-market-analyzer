@@ -1511,3 +1511,159 @@ footer a:hover {
         min-width: 500px;
     }
 }
+
+/* ====== ALBION IN-GAME MARKET MODAL OVERRIDES ====== */
+.albion-market-modal {
+    background: #cbbca2;
+    border: 3px solid #4a3e31;
+    border-radius: 4px;
+    box-shadow: 0 10px 30px rgba(0,0,0,0.8), inset 0 0 60px rgba(139, 107, 72, 0.4);
+    color: #3e3527;
+    max-width: 850px;
+    padding: 1.5rem;
+    font-family: Arial, sans-serif;
+    position: relative;
+    background-image: linear-gradient(to right, rgba(0,0,0,0.05) 0%, transparent 10%, transparent 90%, rgba(0,0,0,0.05) 100%);
+}
+
+.albion-market-modal .close-btn {
+    color: #4a3e31;
+    text-shadow: none;
+    top: 5px;
+    right: 15px;
+    font-size: 2rem;
+    font-weight: bold;
+    opacity: 0.7;
+}
+
+.albion-market-modal .close-btn:hover {
+    color: #b63628;
+    opacity: 1;
+}
+
+.market-header {
+    margin-bottom: 1.5rem;
+    position: relative;
+    z-index: 10;
+}
+
+.market-city-select {
+    background: #e2d1b7;
+    border: 1px solid #8e7c65;
+    color: #3e3527;
+    padding: 0.3rem 0.6rem;
+    border-radius: 2px;
+    font-weight: bold;
+    box-shadow: inset 0 1px 3px rgba(0,0,0,0.2);
+}
+
+.order-book-container {
+    display: flex;
+    gap: 1.5rem;
+    margin-bottom: 2rem;
+}
+
+.order-column {
+    flex: 1;
+}
+
+.order-column h3 {
+    margin: 0 0 0.5rem 0;
+    font-size: 1.2rem;
+    color: #3e3527;
+    border-bottom: 1px solid transparent;
+}
+
+.order-table-header {
+    display: flex;
+    justify-content: space-between;
+    font-size: 0.75rem;
+    color: #725b44;
+    text-transform: uppercase;
+    font-weight: bold;
+    padding-bottom: 0.3rem;
+    border-bottom: 2px solid #a38d72;
+    margin-bottom: 0.5rem;
+}
+
+.order-row {
+    display: flex;
+    justify-content: space-between;
+    padding: 0.4rem 0;
+    border-bottom: 1px solid rgba(163, 141, 114, 0.5);
+    font-weight: bold;
+    font-size: 0.95rem;
+}
+
+.order-row:hover {
+    background: rgba(255, 255, 255, 0.2);
+}
+
+.order-row span.price {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+}
+
+.order-row span.amount {
+    color: #3e3527;
+}
+
+.order-divider {
+    width: 2px;
+    background: linear-gradient(to bottom, transparent, #a38d72, transparent);
+    margin: 0 1rem;
+}
+
+.history-section h3 {
+    margin: 0 0 0.5rem 0;
+    font-size: 1.2rem;
+    color: #3e3527;
+}
+
+.chart-wrapper {
+    background: rgba(189, 169, 146, 0.4);
+    border: 1px solid #b19472;
+    border-radius: 4px;
+    padding: 1rem;
+    position: relative;
+    box-shadow: inset 0 2px 8px rgba(0,0,0,0.1);
+}
+
+.chart-footer {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-top: 0.75rem;
+    font-weight: bold;
+}
+
+.time-toggles {
+    display: flex;
+    gap: 1rem;
+    font-size: 0.85rem;
+    color: #5a4b38;
+}
+
+.time-toggles label {
+    display: flex;
+    align-items: center;
+    gap: 0.3rem;
+    cursor: pointer;
+    font-weight: bold;
+    color: #3e3527;
+    text-transform: none;
+    letter-spacing: normal;
+}
+
+.time-toggles input[type="radio"] {
+    accent-color: #5a4b38;
+}
+
+.avg-price-display {
+    font-size: 0.95rem;
+    color: #3e3527;
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+}

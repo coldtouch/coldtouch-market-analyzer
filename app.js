@@ -1507,14 +1507,15 @@ let currentChartItemId = null;
 
 async function showGraph(itemId) {
     const modal = document.getElementById('chart-modal');
-    const title = document.getElementById('chart-title');
     const ctx = document.getElementById('priceChart').getContext('2d');
     const citySelect = document.getElementById('chart-city-select');
 
     modal.classList.remove('hidden');
-    title.textContent = `Loading history for ${getFriendlyName(itemId)}...`;
-
+    
     if (priceChartInstance) priceChartInstance.destroy();
+    document.getElementById('chart-avg-price').textContent = 'Loading...';
+    document.getElementById('sell-orders-list').innerHTML = '';
+    document.getElementById('buy-orders-list').innerHTML = '';
     
     if (citySelect) {
         citySelect.innerHTML = '<option>Loading...</option>';
@@ -1528,7 +1529,7 @@ async function showGraph(itemId) {
         const data = await response.json();
 
         if (data.length === 0) {
-            title.textContent = 'No history available';
+            document.getElementById('chart-avg-price').textContent = 'N/A';
             return;
         }
 
@@ -1560,12 +1561,15 @@ async function showGraph(itemId) {
         } else {
             defaultCity = data[0].location; // Fallback
         }
+        
+        document.querySelectorAll('input[name="chart-time"]').forEach(radio => {
+            radio.onclick = () => renderChartForCity(citySelect.value || defaultCity);
+        });
 
-        title.textContent = `${getFriendlyName(itemId)} – Price History (30 Days)`;
         renderChartForCity(defaultCity);
 
     } catch (e) {
-        title.textContent = 'Error: ' + e.message;
+        document.getElementById('chart-avg-price').textContent = 'Error';
     }
 }
 
@@ -1583,10 +1587,44 @@ function renderChartForCity(city) {
         return;
     }
 
-    const timestamps = targetDataset.data.timestamps.slice(-30);
-    const avgPrices = targetDataset.data.prices_avg.slice(-30);
-    const volumes = targetDataset.data.item_count.slice(-30);
+    const timeToggles = document.querySelector('input[name="chart-time"]:checked');
+    const chartDays = timeToggles ? parseInt(timeToggles.value, 10) : 28;
+
+    const timestamps = targetDataset.data.timestamps.slice(-chartDays);
+    const avgPrices = targetDataset.data.prices_avg.slice(-chartDays);
+    const volumes = targetDataset.data.item_count.slice(-chartDays);
     const labels = timestamps.map(ts => new Date(ts).toLocaleDateString());
+
+    const avgPriceDisplay = document.getElementById('chart-avg-price');
+    if (avgPrices.length > 0) {
+        const lastValid = avgPrices.filter(p => p > 0).pop();
+        if (lastValid) {
+            avgPriceDisplay.textContent = Math.round(lastValid).toLocaleString();
+        } else {
+            avgPriceDisplay.textContent = '0';
+        }
+    }
+
+    // Populate fake order book from cached MarketDB
+    MarketDB.getItemPrices(currentChartItemId).then(dbPrices => {
+        const cityData = dbPrices.filter(p => p.city === city && p.quality === 1);
+        let best = cityData.length > 0 ? cityData[0] : null;
+        
+        const sellList = document.getElementById('sell-orders-list');
+        const buyList = document.getElementById('buy-orders-list');
+        
+        if (best && best.sell_price_min > 0) {
+            sellList.innerHTML = `<div class="order-row"><span class="price"><span class="silver-icon">💰</span>${Math.round(best.sell_price_min).toLocaleString()}</span><span class="amount">1</span></div>`;
+        } else {
+            sellList.innerHTML = `<div style="text-align:center; color:#8e7c65; padding:1rem; font-size:0.8rem;">No Sell Orders</div>`;
+        }
+        
+        if (best && best.buy_price_max > 0) {
+            buyList.innerHTML = `<div class="order-row"><span class="price"><span class="silver-icon">💰</span>${Math.round(best.buy_price_max).toLocaleString()}</span><span class="amount">1</span></div>`;
+        } else {
+            buyList.innerHTML = `<div style="text-align:center; color:#8e7c65; padding:1rem; font-size:0.8rem;">No Buy Orders</div>`;
+        }
+    });
 
     priceChartInstance = new Chart(ctx, {
         type: 'line',
@@ -1594,65 +1632,82 @@ function renderChartForCity(city) {
             labels,
             datasets: [
                 {
-                    label: 'Average Price',
-                    data: avgPrices,
-                    borderColor: '#d4af37',
-                    backgroundColor: 'rgba(212, 175, 55, 0.15)',
-                    fill: true,
-                    tension: 0.4,
-                    borderWidth: 2,
-                    pointRadius: 2,
-                    pointHoverRadius: 5,
-                    yAxisID: 'y'
+                    type: 'bar',
+                    label: 'Sold',
+                    data: volumes,
+                    backgroundColor: 'rgba(140, 123, 103, 0.4)',
+                    hoverBackgroundColor: 'rgba(140, 123, 103, 0.7)',
+                    borderWidth: 0,
+                    yAxisID: 'y1',
+                    order: 2
                 },
                 {
-                    type: 'bar',
-                    label: 'Volume Sold',
-                    data: volumes,
-                    backgroundColor: 'rgba(100, 149, 237, 0.3)', // subtle blue
-                    borderWidth: 0,
-                    yAxisID: 'y1'
+                    label: 'Average Price',
+                    type: 'line',
+                    data: avgPrices,
+                    borderColor: '#c64a38',
+                    backgroundColor: '#c64a38',
+                    fill: false,
+                    tension: 0, 
+                    borderWidth: 2,
+                    pointBackgroundColor: '#ffffff',
+                    pointBorderColor: '#c64a38',
+                    pointBorderWidth: 2,
+                    pointRadius: 4,
+                    pointHoverRadius: 6,
+                    pointHoverBackgroundColor: '#ffffff',
+                    pointHoverBorderColor: '#c64a38',
+                    pointHoverBorderWidth: 2,
+                    yAxisID: 'y',
+                    order: 1
                 }
             ]
         },
         options: {
                 responsive: true,
                 maintainAspectRatio: false,
+                interaction: {
+                    mode: 'index',
+                    intersect: false,
+                },
                 scales: {
                     x: { 
-                        grid: { color: 'rgba(255,255,255,0.04)' }, 
-                        ticks: { color: '#888', maxRotation: 45 } 
+                        display: false 
                     },
                     y: { 
                         type: 'linear',
                         display: true,
                         position: 'left',
                         beginAtZero: false, 
-                        grid: { color: 'rgba(255,255,255,0.04)' }, 
-                        ticks: { color: '#d4af37' } 
+                        grid: { color: 'rgba(177, 148, 114, 0.3)', drawBorder: false }, 
+                        ticks: { color: '#8e7c65', font: { weight: 'bold' }, maxTicksLimit: 5 } 
                     },
                     y1: {
                         type: 'linear',
-                        display: true,
+                        display: false,
                         position: 'right',
-                        beginAtZero: true,
-                        grid: { drawOnChartArea: false }, // omit grid lines for secondary axis
-                        ticks: { color: 'rgba(100, 149, 237, 0.8)' }
+                        beginAtZero: true
                     }
                 },
                 plugins: {
-                    legend: { labels: { color: '#e0e0e0' } },
+                    legend: { display: false },
                     tooltip: {
+                        backgroundColor: '#1c1814',
+                        titleColor: '#a89c8a',
+                        bodyColor: '#ffffff',
+                        borderColor: '#4a3e31',
+                        borderWidth: 1,
+                        padding: 10,
+                        displayColors: false,
                         callbacks: {
+                            title: () => null,
                             label: function(context) {
-                                let label = context.dataset.label || '';
-                                if (label) {
-                                    label += ': ';
+                                if (context.dataset.label === 'Average Price') {
+                                    return `  Average Price: 💰${context.parsed.y.toLocaleString()}`;
+                                } else if (context.dataset.label === 'Sold') {
+                                    return `  Sold: ${context.parsed.y.toLocaleString()}`;
                                 }
-                                if (context.parsed.y !== null) {
-                                    label += Math.round(context.parsed.y).toLocaleString();
-                                }
-                                return label;
+                                return '';
                             }
                         }
                     }

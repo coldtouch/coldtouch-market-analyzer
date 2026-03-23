@@ -386,15 +386,47 @@
 
     <!-- ====== CHART MODAL ====== -->
     <div id="chart-modal" class="modal hidden">
-        <div class="modal-content" style="max-width: 800px;">
+        <div class="modal-content albion-market-modal">
             <button class="close-btn" id="chart-close-btn">&times;</button>
-            <h2 id="chart-title">Price History</h2>
-            <div class="chart-controls" style="text-align: center; margin-bottom: 1rem;">
-                <label for="chart-city-select" style="margin-right: 0.5rem; color: var(--text-muted);">City:</label>
-                <select id="chart-city-select" class="dropdown" style="min-width: 150px;"></select>
+            <div class="market-header">
+                <select id="chart-city-select" class="market-city-select dropdown"></select>
             </div>
-            <div class="chart-container">
-                <canvas id="priceChart"></canvas>
+            
+            <div class="order-book-container">
+                <div class="order-column">
+                    <h3>Sell Orders</h3>
+                    <div class="order-table-header">
+                        <span>Price</span>
+                        <span>Amount</span>
+                    </div>
+                    <div class="order-list" id="sell-orders-list"></div>
+                </div>
+                <div class="order-divider"></div>
+                <div class="order-column">
+                    <h3>Buy Orders</h3>
+                    <div class="order-table-header">
+                        <span>Price</span>
+                        <span>Amount</span>
+                    </div>
+                    <div class="order-list" id="buy-orders-list"></div>
+                </div>
+            </div>
+
+            <div class="history-section">
+                <h3>Market History</h3>
+                <div class="chart-wrapper">
+                    <canvas id="priceChart"></canvas>
+                </div>
+                <div class="chart-footer">
+                    <div class="time-toggles">
+                        <label><input type="radio" name="chart-time" value="28" checked> 4 weeks</label>
+                        <label><input type="radio" name="chart-time" value="7"> 7 days</label>
+                        <label><input type="radio" name="chart-time" value="1"> 24 hours</label>
+                    </div>
+                    <div class="avg-price-display">
+                        Average Price: <span id="chart-avg-price" style="font-weight:bold;">0</span> 💰
+                    </div>
+                </div>
             </div>
         </div>
     </div>
