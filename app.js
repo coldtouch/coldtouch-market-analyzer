@@ -331,6 +331,7 @@ async function renderBrowser() {
 
     const sortVal = document.getElementById('browser-sort').value;
     const qualityVal = document.getElementById('browser-quality').value;
+    const cityVal = document.getElementById('browser-city').value;
 
     if (sortVal === 'name') {
         browserFilteredItems.sort((a, b) => getFriendlyName(a).localeCompare(getFriendlyName(b)));
@@ -341,6 +342,7 @@ async function renderBrowser() {
             let bestSell = Infinity;
             for (const p of prices) {
                 if (qualityVal !== 'all' && p.quality.toString() !== qualityVal) continue;
+                if (cityVal !== 'all' && p.city !== cityVal) continue;
                 if (p.sell_price_min > 0 && p.sell_price_min < bestSell) bestSell = p.sell_price_min;
                 if (p.buy_price_max > 0 && p.buy_price_max > bestBuy) bestBuy = p.buy_price_max;
             }
@@ -375,6 +377,18 @@ async function renderBrowser() {
         return;
     }
 
+    // FETH BATCHED HISTORY
+    let batchedHistory = [];
+    try {
+        const server = getServer();
+        const batchIds = pageItems.join(',');
+        const locQuery = cityVal !== 'all' ? `&locations=${cityVal}` : '';
+        const hRes = await fetch(`${CHART_API_URLS[server]}/${batchIds}.json?time-scale=24${locQuery}`);
+        if (hRes.ok) {
+            batchedHistory = await hRes.json();
+        }
+    } catch(e) {}
+
     for (const id of pageItems) {
         const name = getFriendlyName(id);
         const tier = extractTier(id);
@@ -384,8 +398,34 @@ async function renderBrowser() {
         let bestSell = null, bestBuy = null;
         for (const p of prices) {
             if (qualityVal !== 'all' && p.quality.toString() !== qualityVal) continue;
+            if (cityVal !== 'all' && p.city !== cityVal) continue;
             if (p.sell_price_min > 0 && (!bestSell || p.sell_price_min < bestSell.sell_price_min)) bestSell = p;
             if (p.buy_price_max > 0 && (!bestBuy || p.buy_price_max > bestBuy.buy_price_max)) bestBuy = p;
+        }
+
+        // Parse History
+        let vol24h = 0;
+        let avg24h = 0;
+        const itemHistoryList = batchedHistory.filter(h => h.item_id === id);
+        if (itemHistoryList.length > 0) {
+            let volSum = 0;
+            let avgSum = 0;
+            let avgCount = 0;
+            for (const h of itemHistoryList) {
+                if (h.data && h.data.item_count && h.data.item_count.length > 0) {
+                    const lastVol = h.data.item_count[h.data.item_count.length - 1];
+                    const lastAvg = h.data.prices_avg[h.data.prices_avg.length - 1];
+                    if (lastVol > 0) {
+                        volSum += lastVol;
+                        avgSum += (lastAvg * lastVol);
+                        avgCount += lastVol;
+                    }
+                }
+            }
+            if (avgCount > 0) {
+                vol24h = volSum;
+                avg24h = Math.round(avgSum / avgCount);
+            }
         }
 
         const card = document.createElement('div');
@@ -411,6 +451,16 @@ async function renderBrowser() {
                     <div class="pc-label">Sell Price</div>
                     <div class="pc-value text-green">${bestBuy ? bestBuy.buy_price_max.toLocaleString() + ' 💰' : '—'}</div>
                     <div class="pc-city">${bestBuy ? bestBuy.city : ''}</div>
+                </div>
+            </div>
+            <div class="item-card-prices" style="padding-top:0.5rem; margin-top:0.5rem; border-top: 1px solid rgba(255,255,255,0.05);">
+                <div class="price-cell">
+                    <div class="pc-label" style="font-size:0.7rem; color:var(--text-muted);">24h Avg Price</div>
+                    <div class="pc-value" style="font-size:0.85rem; color:#a89c8a;">${avg24h > 0 ? avg24h.toLocaleString() + ' 💰' : 'N/A'}</div>
+                </div>
+                <div class="price-cell">
+                    <div class="pc-label" style="font-size:0.7rem; color:var(--text-muted);">24h Vol Sold</div>
+                    <div class="pc-value" style="font-size:0.85rem; color:#a89c8a;">${vol24h > 0 ? vol24h.toLocaleString() : 'N/A'}</div>
                 </div>
             </div>
             <div class="item-card-actions">
