@@ -572,6 +572,8 @@ function processArbitrage(data, quality, tier, enchantment, includeBM, buyCityFi
                         trades.push({
                             itemId, quality: qual, buyCity: cityBuy, sellCity: citySell,
                             buyPrice: priceBuy, sellPrice: priceSell,
+                            originBuyOrder: citiesObj[cityBuy].buyMax,
+                            destSellOrder: citiesObj[citySell].sellMin,
                             tax, profit, roi: (profit / priceBuy) * 100,
                             updateDate: dateBuy < dateSell ? dateBuy : dateSell
                         });
@@ -616,10 +618,13 @@ function renderArbitrage(trades, isSingleItem = false) {
                     <span class="route-label">Buy from</span>
                     <strong class="city-name">${trade.buyCity}</strong>
                     <div style="display:flex; align-items:center; gap:0.5rem; justify-content:center;">
-                        <span class="price">${Math.floor(trade.buyPrice).toLocaleString()} 💰</span>
+                        <span class="price" title="Instant Buy (Cheapest Sell Order)">${Math.floor(trade.buyPrice).toLocaleString()} 💰</span>
                         <button class="btn-refresh-item" data-item="${trade.itemId}" title="Refresh Prices" style="background:none; border:none; color:var(--text-muted); cursor:pointer; padding:0;">
                             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 4v6h-6"></path><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path></svg>
                         </button>
+                    </div>
+                    <div style="font-size:0.8rem; color:var(--text-muted); margin-top:0.3rem;">
+                        Buy Order: <strong>${Math.floor(trade.originBuyOrder).toLocaleString()}</strong>
                     </div>
                 </div>
                 <div class="arrow">➔</div>
@@ -627,10 +632,13 @@ function renderArbitrage(trades, isSingleItem = false) {
                     <span class="route-label">Sell to</span>
                     <strong class="city-name">${trade.sellCity}</strong>
                     <div style="display:flex; align-items:center; gap:0.5rem; justify-content:center;">
-                        <span class="price">${Math.floor(trade.sellPrice).toLocaleString()} 💰</span>
+                        <span class="price" title="Instant Sell (Highest Buy Order)">${Math.floor(trade.sellPrice).toLocaleString()} 💰</span>
                         <button class="btn-refresh-item" data-item="${trade.itemId}" title="Refresh Prices" style="background:none; border:none; color:var(--text-muted); cursor:pointer; padding:0;">
                             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 4v6h-6"></path><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path></svg>
                         </button>
+                    </div>
+                    <div style="font-size:0.8rem; color:var(--text-muted); margin-top:0.3rem;">
+                        Sell Order: <strong>${Math.floor(trade.destSellOrder).toLocaleString()}</strong>
                     </div>
                 </div>
             </div>
