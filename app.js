@@ -474,7 +474,7 @@ async function renderBrowser() {
                 </div>
             </div>
             <div style="text-align:center; font-size:0.7rem; color:var(--text-muted); padding: 0.5rem 0 0 0; font-style:italic;">
-                Last seen: ${formatTimeAgo(maxDateStr)}
+                Last seen: ${timeAgo(maxDateStr)}
             </div>
             <div class="item-card-actions">
                 <button class="btn-card-action" data-action="compare" data-item="${id}" title="Compare prices across cities">
