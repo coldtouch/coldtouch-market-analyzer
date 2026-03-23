@@ -428,6 +428,10 @@ async function renderBrowser() {
             }
         }
 
+        const maxDateStr = (bestBuy && bestBuy.buy_price_max_date && bestSell && bestSell.sell_price_min_date) 
+            ? (bestBuy.buy_price_max_date > bestSell.sell_price_min_date ? bestBuy.buy_price_max_date : bestSell.sell_price_min_date)
+            : (bestBuy?.buy_price_max_date || bestSell?.sell_price_min_date || '');
+
         const card = document.createElement('div');
         card.className = 'item-card';
         card.innerHTML = `
@@ -462,6 +466,9 @@ async function renderBrowser() {
                     <div class="pc-label" style="font-size:0.7rem; color:var(--text-muted);">24h Vol Sold</div>
                     <div class="pc-value" style="font-size:0.85rem; color:#a89c8a;">${vol24h > 0 ? vol24h.toLocaleString() : 'N/A'}</div>
                 </div>
+            </div>
+            <div style="text-align:center; font-size:0.7rem; color:var(--text-muted); padding: 0.5rem 0 0 0; font-style:italic;">
+                Last seen: ${formatTimeAgo(maxDateStr)}
             </div>
             <div class="item-card-actions">
                 <button class="btn-card-action" data-action="compare" data-item="${id}" title="Compare prices across cities">
@@ -731,7 +738,7 @@ async function doArbScan() {
     if (itemsList.length === 0) await loadData();
 
     const spinner = document.getElementById('arb-spinner');
-    const errorEl = document.getElementById('arb-error');
+    const errorEl = document.getElementById('arb-error'); // Restored to original 'arb-error'
     const container = document.getElementById('arbitrage-results');
     const searchInput = document.getElementById('arb-search');
     const quality = document.getElementById('arb-quality').value;
