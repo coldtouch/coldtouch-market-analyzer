@@ -729,10 +729,23 @@ function renderArbitrage(trades, isSingleItem = false) {
                 <div class="roi-row"><span>ROI:</span><strong class="${trade.soRoi >= 0 ? 'text-green' : 'text-red'}">${trade.soRoi.toFixed(1)}%</strong></div>
             </div>
             ` : ''}
-            <div class="card-footer">
-                <span>Updated: ${timeAgo(trade.updateDate)}</span>
+            <div style="text-align:center; font-size:0.7rem; color:var(--text-muted); padding: 0.5rem 0 0 0; font-style:italic;">
+                Updated: ${timeAgo(trade.updateDate)}
             </div>
-            <button class="btn-graph" data-item="${trade.itemId}">Show Price History</button>
+            <div class="item-card-actions">
+                <button class="btn-card-action" data-action="compare" data-item="${trade.itemId}" title="Compare prices across cities">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="20" x2="18" y2="10"></line><line x1="12" y1="20" x2="12" y2="4"></line><line x1="6" y1="20" x2="6" y2="14"></line></svg>
+                    Compare
+                </button>
+                <button class="btn-card-action" data-action="refresh" data-item="${trade.itemId}" title="Refresh this item's data">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 4v6h-6"></path><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path></svg>
+                    Refresh
+                </button>
+                <button class="btn-card-action" data-action="graph" data-item="${trade.itemId}" title="View price history">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"></polyline></svg>
+                    Graph
+                </button>
+            </div>
         `;
         container.appendChild(card);
     });
@@ -1477,13 +1490,23 @@ function renderCrafting(crafts) {
                 <div class="roi-row"><span>ROI:</span><strong class="${craft.roi >= 0 ? 'text-green' : 'text-red'}">${craft.roi.toFixed(1)}%</strong></div>
                 <div class="profit-gauge"><div class="profit-gauge-fill ${gaugeClass}" style="width:${gaugeWidth}%"></div></div>
             </div>
-            <div class="card-footer">
-                <span>Updated: ${timeAgo(craft.updateDate)}</span>
-                <button class="btn-refresh-item" data-item="${craft.itemId}" title="Refresh this item">
+            <div style="text-align:center; font-size:0.7rem; color:var(--text-muted); padding: 0.5rem 0 0 0; font-style:italic;">
+                Updated: ${timeAgo(craft.updateDate)}
+            </div>
+            <div class="item-card-actions">
+                <button class="btn-card-action" data-action="compare" data-item="${craft.itemId}" title="Compare prices across cities">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="20" x2="18" y2="10"></line><line x1="12" y1="20" x2="12" y2="4"></line><line x1="6" y1="20" x2="6" y2="14"></line></svg>
+                    Compare
+                </button>
+                <button class="btn-card-action" data-action="refresh" data-item="${craft.itemId}" title="Refresh this item's data">
                     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 4v6h-6"></path><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path></svg>
+                    Refresh
+                </button>
+                <button class="btn-card-action" data-action="graph" data-item="${craft.itemId}" title="View price history">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"></polyline></svg>
+                    Graph
                 </button>
             </div>
-            <button class="btn-graph" data-item="${craft.itemId}">Show Price History</button>
         `;
         container.appendChild(card);
     });
@@ -1543,25 +1566,39 @@ async function doCraftScan() {
 // SHARED HELPERS
 // ============================================================
 function setupCardButtons(container) {
-    container.querySelectorAll('.btn-refresh-item').forEach(btn => {
+    container.querySelectorAll('[data-action="compare"]').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            switchToCompare(btn.dataset.item);
+        });
+    });
+
+    container.querySelectorAll('[data-action="refresh"]').forEach(btn => {
         btn.addEventListener('click', async (e) => {
             e.stopPropagation();
             const itemId = btn.dataset.item;
-            btn.classList.add('loading');
+            btn.disabled = true;
+            btn.innerHTML = '<div class="spinner" style="width:12px;height:12px;border-width:2px;margin:0;"></div>';
             try {
                 const data = await fetchMarketChunk(getServer(), [itemId]);
                 if (data.length > 0) await MarketDB.saveMarketData(data);
                 await updateDbStatus();
-                // Could re-render here but it would disrupt scroll position
+                // Rerender specific active tab completely seamlessly
+                if (currentTab === 'browser') await renderBrowser();
+                else if (currentTab === 'arbitrage') await doArbScan();
+                else if (currentTab === 'crafting') await doCraftScan();
             } catch (err) {
                 console.error('Refresh failed:', err);
             }
-            btn.classList.remove('loading');
+            btn.disabled = false;
         });
     });
 
-    container.querySelectorAll('.btn-graph').forEach(btn => {
-        btn.addEventListener('click', () => showGraph(btn.dataset.item));
+    container.querySelectorAll('[data-action="graph"]').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            showGraph(btn.dataset.item);
+        });
     });
 }
 
