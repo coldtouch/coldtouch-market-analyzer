@@ -1934,8 +1934,71 @@ async function checkDiscordAuth() {
     }
 }
 
+let liveSyncBuffer = [];
+let liveSyncTimeout = null;
+
+function connectLiveSync() {
+    const ws = new WebSocket('wss://209-97-129-125.nip.io');
+    ws.onopen = () => {
+        console.log('Live Sync WSS Connected! Receiving 0-latency market data.');
+        document.getElementById('db-status').querySelector('.db-status-dot').style.background = '#00ff00';
+    };
+    ws.onmessage = (e) => {
+        try {
+            const payloads = JSON.parse(e.data);
+            payloads.forEach(p => {
+                if (!p.ItemTypeId || !p.LocationId || !p.UnitPriceSilver) return;
+                
+                const city = API_LOCALE_MAP[p.LocationId.toString()];
+                if (!city) return;
+                
+                // Transform into REST API schema struct for IndexedDB compatibility
+                const entry = {
+                    item_id: p.ItemTypeId,
+                    city: city,
+                    quality: p.QualityLevel,
+                    sell_price_min: 0,
+                    sell_price_min_date: "0001-01-01T00:00:00Z",
+                    buy_price_max: 0,
+                    buy_price_max_date: "0001-01-01T00:00:00Z"
+                };
+                
+                const price = p.UnitPriceSilver / 10000;
+                const nowIso = new Date().toISOString();
+                
+                if (p.AuctionType === 'offer') {
+                    entry.sell_price_min = price;
+                    entry.sell_price_min_date = nowIso;
+                } else if (p.AuctionType === 'request') {
+                    entry.buy_price_max = price;
+                    entry.buy_price_max_date = nowIso;
+                }
+                
+                liveSyncBuffer.push(entry);
+            });
+            
+            // Batch push to local IndexedDB to avoid throttling Chromium DOM
+            if (!liveSyncTimeout) {
+                liveSyncTimeout = setTimeout(() => {
+                    const toSave = [...liveSyncBuffer];
+                    liveSyncBuffer = [];
+                    liveSyncTimeout = null;
+                    if (toSave.length > 0) {
+                        MarketDB.saveMarketData(toSave).catch(err => console.debug(err));
+                    }
+                }, 1000);
+            }
+        } catch (err) {}
+    };
+    ws.onclose = () => {
+        document.getElementById('db-status').querySelector('.db-status-dot').style.background = 'red';
+        setTimeout(connectLiveSync, 5000);
+    };
+}
+
 async function init() {
     await checkDiscordAuth();
+    connectLiveSync();
     await loadData();
     await updateDbStatus();
 
