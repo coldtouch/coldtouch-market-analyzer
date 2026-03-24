@@ -108,6 +108,10 @@
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"></path></svg>
                 Crafting Profits
             </button>
+            <button class="nav-tab" data-tab="alerts">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path><path d="M13.73 21a2 2 0 0 1-3.46 0"></path></svg>
+                Alerts
+            </button>
         </div>
     </nav>
 
@@ -478,6 +482,31 @@
             <a href="https://www.albion-online-data.com/" target="_blank">Albion Online Data Project</a>
         </p>
     </footer>
+
+        <!-- ====== TAB: ALERTS ====== -->
+        <section class="tab-pane hidden" id="pane-alerts">
+            <div class="controls-panel">
+                <h2 style="color:var(--accent); margin:0 0 0.5rem 0; font-size:1.2rem;">🔔 Market Alert Manager</h2>
+                <p style="color:var(--text-secondary); font-size:0.85rem; margin:0 0 1rem 0;">Create and manage arbitrage alerts. When a profitable flip is detected, you'll be notified in your Discord channel.</p>
+                <div style="display:flex; gap:1rem; align-items:flex-end; flex-wrap:wrap;">
+                    <div class="control-group">
+                        <label for="alert-channel-id">Discord Channel ID</label>
+                        <input type="text" id="alert-channel-id" placeholder="e.g. 123456789012345678" style="width:220px;">
+                    </div>
+                    <div class="control-group">
+                        <label for="alert-min-profit">Min Profit (Silver)</label>
+                        <input type="number" id="alert-min-profit" value="50000" min="1000" step="5000" style="width:140px;">
+                    </div>
+                    <button id="alert-create-btn" class="btn-scan" style="height:38px; padding:0 1.5rem; font-size:0.85rem;">+ Create Alert</button>
+                </div>
+            </div>
+            <div id="alerts-list" style="margin-top:1rem;"></div>
+            <div id="alerts-empty" class="empty-state" style="display:none;">
+                <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path><path d="M13.73 21a2 2 0 0 1-3.46 0"></path></svg>
+                <p>No alerts configured yet</p>
+                <p class="hint">Enter a Discord Channel ID and minimum profit threshold to create your first alert.</p>
+            </div>
+        </section>
 
     <script src="db.js"></script>
     <script src="app.js"></script>

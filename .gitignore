@@ -15,3 +15,10 @@ consumables_recipes_dump.json
 # OS
 Thumbs.db
 .DS_Store
+
+# Secrets
+.env
+
+# Utility scripts
+check_vps_logs.py
+check_logs.py
