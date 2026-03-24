@@ -4,7 +4,7 @@
 
 const MarketDB = (() => {
     const DB_NAME = 'AlbionMarketDB';
-    const DB_VERSION = 1;
+    const DB_VERSION = 2;
     const STORE_NAME = 'marketPrices';
     const META_STORE = 'meta';
 
@@ -16,6 +16,9 @@ const MarketDB = (() => {
             const req = indexedDB.open(DB_NAME, DB_VERSION);
             req.onupgradeneeded = (e) => {
                 const db = e.target.result;
+                if (e.oldVersion < 2 && db.objectStoreNames.contains(STORE_NAME)) {
+                    db.deleteObjectStore(STORE_NAME);
+                }
                 if (!db.objectStoreNames.contains(STORE_NAME)) {
                     const store = db.createObjectStore(STORE_NAME, { keyPath: 'key' });
                     store.createIndex('item_id', 'item_id', { unique: false });
