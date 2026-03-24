@@ -56,6 +56,16 @@ function timeAgo(dateString) {
     return `${Math.floor(diffHours / 24)}d ago`;
 }
 
+function getFreshnessIndicator(dateString) {
+    if (!dateString || dateString.startsWith('0001')) return '<span class="freshness-dot stale" title="No data">⚫</span>';
+    const date = new Date(dateString + 'Z');
+    const now = new Date();
+    const diffMins = Math.floor((now - date) / 60000);
+    if (diffMins < 30) return '<span class="freshness-dot fresh" title="Updated < 30 min ago">🟢</span>';
+    if (diffMins < 120) return '<span class="freshness-dot aging" title="Updated 30m–2h ago">🟡</span>';
+    return '<span class="freshness-dot old" title="Updated > 2h ago">🔴</span>';
+}
+
 function extractTier(itemId) {
     const m = itemId.match(/^T(\d+)/);
     return m ? m[1] : null;
@@ -487,7 +497,7 @@ async function renderBrowser() {
                 </div>
             </div>
             <div style="text-align:center; font-size:0.7rem; color:var(--text-muted); padding: 0.5rem 0 0 0; font-style:italic;">
-                Updated: ${timeAgo(maxDateStr)}
+                ${getFreshnessIndicator(maxDateStr)} Updated: ${timeAgo(maxDateStr)}
             </div>
             <div class="item-card-actions">
                 <button class="btn-card-action" data-action="compare" data-item="${id}" title="Compare prices across cities">
@@ -728,8 +738,8 @@ function buildArbitrageCardDOM(trade) {
         ` : ''}
         <div style="text-align:center; font-size:0.7rem; color:var(--text-muted); padding: 0.5rem 0 0 0; font-style:italic;">
             <div style="display:flex; justify-content:center; gap:1rem;">
-                <span title="Buy Data Age">🕒 ${trade.buyCity}: ${timeAgo(trade.dateBuy)}</span>
-                <span title="Sell Data Age">🕒 ${trade.sellCity}: ${timeAgo(trade.dateSell)}</span>
+                <span title="Buy Data Age">${getFreshnessIndicator(trade.dateBuy)} ${trade.buyCity}: ${timeAgo(trade.dateBuy)}</span>
+                <span title="Sell Data Age">${getFreshnessIndicator(trade.dateSell)} ${trade.sellCity}: ${timeAgo(trade.dateSell)}</span>
             </div>
         </div>
         <div class="item-card-actions">
@@ -1934,10 +1944,91 @@ function setupAutocomplete(inputId, listId, onSelect) {
     });
 }
 
+// ============================================================
+// ALERT MANAGEMENT
+// ============================================================
+const VPS_BASE = 'https://209-97-129-125.nip.io';
+
+async function loadAlerts() {
+    const listEl = document.getElementById('alerts-list');
+    const emptyEl = document.getElementById('alerts-empty');
+    if (!listEl) return;
+
+    try {
+        const res = await fetch(`${VPS_BASE}/api/alerts`);
+        const alerts = await res.json();
+
+        if (!alerts || alerts.length === 0) {
+            listEl.innerHTML = '';
+            emptyEl.style.display = '';
+            return;
+        }
+
+        emptyEl.style.display = 'none';
+        listEl.innerHTML = alerts.map(a => `
+            <div class="item-card" style="display:flex; justify-content:space-between; align-items:center; padding:1rem; margin-bottom:0.5rem;">
+                <div>
+                    <div style="font-weight:600; color:var(--text-primary);">📢 Channel: <span style="color:var(--accent);">${a.channel_id}</span></div>
+                    <div style="font-size:0.85rem; color:var(--text-secondary); margin-top:0.3rem;">
+                        Min Profit: <strong style="color:var(--profit-green);">${parseInt(a.min_profit).toLocaleString()} silver</strong>
+                        ${a.guild_id ? ` • Source: ${a.guild_id.startsWith('web-') ? '🌐 Web' : '🤖 Discord'}` : ''}
+                    </div>
+                </div>
+                <button class="btn-card-action" style="color:var(--loss-red);" onclick="deleteAlert('${a.channel_id}')" title="Delete this alert">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
+                    Delete
+                </button>
+            </div>
+        `).join('');
+    } catch (e) {
+        listEl.innerHTML = '<div class="empty-state"><p>Could not load alerts. Is the bot server online?</p></div>';
+    }
+}
+
+async function createAlert() {
+    const channelId = document.getElementById('alert-channel-id').value.trim();
+    const minProfit = document.getElementById('alert-min-profit').value;
+
+    if (!channelId) return alert('Please enter a Discord Channel ID.');
+    if (!minProfit || parseInt(minProfit) < 1000) return alert('Min profit must be at least 1,000 silver.');
+
+    try {
+        const res = await fetch(`${VPS_BASE}/api/alerts`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ channel_id: channelId, min_profit: parseInt(minProfit) })
+        });
+        const data = await res.json();
+        if (data.success) {
+            document.getElementById('alert-channel-id').value = '';
+            await loadAlerts();
+        } else {
+            alert('Failed to create alert: ' + (data.error || 'Unknown error'));
+        }
+    } catch (e) {
+        alert('Failed to connect to alert server.');
+    }
+}
+
+async function deleteAlert(channelId) {
+    if (!confirm(`Delete alert for channel ${channelId}?`)) return;
+    try {
+        await fetch(`${VPS_BASE}/api/alerts`, {
+            method: 'DELETE',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ channel_id: channelId })
+        });
+        await loadAlerts();
+    } catch (e) {
+        alert('Failed to delete alert.');
+    }
+}
+
 // ====== INITIALIZATION ======
+
 async function checkDiscordAuth() {
     try {
-        const res = await fetch('https://209-97-129-125.nip.io/api/me', {credentials: 'include'});
+        const res = await fetch(`${VPS_BASE}/api/me`, {credentials: 'include'});
         const data = await res.json();
         if (data.loggedIn) {
             document.getElementById('login-discord-btn').classList.add('hidden');
@@ -1952,9 +2043,35 @@ async function checkDiscordAuth() {
     }
 }
 
+async function loadServerCache() {
+    const statusEl = document.querySelector('.db-status-text');
+    try {
+        if (statusEl) statusEl.textContent = 'Loading shared market data...';
+        const res = await fetch(`${VPS_BASE}/api/market-cache`);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const payload = await res.json();
+        if (payload.data && payload.data.length > 0) {
+            await MarketDB.saveMarketData(payload.data);
+            await MarketDB.setMeta('lastScan', { server: 'shared-cache', timestamp: payload.timestamp });
+            console.log(`✅ Loaded ${payload.count} prices from shared server cache (${payload.timestamp})`);
+            return true;
+        }
+    } catch (e) {
+        console.log('Server cache not available, using local data:', e.message);
+    }
+    return false;
+}
+
 async function init() {
     await checkDiscordAuth();
     await loadData();
+
+    // Try to load shared server cache (instant prices for new visitors)
+    const hasLocalData = await MarketDB.getStoredItemCount() > 0;
+    if (!hasLocalData) {
+        await loadServerCache();
+    }
+
     await updateDbStatus();
 
     initTabs();
@@ -1991,6 +2108,15 @@ async function init() {
         if (e.key === 'Enter') doCraftSearch();
     });
     document.getElementById('craft-search').addEventListener('input', () => { craftSearchExactId = null; });
+
+    // Alerts tab
+    document.getElementById('alert-create-btn').addEventListener('click', createAlert);
+    // Load alerts when switching to the Alerts tab
+    document.querySelectorAll('.nav-tab').forEach(tab => {
+        tab.addEventListener('click', () => {
+            if (tab.dataset.tab === 'alerts') loadAlerts();
+        });
+    });
 
     // Browser search/filters
     setupAutocomplete('browser-search', 'browser-autocomplete', (id) => {

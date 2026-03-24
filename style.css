@@ -1679,3 +1679,17 @@ footer a:hover {
     align-items: center;
     gap: 0.4rem;
 }
+
+/* ====== FRESHNESS INDICATORS ====== */
+.freshness-dot {
+    font-size: 0.6rem;
+    vertical-align: middle;
+    margin-right: 2px;
+}
+.freshness-dot.fresh {
+    animation: freshPulse 2s ease-in-out infinite;
+}
+@keyframes freshPulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.6; }
+}
