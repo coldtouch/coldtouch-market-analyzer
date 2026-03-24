@@ -1941,7 +1941,6 @@ async function checkDiscordAuth() {
 
 async function init() {
     await checkDiscordAuth();
-    connectLiveSync();
     await loadData();
     await updateDbStatus();
 
