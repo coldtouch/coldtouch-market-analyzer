@@ -2072,27 +2072,31 @@ function initLiveSync() {
             const data = JSON.parse(e.data);
             
             // Format incoming NATS string arrays back to the standardized MarketDB schema
+            // IMPORTANT: NATS packets are individual orders, NOT authoritative market summaries.
+            // We use a low-priority date so db.js merge will only accept them if the price is BETTER
+            // (lower sell_price_min or higher buy_price_max), not just because the date is "newer".
             const formattedUpdates = [];
+            const natsDate = ''; // Empty date = lowest priority → only wins via better price path
             
             for (const payload of data) {
                  if (!payload.LocationId || !API_LOCALE_MAP[payload.LocationId]) continue;
+                 if (!payload.UnitPriceSilver || payload.UnitPriceSilver <= 0) continue;
                  
                  formattedUpdates.push({
                      item_id: payload.ItemTypeId,
                      city: API_LOCALE_MAP[payload.LocationId],
                      quality: payload.QualityLevel,
                      sell_price_min: payload.AuctionType === 'offer' ? payload.UnitPriceSilver : 0, 
-                     sell_price_min_date: payload.AuctionType === 'offer' ? payload.Expires : "1970-01-01T00:00:00",
+                     sell_price_min_date: natsDate,
                      buy_price_max: payload.AuctionType === 'request' ? payload.UnitPriceSilver : 0,
-                     buy_price_max_date: payload.AuctionType === 'request' ? payload.Expires : "1970-01-01T00:00:00"
+                     buy_price_max_date: natsDate
                  });
             }
 
             if (formattedUpdates.length > 0) {
                  // Non-blocking background save to IndexedDB
+                 // With empty dates, these only overwrite cached prices if the new price is strictly better
                  MarketDB.saveMarketData(formattedUpdates);
-                 // Note: We don't forcefully re-render the DOM here to avoid interrupting the user's scrolling,
-                 // but the database is now perfectly up to date with 0-second delays for the next interaction!
             }
             
         } catch(err) {
