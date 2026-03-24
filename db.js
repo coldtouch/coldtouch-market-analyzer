@@ -4,7 +4,7 @@
 
 const MarketDB = (() => {
     const DB_NAME = 'AlbionMarketDB';
-    const DB_VERSION = 3;
+    const DB_VERSION = 4;
     const STORE_NAME = 'marketPrices';
     const META_STORE = 'meta';
 
@@ -16,7 +16,7 @@ const MarketDB = (() => {
             const req = indexedDB.open(DB_NAME, DB_VERSION);
             req.onupgradeneeded = (e) => {
                 const db = e.target.result;
-                if (e.oldVersion < 3 && db.objectStoreNames.contains(STORE_NAME)) {
+                if (e.oldVersion < 4 && db.objectStoreNames.contains(STORE_NAME)) {
                     db.deleteObjectStore(STORE_NAME);
                 }
                 if (!db.objectStoreNames.contains(STORE_NAME)) {
@@ -57,11 +57,24 @@ const MarketDB = (() => {
                     let buyDate = entry.buy_price_max_date || '';
 
                     if (existing) {
-                        if (existing.sell_price_min_date && sellDate < existing.sell_price_min_date) {
+                        // Sell price: use incoming if it has a newer date OR a better (lower non-zero) price
+                        if (sellDate && sellDate >= (existing.sell_price_min_date || '')) {
+                            // Incoming is newer — use it (even if 0, meaning the order expired)
+                        } else if (sellPrice > 0 && existing.sell_price_min > 0 && sellPrice < existing.sell_price_min) {
+                            // Incoming is a better price — use it
+                        } else {
+                            // Keep existing
                             sellPrice = existing.sell_price_min;
                             sellDate = existing.sell_price_min_date;
                         }
-                        if (existing.buy_price_max_date && buyDate < existing.buy_price_max_date) {
+
+                        // Buy price: use incoming if it has a newer date OR a better (higher) price
+                        if (buyDate && buyDate >= (existing.buy_price_max_date || '')) {
+                            // Incoming is newer — use it (even if 0)
+                        } else if (buyPrice > 0 && buyPrice > (existing.buy_price_max || 0)) {
+                            // Incoming is a better price — use it
+                        } else {
+                            // Keep existing
                             buyPrice = existing.buy_price_max;
                             buyDate = existing.buy_price_max_date;
                         }
