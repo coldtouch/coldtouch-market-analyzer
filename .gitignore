@@ -7,6 +7,10 @@ __pycache__/
 
 # Large source file (items.txt is the raw dump; items.json is the processed version we keep)
 items.txt
+items_dump.json
+items.xml
+items_mazur.txt
+consumables_recipes_dump.json
 
 # OS
 Thumbs.db

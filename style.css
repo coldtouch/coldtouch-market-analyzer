@@ -1340,6 +1340,13 @@ footer a:hover {
     transform: translateY(-1px);
 }
 
+.btn-scan-all:hover {
+    background: #2a2a2a;
+    border-color: #555;
+}
+
+.scan-progress-wrap {
+
 /* Summary Card */
 .craft-summary-card {
     background: var(--bg-card);
