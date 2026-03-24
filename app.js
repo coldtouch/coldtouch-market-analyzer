@@ -1925,9 +1925,10 @@ async function checkDiscordAuth() {
             document.getElementById('login-discord-btn').classList.add('hidden');
             const profile = document.getElementById('discord-user-profile');
             profile.classList.remove('hidden');
-        profile.style.display = 'flex';
-        document.getElementById('discord-avatar').src = `https://cdn.discordapp.com/avatars/${data.user.id}/${data.user.avatar}.png`;
-        document.getElementById('discord-username').textContent = data.user.username;
+            profile.style.display = 'flex';
+            document.getElementById('discord-avatar').src = `https://cdn.discordapp.com/avatars/${data.user.id}/${data.user.avatar}.png`;
+            document.getElementById('discord-username').textContent = data.user.username;
+        }
     } catch (e) {
         console.log('Discord OAuth session not detected.', e);
     }
