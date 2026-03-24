@@ -1963,7 +1963,7 @@ function connectLiveSync() {
                     buy_price_max_date: "0001-01-01T00:00:00Z"
                 };
                 
-                const price = p.UnitPriceSilver / 10000;
+                const price = p.UnitPriceSilver;
                 const nowIso = new Date().toISOString();
                 
                 if (p.AuctionType === 'offer') {
