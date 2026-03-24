@@ -849,6 +849,11 @@ async function doArbScan(targetItemId = null) {
                 const trades = processArbitrage(filteredData, quality, tier, enchantment, includeBM, buyCityFilter, sellCityFilter, isSingleItem);
                 renderArbitrage(trades, isSingleItem, targetItemId);
                 return;
+            } else {
+                spinner.classList.add('hidden');
+                errorEl.textContent = 'Local Database is completely empty because we just ran the mathematical Cache Flush. Please click "Scan All Market" at the top of the webpage first to repopulate the 8,000 item economy.';
+                errorEl.classList.remove('hidden');
+                return;
             }
         } catch (e) { /* fall through */ }
 
