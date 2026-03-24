@@ -205,10 +205,23 @@ async function scanAllMarket() {
 
         scannedItems += chunk.length;
         const pct = Math.round((scannedItems / totalItems) * 100);
-        const elapsed = ((Date.now() - startTime) / 1000).toFixed(0);
+        const elapsedSecs = (Date.now() - startTime) / 1000;
+        
+        let timeStr = "calculating...";
+        if (scannedItems > 0 && elapsedSecs > 0) {
+            const itemsRemaining = totalItems - scannedItems;
+            const secPerItem = elapsedSecs / scannedItems;
+            const remainingSecs = Math.max(0, Math.ceil(secPerItem * itemsRemaining));
+            if (remainingSecs > 60) {
+                timeStr = `${Math.floor(remainingSecs / 60)}m ${remainingSecs % 60}s remaining`;
+            } else {
+                timeStr = `${remainingSecs}s remaining`;
+            }
+        }
+
         progressFill.style.width = pct + '%';
         progressPercent.textContent = pct + '%';
-        progressText.textContent = `${scannedItems.toLocaleString()} / ${totalItems.toLocaleString()} items • ${elapsed}s elapsed${failedChunks > 0 ? ` • ${failedChunks} errors` : ''}`;
+        progressText.textContent = `${scannedItems.toLocaleString()} / ${totalItems.toLocaleString()} items • ${timeStr}${failedChunks > 0 ? ` • ${failedChunks} errors` : ''}`;
     }
 
     await MarketDB.setMeta('lastScan', { server });
