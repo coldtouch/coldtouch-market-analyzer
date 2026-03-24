@@ -1917,7 +1917,25 @@ function setupAutocomplete(inputId, listId, onSelect) {
 }
 
 // ====== INITIALIZATION ======
+async function checkDiscordAuth() {
+    try {
+        const res = await fetch('https://209-97-129-125.nip.io/api/me', {credentials: 'include'});
+        const data = await res.json();
+        if (data.loggedIn) {
+            document.getElementById('login-discord-btn').classList.add('hidden');
+            const profile = document.getElementById('discord-user-profile');
+            profile.classList.remove('hidden');
+            profile.style.display = 'flex';
+            document.getElementById('discord-avatar').src = `https://cdn.discordapp.com/avatars/${data.user.id}/${data.user.avatar}.png`;
+            document.getElementById('discord-username').textContent = data.user.username;
+        }
+    } catch (e) {
+        console.log('Discord OAuth session not detected.', e);
+    }
+}
+
 async function init() {
+    await checkDiscordAuth();
     await loadData();
     await updateDbStatus();
 
