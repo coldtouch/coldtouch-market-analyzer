@@ -1936,6 +1936,7 @@ async function checkDiscordAuth() {
 
 let liveSyncBuffer = [];
 let liveSyncTimeout = null;
+const API_LOCALE_MAP = { '0': 'Thetford', '7': 'Thetford', '3004': 'Thetford', '3': 'Lymhurst', '1002': 'Lymhurst', '4': 'Bridgewatch', '2004': 'Bridgewatch', '3003': 'Black Market', '3005': 'Caerleon', '3008': 'Fort Sterling', '4000': 'Martlock', '4300': 'Brecilien' };
 
 function connectLiveSync() {
     const ws = new WebSocket('wss://209-97-129-125.nip.io');
