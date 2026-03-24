@@ -132,7 +132,7 @@ async function loadData() {
 // ====== API FETCHING ======
 async function fetchMarketChunk(server, items) {
     if (items.length === 0) return [];
-    const url = `${API_URLS[server]}/${items.join(',')}.json`;
+    const url = `${API_URLS[server]}/${items.join(',')}.json?v=${Date.now()}`;
     const response = await fetch(url);
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     return response.json();
