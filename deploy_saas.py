@@ -523,10 +523,10 @@ function checkAndAlert(id, q) {
 
   if (!bestSell.loc || !bestBuy.loc || bestSell.loc === bestBuy.loc) return;
 
-  // At least one side must be fresh (updated within threshold)
+  // Both sides must be fresh to ensure the spread is real
   const sellFresh = (now - bestSell.date) < FRESHNESS_THRESHOLD;
   const buyFresh = (now - bestBuy.date) < FRESHNESS_THRESHOLD;
-  if (!sellFresh && !buyFresh) return;
+  if (!sellFresh || !buyFresh) return;
 
   const profit = bestBuy.price - bestSell.price - (bestBuy.price * TAX_RATE);
   if (profit <= 0) return;
