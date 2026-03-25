@@ -2,6 +2,23 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-03-25 — Discord Bot Overhaul
+
+#### Discord Bot
+- **Alerter Seeded from Server Scans**: The alerter now starts with full market coverage (~125k price points) from the 5-minute server scans instead of building from scratch via NATS stream.
+- **Freshness-Gated Alerts**: Alerts only fire when at least one side (buy or sell) has data fresher than 30 minutes, eliminating stale/misleading notifications.
+- **Friendly Item Names**: Alert embeds now show item names (e.g. "Elder's Claymore") instead of raw IDs, plus item thumbnails.
+- **ROI in Alerts**: Each alert now shows profit percentage (ROI) alongside the silver amount.
+- **Color-Coded Severity**: Embed color reflects profit level — green (<100k), gold (100k-500k), red (>500k).
+- **Data Age in Alerts**: Each alert shows how old the buy/sell prices are (e.g. "3m ago", "just now").
+- **Website Link**: Each alert embed links to the Coldtouch Market Analyzer website.
+- **Configurable Cooldown**: `/setup_alerts` now accepts an optional `cooldown` parameter (minutes between alerts per item, default 10 min, was hardcoded at 30 min).
+- **`/my_alerts` Command**: Shows all active alert configurations for the current server.
+- **`/status` Command**: Shows bot stats — items tracked, price points, alerts sent, last alert time, and market scan info.
+- **Improved Embed Formatting**: All bot responses use rich embeds with consistent styling and footer branding.
+
+---
+
 ### 2026-03-25 — Smart Market Data Pipeline
 
 #### Changed
