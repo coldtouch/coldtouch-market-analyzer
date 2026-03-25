@@ -47,6 +47,7 @@ def main():
     "discord.js": "^14.14.1",
     "express": "^4.18.2",
     "express-session": "^1.18.0",
+    "express-rate-limit": "^7.1.5",
     "passport": "^0.7.0",
     "passport-discord": "^0.1.4",
     "sqlite3": "^5.1.7",
@@ -61,9 +62,14 @@ def main():
     print("Installing NPM packages (this will take a minute)...")
     run_wait("cd /opt/albion-saas && npm install")
     
+    # Generate a strong random session secret
+    import secrets
+    session_secret = secrets.token_hex(32)
+
     backend_js = """
 const express = require('express');
 const session = require('express-session');
+const rateLimit = require('express-rate-limit');
 const passport = require('passport');
 const DiscordStrategy = require('passport-discord').Strategy;
 const cors = require('cors');
@@ -76,15 +82,16 @@ const sqlite3 = require('sqlite3').verbose();
 const { connect, StringCodec } = require('nats');
 const { Client, GatewayIntentBits, REST, Routes } = require('discord.js');
 
-const domain = 'REPLACE_DOMAIN';
-const CLIENT_ID = 'REPLACE_CLIENT';
-const CLIENT_SECRET = 'REPLACE_SECRET';
-const BOT_TOKEN = 'REPLACE_TOKEN';
+const domain = process.env.DOMAIN;
+const CLIENT_ID = process.env.DISCORD_CLIENT_ID;
+const CLIENT_SECRET = process.env.DISCORD_CLIENT_SECRET;
+const BOT_TOKEN = process.env.DISCORD_BOT_TOKEN;
+const SESSION_SECRET = process.env.SESSION_SECRET;
 
 const API_BASE = 'https://west.albion-online-data.com/api/v2/stats/prices';
 const ITEMS_URL = 'https://coldtouch.github.io/coldtouch-market-analyzer/items.json';
 const CHUNK_SIZE = 100;
-const SCAN_INTERVAL_MS = 10 * 60 * 1000; // 10 minutes
+const SCAN_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 
 // === DATABASE ===
 const db = new sqlite3.Database('/opt/albion-saas/database.sqlite');
@@ -94,28 +101,25 @@ db.serialize(() => {
 });
 
 // === SHARED MARKET CACHE ===
-let marketCache = [];       // Full array of price entries for all items  
-let cacheTimestamp = null;   // When the last full scan completed
-let cacheItemCount = 0;      
-let cachedGzipBuffer = null; // Pre-compressed response buffer
+let cacheTimestamp = null;
+let cacheItemCount = 0;
+let cachedGzipBuffer = null;
 let scanInProgress = false;
 
 async function doServerScan() {
   if (scanInProgress) { console.log('[Cache] Scan already in progress, skipping.'); return; }
   scanInProgress = true;
   console.log('[Cache] Starting full market scan...');
-  const startTime = Date.now();
-  
+
   try {
-    // 1) Fetch the item list from GitHub Pages
     const itemsRes = await fetch(ITEMS_URL);
     if (!itemsRes.ok) throw new Error('Failed to fetch items.json: HTTP ' + itemsRes.status);
     const itemNames = await itemsRes.json();
     const itemIds = Object.keys(itemNames).filter(k => k && itemNames[k]);
     console.log(`[Cache] Loaded ${itemIds.length} item IDs.`);
-    
-    // 2) Fetch prices in chunks
-    const allPrices = [];
+
+    const priceMap = new Map();
+
     for (let i = 0; i < itemIds.length; i += CHUNK_SIZE) {
       const chunk = itemIds.slice(i, i + CHUNK_SIZE);
       try {
@@ -125,37 +129,63 @@ async function doServerScan() {
           const data = await res.json();
           for (const entry of data) {
             if (entry.sell_price_min > 0 || entry.buy_price_max > 0) {
-              allPrices.push(entry);
+              const key = `${entry.item_id}|${entry.city}|${entry.quality}`;
+              const existing = priceMap.get(key);
+
+              const minimalEntry = {
+                item_id: entry.item_id,
+                city: entry.city,
+                quality: entry.quality,
+                sell_price_min: entry.sell_price_min,
+                sell_price_min_date: entry.sell_price_min_date,
+                buy_price_max: entry.buy_price_max,
+                buy_price_max_date: entry.buy_price_max_date
+              };
+
+              if (!existing) {
+                priceMap.set(key, minimalEntry);
+              } else {
+                if (minimalEntry.sell_price_min > 0 && (existing.sell_price_min === 0 || minimalEntry.sell_price_min < existing.sell_price_min)) {
+                  existing.sell_price_min = minimalEntry.sell_price_min;
+                  existing.sell_price_min_date = minimalEntry.sell_price_min_date;
+                }
+                if (minimalEntry.buy_price_max > 0 && minimalEntry.buy_price_max > existing.buy_price_max) {
+                  existing.buy_price_max = minimalEntry.buy_price_max;
+                  existing.buy_price_max_date = minimalEntry.buy_price_max_date;
+                }
+              }
             }
           }
         }
-      } catch (e) { /* skip failed chunk */ }
-      
-      // Small delay to avoid hammering the API
+      } catch (e) { console.error(`[Cache] Chunk ${i} failed:`, e.message); }
+
+      // Brief pause between chunks to avoid hammering the API
       if (i + CHUNK_SIZE < itemIds.length) {
         await new Promise(r => setTimeout(r, 100));
       }
     }
-    
-    marketCache = allPrices;
+
+    const allPrices = Array.from(priceMap.values());
+    priceMap.clear();
+
     cacheTimestamp = new Date().toISOString();
     cacheItemCount = allPrices.length;
-    
-    // Pre-compress the cache for fast serving
-    const jsonStr = JSON.stringify({ timestamp: cacheTimestamp, count: cacheItemCount, data: allPrices });
-    cachedGzipBuffer = zlib.gzipSync(jsonStr);
-    
-    const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
-    console.log(`[Cache] Scan complete: ${allPrices.length} price entries in ${elapsed}s. Compressed: ${(cachedGzipBuffer.length / 1024).toFixed(0)}KB`);
+
+    const json = JSON.stringify({ timestamp: cacheTimestamp, count: cacheItemCount, data: allPrices });
+    zlib.gzip(json, (err, buffer) => {
+        if (!err) {
+            cachedGzipBuffer = buffer;
+            console.log(`[Cache] Scan complete: ${cacheItemCount} entries. Compressed: ${Math.round(buffer.length/1024)}KB`);
+        }
+        scanInProgress = false;
+    });
   } catch (err) {
-    console.error('[Cache] Scan failed:', err.message);
-  } finally {
+    console.error('[Cache] Scan failed:', err);
     scanInProgress = false;
   }
 }
 
-// Start periodic scanning
-setTimeout(doServerScan, 5000); // First scan 5s after boot
+setTimeout(doServerScan, 5000);
 setInterval(doServerScan, SCAN_INTERVAL_MS);
 
 // === DISCORD BOT ===
@@ -174,12 +204,12 @@ const commands = [
 
 const rest = new REST({ version: '10' }).setToken(BOT_TOKEN);
 
-client.on('ready', async () => {
+client.on('clientReady', async () => {
   console.log(`Bot logged in as ${client.user.tag}`);
   try {
     await rest.put(Routes.applicationCommands(CLIENT_ID), { body: commands });
     console.log('Registered Slash Commands successfully!');
-  } catch (error) { console.error(error); }
+  } catch (error) { console.error('Failed to register commands:', error); }
 });
 
 client.on('interactionCreate', async interaction => {
@@ -188,12 +218,12 @@ client.on('interactionCreate', async interaction => {
     const minP = interaction.options.getInteger('min_profit');
     db.run(`INSERT OR REPLACE INTO alerts (guild_id, channel_id, min_profit) VALUES (?, ?, ?)`, [interaction.guildId, interaction.channelId, minP], (err) => {
       if(err) return interaction.reply({content: 'DB Error :(', ephemeral: true});
-      interaction.reply(`✅ Bound Market Arbitrage alerts to this channel for flips > **${minP.toLocaleString()} silver**!`);
+      interaction.reply(`Bound Market Arbitrage alerts to this channel for flips > **${minP.toLocaleString()} silver**!`);
     });
   }
   if (interaction.commandName === 'stop_alerts') {
     db.run(`DELETE FROM alerts WHERE guild_id = ? AND channel_id = ?`, [interaction.guildId, interaction.channelId], (err) => {
-      interaction.reply(`🛑 Alerts stopped for this channel.`);
+      interaction.reply(`Alerts stopped for this channel.`);
     });
   }
 });
@@ -203,8 +233,13 @@ client.login(BOT_TOKEN);
 // === EXPRESS APP ===
 const app = express();
 app.use(cors({ origin: 'https://coldtouch.github.io', credentials: true }));
+
+// Rate limiting
+const apiLimiter = rateLimit({ windowMs: 60 * 1000, max: 60, standardHeaders: true, legacyHeaders: false });
+app.use('/api/', apiLimiter);
+
 app.use(session({
-  secret: 'albion-secret',
+  secret: SESSION_SECRET,
   resave: false,
   saveUninitialized: false,
   cookie: {
@@ -231,7 +266,7 @@ app.use(passport.session());
 
 app.get('/auth/discord', passport.authenticate('discord'));
 app.get('/auth/discord/callback', passport.authenticate('discord', { failureRedirect: '/' }), (req, res) => {
-  res.redirect(`https://coldtouch.github.io/coldtouch-market-analyzer?login=success`); 
+  res.redirect(`https://coldtouch.github.io/coldtouch-market-analyzer?login=success`);
 });
 
 app.get('/api/me', (req, res) => {
@@ -260,28 +295,35 @@ app.get('/api/market-cache/status', (req, res) => {
   });
 });
 
-// === ALERT CRUD ENDPOINTS ===
+// === ALERT CRUD ENDPOINTS (auth required) ===
 app.use(express.json());
 
-app.get('/api/alerts', (req, res) => {
+function requireAuth(req, res, next) {
+  if (!req.user) return res.status(401).json({ error: 'Login required' });
+  next();
+}
+
+app.get('/api/alerts', requireAuth, (req, res) => {
   db.all(`SELECT guild_id, channel_id, min_profit FROM alerts`, [], (err, rows) => {
     if (err) return res.status(500).json({ error: err.message });
     res.json(rows || []);
   });
 });
 
-app.post('/api/alerts', (req, res) => {
+app.post('/api/alerts', requireAuth, (req, res) => {
   const { channel_id, min_profit } = req.body;
   if (!channel_id || !min_profit) return res.status(400).json({ error: 'channel_id and min_profit required' });
+  const profit = parseInt(min_profit);
+  if (isNaN(profit) || profit < 0 || profit > 100000000) return res.status(400).json({ error: 'min_profit must be between 0 and 100,000,000' });
   const guildId = 'web-' + channel_id;
-  db.run(`INSERT OR REPLACE INTO alerts (guild_id, channel_id, min_profit) VALUES (?, ?, ?)`, 
-    [guildId, channel_id, parseInt(min_profit)], (err) => {
+  db.run(`INSERT OR REPLACE INTO alerts (guild_id, channel_id, min_profit) VALUES (?, ?, ?)`,
+    [guildId, channel_id, profit], (err) => {
     if (err) return res.status(500).json({ error: err.message });
-    res.json({ success: true, channel_id, min_profit: parseInt(min_profit) });
+    res.json({ success: true, channel_id, min_profit: profit });
   });
 });
 
-app.delete('/api/alerts', (req, res) => {
+app.delete('/api/alerts', requireAuth, (req, res) => {
   const { channel_id } = req.body;
   if (!channel_id) return res.status(400).json({ error: 'channel_id required' });
   db.run(`DELETE FROM alerts WHERE channel_id = ?`, [channel_id], (err) => {
@@ -302,26 +344,53 @@ wss.on('connection', ws => { wsClients.add(ws); ws.on('close', () => wsClients.d
 
 // === ALERTER LOGIC ===
 const TAX_RATE = 0.065;
-const alertMarketDb = {}; 
+const alertMarketDb = {};
 const API_LOCALE_MAP = { '0': 'Thetford', '7': 'Thetford', '3004': 'Thetford', '3': 'Lymhurst', '1002': 'Lymhurst', '4': 'Bridgewatch', '2004': 'Bridgewatch', '3003': 'Black Market', '3005': 'Caerleon', '3008': 'Fort Sterling', '4000': 'Martlock', '4300': 'Brecilien' };
 function getCity(id) { return API_LOCALE_MAP[id] || 'City-'+id; }
 
-const alertCooldowns = {}; 
+const alertCooldowns = {};
+
+// Evict stale entries every 30 minutes
+setInterval(() => {
+  const now = Date.now();
+  for (const key of Object.keys(alertCooldowns)) {
+    if (now - alertCooldowns[key] > 3600000) delete alertCooldowns[key];
+  }
+  // Evict alertMarketDb entries older than 2 hours
+  let evicted = 0;
+  for (const itemId of Object.keys(alertMarketDb)) {
+    for (const q of Object.keys(alertMarketDb[itemId])) {
+      for (const loc of Object.keys(alertMarketDb[itemId][q])) {
+        const entry = alertMarketDb[itemId][q][loc];
+        if (entry.lastSeen && now - entry.lastSeen > 7200000) {
+          delete alertMarketDb[itemId][q][loc];
+          evicted++;
+        }
+      }
+      if (Object.keys(alertMarketDb[itemId][q]).length === 0) delete alertMarketDb[itemId][q];
+    }
+    if (Object.keys(alertMarketDb[itemId]).length === 0) delete alertMarketDb[itemId];
+  }
+  if (evicted > 0) console.log(`[Eviction] Cleared ${evicted} stale alertMarketDb entries`);
+}, 1800000);
+
+let natsConnection = null;
 
 (async () => {
   try {
-    const nc = await connect({ 
+    natsConnection = await connect({
       servers: "nats.albion-online-data.com:4222",
       user: "public",
-      pass: "thenewalbiondata" 
+      pass: "thenewalbiondata"
     });
+    console.log('[NATS] Connected');
     const sc = StringCodec();
-    const sub = nc.subscribe("marketorders.deduped.*");
-    
+    const sub = natsConnection.subscribe("marketorders.deduped.*");
+
     for await (const m of sub) {
       const strData = sc.decode(m.data);
       for(let wc of wsClients) if(wc.readyState === WebSocket.OPEN) wc.send(strData);
-      
+
       try {
         const payloads = JSON.parse(strData);
         for (const p of payloads) {
@@ -330,16 +399,18 @@ const alertCooldowns = {};
           if (!alertMarketDb[id]) alertMarketDb[id] = {};
           if (!alertMarketDb[id][q]) alertMarketDb[id][q] = {};
           if (!alertMarketDb[id][q][loc]) alertMarketDb[id][q][loc] = { sellMin: Infinity, buyMax: 0 };
-          
+
+          alertMarketDb[id][q][loc].lastSeen = Date.now();
+
           if (p.AuctionType === 'offer' && price < alertMarketDb[id][q][loc].sellMin) alertMarketDb[id][q][loc].sellMin = price;
           else if (p.AuctionType === 'request' && price > alertMarketDb[id][q][loc].buyMax) alertMarketDb[id][q][loc].buyMax = price;
-          
+
           let bestSell = { price: Infinity, loc: null }, bestBuy = { price: 0, loc: null };
           for (const [c, cd] of Object.entries(alertMarketDb[id][q])) {
             if (cd.sellMin > 0 && cd.sellMin < bestSell.price) bestSell = { price: cd.sellMin, loc: c };
             if (cd.buyMax > 0 && cd.buyMax > bestBuy.price) bestBuy = { price: cd.buyMax, loc: c };
           }
-          
+
           if (bestSell.loc && bestBuy.loc && bestSell.loc !== bestBuy.loc) {
             const profit = bestBuy.price - bestSell.price - (bestBuy.price * TAX_RATE);
             if (profit > 0) {
@@ -348,13 +419,13 @@ const alertCooldowns = {};
                 rows.forEach(row => {
                   const cacheKey = `${id}_${q}_${row.channel_id}`;
                   const last = alertCooldowns[cacheKey] || 0;
-                  if (Date.now() - last > 1800000) { 
+                  if (Date.now() - last > 1800000) {
                     alertCooldowns[cacheKey] = Date.now();
                     const channel = client.channels.cache.get(row.channel_id);
                     if (channel) {
                       channel.send({
                         embeds: [{
-                          title: `🚨 Arbitrage Alert! 💰 ${Math.floor(profit).toLocaleString()} Silver`,
+                          title: `Arbitrage Alert! ${Math.floor(profit).toLocaleString()} Silver`,
                           color: 0xffd700,
                           fields: [
                             { name: "Item", value: `${id} (Qual ${q})`, inline: false },
@@ -362,7 +433,7 @@ const alertCooldowns = {};
                             { name: "Sell In", value: `**${getCity(bestBuy.loc)}** for ${Math.floor(bestBuy.price).toLocaleString()}`, inline: true }
                           ]
                         }]
-                      }).catch(()=>{});
+                      }).catch(e => console.error('[Alert] Failed to send:', e.message));
                     }
                   }
                 });
@@ -370,28 +441,51 @@ const alertCooldowns = {};
             }
           }
         }
-      } catch(e) {}
+      } catch(e) { console.error('[NATS] Parse error:', e.message); }
     }
-  } catch(err){ console.error(err); }
+  } catch(err){ console.error('[NATS] Connection failed:', err); }
 })();
+
+// === GRACEFUL SHUTDOWN ===
+function shutdown(signal) {
+  console.log(`[Shutdown] Received ${signal}, closing...`);
+  if (natsConnection) natsConnection.close();
+  wss.close();
+  client.destroy();
+  db.close();
+  server.close(() => {
+    console.log('[Shutdown] Clean exit');
+    process.exit(0);
+  });
+  setTimeout(() => process.exit(1), 5000);
+}
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));
 
 server.listen(443, () => console.log('SaaS Backend (Express + Discord + WSS + Market Cache) listening on 443!'));
 """
-    backend_js = backend_js.replace("REPLACE_DOMAIN", domain)
-    backend_js = backend_js.replace("REPLACE_CLIENT", CLIENT_ID)
-    backend_js = backend_js.replace("REPLACE_SECRET", CLIENT_SECRET)
-    backend_js = backend_js.replace("REPLACE_TOKEN", BOT_TOKEN)
-
     b64_server = base64.b64encode(backend_js.encode()).decode()
     run_wait(f"echo '{b64_server}' | base64 -d > /opt/albion-saas/backend.js")
-    
+
+    # Write env file with restricted permissions
+    env_content = f"""DOMAIN={domain}
+DISCORD_CLIENT_ID={CLIENT_ID}
+DISCORD_CLIENT_SECRET={CLIENT_SECRET}
+DISCORD_BOT_TOKEN={BOT_TOKEN}
+SESSION_SECRET={session_secret}
+"""
+    b64_env = base64.b64encode(env_content.encode()).decode()
+    run_wait(f"echo '{b64_env}' | base64 -d > /opt/albion-saas/.env")
+    run_wait("chmod 600 /opt/albion-saas/.env")
+
     svc = """
 [Unit]
 Description=Albion SaaS Backend
 After=network.target
 
 [Service]
-ExecStart=/usr/bin/node /opt/albion-saas/backend.js
+EnvironmentFile=/opt/albion-saas/.env
+ExecStart=/usr/bin/node --max-old-space-size=400 /opt/albion-saas/backend.js
 WorkingDirectory=/opt/albion-saas
 Restart=always
 User=root
@@ -401,14 +495,13 @@ WantedBy=multi-user.target
 """
     b64_svc = base64.b64encode(svc.encode()).decode()
     run_wait(f"echo '{b64_svc}' | base64 -d > /etc/systemd/system/albion-saas.service")
-    
-    run_wait("systemctl stop albion-proxy albion-alerter") 
-    run_wait("systemctl disable albion-proxy albion-alerter") 
+
     run_wait("systemctl daemon-reload")
     run_wait("systemctl enable albion-saas")
     run_wait("systemctl restart albion-saas")
     
-    print(run_wait("systemctl status albion-saas | head -n 15"))
+    status = run_wait("systemctl is-active albion-saas")
+    print(f"Service status: {status.strip()}")
     ssh.close()
     print("SaaS Deployed successfully!")
 

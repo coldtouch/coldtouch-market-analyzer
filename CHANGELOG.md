@@ -2,6 +2,33 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-03-25 — VPS Hardening & UI Fix
+
+#### Infrastructure
+- **VPS Upgrade Optimizations**: Tuned backend for 1 GB RAM plan — reduced scan throttle (500ms → 100ms), removed GC pause, increased scan frequency (10min → 5min), adjusted heap limit to 400 MB.
+- **Swap Space**: Added 512 MiB swap as OOM safety net, persisted in fstab.
+- **UFW Firewall**: Enabled firewall allowing only ports 22 (SSH) and 443 (HTTPS).
+- **Certbot Auto-Restart**: Added deploy hook to automatically restart the backend when SSL certificates are renewed.
+- **Dead Service Cleanup**: Removed vestigial `albion-proxy` and `albion-alerter` systemd services and `/opt/albion-proxy/` directory.
+
+#### Security
+- **Secrets Externalized**: Moved Discord bot token, client secret, and session secret out of source code into a server-side `.env` file (chmod 600) loaded via systemd `EnvironmentFile`.
+- **Strong Session Secret**: Replaced hardcoded `'albion-secret'` with a random 64-character hex token.
+- **API Rate Limiting**: Added `express-rate-limit` (60 req/min per IP) on all `/api/` endpoints.
+- **Alert Auth Gate**: GET/POST/DELETE `/api/alerts` now require Discord OAuth login.
+- **Input Validation**: `min_profit` validated as a number between 0 and 100,000,000.
+
+#### Backend
+- **Cache Eviction**: `alertMarketDb` entries expire after 2 hours, cooldowns after 1 hour (cleanup runs every 30 min).
+- **Graceful Shutdown**: SIGTERM/SIGINT handler cleanly closes NATS, WebSocket, Discord bot, SQLite, and HTTP server.
+- **Error Logging**: Replaced silent `catch(e) {}` blocks with meaningful error output.
+- **discord.js Fix**: Changed `ready` → `clientReady` event to eliminate deprecation warning.
+
+#### UI
+- **Separated Scan & Sync Indicators**: Split the overlapping "market scan" and "live sync" status into two distinct indicators in the top bar, each with their own dot and label.
+
+---
+
 ### Added
 - **Browser Batched History Engine**: Dramatically upgraded the global *Market Browser* by allowing users to filter searches by specific Cities. Additionally, built an advanced HTTP batcher that quietly fetches the exact `24h Volume (Sold)` and `24h Average Price` for all 50 items visible on your screen simultaneously, injecting them right onto the cards without locking your browser or banning your IP.
 - **Global Toolbar Unification**: Completely stripped and rebuilt the Item Cards inside the `Market Flipping (Arbitrage)` and `Crafting Profits` tabs. Extracted the new 3-button (Compare, Refresh, History) action toolbar and injected it deeply into every module for 100% uniformity. Now every single item card across the entire website clearly broadcasts `"Updated: XXm ago"` and natively allows 1-click live sync refreshes!
