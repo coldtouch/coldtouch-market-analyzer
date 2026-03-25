@@ -4,6 +4,12 @@ All notable changes to the Coldtouch Market Analyzer will be documented in this 
 
 ### 2026-03-25 — Phase 1: Historical Spread Analyzer
 
+#### Data Sources (4 total)
+- **Server Scan Snapshots**: Every 5-min scan persists ~130k price snapshots to SQLite on disk.
+- **Charts API Backfill**: On first start, fetches 28 days of daily averages from the Albion Data Project for all 11,115 items — 1,006,565 historical records loaded instantly.
+- **History API**: Fetches 6-hour granularity data for more granular recent coverage.
+- **NATS Live Order Snapshots**: All incoming real-time market orders (~1,000+/min) are buffered and batch-written to snapshots every 60 seconds, filling gaps between full scans.
+
 #### Backend (VPS)
 - **Price Snapshot Recording**: Every 5-minute server scan now persists ~130k price snapshots to SQLite on disk, building a historical price database over time.
 - **Spread Statistics Engine**: Hourly job computes spread statistics for every item/city-pair combo over a 7-day window — average spread, consistency %, median profit, and a composite confidence score (0-100).
