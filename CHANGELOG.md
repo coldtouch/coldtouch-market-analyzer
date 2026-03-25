@@ -2,6 +2,30 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-03-25 — Phase 3: Community Scanning Incentives
+
+#### Backend (VPS)
+- **Contribution Tracking**: Every item refresh (web or Discord `/scan`) is recorded in a `contributions` table, attributing scans to Discord users.
+- **User Stats Engine**: `recomputeUserStats()` runs every 5 minutes, aggregating 30-day scan counts and assigning tier ranks (Bronze 0-49, Silver 50-199, Gold 200-499, Diamond 500+).
+- **Leaderboard API**: `GET /api/leaderboard` returns top 20 scanners with 60-second in-memory cache. `GET /api/my-stats` returns the logged-in user's rank, tier, and scan counts.
+- **Contribution API**: `POST /api/contributions` (rate-limited 30/min) accepts scan events from the frontend.
+- **`/api/me` Enhanced**: Now returns the user's tier alongside login info.
+- **Contribution Cleanup**: Old contribution records (>60 days) are pruned during the daily compaction job.
+
+#### Discord Bot
+- **`/scan` Command**: Scan any item by name directly from Discord — fetches live prices and records the contribution.
+- **`/leaderboard` Command**: Shows top 10 community scanners with tier badges and scan counts.
+- **`/mystats` Command**: Shows personal scanning stats including tier, 30-day scans, all-time scans, and server rank.
+
+#### Frontend
+- **Community Tab**: New "Community" navigation tab with a full leaderboard UI showing top 20 scanners ranked by 30-day activity.
+- **My Stats Card**: Logged-in users see their personal stats (rank, scans, tier) with a visual tier progression bar.
+- **Tier Badges**: Bronze/Silver/Gold/Diamond tier badges displayed next to Discord username in the header and throughout the Community tab.
+- **Contribution Tracking**: Every item refresh button click automatically records a contribution when the user is logged in via Discord OAuth.
+- **Tier Progression Bar**: Visual progress bar showing how close the user is to the next tier threshold.
+
+---
+
 ### 2026-03-25 — Phase 2: Enhanced Alert System
 
 #### Discord Bot

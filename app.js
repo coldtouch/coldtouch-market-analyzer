@@ -33,6 +33,7 @@ let priceChartInstance = null;
 let scanAbortController = null;
 let spreadStatsCache = {}; // keyed by "itemId_quality_buyCity_sellCity"
 let spreadStatsCacheTime = 0;
+let discordUser = null; // stored on auth check for contribution tracking
 
 // ====== UTILITY ======
 function getFriendlyName(id) {
@@ -460,6 +461,7 @@ async function renderBrowser() {
             try {
                 const data = await fetchMarketChunk(getServer(), [itemId]);
                 if (data.length > 0) await MarketDB.saveMarketData(data);
+                trackContribution(1);
                 await renderBrowser();
                 await updateDbStatus();
             } catch (e) {
@@ -1670,11 +1672,12 @@ function setupCardButtons(container) {
             try {
                 const data = await fetchMarketChunk(getServer(), [itemId]);
                 if (data.length > 0) await MarketDB.saveMarketData(data);
+                trackContribution(1);
                 await updateDbStatus();
-                
+
                 // Natively hot-swap via local targetItemId logic!
                 if (currentTab === 'browser') {
-                    // Temporarily using strict scroll restore for Browser 
+                    // Temporarily using strict scroll restore for Browser
                     const scrollY = window.scrollY;
                     await renderBrowser();
                     window.scrollTo(0, scrollY);
@@ -2051,12 +2054,21 @@ async function checkDiscordAuth() {
         const res = await fetch(`${VPS_BASE}/api/me`, {credentials: 'include'});
         const data = await res.json();
         if (data.loggedIn) {
+            discordUser = data.user;
             document.getElementById('login-discord-btn').classList.add('hidden');
             const profile = document.getElementById('discord-user-profile');
             profile.classList.remove('hidden');
             profile.style.display = 'flex';
             document.getElementById('discord-avatar').src = `https://cdn.discordapp.com/avatars/${data.user.id}/${data.user.avatar}.png`;
             document.getElementById('discord-username').textContent = data.user.username;
+
+            // Show tier badge in header
+            if (data.tier) {
+                const tierBadge = document.getElementById('discord-tier-badge');
+                tierBadge.textContent = data.tier.charAt(0).toUpperCase() + data.tier.slice(1);
+                tierBadge.className = `tier-badge tier-${data.tier}`;
+                tierBadge.style.display = 'inline-block';
+            }
         }
     } catch (e) {
         console.log('Discord OAuth session not detected.', e);
@@ -2146,10 +2158,11 @@ async function init() {
 
     // Alerts tab
     document.getElementById('alert-create-btn').addEventListener('click', createAlert);
-    // Load alerts when switching to the Alerts tab
+    // Load alerts/community when switching to those tabs
     document.querySelectorAll('.nav-tab').forEach(tab => {
         tab.addEventListener('click', () => {
             if (tab.dataset.tab === 'alerts') loadAlerts();
+            if (tab.dataset.tab === 'community') loadCommunityTab();
         });
     });
 
@@ -2264,6 +2277,108 @@ function initLiveSync() {
             // Silently drop unparseable packets to avoid console spam
         }
     };
+}
+
+// ====== CONTRIBUTION TRACKING ======
+function trackContribution(itemCount) {
+    if (!discordUser) return; // Only track for logged-in users
+    fetch(`${VPS_BASE}/api/contributions`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ source: 'web_refresh', item_count: itemCount })
+    }).catch(() => {}); // Fire-and-forget
+}
+
+// ====== COMMUNITY TAB ======
+const TIER_THRESHOLDS = { bronze: 0, silver: 50, gold: 200, diamond: 500 };
+const TIER_ORDER = ['bronze', 'silver', 'gold', 'diamond'];
+
+function getTierProgress(tier, scans30d) {
+    const idx = TIER_ORDER.indexOf(tier);
+    if (idx >= TIER_ORDER.length - 1) return { pct: 100, nextTier: null, nextThreshold: null };
+    const nextTier = TIER_ORDER[idx + 1];
+    const currentThreshold = TIER_THRESHOLDS[tier];
+    const nextThreshold = TIER_THRESHOLDS[nextTier];
+    const pct = Math.min(100, Math.round(((scans30d - currentThreshold) / (nextThreshold - currentThreshold)) * 100));
+    return { pct, nextTier, nextThreshold };
+}
+
+async function loadCommunityTab() {
+    // Load my stats if logged in
+    if (discordUser) {
+        try {
+            const res = await fetch(`${VPS_BASE}/api/my-stats`, { credentials: 'include' });
+            if (res.ok) {
+                const stats = await res.json();
+                const card = document.getElementById('community-my-stats');
+                card.style.display = 'block';
+                document.getElementById('community-my-avatar').src = `https://cdn.discordapp.com/avatars/${discordUser.id}/${discordUser.avatar}.png`;
+                document.getElementById('community-my-name').textContent = discordUser.username;
+
+                const tier = stats.tier || 'bronze';
+                const tierBadge = document.getElementById('community-my-tier');
+                tierBadge.textContent = tier.charAt(0).toUpperCase() + tier.slice(1);
+                tierBadge.className = `tier-badge tier-${tier}`;
+
+                document.getElementById('community-my-rank').textContent = stats.rank || '—';
+                document.getElementById('community-my-scans30d').textContent = (stats.scans_30d || 0).toLocaleString();
+                document.getElementById('community-my-scans-total').textContent = (stats.scans_total || 0).toLocaleString();
+
+                // Tier progress bar
+                const progress = getTierProgress(tier, stats.scans_30d || 0);
+                document.getElementById('tier-current-label').textContent = tier.charAt(0).toUpperCase() + tier.slice(1);
+                if (progress.nextTier) {
+                    document.getElementById('tier-next-label').textContent = `→ ${progress.nextTier.charAt(0).toUpperCase() + progress.nextTier.slice(1)} (${progress.nextThreshold} scans)`;
+                } else {
+                    document.getElementById('tier-next-label').textContent = 'Max tier reached!';
+                }
+                document.getElementById('tier-progress-fill').style.width = progress.pct + '%';
+            }
+        } catch (e) {
+            console.log('Failed to load my stats:', e);
+        }
+    }
+
+    // Load leaderboard
+    try {
+        const res = await fetch(`${VPS_BASE}/api/leaderboard`);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const lb = await res.json();
+        const listEl = document.getElementById('leaderboard-list');
+        const emptyEl = document.getElementById('leaderboard-empty');
+
+        if (!lb || lb.length === 0) {
+            listEl.innerHTML = '';
+            emptyEl.style.display = 'block';
+            return;
+        }
+        emptyEl.style.display = 'none';
+
+        listEl.innerHTML = lb.map((u, i) => {
+            const rank = i + 1;
+            const rankClass = rank <= 3 ? `top-${rank}` : '';
+            const tier = u.tier || 'bronze';
+            const tierLabel = tier.charAt(0).toUpperCase() + tier.slice(1);
+            const avatarUrl = u.avatar
+                ? `https://cdn.discordapp.com/avatars/${u.user_id}/${u.avatar}.png?size=64`
+                : 'https://cdn.discordapp.com/embed/avatars/0.png';
+            const medal = rank === 1 ? '🥇' : rank === 2 ? '🥈' : rank === 3 ? '🥉' : rank;
+
+            return `
+                <div class="leaderboard-row">
+                    <div class="leaderboard-rank ${rankClass}">${medal}</div>
+                    <img class="leaderboard-avatar" src="${avatarUrl}" alt="">
+                    <div class="leaderboard-name">
+                        ${u.username || 'Unknown'}
+                        <span class="tier-badge tier-${tier}">${tierLabel}</span>
+                    </div>
+                    <div class="leaderboard-scans">${(u.scans_30d || 0).toLocaleString()} scans</div>
+                </div>`;
+        }).join('');
+    } catch (e) {
+        console.log('Failed to load leaderboard:', e);
+    }
 }
 
 window.addEventListener('load', init);

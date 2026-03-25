@@ -158,6 +158,26 @@ db.serialize(() => {
     period_start INTEGER NOT NULL,
     PRIMARY KEY(item_id, quality, city, period_type, period_start)
   )`);
+
+  // === PHASE 3: Community Scanning Incentives ===
+  db.run(`CREATE TABLE IF NOT EXISTS contributions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id TEXT NOT NULL,
+    source TEXT NOT NULL,
+    item_count INTEGER DEFAULT 1,
+    created_at INTEGER NOT NULL
+  )`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_contrib_user ON contributions(user_id, created_at)`);
+
+  db.run(`CREATE TABLE IF NOT EXISTS user_stats (
+    user_id TEXT PRIMARY KEY,
+    username TEXT,
+    avatar TEXT,
+    scans_30d INTEGER DEFAULT 0,
+    scans_total INTEGER DEFAULT 0,
+    tier TEXT DEFAULT 'bronze',
+    updated_at INTEGER NOT NULL
+  )`);
 });
 
 // === SHARED MARKET CACHE ===
@@ -284,6 +304,21 @@ const commands = [
     options: [
       { name: 'min_confidence', type: 4, description: 'Minimum confidence score (0 = any, 40 = medium, 70 = high)', required: true }
     ]
+  },
+  {
+    name: 'scan',
+    description: 'Scan a specific item for fresh market data and earn contribution points',
+    options: [
+      { name: 'item', type: 3, description: 'Item name or ID (e.g. T4_BAG, Elder Bag)', required: true }
+    ]
+  },
+  {
+    name: 'leaderboard',
+    description: 'Show top market scanners this month'
+  },
+  {
+    name: 'mystats',
+    description: 'Show your scanning stats and contributor tier'
   }
 ];
 
@@ -408,6 +443,143 @@ client.on('interactionCreate', async interaction => {
       }]});
     });
   }
+
+  if (interaction.commandName === 'scan') {
+    const searchTerm = interaction.options.getString('item').trim();
+    await interaction.deferReply();
+
+    // Fuzzy match item
+    const searchLower = searchTerm.toLowerCase();
+    let matchedId = null;
+    for (const [id, name] of Object.entries(itemNames)) {
+      if (id.toLowerCase() === searchLower || (name && name.toLowerCase() === searchLower)) {
+        matchedId = id;
+        break;
+      }
+    }
+    if (!matchedId) {
+      const words = searchLower.split(' ').filter(w => w);
+      for (const [id, name] of Object.entries(itemNames)) {
+        const target = ((name || '') + ' ' + id.replace(/_/g, ' ')).toLowerCase();
+        if (words.every(w => target.includes(w))) { matchedId = id; break; }
+      }
+    }
+
+    if (!matchedId) {
+      return interaction.editReply({ content: `Could not find item matching "${searchTerm}". Try an exact item ID like T4_BAG.` });
+    }
+
+    try {
+      const url = `${API_BASE}/${matchedId}.json`;
+      const res = await fetch(url);
+      if (!res.ok) throw new Error('API error');
+      const data = await res.json();
+
+      // Update alertMarketDb with fresh data
+      for (const entry of data) {
+        if (!entry.item_id || !entry.city) continue;
+        const id2 = entry.item_id, q2 = entry.quality || 1, city2 = entry.city;
+        if (!alertMarketDb[id2]) alertMarketDb[id2] = {};
+        if (!alertMarketDb[id2][q2]) alertMarketDb[id2][q2] = {};
+        if (!alertMarketDb[id2][q2][city2]) alertMarketDb[id2][q2][city2] = { sellMin: Infinity, buyMax: 0, sellDate: 0, buyDate: 0 };
+        const now2 = Date.now();
+        alertMarketDb[id2][q2][city2].lastSeen = now2;
+        if (entry.sell_price_min > 0) { alertMarketDb[id2][q2][city2].sellMin = entry.sell_price_min; alertMarketDb[id2][q2][city2].sellDate = now2; }
+        if (entry.buy_price_max > 0) { alertMarketDb[id2][q2][city2].buyMax = entry.buy_price_max; alertMarketDb[id2][q2][city2].buyDate = now2; }
+      }
+
+      // Record contribution
+      const userId = interaction.user.id;
+      db.run(`INSERT INTO contributions (user_id, source, item_count, created_at) VALUES (?, ?, ?, ?)`,
+        [userId, 'discord_scan', 1, Date.now()]);
+      // Ensure user exists in users table
+      db.run(`INSERT OR IGNORE INTO users (id, username, avatar) VALUES (?, ?, ?)`,
+        [userId, interaction.user.username, interaction.user.avatar]);
+
+      // Build price summary
+      const cities = {};
+      for (const entry of data) {
+        if (entry.quality !== 1 && entry.quality) continue;
+        let c = entry.city;
+        if (!c) continue;
+        cities[c] = { sell: entry.sell_price_min || 0, buy: entry.buy_price_max || 0 };
+      }
+      const priceLines = Object.entries(cities).map(([c, p]) => {
+        const sell = p.sell > 0 ? p.sell.toLocaleString() : '—';
+        const buy = p.buy > 0 ? p.buy.toLocaleString() : '—';
+        return `**${c}**: Buy ${sell} / Sell ${buy}`;
+      }).join('\\n');
+
+      interaction.editReply({ embeds: [{
+        title: `Scanned: ${getFriendlyName(matchedId)}`,
+        color: 0x00ff00,
+        thumbnail: { url: `https://render.albiononline.com/v1/item/${matchedId}.png` },
+        description: priceLines || 'No price data available.',
+        footer: { text: `+1 scan contribution • Coldtouch Market Analyzer` }
+      }]});
+    } catch (e) {
+      interaction.editReply({ content: `Failed to scan: ${e.message}` });
+    }
+  }
+
+  if (interaction.commandName === 'leaderboard') {
+    db.all(`SELECT user_id, username, avatar, scans_30d, tier FROM user_stats WHERE scans_30d > 0 ORDER BY scans_30d DESC LIMIT 10`, [], (err, rows) => {
+      if (err || !rows || rows.length === 0) {
+        return interaction.reply({ embeds: [{
+          title: 'Leaderboard',
+          color: 0xffd700,
+          description: 'No contributions yet. Use `/scan` or refresh items on the website to start!',
+          footer: { text: 'Coldtouch Market Analyzer' }
+        }]});
+      }
+      const tierEmoji = { diamond: '💎', gold: '🥇', silver: '🥈', bronze: '🥉' };
+      const lines = rows.map((r, i) => {
+        const emoji = tierEmoji[r.tier] || '🥉';
+        return `**${i + 1}.** ${emoji} ${r.username || 'Unknown'} — **${r.scans_30d}** scans`;
+      });
+      interaction.reply({ embeds: [{
+        title: '🏆 Top Scanners (30 days)',
+        color: 0xffd700,
+        description: lines.join('\\n'),
+        footer: { text: 'Scan items with /scan or refresh on the website to climb!' }
+      }]});
+    });
+  }
+
+  if (interaction.commandName === 'mystats') {
+    const userId = interaction.user.id;
+    db.get(`SELECT scans_30d, scans_total, tier FROM user_stats WHERE user_id = ?`, [userId], (err, row) => {
+      if (err || !row) {
+        return interaction.reply({ embeds: [{
+          title: 'Your Stats',
+          color: 0x888888,
+          description: 'No scanning activity yet. Use `/scan` or refresh items on the website to get started!',
+          footer: { text: 'Coldtouch Market Analyzer' }
+        }], ephemeral: true });
+      }
+      const tierEmoji = { diamond: '💎', gold: '🥇', silver: '🥈', bronze: '🥉' };
+      const nextTier = { bronze: { name: 'Silver', need: 50 }, silver: { name: 'Gold', need: 200 }, gold: { name: 'Diamond', need: 500 }, diamond: null };
+      const next = nextTier[row.tier];
+      const progressLine = next ? `**${row.scans_30d}/${next.need}** scans to reach ${next.name}` : 'Maximum tier reached!';
+
+      // Get rank
+      db.get(`SELECT COUNT(*) + 1 as rank FROM user_stats WHERE scans_30d > ?`, [row.scans_30d], (err2, rankRow) => {
+        const rank = rankRow ? rankRow.rank : '?';
+        interaction.reply({ embeds: [{
+          title: `${tierEmoji[row.tier] || '🥉'} ${interaction.user.username}'s Stats`,
+          color: row.tier === 'diamond' ? 0xb9f2ff : row.tier === 'gold' ? 0xffd700 : row.tier === 'silver' ? 0xc0c0c0 : 0xcd7f32,
+          fields: [
+            { name: 'Tier', value: row.tier.charAt(0).toUpperCase() + row.tier.slice(1), inline: true },
+            { name: 'Rank', value: `#${rank}`, inline: true },
+            { name: 'Scans (30d)', value: row.scans_30d.toString(), inline: true },
+            { name: 'Total Scans', value: row.scans_total.toString(), inline: true },
+            { name: 'Progress', value: progressLine, inline: false }
+          ],
+          footer: { text: 'Coldtouch Market Analyzer' }
+        }], ephemeral: true });
+      });
+    });
+  }
 });
 
 client.login(BOT_TOKEN);
@@ -454,8 +626,17 @@ app.get('/auth/discord/callback', passport.authenticate('discord', { failureRedi
 });
 
 app.get('/api/me', (req, res) => {
-  if(req.user) res.json({ loggedIn: true, user: req.user });
-  else res.json({ loggedIn: false });
+  if(req.user) {
+    db.get(`SELECT scans_30d, scans_total, tier FROM user_stats WHERE user_id = ?`, [req.user.id], (err, stats) => {
+      res.json({
+        loggedIn: true,
+        user: req.user,
+        stats: stats || { scans_30d: 0, scans_total: 0, tier: 'bronze' }
+      });
+    });
+  } else {
+    res.json({ loggedIn: false });
+  }
 });
 
 // === SHARED MARKET CACHE ENDPOINTS ===
@@ -513,6 +694,101 @@ app.delete('/api/alerts', requireAuth, (req, res) => {
   db.run(`DELETE FROM alerts WHERE channel_id = ?`, [channel_id], (err) => {
     if (err) return res.status(500).json({ error: err.message });
     res.json({ success: true });
+  });
+});
+
+// === COMMUNITY: User Stats Recomputation (every 5 min) ===
+function recomputeUserStats() {
+  const now = Date.now();
+  const thirtyDaysAgo = now - 30 * 24 * 60 * 60 * 1000;
+
+  db.all(`SELECT c.user_id, COUNT(*) as cnt_30d, u.username, u.avatar
+    FROM contributions c LEFT JOIN users u ON c.user_id = u.id
+    WHERE c.created_at > ? GROUP BY c.user_id`, [thirtyDaysAgo], (err, rows30) => {
+    if (err || !rows30) return;
+
+    db.all(`SELECT user_id, COUNT(*) as cnt_total FROM contributions GROUP BY user_id`, [], (err2, rowsTotal) => {
+      if (err2) return;
+      const totalMap = {};
+      for (const r of (rowsTotal || [])) totalMap[r.user_id] = r.cnt_total;
+
+      for (const r of rows30) {
+        const total = totalMap[r.user_id] || r.cnt_30d;
+        let tier = 'bronze';
+        if (r.cnt_30d >= 500) tier = 'diamond';
+        else if (r.cnt_30d >= 200) tier = 'gold';
+        else if (r.cnt_30d >= 50) tier = 'silver';
+
+        db.run(`INSERT OR REPLACE INTO user_stats (user_id, username, avatar, scans_30d, scans_total, tier, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+          [r.user_id, r.username || '', r.avatar || '', r.cnt_30d, total, tier, now]);
+      }
+    });
+  });
+}
+
+// Run stats recomputation every 5 min, first after 60s
+setTimeout(recomputeUserStats, 60 * 1000);
+setInterval(recomputeUserStats, 5 * 60 * 1000);
+
+// Leaderboard memory cache
+let leaderboardCache = null;
+let leaderboardCacheTime = 0;
+
+// === COMMUNITY API ENDPOINTS ===
+const contribLimiter = rateLimit({ windowMs: 60 * 1000, max: 30, standardHeaders: true, legacyHeaders: false });
+
+app.post('/api/contributions', requireAuth, contribLimiter, (req, res) => {
+  const { item_ids, source } = req.body;
+  if (!item_ids || !Array.isArray(item_ids) || item_ids.length === 0) {
+    return res.status(400).json({ error: 'item_ids array required' });
+  }
+  const validSources = ['web_refresh', 'web_compare'];
+  const src = validSources.includes(source) ? source : 'web_refresh';
+  const userId = req.user.id;
+  const now = Date.now();
+
+  db.run(`INSERT INTO contributions (user_id, source, item_count, created_at) VALUES (?, ?, ?, ?)`,
+    [userId, src, item_ids.length, now], (err) => {
+    if (err) return res.status(500).json({ error: err.message });
+
+    // Return updated stats
+    const thirtyDaysAgo = now - 30 * 24 * 60 * 60 * 1000;
+    db.get(`SELECT COUNT(*) as cnt FROM contributions WHERE user_id = ? AND created_at > ?`, [userId, thirtyDaysAgo], (err2, row) => {
+      const scans30d = row ? row.cnt : 0;
+      let tier = 'bronze';
+      if (scans30d >= 500) tier = 'diamond';
+      else if (scans30d >= 200) tier = 'gold';
+      else if (scans30d >= 50) tier = 'silver';
+      res.json({ success: true, scans_30d: scans30d, tier });
+    });
+  });
+});
+
+app.get('/api/my-stats', requireAuth, (req, res) => {
+  const userId = req.user.id;
+  db.get(`SELECT scans_30d, scans_total, tier FROM user_stats WHERE user_id = ?`, [userId], (err, row) => {
+    if (err || !row) return res.json({ scans_30d: 0, scans_total: 0, tier: 'bronze', rank: 0 });
+    db.get(`SELECT COUNT(*) + 1 as rank FROM user_stats WHERE scans_30d > ?`, [row.scans_30d], (err2, rankRow) => {
+      res.json({
+        scans_30d: row.scans_30d,
+        scans_total: row.scans_total,
+        tier: row.tier,
+        rank: rankRow ? rankRow.rank : 0
+      });
+    });
+  });
+});
+
+app.get('/api/leaderboard', (req, res) => {
+  const now = Date.now();
+  if (leaderboardCache && now - leaderboardCacheTime < 60000) {
+    return res.json(leaderboardCache);
+  }
+  db.all(`SELECT user_id, username, avatar, scans_30d, tier FROM user_stats WHERE scans_30d > 0 ORDER BY scans_30d DESC LIMIT 20`, [], (err, rows) => {
+    if (err) return res.status(500).json({ error: err.message });
+    leaderboardCache = rows || [];
+    leaderboardCacheTime = now;
+    res.json(leaderboardCache);
   });
 });
 
@@ -968,6 +1244,10 @@ function compactOldData() {
 
   // Delete raw snapshots older than 30 days (should already be compacted)
   db.run(`DELETE FROM price_snapshots WHERE recorded_at < ?`, [thirtyDaysAgo]);
+
+  // Clean up old contributions (keep 60 days)
+  const sixtyDaysAgo = now - 60 * 24 * 60 * 60 * 1000;
+  db.run(`DELETE FROM contributions WHERE created_at < ?`, [sixtyDaysAgo]);
 }
 
 // Run compaction daily, first run 10 minutes after start
