@@ -31,6 +31,8 @@ let arbSearchExactId = null;
 let craftSearchExactId = null;
 let priceChartInstance = null;
 let scanAbortController = null;
+let spreadStatsCache = {}; // keyed by "itemId_quality_buyCity_sellCity"
+let spreadStatsCacheTime = 0;
 
 // ====== UTILITY ======
 function getFriendlyName(id) {
@@ -524,9 +526,46 @@ function buildPaginationHTML(totalPages) {
 }
 
 // ============================================================
+// SPREAD STATS (Historical Confidence)
+// ============================================================
+async function loadSpreadStats() {
+    const now = Date.now();
+    // Cache for 10 minutes
+    if (now - spreadStatsCacheTime < 10 * 60 * 1000 && Object.keys(spreadStatsCache).length > 0) return;
+    try {
+        const res = await fetch(`${VPS_BASE}/api/spread-stats/top?limit=200&min_confidence=10`);
+        if (!res.ok) return;
+        const rows = await res.json();
+        spreadStatsCache = {};
+        for (const r of rows) {
+            const key = `${r.item_id}_${r.quality}_${r.buy_city}_${r.sell_city}`;
+            spreadStatsCache[key] = r;
+        }
+        spreadStatsCacheTime = now;
+        console.log(`[SpreadStats] Loaded ${rows.length} spread stats`);
+    } catch (e) {
+        console.log('[SpreadStats] Failed to load:', e.message);
+    }
+}
+
+function getSpreadStat(itemId, quality, buyCity, sellCity) {
+    const key = `${itemId}_${quality}_${buyCity}_${sellCity}`;
+    return spreadStatsCache[key] || null;
+}
+
+function getConfidenceBadge(confidence) {
+    if (confidence === null || confidence === undefined) return '';
+    let cls, label;
+    if (confidence >= 70) { cls = 'confidence-high'; label = 'High'; }
+    else if (confidence >= 40) { cls = 'confidence-mid'; label = 'Mid'; }
+    else { cls = 'confidence-low'; label = 'Low'; }
+    return `<span class="confidence-badge ${cls}" title="Historical confidence: ${confidence}% — Based on 7 days of server scans">${confidence}% ${label}</span>`;
+}
+
+// ============================================================
 // MARKET FLIPPING (ARBITRAGE)
 // ============================================================
-function processArbitrage(data, quality, tier, enchantment, includeBM, buyCityFilter, sellCityFilter, isSingleItem = false, freshOnly = false, freshThresholdMins = 30) {
+function processArbitrage(data, quality, tier, enchantment, includeBM, buyCityFilter, sellCityFilter, isSingleItem = false, freshOnly = false, freshThresholdMins = 30, sortBy = 'profit', minConfidence = 0) {
     const itemsData = {};
     data.forEach(entry => {
         if (quality !== 'all' && entry.quality.toString() !== quality) return;
@@ -589,6 +628,7 @@ function processArbitrage(data, quality, tier, enchantment, includeBM, buyCityFi
                     if (profit > 0 || isSingleItem) {
                         const dateBuy = citiesObj[cityBuy].updateDate;
                         const dateSell = citiesObj[citySell].updateDate;
+                        const stat = getSpreadStat(itemId, qual, cityBuy, citySell);
                         trades.push({
                             itemId, quality: qual, buyCity: cityBuy, sellCity: citySell,
                             buyPrice: priceBuy, sellPrice: priceSell,
@@ -597,31 +637,57 @@ function processArbitrage(data, quality, tier, enchantment, includeBM, buyCityFi
                             tax, profit, roi: (profit / priceBuy) * 100,
                             soTax, soProfit, soRoi: destSellOrder > 0 ? (soProfit / priceBuy) * 100 : 0,
                             updateDate: dateBuy < dateSell ? dateBuy : dateSell,
-                            dateBuy: dateBuy, dateSell: dateSell
+                            dateBuy: dateBuy, dateSell: dateSell,
+                            confidence: stat ? stat.confidence_score : null,
+                            consistencyPct: stat ? stat.consistency_pct : null,
+                            avgSpread: stat ? stat.avg_spread : null,
+                            sampleCount: stat ? stat.sample_count : null
                         });
                     }
                 }
             }
         }
     }
+    // Apply freshness filter
+    let filtered = trades;
     if (freshOnly) {
         const now = new Date();
         const thresholdMs = freshThresholdMins * 60 * 1000;
-        const freshTrades = trades.filter(t => {
+        filtered = trades.filter(t => {
             const buyAge = t.dateBuy && !t.dateBuy.startsWith('0001') ? now - new Date(t.dateBuy) : Infinity;
             const sellAge = t.dateSell && !t.dateSell.startsWith('0001') ? now - new Date(t.dateSell) : Infinity;
             return buyAge < thresholdMs && sellAge < thresholdMs;
         });
-        return freshTrades.sort((a, b) => {
-            // Sort by newest data first, profit as tiebreaker
+    }
+
+    // Apply confidence filter
+    if (minConfidence > 0) {
+        filtered = filtered.filter(t => t.confidence !== null && t.confidence >= minConfidence);
+    }
+
+    // Sort
+    if (sortBy === 'confidence') {
+        filtered.sort((a, b) => {
+            const ca = a.confidence !== null ? a.confidence : -1;
+            const cb = b.confidence !== null ? b.confidence : -1;
+            if (cb !== ca) return cb - ca;
+            return b.profit - a.profit;
+        });
+    } else if (sortBy === 'roi') {
+        filtered.sort((a, b) => b.roi - a.roi);
+    } else if (freshOnly) {
+        filtered.sort((a, b) => {
             const newestA = a.dateBuy > a.dateSell ? a.dateBuy : a.dateSell;
             const newestB = b.dateBuy > b.dateSell ? b.dateBuy : b.dateSell;
             if (newestB > newestA) return 1;
             if (newestA > newestB) return -1;
             return b.profit - a.profit;
-        }).slice(0, 60);
+        });
+    } else {
+        filtered.sort((a, b) => b.profit - a.profit);
     }
-    return trades.sort((a, b) => b.profit - a.profit).slice(0, 60);
+
+    return filtered.slice(0, 60);
 }
 
 function buildArbitrageCardDOM(trade) {
@@ -679,10 +745,17 @@ function buildArbitrageCardDOM(trade) {
         </div>
         ` : ''}
         <div style="text-align:center; font-size:0.7rem; color:var(--text-muted); padding: 0.5rem 0 0 0; font-style:italic;">
-            <div style="display:flex; justify-content:center; gap:1rem;">
+            <div style="display:flex; justify-content:center; gap:1rem; flex-wrap:wrap;">
                 <span title="Buy Data Age">${getFreshnessIndicator(trade.dateBuy)} ${trade.buyCity}: ${timeAgo(trade.dateBuy)}</span>
                 <span title="Sell Data Age">${getFreshnessIndicator(trade.dateSell)} ${trade.sellCity}: ${timeAgo(trade.dateSell)}</span>
             </div>
+            ${trade.confidence !== null ? `
+            <div style="margin-top:0.4rem; display:flex; justify-content:center; align-items:center; gap:0.5rem;">
+                ${getConfidenceBadge(trade.confidence)}
+                <span title="Profitable ${trade.consistencyPct}% of the time over 7 days (${trade.sampleCount} samples). Avg spread: ${trade.avgSpread ? Math.floor(trade.avgSpread).toLocaleString() : '?'} silver">
+                    Profitable ${trade.consistencyPct}% of the time
+                </span>
+            </div>` : ''}
         </div>
         <div class="item-card-actions">
             <button class="btn-card-action" data-action="compare" data-item="${trade.itemId}" title="Compare prices across cities">
@@ -758,6 +831,7 @@ function renderArbitrage(trades, isSingleItem = false, targetItemId = null) {
 
 async function doArbScan(targetItemId = null) {
     if (itemsList.length === 0) await loadData();
+    await loadSpreadStats();
 
     const spinner = document.getElementById('arb-spinner');
     const errorEl = document.getElementById('arb-error'); // Restored to original 'arb-error'
@@ -772,6 +846,8 @@ async function doArbScan(targetItemId = null) {
     const includeBM = document.getElementById('include-black-market').checked;
     const freshOnly = document.getElementById('fresh-only-toggle').checked;
     const freshThresholdMins = parseInt(document.getElementById('fresh-threshold').value) || 30;
+    const sortBy = document.getElementById('arb-sort').value;
+    const minConfidence = parseInt(document.getElementById('arb-min-confidence').value) || 0;
 
     if (!targetItemId) {
         hideError(errorEl);
@@ -813,7 +889,7 @@ async function doArbScan(targetItemId = null) {
                     });
                 }
 
-                const trades = processArbitrage(filteredData, quality, tier, enchantment, includeBM, buyCityFilter, sellCityFilter, isSingleItem, freshOnly, freshThresholdMins);
+                const trades = processArbitrage(filteredData, quality, tier, enchantment, includeBM, buyCityFilter, sellCityFilter, isSingleItem, freshOnly, freshThresholdMins, sortBy, minConfidence);
                 renderArbitrage(trades, isSingleItem, targetItemId);
                 return;
             } else {
@@ -834,7 +910,7 @@ async function doArbScan(targetItemId = null) {
         const data = await fetchMarketData(server, itemsToFetch);
         if (data.length > 0) await MarketDB.saveMarketData(data);
         spinner.classList.add('hidden');
-        const trades = processArbitrage(data, quality, tier, enchantment, includeBM, buyCityFilter, sellCityFilter, isSingleItem, freshOnly, freshThresholdMins);
+        const trades = processArbitrage(data, quality, tier, enchantment, includeBM, buyCityFilter, sellCityFilter, isSingleItem, freshOnly, freshThresholdMins, sortBy, minConfidence);
         renderArbitrage(trades, isSingleItem);
         await updateDbStatus();
     } catch (e) {
