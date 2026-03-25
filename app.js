@@ -526,7 +526,7 @@ function buildPaginationHTML(totalPages) {
 // ============================================================
 // MARKET FLIPPING (ARBITRAGE)
 // ============================================================
-function processArbitrage(data, quality, tier, enchantment, includeBM, buyCityFilter, sellCityFilter, isSingleItem = false) {
+function processArbitrage(data, quality, tier, enchantment, includeBM, buyCityFilter, sellCityFilter, isSingleItem = false, freshestFirst = false) {
     const itemsData = {};
     data.forEach(entry => {
         if (quality !== 'all' && entry.quality.toString() !== quality) return;
@@ -603,6 +603,15 @@ function processArbitrage(data, quality, tier, enchantment, includeBM, buyCityFi
                 }
             }
         }
+    }
+    if (freshestFirst) {
+        return trades.sort((a, b) => {
+            const dateA = a.dateBuy > a.dateSell ? a.dateBuy : a.dateSell;
+            const dateB = b.dateBuy > b.dateSell ? b.dateBuy : b.dateSell;
+            if (dateB > dateA) return 1;
+            if (dateA > dateB) return -1;
+            return b.profit - a.profit;
+        }).slice(0, 60);
     }
     return trades.sort((a, b) => b.profit - a.profit).slice(0, 60);
 }
@@ -753,6 +762,7 @@ async function doArbScan(targetItemId = null) {
     const buyCityFilter = document.getElementById('arb-buy-city').value;
     const sellCityFilter = document.getElementById('arb-sell-city').value;
     const includeBM = document.getElementById('include-black-market').checked;
+    const freshestFirst = document.getElementById('freshest-first').checked;
 
     if (!targetItemId) {
         hideError(errorEl);
@@ -794,7 +804,7 @@ async function doArbScan(targetItemId = null) {
                     });
                 }
 
-                const trades = processArbitrage(filteredData, quality, tier, enchantment, includeBM, buyCityFilter, sellCityFilter, isSingleItem);
+                const trades = processArbitrage(filteredData, quality, tier, enchantment, includeBM, buyCityFilter, sellCityFilter, isSingleItem, freshestFirst);
                 renderArbitrage(trades, isSingleItem, targetItemId);
                 return;
             } else {
@@ -815,7 +825,7 @@ async function doArbScan(targetItemId = null) {
         const data = await fetchMarketData(server, itemsToFetch);
         if (data.length > 0) await MarketDB.saveMarketData(data);
         spinner.classList.add('hidden');
-        const trades = processArbitrage(data, quality, tier, enchantment, includeBM, buyCityFilter, sellCityFilter, isSingleItem);
+        const trades = processArbitrage(data, quality, tier, enchantment, includeBM, buyCityFilter, sellCityFilter, isSingleItem, freshestFirst);
         renderArbitrage(trades, isSingleItem);
         await updateDbStatus();
     } catch (e) {
