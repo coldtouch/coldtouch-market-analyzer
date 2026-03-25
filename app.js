@@ -2168,27 +2168,27 @@ const API_LOCALE_MAP = {
 };
 
 function initLiveSync() {
-    const statusDot = document.querySelector('.db-status-dot');
-    const statusText = document.querySelector('.db-status-text');
-    
-    // Connect to the new VPS Proxy 
+    const syncDot = document.querySelector('.live-sync-dot');
+    const syncText = document.querySelector('.live-sync-text');
+
+    // Connect to the new VPS Proxy
     wsLink = new WebSocket('wss://209-97-129-125.nip.io');
-    
+
     wsLink.onopen = () => {
         console.log("🟢 Connected to Live NATS Stream at 209-97-129-125");
-        if(statusText) statusText.textContent = "Live Market Sync Active";
-        if(statusDot) {
-            statusDot.style.background = '#00ff00';
-            statusDot.style.boxShadow = '0 0 8px #00ff00';
+        if(syncText) syncText.textContent = "Live Sync Active";
+        if(syncDot) {
+            syncDot.style.background = '#00ff00';
+            syncDot.style.boxShadow = '0 0 8px #00ff00';
         }
     };
 
     wsLink.onclose = () => {
         console.log("🔴 Live Stream Disconnected. Reconnecting in 5s...");
-        if(statusText) statusText.textContent = "Live Sync Offline (Retrying)";
-        if(statusDot) {
-            statusDot.style.background = 'var(--loss-red)';
-            statusDot.style.boxShadow = '0 0 6px var(--loss-red)';
+        if(syncText) syncText.textContent = "Live Sync Offline";
+        if(syncDot) {
+            syncDot.style.background = 'var(--loss-red)';
+            syncDot.style.boxShadow = '0 0 6px var(--loss-red)';
         }
         setTimeout(initLiveSync, 5000);
     };

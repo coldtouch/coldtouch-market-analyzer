@@ -157,6 +157,26 @@ header::after {
     box-shadow: 0 0 6px var(--profit-green);
 }
 
+.live-sync-status {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    font-size: 0.8rem;
+    color: var(--text-secondary);
+    padding: 0.3rem 0.7rem;
+    border-radius: 20px;
+    border: 1px solid var(--border-color);
+    background: rgba(0, 0, 0, 0.3);
+}
+
+.live-sync-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--text-muted);
+    transition: var(--transition);
+}
+
 .btn-scan-all {
     display: flex;
     align-items: center;
