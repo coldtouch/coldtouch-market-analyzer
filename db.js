@@ -159,6 +159,32 @@ const MarketDB = (() => {
         });
     }
 
+    async function evictStale(maxAgeMs) {
+        const db = await open();
+        return new Promise((resolve, reject) => {
+            const tx = db.transaction(STORE_NAME, 'readwrite');
+            const store = tx.objectStore(STORE_NAME);
+            const cutoff = Date.now() - maxAgeMs;
+            let evicted = 0;
+            const req = store.openCursor();
+            req.onsuccess = (e) => {
+                const cursor = e.target.result;
+                if (cursor) {
+                    if (cursor.value.scan_timestamp && cursor.value.scan_timestamp < cutoff) {
+                        cursor.delete();
+                        evicted++;
+                    }
+                    cursor.continue();
+                }
+            };
+            tx.oncomplete = () => {
+                if (evicted > 0) console.log(`[DB] Evicted ${evicted} stale entries`);
+                resolve(evicted);
+            };
+            tx.onerror = () => reject(tx.error);
+        });
+    }
+
     return {
         open,
         saveMarketData,
@@ -167,6 +193,7 @@ const MarketDB = (() => {
         clearAll,
         setMeta,
         getMeta,
-        getStoredItemCount
+        getStoredItemCount,
+        evictStale
     };
 })();

@@ -187,71 +187,37 @@ async function scanAllMarket() {
     const progressPercent = document.getElementById('scan-progress-percent');
     const progressFill = document.getElementById('scan-progress-fill');
 
-    if (itemsList.length === 0) await loadData();
-
     btn.disabled = true;
-    btn.textContent = 'Scanning...';
+    btn.textContent = 'Refreshing...';
     progressWrap.classList.remove('hidden');
-    progressFill.style.width = '0%';
+    progressFill.style.width = '50%';
+    progressPercent.textContent = '';
+    progressText.textContent = 'Pulling latest data from server...';
 
-    const server = getServer();
-    const totalItems = itemsList.length;
-    const totalChunks = Math.ceil(totalItems / API_CHUNK_SIZE);
-    let scannedItems = 0;
-    let failedChunks = 0;
     const startTime = Date.now();
+    const success = await loadServerCache();
 
-    for (let i = 0; i < totalItems; i += API_CHUNK_SIZE) {
-        const chunk = itemsList.slice(i, i + API_CHUNK_SIZE);
-        try {
-            const data = await fetchMarketChunk(server, chunk);
-            if (data.length > 0) {
-                await MarketDB.saveMarketData(data);
-            }
-        } catch (e) {
-            failedChunks++;
-            console.warn(`Chunk ${Math.floor(i / API_CHUNK_SIZE) + 1} failed:`, e.message);
-        }
-
-        scannedItems += chunk.length;
-        const pct = Math.round((scannedItems / totalItems) * 100);
-        const elapsedSecs = (Date.now() - startTime) / 1000;
-        
-        let timeStr = "calculating...";
-        if (scannedItems > 0 && elapsedSecs > 0) {
-            const itemsRemaining = totalItems - scannedItems;
-            const secPerItem = elapsedSecs / scannedItems;
-            const remainingSecs = Math.max(0, Math.ceil(secPerItem * itemsRemaining));
-            if (remainingSecs > 60) {
-                timeStr = `${Math.floor(remainingSecs / 60)}m ${remainingSecs % 60}s remaining`;
-            } else {
-                timeStr = `${remainingSecs}s remaining`;
-            }
-        }
-
-        progressFill.style.width = pct + '%';
-        progressPercent.textContent = pct + '%';
-        progressText.textContent = `${scannedItems.toLocaleString()} / ${totalItems.toLocaleString()} items • ${timeStr}${failedChunks > 0 ? ` • ${failedChunks} errors` : ''}`;
+    if (success) {
+        await MarketDB.evictStale(24 * 60 * 60 * 1000);
+        const count = await MarketDB.getStoredItemCount();
+        const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+        progressFill.style.width = '100%';
+        progressPercent.textContent = '100%';
+        progressText.textContent = `Refreshed ${count.toLocaleString()} prices in ${elapsed}s`;
+    } else {
+        progressText.textContent = 'Server cache unavailable. Try again shortly.';
+        progressFill.style.width = '0%';
     }
-
-    await MarketDB.setMeta('lastScan', { server });
-
-    const totalElapsed = ((Date.now() - startTime) / 1000).toFixed(1);
-    progressText.textContent = `Scan complete! ${scannedItems.toLocaleString()} items in ${totalElapsed}s${failedChunks > 0 ? ` (${failedChunks} failed chunks)` : ''}`;
-    progressPercent.textContent = '100%';
-    progressFill.style.width = '100%';
 
     btn.disabled = false;
     btn.innerHTML = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-6.22-8.56"></path><path d="M21 3v6h-6"></path></svg> Scan All Market`;
 
     await updateDbStatus();
 
-    // Auto-hide progress after 5s
     setTimeout(() => {
         progressWrap.classList.add('hidden');
     }, 5000);
 
-    // Refresh current view
     if (currentTab === 'browser') renderBrowser();
 }
 
@@ -2043,17 +2009,18 @@ async function checkDiscordAuth() {
     }
 }
 
-async function loadServerCache() {
+async function loadServerCache(silent = false) {
     const statusEl = document.querySelector('.db-status-text');
     try {
-        if (statusEl) statusEl.textContent = 'Loading shared market data...';
+        if (!silent && statusEl) statusEl.textContent = 'Loading shared market data...';
         const res = await fetch(`${VPS_BASE}/api/market-cache`);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const payload = await res.json();
         if (payload.data && payload.data.length > 0) {
             await MarketDB.saveMarketData(payload.data);
             await MarketDB.setMeta('lastScan', { server: 'shared-cache', timestamp: payload.timestamp });
-            console.log(`✅ Loaded ${payload.count} prices from shared server cache (${payload.timestamp})`);
+            console.log(`Loaded ${payload.count} prices from server cache (${payload.timestamp})`);
+            await updateDbStatus();
             return true;
         }
     } catch (e) {
@@ -2066,13 +2033,23 @@ async function init() {
     await checkDiscordAuth();
     await loadData();
 
-    // Try to load shared server cache (instant prices for new visitors)
-    const hasLocalData = await MarketDB.getStoredItemCount() > 0;
-    if (!hasLocalData) {
-        await loadServerCache();
-    }
+    // Load shared server cache (always — keeps data fresh for all users)
+    await loadServerCache();
+
+    // Evict stale prices older than 24h
+    await MarketDB.evictStale(24 * 60 * 60 * 1000);
 
     await updateDbStatus();
+
+    // Background refresh: pull server cache every 5 min + evict stale data
+    setInterval(async () => {
+        await loadServerCache(true);
+        await MarketDB.evictStale(24 * 60 * 60 * 1000);
+        if (currentTab === 'browser') renderBrowser();
+    }, 5 * 60 * 1000);
+
+    // Keep db-status indicator fresh
+    setInterval(updateDbStatus, 60 * 1000);
 
     initTabs();
 
