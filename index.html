@@ -42,7 +42,10 @@
                 <div id="discord-user-profile" class="hidden" style="align-items:center; gap:0.5rem;">
                     <img id="discord-avatar" src="" style="width:32px; height:32px; border-radius:50%; border:2px solid #5865F2;">
                     <div style="display:flex; flex-direction:column;">
-                        <span id="discord-username" style="font-weight:bold; font-size:0.9rem; color:#fff;">Username</span>
+                        <div style="display:flex; align-items:center; gap:0.4rem;">
+                            <span id="discord-username" style="font-weight:bold; font-size:0.9rem; color:#fff;">Username</span>
+                            <span id="discord-tier-badge" class="tier-badge tier-bronze" style="display:none;">Bronze</span>
+                        </div>
                         <a href="https://discord.com/api/oauth2/authorize?client_id=1485787279787299047&permissions=2048&scope=bot" target="_blank" style="font-size:0.7rem; color:#5865F2; text-decoration:none;">Invite Bot to Server</a>
                     </div>
                 </div>
@@ -96,6 +99,10 @@
             <button class="nav-tab" data-tab="alerts">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path><path d="M13.73 21a2 2 0 0 1-3.46 0"></path></svg>
                 Alerts
+            </button>
+            <button class="nav-tab" data-tab="community">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg>
+                Community
             </button>
         </div>
     </nav>
@@ -523,6 +530,60 @@
                 <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path><path d="M13.73 21a2 2 0 0 1-3.46 0"></path></svg>
                 <p>No alerts configured yet</p>
                 <p class="hint">Enter a Discord Channel ID and minimum profit threshold to create your first alert.</p>
+            </div>
+        </section>
+
+        <!-- ====== TAB: COMMUNITY ====== -->
+        <section class="tab-pane hidden" id="pane-community">
+            <div class="controls-panel">
+                <h2 style="color:var(--accent); margin:0 0 0.5rem 0; font-size:1.2rem;">👥 Community Scanners</h2>
+                <p style="color:var(--text-secondary); font-size:0.85rem; margin:0 0 1rem 0;">Every time you refresh an item's prices, you contribute to the community data pool. Scan more items to climb the leaderboard!</p>
+            </div>
+
+            <!-- My Stats Card (visible when logged in) -->
+            <div id="community-my-stats" class="community-stats-card" style="display:none;">
+                <div class="community-stats-header">
+                    <img id="community-my-avatar" src="" class="community-avatar">
+                    <div>
+                        <div style="display:flex; align-items:center; gap:0.5rem;">
+                            <span id="community-my-name" style="font-weight:700; font-size:1.1rem; color:var(--text-primary);">You</span>
+                            <span id="community-my-tier" class="tier-badge tier-bronze">Bronze</span>
+                        </div>
+                        <div style="color:var(--text-secondary); font-size:0.85rem; margin-top:0.25rem;">
+                            Rank #<span id="community-my-rank">—</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="community-stats-grid">
+                    <div class="community-stat-box">
+                        <div class="community-stat-value" id="community-my-scans30d">0</div>
+                        <div class="community-stat-label">Scans (30d)</div>
+                    </div>
+                    <div class="community-stat-box">
+                        <div class="community-stat-value" id="community-my-scans-total">0</div>
+                        <div class="community-stat-label">Scans (All Time)</div>
+                    </div>
+                </div>
+                <div class="tier-progress-wrapper">
+                    <div class="tier-progress-label">
+                        <span id="tier-current-label">Bronze</span>
+                        <span id="tier-next-label">→ Silver (50 scans)</span>
+                    </div>
+                    <div class="tier-progress-bar">
+                        <div class="tier-progress-fill" id="tier-progress-fill" style="width:0%"></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Leaderboard -->
+            <div class="community-leaderboard">
+                <h3 style="color:var(--text-primary); margin:0 0 1rem 0; font-size:1rem;">🏆 Top Scanners (30 Days)</h3>
+                <div id="leaderboard-list"></div>
+                <div id="leaderboard-empty" class="empty-state" style="display:none;">
+                    <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle></svg>
+                    <p>No scanning activity yet</p>
+                    <p class="hint">Be the first to contribute by refreshing item prices!</p>
+                </div>
             </div>
         </section>
 
