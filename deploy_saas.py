@@ -48,6 +48,7 @@ def main():
     "express": "^4.18.2",
     "express-session": "^1.18.0",
     "express-rate-limit": "^7.1.5",
+    "connect-sqlite3": "^0.9.15",
     "passport": "^0.7.0",
     "passport-discord": "^0.1.4",
     "sqlite3": "^5.1.7",
@@ -62,13 +63,21 @@ def main():
     print("Installing NPM packages (this will take a minute)...")
     run_wait("cd /opt/albion-saas && npm install")
     
-    # Generate a strong random session secret
+    # Reuse existing session secret (so logins survive deploys), or generate a new one
     import secrets
-    session_secret = secrets.token_hex(32)
+    existing_env = run_wait("cat /opt/albion-saas/.env 2>/dev/null || echo ''")
+    session_secret = None
+    for line in existing_env.strip().split('\n'):
+        if line.startswith('SESSION_SECRET='):
+            session_secret = line.split('=', 1)[1].strip()
+            break
+    if not session_secret:
+        session_secret = secrets.token_hex(32)
 
     backend_js = """
 const express = require('express');
 const session = require('express-session');
+const SQLiteStore = require('connect-sqlite3')(session);
 const rateLimit = require('express-rate-limit');
 const passport = require('passport');
 const DiscordStrategy = require('passport-discord').Strategy;
@@ -327,12 +336,14 @@ const apiLimiter = rateLimit({ windowMs: 60 * 1000, max: 60, standardHeaders: tr
 app.use('/api/', apiLimiter);
 
 app.use(session({
+  store: new SQLiteStore({ db: 'sessions.sqlite', dir: '/opt/albion-saas' }),
   secret: SESSION_SECRET,
   resave: false,
   saveUninitialized: false,
   cookie: {
     secure: true,
-    sameSite: 'none'
+    sameSite: 'none',
+    maxAge: 30 * 24 * 60 * 60 * 1000 // 30 days
   }
 }));
 
