@@ -179,47 +179,6 @@ async function updateDbStatus() {
     }
 }
 
-// ====== SCAN ALL MARKET ======
-async function scanAllMarket() {
-    const btn = document.getElementById('scan-all-btn');
-    const progressWrap = document.getElementById('scan-progress-wrap');
-    const progressText = document.getElementById('scan-progress-text');
-    const progressPercent = document.getElementById('scan-progress-percent');
-    const progressFill = document.getElementById('scan-progress-fill');
-
-    btn.disabled = true;
-    btn.textContent = 'Refreshing...';
-    progressWrap.classList.remove('hidden');
-    progressFill.style.width = '50%';
-    progressPercent.textContent = '';
-    progressText.textContent = 'Pulling latest data from server...';
-
-    const startTime = Date.now();
-    const success = await loadServerCache();
-
-    if (success) {
-        await MarketDB.evictStale(24 * 60 * 60 * 1000);
-        const count = await MarketDB.getStoredItemCount();
-        const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
-        progressFill.style.width = '100%';
-        progressPercent.textContent = '100%';
-        progressText.textContent = `Refreshed ${count.toLocaleString()} prices in ${elapsed}s`;
-    } else {
-        progressText.textContent = 'Server cache unavailable. Try again shortly.';
-        progressFill.style.width = '0%';
-    }
-
-    btn.disabled = false;
-    btn.innerHTML = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-6.22-8.56"></path><path d="M21 3v6h-6"></path></svg> Scan All Market`;
-
-    await updateDbStatus();
-
-    setTimeout(() => {
-        progressWrap.classList.add('hidden');
-    }, 5000);
-
-    if (currentTab === 'browser') renderBrowser();
-}
 
 // ====== TAB NAVIGATION ======
 function initTabs() {
@@ -2052,9 +2011,6 @@ async function init() {
     setInterval(updateDbStatus, 60 * 1000);
 
     initTabs();
-
-    // Scan All Market button
-    document.getElementById('scan-all-btn').addEventListener('click', scanAllMarket);
 
     // Arbitrage tab
     document.getElementById('arb-scan-btn').addEventListener('click', () => doArbScan());
