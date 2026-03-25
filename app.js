@@ -722,7 +722,7 @@ function renderArbitrage(trades, isSingleItem = false, targetItemId = null) {
     container.innerHTML = '';
 
     if (trades.length === 0) {
-        container.innerHTML = `<div class="empty-state"><p>${isSingleItem ? 'No market data for this item.' : 'No profitable routes found.'}</p><p class="hint">Try scanning the market first, then search for items.</p></div>`;
+        container.innerHTML = `<div class="empty-state"><p>${isSingleItem ? 'No market data for this item.' : 'No profitable routes found.'}</p><p class="hint">Data refreshes automatically every 5 minutes. Try adjusting your filters.</p></div>`;
         return;
     }
 
@@ -799,13 +799,13 @@ async function doArbScan(targetItemId = null) {
                 return;
             } else {
                 spinner.classList.add('hidden');
-                errorEl.textContent = 'Local Database is completely empty because we just ran the mathematical Cache Flush. Please click "Scan All Market" at the top of the webpage first to repopulate the 8,000 item economy.';
+                errorEl.textContent = 'No market data available yet. Data loads automatically from the server — please wait a moment and try again.';
                 errorEl.classList.remove('hidden');
                 return;
             }
         } catch (e) { /* fall through */ }
 
-        showError(errorEl, 'No cached data. Click "Scan All Market" first to download market prices, or search for a specific item.');
+        showError(errorEl, 'No cached data available yet. Data loads automatically from the server — please wait a moment and try again.');
         spinner.classList.add('hidden');
         return;
     }
@@ -1527,7 +1527,7 @@ async function doCraftScan() {
         spinner.classList.add('hidden');
 
         if (cachedData.length === 0) {
-            showError(errorEl, 'No cached data. Click "Scan All Market" first.');
+            showError(errorEl, 'No cached data available yet. Data loads automatically — please wait a moment and try again.');
             return;
         }
 
