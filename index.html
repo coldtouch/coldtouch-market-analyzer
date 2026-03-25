@@ -275,7 +275,21 @@
                 </div>
                 <div class="control-group checkbox-group">
                     <label><input type="checkbox" id="include-black-market" checked> Include Black Market</label>
-                    <label><input type="checkbox" id="freshest-first"> Freshest First</label>
+                </div>
+                <div class="control-group fresh-toggle-group">
+                    <div class="fresh-toggle-row">
+                        <label class="toggle-switch">
+                            <input type="checkbox" id="fresh-only-toggle">
+                            <span class="toggle-slider"></span>
+                        </label>
+                        <span class="fresh-toggle-label">Fresh Only</span>
+                    </div>
+                    <select id="fresh-threshold" class="fresh-threshold-select" disabled>
+                        <option value="15">15 min</option>
+                        <option value="30" selected>30 min</option>
+                        <option value="60">1 hour</option>
+                        <option value="120">2 hours</option>
+                    </select>
                 </div>
                 <button id="arb-scan-btn" class="btn-primary">Scan Markets</button>
             </div>
