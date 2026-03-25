@@ -98,6 +98,8 @@ const BOT_TOKEN = process.env.DISCORD_BOT_TOKEN;
 const SESSION_SECRET = process.env.SESSION_SECRET;
 
 const API_BASE = 'https://west.albion-online-data.com/api/v2/stats/prices';
+const CHARTS_BASE = 'https://west.albion-online-data.com/api/v2/stats/charts';
+const HISTORY_BASE = 'https://west.albion-online-data.com/api/v2/stats/history';
 const ITEMS_URL = 'https://coldtouch.github.io/coldtouch-market-analyzer/items.json';
 const CHUNK_SIZE = 100;
 const SCAN_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
@@ -677,26 +679,35 @@ function checkAndAlert(id, q) {
   });
 }
 
+let dbBusy = false; // Prevents concurrent transaction collisions
+
 // === HISTORICAL SNAPSHOT RECORDING ===
 function recordSnapshots(allPrices) {
+  if (dbBusy) { console.log('[Snapshots] DB busy, skipping'); return; }
   const now = Date.now();
-  const stmt = db.prepare(`INSERT INTO price_snapshots (item_id, quality, city, sell_price_min, buy_price_max, sell_date, buy_date, recorded_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`);
   let count = 0;
-  db.run('BEGIN TRANSACTION');
-  for (const entry of allPrices) {
-    if (!entry.item_id || !entry.city) continue;
-    if (entry.sell_price_min <= 0 && entry.buy_price_max <= 0) continue;
-    stmt.run(entry.item_id, entry.quality || 1, entry.city, entry.sell_price_min || 0, entry.buy_price_max || 0, entry.sell_price_min_date || '', entry.buy_price_max_date || '', now);
-    count++;
-  }
-  db.run('COMMIT', () => {
+  db.serialize(() => {
+    db.run('BEGIN TRANSACTION');
+    const stmt = db.prepare(`INSERT INTO price_snapshots (item_id, quality, city, sell_price_min, buy_price_max, sell_date, buy_date, recorded_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`);
+    for (const entry of allPrices) {
+      if (!entry.item_id || !entry.city) continue;
+      if (entry.sell_price_min <= 0 && entry.buy_price_max <= 0) continue;
+      stmt.run(entry.item_id, entry.quality || 1, entry.city, entry.sell_price_min || 0, entry.buy_price_max || 0, entry.sell_price_min_date || '', entry.buy_price_max_date || '', now);
+      count++;
+    }
     stmt.finalize();
-    console.log(`[Snapshots] Recorded ${count} price snapshots`);
+    db.run('COMMIT', () => {
+      console.log(`[Snapshots] Recorded ${count} price snapshots`);
+    });
   });
 }
 
 // === SPREAD STATISTICS COMPUTATION (runs hourly) ===
+let statsRunning = false;
 function computeSpreadStats() {
+  if (dbBusy || statsRunning) { console.log('[SpreadStats] Busy, skipping this cycle'); return; }
+  statsRunning = true;
+
   const now = Date.now();
   const windowMs = 7 * 24 * 60 * 60 * 1000; // 7 days
   const cutoff = now - windowMs;
@@ -707,6 +718,7 @@ function computeSpreadStats() {
   db.all(`SELECT DISTINCT item_id, quality FROM price_snapshots WHERE recorded_at > ?`, [cutoff], (err, items) => {
     if (err || !items || items.length === 0) {
       console.log('[SpreadStats] No data to process');
+      statsRunning = false;
       return;
     }
 
@@ -717,6 +729,7 @@ function computeSpreadStats() {
       const batch = items.slice(startIdx, startIdx + batchSize);
       if (batch.length === 0) {
         console.log(`[SpreadStats] Done. Processed ${processed} item/quality combos`);
+        statsRunning = false;
         return;
       }
 
@@ -742,14 +755,12 @@ function computeSpreadStats() {
               }
               const cities = Array.from(citySet);
 
-              const upsertStmt = db.prepare(`INSERT OR REPLACE INTO spread_stats (item_id, quality, buy_city, sell_city, avg_spread, median_spread, consistency_pct, sample_count, window_days, confidence_score, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
-
               for (let i = 0; i < cities.length; i++) {
                 for (let j = 0; j < cities.length; j++) {
                   if (i === j) continue;
                   const buyCity = cities[i];
                   const sellCity = cities[j];
-                  if (buyCity === 'Black Market') continue; // Don't buy from BM
+                  if (buyCity === 'Black Market') continue;
 
                   const spreads = [];
                   for (const cycle of Object.values(cycles)) {
@@ -761,7 +772,7 @@ function computeSpreadStats() {
                     spreads.push(spread);
                   }
 
-                  if (spreads.length < 3) continue; // Need at least 3 data points
+                  if (spreads.length < 3) continue;
 
                   const positive = spreads.filter(s => s > 0);
                   const consistencyPct = (positive.length / spreads.length) * 100;
@@ -769,16 +780,17 @@ function computeSpreadStats() {
                   const sorted = [...positive].sort((a, b) => a - b);
                   const median = sorted.length > 0 ? sorted[Math.floor(sorted.length / 2)] : 0;
 
-                  // Confidence = weighted combo of consistency, sample size, and avg spread
                   const sampleScore = Math.min(spreads.length, 100) / 100 * 30;
                   const consistScore = consistencyPct * 0.5;
                   const spreadScore = Math.min(Math.max(avg, 0), 500000) / 500000 * 20;
                   const confidence = Math.round(Math.min(100, sampleScore + consistScore + spreadScore));
 
-                  upsertStmt.run(item_id, quality, buyCity, sellCity, Math.round(avg), Math.round(median), Math.round(consistencyPct * 10) / 10, spreads.length, 7, confidence, now);
+                  db.run(`INSERT OR REPLACE INTO spread_stats (item_id, quality, buy_city, sell_city, avg_spread, median_spread, consistency_pct, sample_count, window_days, confidence_score, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                    [item_id, quality, buyCity, sellCity, Math.round(avg), Math.round(median), Math.round(consistencyPct * 10) / 10, spreads.length, 7, confidence, now],
+                    () => {} // swallow errors silently
+                  );
                 }
               }
-              upsertStmt.finalize();
             }
 
             processed++;
@@ -796,8 +808,8 @@ function computeSpreadStats() {
   });
 }
 
-// Run stats computation hourly, first run 2 minutes after start
-setTimeout(computeSpreadStats, 2 * 60 * 1000);
+// Run stats computation hourly, first run 5 minutes after start (after backfill)
+setTimeout(computeSpreadStats, 5 * 60 * 1000);
 setInterval(computeSpreadStats, 60 * 60 * 1000);
 
 // === DATA COMPACTION (runs daily) ===
@@ -876,6 +888,153 @@ function compactOldData() {
 setTimeout(compactOldData, 10 * 60 * 1000);
 setInterval(compactOldData, 24 * 60 * 60 * 1000);
 
+// === HISTORICAL BACKFILL (Charts + History APIs) ===
+// Runs once on start if no historical data exists
+async function backfillHistoricalData() {
+  // Check if we already have historical data
+  const hasData = await new Promise((resolve) => {
+    db.get(`SELECT COUNT(*) as cnt FROM price_averages`, (err, row) => {
+      resolve(row && row.cnt > 0);
+    });
+  });
+  if (hasData) {
+    console.log('[Backfill] Historical data already exists, skipping backfill');
+    return;
+  }
+
+  // Wait for items to be loaded from the first scan
+  let retries = 0;
+  while (Object.keys(itemNames).length === 0 && retries < 30) {
+    await new Promise(r => setTimeout(r, 5000));
+    retries++;
+  }
+  const itemIds = Object.keys(itemNames).filter(k => k && itemNames[k]);
+  if (itemIds.length === 0) {
+    console.log('[Backfill] No items loaded, skipping');
+    return;
+  }
+
+  dbBusy = true;
+  console.log(`[Backfill] Starting historical backfill for ${itemIds.length} items...`);
+
+  // Helper: promisified batch insert
+  function batchInsert(rows, periodType) {
+    return new Promise((resolve, reject) => {
+      if (rows.length === 0) return resolve(0);
+      db.run('BEGIN TRANSACTION', (err) => {
+        if (err) return resolve(0);
+        const stmt = db.prepare(`INSERT OR IGNORE INTO price_averages (item_id, quality, city, avg_sell, avg_buy, sample_count, period_type, period_start) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`);
+        for (const r of rows) {
+          stmt.run(r.item_id, r.quality, r.city, r.avg_sell, 0, r.count, periodType, r.period_start);
+        }
+        stmt.finalize(() => {
+          db.run('COMMIT', (err2) => {
+            resolve(rows.length);
+          });
+        });
+      });
+    });
+  }
+
+  // Phase A: Charts API (daily averages, time-scale=24, ~28 days back)
+  let dailyCount = 0;
+  for (let i = 0; i < itemIds.length; i += CHUNK_SIZE) {
+    const chunk = itemIds.slice(i, i + CHUNK_SIZE);
+    try {
+      const url = `${CHARTS_BASE}/${chunk.join(',')}.json?time-scale=24`;
+      const res = await fetch(url);
+      if (!res.ok) continue;
+      const data = await res.json();
+
+      const rows = [];
+      for (const entry of data) {
+        if (!entry.data || !entry.data.timestamps) continue;
+        const ts = entry.data.timestamps;
+        const avgPrices = entry.data.prices_avg || [];
+        const counts = entry.data.item_count || [];
+        for (let t = 0; t < ts.length; t++) {
+          if (!avgPrices[t] || avgPrices[t] <= 0) continue;
+          const periodStart = new Date(ts[t]).getTime();
+          if (isNaN(periodStart)) continue;
+          rows.push({ item_id: entry.item_id, quality: entry.quality || 1, city: entry.location || '', avg_sell: Math.round(avgPrices[t]), count: counts[t] || 1, period_start: periodStart });
+        }
+      }
+      dailyCount += await batchInsert(rows, 'daily');
+    } catch (e) {
+      console.error(`[Backfill] Charts chunk ${i} failed:`, e.message);
+    }
+    if (i + CHUNK_SIZE < itemIds.length) await new Promise(r => setTimeout(r, 150));
+    if (i % 1000 === 0 && i > 0) console.log(`[Backfill] Charts progress: ${i}/${itemIds.length} items`);
+  }
+  console.log(`[Backfill] Charts API: inserted ${dailyCount} daily averages`);
+
+  // Phase B: History API (6-hour granularity, more recent data)
+  let hourlyCount = 0;
+  for (let i = 0; i < itemIds.length; i += CHUNK_SIZE) {
+    const chunk = itemIds.slice(i, i + CHUNK_SIZE);
+    try {
+      const url = `${HISTORY_BASE}/${chunk.join(',')}.json?time-scale=6`;
+      const res = await fetch(url);
+      if (!res.ok) continue;
+      const data = await res.json();
+
+      const rows = [];
+      for (const entry of data) {
+        if (!entry.data || !entry.data.timestamps) continue;
+        const ts = entry.data.timestamps;
+        const avgPrices = entry.data.prices_avg || [];
+        const counts = entry.data.item_count || [];
+        for (let t = 0; t < ts.length; t++) {
+          if (!avgPrices[t] || avgPrices[t] <= 0) continue;
+          const periodStart = new Date(ts[t]).getTime();
+          if (isNaN(periodStart)) continue;
+          rows.push({ item_id: entry.item_id, quality: entry.quality || 1, city: entry.location || '', avg_sell: Math.round(avgPrices[t]), count: counts[t] || 1, period_start: periodStart });
+        }
+      }
+      hourlyCount += await batchInsert(rows, 'hourly');
+    } catch (e) {
+      console.error(`[Backfill] History chunk ${i} failed:`, e.message);
+    }
+    if (i + CHUNK_SIZE < itemIds.length) await new Promise(r => setTimeout(r, 150));
+    if (i % 1000 === 0 && i > 0) console.log(`[Backfill] History progress: ${i}/${itemIds.length} items`);
+  }
+  console.log(`[Backfill] History API: inserted ${hourlyCount} hourly averages`);
+  dbBusy = false;
+  console.log(`[Backfill] Complete! Total: ${dailyCount} daily + ${hourlyCount} hourly records`);
+
+  // Trigger a spread stats computation right after backfill
+  setTimeout(computeSpreadStats, 5000);
+}
+
+// Start backfill 90 seconds after boot (after first scan completes)
+setTimeout(backfillHistoricalData, 90 * 1000);
+
+// === NATS SNAPSHOT BUFFER ===
+// Buffer incoming NATS orders and batch-write to price_snapshots every 60s
+let natsSnapshotBuffer = [];
+const NATS_FLUSH_INTERVAL = 60 * 1000; // 60 seconds
+
+function flushNatsBuffer() {
+  if (natsSnapshotBuffer.length === 0 || dbBusy || statsRunning) return;
+  const batch = natsSnapshotBuffer;
+  natsSnapshotBuffer = [];
+  const now = Date.now();
+
+  db.serialize(() => {
+    db.run('BEGIN TRANSACTION');
+    const stmt = db.prepare(`INSERT INTO price_snapshots (item_id, quality, city, sell_price_min, buy_price_max, sell_date, buy_date, recorded_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`);
+    for (const entry of batch) {
+      stmt.run(entry.item_id, entry.quality, entry.city, entry.sell || 0, entry.buy || 0, '', '', now);
+    }
+    stmt.finalize();
+    db.run('COMMIT', () => {
+      if (batch.length > 50) console.log(`[NATS-Snap] Flushed ${batch.length} live orders to snapshots`);
+    });
+  });
+}
+
+setInterval(flushNatsBuffer, NATS_FLUSH_INTERVAL);
+
 let natsConnection = null;
 
 (async () => {
@@ -916,6 +1075,13 @@ let natsConnection = null;
             alertMarketDb[id][q][city].buyDate = now;
           }
 
+          // Buffer for snapshot recording
+          natsSnapshotBuffer.push({
+            item_id: id, quality: q, city: city,
+            sell: p.AuctionType === 'offer' ? price : 0,
+            buy: p.AuctionType === 'request' ? price : 0
+          });
+
           // Check for alerts on this item
           checkAndAlert(id, q);
         }
@@ -927,6 +1093,7 @@ let natsConnection = null;
 // === GRACEFUL SHUTDOWN ===
 function shutdown(signal) {
   console.log(`[Shutdown] Received ${signal}, closing...`);
+  flushNatsBuffer(); // Save any buffered NATS data before exit
   if (natsConnection) natsConnection.close();
   wss.close();
   client.destroy();
