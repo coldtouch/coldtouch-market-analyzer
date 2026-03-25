@@ -113,8 +113,9 @@ const db = new sqlite3.Database('/opt/albion-saas/database.sqlite');
 db.serialize(() => {
   db.run(`CREATE TABLE IF NOT EXISTS users (id TEXT PRIMARY KEY, username TEXT, avatar TEXT)`);
   db.run(`CREATE TABLE IF NOT EXISTS alerts (guild_id TEXT, channel_id TEXT, min_profit INTEGER, cooldown_ms INTEGER DEFAULT 600000, PRIMARY KEY(guild_id, channel_id))`);
-  // Migrate: add cooldown_ms column if missing
+  // Migrate: add columns if missing
   db.run(`ALTER TABLE alerts ADD COLUMN cooldown_ms INTEGER DEFAULT 600000`, () => {});
+  db.run(`ALTER TABLE alerts ADD COLUMN min_confidence INTEGER DEFAULT 0`, () => {});
 
   // === PHASE 1: Historical Spread Analyzer ===
   db.run(`CREATE TABLE IF NOT EXISTS price_snapshots (
@@ -261,7 +262,8 @@ const commands = [
     description: 'Start arbitrage alerts in this channel',
     options: [
       { name: 'min_profit', type: 4, description: 'Minimum silver profit (e.g. 50000)', required: true },
-      { name: 'cooldown', type: 4, description: 'Minutes between alerts for the same item (default: 10)', required: false }
+      { name: 'cooldown', type: 4, description: 'Minutes between alerts for the same item (default: 10)', required: false },
+      { name: 'min_confidence', type: 4, description: 'Minimum confidence % (0=any, 40=medium, 70=high)', required: false }
     ]
   },
   {
@@ -275,6 +277,13 @@ const commands = [
   {
     name: 'status',
     description: 'Show bot status and market data stats'
+  },
+  {
+    name: 'set_confidence',
+    description: 'Set minimum confidence threshold for alerts (0-100)',
+    options: [
+      { name: 'min_confidence', type: 4, description: 'Minimum confidence score (0 = any, 40 = medium, 70 = high)', required: true }
+    ]
   }
 ];
 
@@ -298,18 +307,21 @@ client.on('interactionCreate', async interaction => {
     const minP = interaction.options.getInteger('min_profit');
     const cooldown = interaction.options.getInteger('cooldown') || 10;
     const cooldownMs = Math.max(1, Math.min(120, cooldown)) * 60 * 1000;
-    db.run(`INSERT OR REPLACE INTO alerts (guild_id, channel_id, min_profit, cooldown_ms) VALUES (?, ?, ?, ?)`,
-      [interaction.guildId, interaction.channelId, minP, cooldownMs], (err) => {
+    const minConf = Math.max(0, Math.min(100, interaction.options.getInteger('min_confidence') || 0));
+    db.run(`INSERT OR REPLACE INTO alerts (guild_id, channel_id, min_profit, cooldown_ms, min_confidence) VALUES (?, ?, ?, ?, ?)`,
+      [interaction.guildId, interaction.channelId, minP, cooldownMs, minConf], (err) => {
       if(err) return interaction.reply({content: 'DB Error :(', ephemeral: true});
+      const fields = [
+        { name: 'Channel', value: `<#${interaction.channelId}>`, inline: true },
+        { name: 'Min Profit', value: `${minP.toLocaleString()} silver`, inline: true },
+        { name: 'Cooldown', value: `${cooldown} min per item`, inline: true }
+      ];
+      if (minConf > 0) fields.push({ name: 'Min Confidence', value: `${minConf}%+`, inline: true });
       interaction.reply({ embeds: [{
         title: 'Alerts Configured',
         color: 0x00ff00,
-        fields: [
-          { name: 'Channel', value: `<#${interaction.channelId}>`, inline: true },
-          { name: 'Min Profit', value: `${minP.toLocaleString()} silver`, inline: true },
-          { name: 'Cooldown', value: `${cooldown} min per item`, inline: true }
-        ],
-        footer: { text: 'Coldtouch Market Analyzer' }
+        fields,
+        footer: { text: 'Coldtouch Market Analyzer • Use /set_confidence to change threshold later' }
       }]});
     });
   }
@@ -326,7 +338,7 @@ client.on('interactionCreate', async interaction => {
   }
 
   if (interaction.commandName === 'my_alerts') {
-    db.all(`SELECT channel_id, min_profit, cooldown_ms FROM alerts WHERE guild_id = ?`, [interaction.guildId], (err, rows) => {
+    db.all(`SELECT channel_id, min_profit, cooldown_ms, min_confidence FROM alerts WHERE guild_id = ?`, [interaction.guildId], (err, rows) => {
       if (err || !rows || rows.length === 0) {
         return interaction.reply({ embeds: [{
           title: 'No Active Alerts',
@@ -335,13 +347,39 @@ client.on('interactionCreate', async interaction => {
           footer: { text: 'Coldtouch Market Analyzer' }
         }], ephemeral: true });
       }
-      const lines = rows.map(r => `<#${r.channel_id}> — min **${r.min_profit.toLocaleString()}** silver, cooldown **${Math.round((r.cooldown_ms || 600000) / 60000)}** min`);
+      const lines = rows.map(r => {
+        const conf = r.min_confidence || 0;
+        const confLabel = conf > 0 ? `, confidence **${conf}%+**` : '';
+        return `<#${r.channel_id}> — min **${r.min_profit.toLocaleString()}** silver, cooldown **${Math.round((r.cooldown_ms || 600000) / 60000)}** min${confLabel}`;
+      });
       interaction.reply({ embeds: [{
         title: `Active Alerts (${rows.length})`,
         color: 0xffd700,
         description: lines.join('\\n'),
-        footer: { text: 'Coldtouch Market Analyzer' }
+        footer: { text: 'Coldtouch Market Analyzer • Use /set_confidence to filter by reliability' }
       }], ephemeral: true });
+    });
+  }
+
+  if (interaction.commandName === 'set_confidence') {
+    const minConf = Math.max(0, Math.min(100, interaction.options.getInteger('min_confidence')));
+    db.run(`UPDATE alerts SET min_confidence = ? WHERE guild_id = ? AND channel_id = ?`,
+      [minConf, interaction.guildId, interaction.channelId], (err) => {
+      if (err) {
+        // Try to check if alert exists
+        return interaction.reply({ content: 'No alert configured in this channel. Use `/setup_alerts` first.', ephemeral: true });
+      }
+      const label = minConf === 0 ? 'Any (all alerts)' : minConf >= 70 ? `${minConf}% (High confidence only)` : minConf >= 40 ? `${minConf}% (Medium+ confidence)` : `${minConf}%`;
+      interaction.reply({ embeds: [{
+        title: 'Confidence Threshold Updated',
+        color: 0x5865F2,
+        fields: [
+          { name: 'Channel', value: `<#${interaction.channelId}>`, inline: true },
+          { name: 'Min Confidence', value: label, inline: true }
+        ],
+        description: minConf > 0 ? 'Alerts will only fire for routes with historical confidence at or above this level.' : 'All profitable alerts will be sent regardless of historical confidence.',
+        footer: { text: 'Coldtouch Market Analyzer' }
+      }]});
     });
   }
 
@@ -640,41 +678,89 @@ function checkAndAlert(id, q) {
   const sellAge = Math.round((now - bestBuy.date) / 60000);
   const freshLabel = (mins) => mins < 1 ? 'just now' : mins < 60 ? mins + 'm ago' : Math.floor(mins/60) + 'h ago';
 
-  db.all(`SELECT channel_id, cooldown_ms FROM alerts WHERE min_profit <= ?`, [profit], (err, rows) => {
-    if (err || !rows) return;
-    rows.forEach(row => {
-      const cacheKey = `${id}_${q}_${row.channel_id}`;
-      const last = alertCooldowns[cacheKey] || 0;
-      const cooldown = row.cooldown_ms || 600000;
-      if (now - last < cooldown) return;
+  // Look up historical confidence for this route
+  const buyCity = getCity(bestSell.loc);
+  const sellCity = getCity(bestBuy.loc);
 
-      alertCooldowns[cacheKey] = now;
-      const channel = client.channels.cache.get(row.channel_id);
-      if (!channel) return;
+  db.get(`SELECT confidence_score, consistency_pct, avg_spread, sample_count FROM spread_stats WHERE item_id = ? AND quality = ? AND buy_city = ? AND sell_city = ? AND window_days = 7`,
+    [id, q, buyCity, sellCity], (statsErr, stats) => {
 
-      const qualName = getQualityName(q);
-      const friendlyName = getFriendlyName(id);
-      const thumbnailUrl = `https://render.albiononline.com/v1/item/${id}.png?quality=${q}`;
+    const confidence = stats ? stats.confidence_score : null;
+    const consistencyPct = stats ? stats.consistency_pct : null;
+    const sampleCount = stats ? stats.sample_count : 0;
 
-      channel.send({
-        embeds: [{
-          title: `${friendlyName}`,
-          color: profit > 500000 ? 0xff4500 : profit > 100000 ? 0xffd700 : 0x00ff00,
-          thumbnail: { url: thumbnailUrl },
-          fields: [
-            { name: 'Profit', value: `**${Math.floor(profit).toLocaleString()}** silver (${roi}% ROI)`, inline: false },
-            { name: 'Buy From', value: `**${getCity(bestSell.loc)}**\\n${Math.floor(bestSell.price).toLocaleString()} silver\\n${freshLabel(buyAge)}`, inline: true },
-            { name: 'Sell To', value: `**${getCity(bestBuy.loc)}**\\n${Math.floor(bestBuy.price).toLocaleString()} silver\\n${freshLabel(sellAge)}`, inline: true },
-            { name: 'Quality', value: qualName, inline: true }
-          ],
-          footer: { text: `Coldtouch Market Analyzer` },
-          timestamp: new Date().toISOString(),
-          url: SITE_URL
-        }]
-      }).catch(e => console.error('[Alert] Failed to send:', e.message));
+    db.all(`SELECT channel_id, cooldown_ms, min_confidence FROM alerts WHERE min_profit <= ?`, [profit], (err, rows) => {
+      if (err || !rows) return;
 
-      totalAlertsSent++;
-      lastAlertTime = now;
+      // Sort by confidence: high-confidence alerts get processed first
+      rows.forEach(row => {
+        const cacheKey = `${id}_${q}_${row.channel_id}`;
+        const last = alertCooldowns[cacheKey] || 0;
+        const cooldown = row.cooldown_ms || 600000;
+        if (now - last < cooldown) return;
+
+        // Check confidence threshold
+        const minConf = row.min_confidence || 0;
+        if (minConf > 0 && (confidence === null || confidence < minConf)) return;
+
+        alertCooldowns[cacheKey] = now;
+        const channel = client.channels.cache.get(row.channel_id);
+        if (!channel) return;
+
+        const qualName = getQualityName(q);
+        const friendlyName = getFriendlyName(id);
+        const thumbnailUrl = `https://render.albiononline.com/v1/item/${id}.png?quality=${q}`;
+
+        // Color: factor in confidence
+        let embedColor;
+        if (confidence !== null && confidence >= 70) {
+          embedColor = profit > 500000 ? 0xff4500 : profit > 100000 ? 0xffd700 : 0x00ff00;
+        } else if (confidence !== null && confidence >= 40) {
+          embedColor = profit > 500000 ? 0xffa500 : 0xffff00; // orange/yellow for mid confidence
+        } else {
+          embedColor = 0x888888; // grey for low/unknown confidence
+        }
+
+        // Build fields
+        const fields = [
+          { name: 'Profit', value: `**${Math.floor(profit).toLocaleString()}** silver (${roi}% ROI)`, inline: false },
+          { name: 'Buy From', value: `**${buyCity}**\\n${Math.floor(bestSell.price).toLocaleString()} silver\\n${freshLabel(buyAge)}`, inline: true },
+          { name: 'Sell To', value: `**${sellCity}**\\n${Math.floor(bestBuy.price).toLocaleString()} silver\\n${freshLabel(sellAge)}`, inline: true },
+          { name: 'Quality', value: qualName, inline: true }
+        ];
+
+        // Add reliability field if we have historical data
+        if (confidence !== null) {
+          const confLabel = confidence >= 70 ? 'High' : confidence >= 40 ? 'Medium' : 'Low';
+          const confEmoji = confidence >= 70 ? '🟢' : confidence >= 40 ? '🟡' : '🔴';
+          fields.push({
+            name: 'Reliability',
+            value: `${confEmoji} **${confidence}%** ${confLabel} — profitable ${consistencyPct}% of the time (${sampleCount} samples over 7d)`,
+            inline: false
+          });
+        } else {
+          fields.push({
+            name: 'Reliability',
+            value: '⚪ No historical data yet',
+            inline: false
+          });
+        }
+
+        channel.send({
+          embeds: [{
+            title: `${friendlyName}`,
+            color: embedColor,
+            thumbnail: { url: thumbnailUrl },
+            fields,
+            footer: { text: `Coldtouch Market Analyzer` },
+            timestamp: new Date().toISOString(),
+            url: SITE_URL
+          }]
+        }).catch(e => console.error('[Alert] Failed to send:', e.message));
+
+        totalAlertsSent++;
+        lastAlertTime = now;
+      });
     });
   });
 }
