@@ -2,6 +2,17 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-03-25 — Smart Market Data Pipeline
+
+#### Changed
+- **Server Cache Always Loads**: All users now get fresh server-scanned data on every page load, not just first-time visitors.
+- **Background Auto-Refresh**: Frontend silently pulls the latest server cache every 5 minutes and refreshes the browser view.
+- **Instant "Scan All Market"**: Button now pulls pre-built server cache instantly (~1s) instead of making 112 sequential API calls from the browser (~2min).
+- **Stale Data Eviction**: IndexedDB entries older than 24 hours are automatically purged on load and every 5 minutes.
+- **Live db-status Indicator**: The "prices cached" status now auto-refreshes every 60 seconds.
+
+---
+
 ### 2026-03-25 — VPS Hardening & UI Fix
 
 #### Infrastructure
