@@ -2,6 +2,18 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-03-25 — Phase 2: Enhanced Alert System
+
+#### Discord Bot
+- **Reliability in Alerts**: Every alert now includes a Reliability field showing the historical confidence score, consistency %, and sample count (e.g., "🟢 85% High — profitable 92% of the time (48 samples over 7d)").
+- **Confidence-Based Colors**: Alert embed color reflects both profit AND confidence — green for high-confidence profitable routes, orange/yellow for medium, grey for low or unknown.
+- **`/setup_alerts` Confidence Option**: New optional `min_confidence` parameter when setting up alerts (0=any, 40=medium, 70=high only).
+- **`/set_confidence` Command**: Change the confidence threshold for an existing alert channel at any time.
+- **Noise Reduction**: Routes below the channel's confidence threshold are automatically suppressed — no more alerts for unreliable flips that have historically been unprofitable.
+- **`/my_alerts` Enhanced**: Now shows confidence threshold alongside profit and cooldown settings.
+
+---
+
 ### 2026-03-25 — Phase 1: Historical Spread Analyzer
 
 #### Data Sources (4 total)
