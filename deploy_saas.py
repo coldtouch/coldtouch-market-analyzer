@@ -113,6 +113,48 @@ db.serialize(() => {
   db.run(`CREATE TABLE IF NOT EXISTS alerts (guild_id TEXT, channel_id TEXT, min_profit INTEGER, cooldown_ms INTEGER DEFAULT 600000, PRIMARY KEY(guild_id, channel_id))`);
   // Migrate: add cooldown_ms column if missing
   db.run(`ALTER TABLE alerts ADD COLUMN cooldown_ms INTEGER DEFAULT 600000`, () => {});
+
+  // === PHASE 1: Historical Spread Analyzer ===
+  db.run(`CREATE TABLE IF NOT EXISTS price_snapshots (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    item_id TEXT NOT NULL,
+    quality INTEGER DEFAULT 1,
+    city TEXT NOT NULL,
+    sell_price_min INTEGER DEFAULT 0,
+    buy_price_max INTEGER DEFAULT 0,
+    sell_date TEXT,
+    buy_date TEXT,
+    recorded_at INTEGER NOT NULL
+  )`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_ps_item_city ON price_snapshots(item_id, city, recorded_at)`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_ps_recorded ON price_snapshots(recorded_at)`);
+
+  db.run(`CREATE TABLE IF NOT EXISTS spread_stats (
+    item_id TEXT NOT NULL,
+    quality INTEGER DEFAULT 1,
+    buy_city TEXT NOT NULL,
+    sell_city TEXT NOT NULL,
+    avg_spread REAL DEFAULT 0,
+    median_spread REAL DEFAULT 0,
+    consistency_pct REAL DEFAULT 0,
+    sample_count INTEGER DEFAULT 0,
+    window_days INTEGER DEFAULT 7,
+    confidence_score REAL DEFAULT 0,
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY(item_id, quality, buy_city, sell_city, window_days)
+  )`);
+
+  db.run(`CREATE TABLE IF NOT EXISTS price_averages (
+    item_id TEXT NOT NULL,
+    quality INTEGER DEFAULT 1,
+    city TEXT NOT NULL,
+    avg_sell INTEGER DEFAULT 0,
+    avg_buy INTEGER DEFAULT 0,
+    sample_count INTEGER DEFAULT 0,
+    period_type TEXT NOT NULL,
+    period_start INTEGER NOT NULL,
+    PRIMARY KEY(item_id, quality, city, period_type, period_start)
+  )`);
 });
 
 // === SHARED MARKET CACHE ===
@@ -188,6 +230,9 @@ async function doServerScan() {
 
     // Seed alerter with scan data
     seedAlerterFromScan(allPrices);
+
+    // Record snapshots for historical analysis
+    recordSnapshots(allPrices);
 
     const json = JSON.stringify({ timestamp: cacheTimestamp, count: cacheItemCount, data: allPrices });
     zlib.gzip(json, (err, buffer) => {
@@ -431,6 +476,52 @@ app.delete('/api/alerts', requireAuth, (req, res) => {
   });
 });
 
+// === SPREAD STATS API ===
+app.get('/api/spread-stats', (req, res) => {
+  const { item_id, quality } = req.query;
+  if (!item_id) return res.status(400).json({ error: 'item_id required' });
+  const q = parseInt(quality) || 1;
+  db.all(
+    `SELECT * FROM spread_stats WHERE item_id = ? AND quality = ? AND window_days = 7 ORDER BY confidence_score DESC`,
+    [item_id, q],
+    (err, rows) => {
+      if (err) return res.status(500).json({ error: err.message });
+      res.json(rows || []);
+    }
+  );
+});
+
+app.get('/api/spread-stats/top', (req, res) => {
+  const limit = Math.min(parseInt(req.query.limit) || 100, 200);
+  const minConfidence = parseInt(req.query.min_confidence) || 0;
+  db.all(
+    `SELECT * FROM spread_stats WHERE window_days = 7 AND confidence_score >= ? AND avg_spread > 0 ORDER BY confidence_score DESC LIMIT ?`,
+    [minConfidence, limit],
+    (err, rows) => {
+      if (err) return res.status(500).json({ error: err.message });
+      res.json(rows || []);
+    }
+  );
+});
+
+app.get('/api/price-history', (req, res) => {
+  const { item_id, city, days } = req.query;
+  if (!item_id) return res.status(400).json({ error: 'item_id required' });
+  const daysBack = Math.min(parseInt(days) || 7, 90);
+  const cutoff = Date.now() - daysBack * 24 * 60 * 60 * 1000;
+
+  // Get raw snapshots for recent data
+  const query = city
+    ? `SELECT sell_price_min, buy_price_max, recorded_at FROM price_snapshots WHERE item_id = ? AND city = ? AND recorded_at > ? ORDER BY recorded_at`
+    : `SELECT city, sell_price_min, buy_price_max, recorded_at FROM price_snapshots WHERE item_id = ? AND recorded_at > ? ORDER BY recorded_at`;
+
+  const params = city ? [item_id, city, cutoff] : [item_id, cutoff];
+  db.all(query, params, (err, rows) => {
+    if (err) return res.status(500).json({ error: err.message });
+    res.json(rows || []);
+  });
+});
+
 // === TLS SERVER & WSS ===
 const server = https.createServer({
   cert: fs.readFileSync(`/etc/letsencrypt/live/${domain}/fullchain.pem`),
@@ -585,6 +676,205 @@ function checkAndAlert(id, q) {
     });
   });
 }
+
+// === HISTORICAL SNAPSHOT RECORDING ===
+function recordSnapshots(allPrices) {
+  const now = Date.now();
+  const stmt = db.prepare(`INSERT INTO price_snapshots (item_id, quality, city, sell_price_min, buy_price_max, sell_date, buy_date, recorded_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`);
+  let count = 0;
+  db.run('BEGIN TRANSACTION');
+  for (const entry of allPrices) {
+    if (!entry.item_id || !entry.city) continue;
+    if (entry.sell_price_min <= 0 && entry.buy_price_max <= 0) continue;
+    stmt.run(entry.item_id, entry.quality || 1, entry.city, entry.sell_price_min || 0, entry.buy_price_max || 0, entry.sell_price_min_date || '', entry.buy_price_max_date || '', now);
+    count++;
+  }
+  db.run('COMMIT', () => {
+    stmt.finalize();
+    console.log(`[Snapshots] Recorded ${count} price snapshots`);
+  });
+}
+
+// === SPREAD STATISTICS COMPUTATION (runs hourly) ===
+function computeSpreadStats() {
+  const now = Date.now();
+  const windowMs = 7 * 24 * 60 * 60 * 1000; // 7 days
+  const cutoff = now - windowMs;
+
+  console.log('[SpreadStats] Starting computation...');
+
+  // Get distinct item+quality combos from recent snapshots
+  db.all(`SELECT DISTINCT item_id, quality FROM price_snapshots WHERE recorded_at > ?`, [cutoff], (err, items) => {
+    if (err || !items || items.length === 0) {
+      console.log('[SpreadStats] No data to process');
+      return;
+    }
+
+    let processed = 0;
+    const batchSize = 200;
+
+    function processBatch(startIdx) {
+      const batch = items.slice(startIdx, startIdx + batchSize);
+      if (batch.length === 0) {
+        console.log(`[SpreadStats] Done. Processed ${processed} item/quality combos`);
+        return;
+      }
+
+      let pending = batch.length;
+      for (const { item_id, quality } of batch) {
+        // Get all snapshots for this item+quality grouped by recorded_at (scan cycle)
+        db.all(
+          `SELECT city, sell_price_min, buy_price_max, sell_date, buy_date, recorded_at FROM price_snapshots WHERE item_id = ? AND quality = ? AND recorded_at > ? ORDER BY recorded_at`,
+          [item_id, quality, cutoff],
+          (err2, rows) => {
+            if (!err2 && rows && rows.length > 0) {
+              // Group by scan cycle (recorded_at)
+              const cycles = {};
+              for (const r of rows) {
+                if (!cycles[r.recorded_at]) cycles[r.recorded_at] = {};
+                cycles[r.recorded_at][r.city] = { sell: r.sell_price_min, buy: r.buy_price_max, sellDate: r.sell_date, buyDate: r.buy_date };
+              }
+
+              // For each city pair, compute spreads across cycles
+              const citySet = new Set();
+              for (const c of Object.values(cycles)) {
+                for (const city of Object.keys(c)) citySet.add(city);
+              }
+              const cities = Array.from(citySet);
+
+              const upsertStmt = db.prepare(`INSERT OR REPLACE INTO spread_stats (item_id, quality, buy_city, sell_city, avg_spread, median_spread, consistency_pct, sample_count, window_days, confidence_score, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+
+              for (let i = 0; i < cities.length; i++) {
+                for (let j = 0; j < cities.length; j++) {
+                  if (i === j) continue;
+                  const buyCity = cities[i];
+                  const sellCity = cities[j];
+                  if (buyCity === 'Black Market') continue; // Don't buy from BM
+
+                  const spreads = [];
+                  for (const cycle of Object.values(cycles)) {
+                    const buyData = cycle[buyCity];
+                    const sellData = cycle[sellCity];
+                    if (!buyData || !sellData) continue;
+                    if (buyData.sell <= 0 || sellData.buy <= 0) continue;
+                    const spread = sellData.buy - buyData.sell - (sellData.buy * TAX_RATE);
+                    spreads.push(spread);
+                  }
+
+                  if (spreads.length < 3) continue; // Need at least 3 data points
+
+                  const positive = spreads.filter(s => s > 0);
+                  const consistencyPct = (positive.length / spreads.length) * 100;
+                  const avg = spreads.reduce((a, b) => a + b, 0) / spreads.length;
+                  const sorted = [...positive].sort((a, b) => a - b);
+                  const median = sorted.length > 0 ? sorted[Math.floor(sorted.length / 2)] : 0;
+
+                  // Confidence = weighted combo of consistency, sample size, and avg spread
+                  const sampleScore = Math.min(spreads.length, 100) / 100 * 30;
+                  const consistScore = consistencyPct * 0.5;
+                  const spreadScore = Math.min(Math.max(avg, 0), 500000) / 500000 * 20;
+                  const confidence = Math.round(Math.min(100, sampleScore + consistScore + spreadScore));
+
+                  upsertStmt.run(item_id, quality, buyCity, sellCity, Math.round(avg), Math.round(median), Math.round(consistencyPct * 10) / 10, spreads.length, 7, confidence, now);
+                }
+              }
+              upsertStmt.finalize();
+            }
+
+            processed++;
+            pending--;
+            if (pending === 0) {
+              // Process next batch with a yield
+              setTimeout(() => processBatch(startIdx + batchSize), 50);
+            }
+          }
+        );
+      }
+    }
+
+    processBatch(0);
+  });
+}
+
+// Run stats computation hourly, first run 2 minutes after start
+setTimeout(computeSpreadStats, 2 * 60 * 1000);
+setInterval(computeSpreadStats, 60 * 60 * 1000);
+
+// === DATA COMPACTION (runs daily) ===
+function compactOldData() {
+  const now = Date.now();
+  const sevenDaysAgo = now - 7 * 24 * 60 * 60 * 1000;
+  const thirtyDaysAgo = now - 30 * 24 * 60 * 60 * 1000;
+
+  console.log('[Compaction] Starting...');
+
+  // Compact >7 day old raw snapshots into hourly averages
+  db.all(
+    `SELECT item_id, quality, city,
+      CAST(recorded_at / 3600000 AS INTEGER) * 3600000 as hour_start,
+      AVG(sell_price_min) as avg_sell,
+      AVG(buy_price_max) as avg_buy,
+      COUNT(*) as cnt
+    FROM price_snapshots
+    WHERE recorded_at < ? AND recorded_at > ?
+    GROUP BY item_id, quality, city, hour_start`,
+    [sevenDaysAgo, thirtyDaysAgo],
+    (err, rows) => {
+      if (err || !rows || rows.length === 0) {
+        console.log('[Compaction] No data to compact (7-30d range)');
+        return;
+      }
+
+      const stmt = db.prepare(`INSERT OR REPLACE INTO price_averages (item_id, quality, city, avg_sell, avg_buy, sample_count, period_type, period_start) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`);
+      db.run('BEGIN TRANSACTION');
+      for (const r of rows) {
+        stmt.run(r.item_id, r.quality, r.city, Math.round(r.avg_sell), Math.round(r.avg_buy), r.cnt, 'hourly', r.hour_start);
+      }
+      db.run('COMMIT', () => {
+        stmt.finalize();
+        // Delete the compacted raw snapshots
+        db.run(`DELETE FROM price_snapshots WHERE recorded_at < ? AND recorded_at > ?`, [sevenDaysAgo, thirtyDaysAgo], (err2) => {
+          if (!err2) console.log(`[Compaction] Compacted ${rows.length} hourly averages, deleted raw snapshots (7-30d)`);
+        });
+      });
+    }
+  );
+
+  // Compact >30 day old hourly averages into daily
+  db.all(
+    `SELECT item_id, quality, city,
+      CAST(period_start / 86400000 AS INTEGER) * 86400000 as day_start,
+      AVG(avg_sell) as avg_sell,
+      AVG(avg_buy) as avg_buy,
+      SUM(sample_count) as cnt
+    FROM price_averages
+    WHERE period_type = 'hourly' AND period_start < ?
+    GROUP BY item_id, quality, city, day_start`,
+    [thirtyDaysAgo],
+    (err, rows) => {
+      if (err || !rows || rows.length === 0) return;
+
+      const stmt = db.prepare(`INSERT OR REPLACE INTO price_averages (item_id, quality, city, avg_sell, avg_buy, sample_count, period_type, period_start) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`);
+      db.run('BEGIN TRANSACTION');
+      for (const r of rows) {
+        stmt.run(r.item_id, r.quality, r.city, Math.round(r.avg_sell), Math.round(r.avg_buy), r.cnt, 'daily', r.day_start);
+      }
+      db.run('COMMIT', () => {
+        stmt.finalize();
+        db.run(`DELETE FROM price_averages WHERE period_type = 'hourly' AND period_start < ?`, [thirtyDaysAgo], (err2) => {
+          if (!err2) console.log(`[Compaction] Compacted ${rows.length} daily averages, deleted old hourly data`);
+        });
+      });
+    }
+  );
+
+  // Delete raw snapshots older than 30 days (should already be compacted)
+  db.run(`DELETE FROM price_snapshots WHERE recorded_at < ?`, [thirtyDaysAgo]);
+}
+
+// Run compaction daily, first run 10 minutes after start
+setTimeout(compactOldData, 10 * 60 * 1000);
+setInterval(compactOldData, 24 * 60 * 60 * 1000);
 
 let natsConnection = null;
 

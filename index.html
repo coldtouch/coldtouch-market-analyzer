@@ -291,6 +291,24 @@
                         <option value="120">2 hours</option>
                     </select>
                 </div>
+                <div class="control-group">
+                    <label for="arb-sort">Sort By</label>
+                    <select id="arb-sort">
+                        <option value="profit">Highest Profit</option>
+                        <option value="confidence">Highest Confidence</option>
+                        <option value="roi">Highest ROI</option>
+                    </select>
+                </div>
+                <div class="control-group">
+                    <label for="arb-min-confidence">Min Confidence</label>
+                    <select id="arb-min-confidence">
+                        <option value="0">Any</option>
+                        <option value="20">20%+</option>
+                        <option value="40">40%+</option>
+                        <option value="60">60%+</option>
+                        <option value="80">80%+</option>
+                    </select>
+                </div>
                 <button id="arb-scan-btn" class="btn-primary">Scan Markets</button>
             </div>
             <div class="loading-state hidden" id="arb-spinner">
