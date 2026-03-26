@@ -38,6 +38,9 @@ const MarketDB = (() => {
         return `${entry.item_id}_${entry.quality}_${entry.city}`;
     }
 
+    // Parse a market timestamp to ms — handles both "...T00:00:00" (no Z) and "...T00:00:00Z" (UTC)
+    function parseTs(d) { return d ? (new Date(d.endsWith('Z') ? d : d + 'Z').getTime() || 0) : 0; }
+
     async function saveMarketData(entries) {
         const db = await open();
         return new Promise((resolve, reject) => {
@@ -48,7 +51,7 @@ const MarketDB = (() => {
                 if (!entry.item_id || !entry.city) continue;
                 const key = makeKey(entry);
                 const req = store.get(key);
-                
+
                 req.onsuccess = (e) => {
                     const existing = e.target.result;
                     let sellPrice = entry.sell_price_min || 0;
@@ -58,7 +61,7 @@ const MarketDB = (() => {
 
                     if (existing) {
                         // Sell price: use incoming if it has a newer date OR a better (lower non-zero) price
-                        if (sellDate && sellDate >= (existing.sell_price_min_date || '')) {
+                        if (sellDate && parseTs(sellDate) >= parseTs(existing.sell_price_min_date || '')) {
                             // Incoming is newer — use it (even if 0, meaning the order expired)
                         } else if (sellPrice > 0 && existing.sell_price_min > 0 && sellPrice < existing.sell_price_min) {
                             // Incoming is a better price — use it
@@ -69,7 +72,7 @@ const MarketDB = (() => {
                         }
 
                         // Buy price: use incoming if it has a newer date OR a better (higher) price
-                        if (buyDate && buyDate >= (existing.buy_price_max_date || '')) {
+                        if (buyDate && parseTs(buyDate) >= parseTs(existing.buy_price_max_date || '')) {
                             // Incoming is newer — use it (even if 0)
                         } else if (buyPrice > 0 && buyPrice > (existing.buy_price_max || 0)) {
                             // Incoming is a better price — use it
