@@ -100,6 +100,10 @@
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path><path d="M13.73 21a2 2 0 0 1-3.46 0"></path></svg>
                 Alerts
             </button>
+            <button class="nav-tab" data-tab="about">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>
+                About
+            </button>
             <button class="nav-tab" data-tab="community">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg>
                 Community
@@ -530,6 +534,118 @@
                 <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path><path d="M13.73 21a2 2 0 0 1-3.46 0"></path></svg>
                 <p>No alerts configured yet</p>
                 <p class="hint">Enter a Discord Channel ID and minimum profit threshold to create your first alert.</p>
+            </div>
+        </section>
+
+        <!-- ====== TAB: ABOUT ====== -->
+        <section class="tab-pane hidden" id="pane-about">
+            <div class="about-container">
+
+                <!-- Features Section -->
+                <div class="about-section">
+                    <h2 class="about-heading">Features</h2>
+                    <div class="features-grid">
+                        <div class="feature-card">
+                            <div class="feature-icon">📊</div>
+                            <h3>Market Browser</h3>
+                            <p>Browse all items in the Albion Online marketplace. Filter by tier, enchantment, category, and quality. See real-time prices across all cities with freshness indicators.</p>
+                        </div>
+                        <div class="feature-card">
+                            <div class="feature-icon">💰</div>
+                            <h3>Market Flipping</h3>
+                            <p>Find profitable arbitrage routes between cities. Each flip shows profit, ROI, tax, and a confidence score based on 7 days of historical data so you know which routes are consistently profitable.</p>
+                        </div>
+                        <div class="feature-card">
+                            <div class="feature-icon">📈</div>
+                            <h3>City Comparison</h3>
+                            <p>Compare prices for any item across all cities side-by-side. Instantly see where to buy low and sell high with visual price charts.</p>
+                        </div>
+                        <div class="feature-card">
+                            <div class="feature-icon">🔨</div>
+                            <h3>Crafting Calculator</h3>
+                            <p>Calculate crafting profits using live market prices. Accounts for material costs, return rates, and selling prices across cities.</p>
+                        </div>
+                        <div class="feature-card">
+                            <div class="feature-icon">🔔</div>
+                            <h3>Discord Alerts</h3>
+                            <p>Get real-time flip alerts delivered to your Discord server. Set minimum profit thresholds and confidence filters. Never miss a profitable opportunity.</p>
+                        </div>
+                        <div class="feature-card">
+                            <div class="feature-icon">⚡</div>
+                            <h3>Live Data Sync</h3>
+                            <p>Prices update automatically via 4 data sources: server scans every 5 minutes, live NATS player orders, Charts API historical data, and community contributions.</p>
+                        </div>
+                        <div class="feature-card">
+                            <div class="feature-icon">🎯</div>
+                            <h3>Confidence Scores</h3>
+                            <p>Every trade route has a reliability score calculated from historical spread analysis. High confidence means the route has been consistently profitable over the past week.</p>
+                        </div>
+                        <div class="feature-card">
+                            <div class="feature-icon">👥</div>
+                            <h3>Community Scanners</h3>
+                            <p>Contribute to the data pool by refreshing item prices. Climb the leaderboard and earn tier ranks: Bronze, Silver, Gold, and Diamond.</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Changelog Section -->
+                <div class="about-section">
+                    <h2 class="about-heading">Changelog</h2>
+                    <div class="changelog-list">
+                        <div class="changelog-entry">
+                            <div class="changelog-date">March 25, 2026</div>
+                            <div class="changelog-title">Community Scanning Incentives</div>
+                            <ul>
+                                <li>Added Community tab with leaderboard showing top scanners</li>
+                                <li>Tier system: Bronze, Silver, Gold, Diamond based on 30-day scan activity</li>
+                                <li>Discord commands: <code>/scan</code>, <code>/leaderboard</code>, <code>/mystats</code></li>
+                                <li>Every item refresh now contributes to your rank</li>
+                            </ul>
+                        </div>
+                        <div class="changelog-entry">
+                            <div class="changelog-date">March 25, 2026</div>
+                            <div class="changelog-title">Enhanced Alert System</div>
+                            <ul>
+                                <li>Discord alerts now show confidence scores and reliability ratings</li>
+                                <li>Color-coded embeds based on confidence level</li>
+                                <li>Filter alerts by minimum confidence with <code>/setup_alerts</code> and <code>/set_confidence</code></li>
+                            </ul>
+                        </div>
+                        <div class="changelog-entry">
+                            <div class="changelog-date">March 25, 2026</div>
+                            <div class="changelog-title">4 Data Sources + Historical Intelligence</div>
+                            <ul>
+                                <li>Server scans every 5 minutes for all 11,000+ items</li>
+                                <li>Live NATS stream with 1,000+ real-time player orders per minute</li>
+                                <li>28-day Charts API historical backfill for confidence scoring</li>
+                                <li>History API integration for 6-hour granularity price averages</li>
+                            </ul>
+                        </div>
+                        <div class="changelog-entry">
+                            <div class="changelog-date">March 25, 2026</div>
+                            <div class="changelog-title">Historical Spread Analyzer</div>
+                            <ul>
+                                <li>Confidence scores for every trade route based on 7-day spread analysis</li>
+                                <li>Sort flips by confidence, profit, or ROI</li>
+                                <li>Filter by minimum confidence threshold</li>
+                                <li>"Fresh Only" toggle to prioritize recently updated prices</li>
+                            </ul>
+                        </div>
+                        <div class="changelog-entry">
+                            <div class="changelog-date">March 2026</div>
+                            <div class="changelog-title">Core Platform</div>
+                            <ul>
+                                <li>Market Browser with search, filters, and pagination</li>
+                                <li>City Comparison tool with price charts</li>
+                                <li>Crafting profit calculator with material cost breakdown</li>
+                                <li>Discord OAuth login and bot integration</li>
+                                <li>Live WebSocket sync from NATS stream</li>
+                                <li>Black Market flipping support</li>
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+
             </div>
         </section>
 
