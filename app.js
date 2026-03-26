@@ -567,7 +567,7 @@ function getConfidenceBadge(confidence) {
 // ============================================================
 // MARKET FLIPPING (ARBITRAGE)
 // ============================================================
-function processArbitrage(data, quality, tier, enchantment, includeBM, buyCityFilter, sellCityFilter, isSingleItem = false, freshOnly = false, freshThresholdMins = 30, sortBy = 'profit', minConfidence = 0) {
+function processArbitrage(data, quality, tier, enchantment, includeBM, buyCityFilter, sellCityFilter, isSingleItem = false, freshMode = 'off', freshThresholdMins = 30, sortBy = 'profit', minConfidence = 0) {
     const itemsData = {};
     data.forEach(entry => {
         if (quality !== 'all' && entry.quality.toString() !== quality) return;
@@ -652,13 +652,15 @@ function processArbitrage(data, quality, tier, enchantment, includeBM, buyCityFi
     }
     // Apply freshness filter
     let filtered = trades;
-    if (freshOnly) {
+    if (freshMode !== 'off') {
         const now = new Date();
         const thresholdMs = freshThresholdMins * 60 * 1000;
         filtered = trades.filter(t => {
             const buyAge = t.dateBuy && !t.dateBuy.startsWith('0001') ? now - new Date(t.dateBuy) : Infinity;
             const sellAge = t.dateSell && !t.dateSell.startsWith('0001') ? now - new Date(t.dateSell) : Infinity;
-            return buyAge < thresholdMs && sellAge < thresholdMs;
+            if (freshMode === 'buy') return buyAge < thresholdMs;
+            if (freshMode === 'sell') return sellAge < thresholdMs;
+            return buyAge < thresholdMs && sellAge < thresholdMs; // 'both'
         });
     }
 
@@ -677,12 +679,15 @@ function processArbitrage(data, quality, tier, enchantment, includeBM, buyCityFi
         });
     } else if (sortBy === 'roi') {
         filtered.sort((a, b) => b.roi - a.roi);
-    } else if (freshOnly) {
+    } else if (freshMode !== 'off') {
         filtered.sort((a, b) => {
-            const newestA = a.dateBuy > a.dateSell ? a.dateBuy : a.dateSell;
-            const newestB = b.dateBuy > b.dateSell ? b.dateBuy : b.dateSell;
-            if (newestB > newestA) return 1;
-            if (newestA > newestB) return -1;
+            // Sort by the freshness side that matters for the selected mode
+            let dateA, dateB;
+            if (freshMode === 'buy') { dateA = a.dateBuy; dateB = b.dateBuy; }
+            else if (freshMode === 'sell') { dateA = a.dateSell; dateB = b.dateSell; }
+            else { dateA = a.dateBuy > a.dateSell ? a.dateBuy : a.dateSell; dateB = b.dateBuy > b.dateSell ? b.dateBuy : b.dateSell; }
+            if (dateB > dateA) return 1;
+            if (dateA > dateB) return -1;
             return b.profit - a.profit;
         });
     } else {
@@ -846,7 +851,7 @@ async function doArbScan(targetItemId = null) {
     const buyCityFilter = document.getElementById('arb-buy-city').value;
     const sellCityFilter = document.getElementById('arb-sell-city').value;
     const includeBM = document.getElementById('include-black-market').checked;
-    const freshOnly = document.getElementById('fresh-only-toggle').checked;
+    const freshMode = document.getElementById('fresh-mode').value;
     const freshThresholdMins = parseInt(document.getElementById('fresh-threshold').value) || 30;
     const sortBy = document.getElementById('arb-sort').value;
     const minConfidence = parseInt(document.getElementById('arb-min-confidence').value) || 0;
@@ -891,7 +896,7 @@ async function doArbScan(targetItemId = null) {
                     });
                 }
 
-                const trades = processArbitrage(filteredData, quality, tier, enchantment, includeBM, buyCityFilter, sellCityFilter, isSingleItem, freshOnly, freshThresholdMins, sortBy, minConfidence);
+                const trades = processArbitrage(filteredData, quality, tier, enchantment, includeBM, buyCityFilter, sellCityFilter, isSingleItem, freshMode, freshThresholdMins, sortBy, minConfidence);
                 renderArbitrage(trades, isSingleItem, targetItemId);
                 return;
             } else {
@@ -912,7 +917,7 @@ async function doArbScan(targetItemId = null) {
         const data = await fetchMarketData(server, itemsToFetch);
         if (data.length > 0) await MarketDB.saveMarketData(data);
         spinner.classList.add('hidden');
-        const trades = processArbitrage(data, quality, tier, enchantment, includeBM, buyCityFilter, sellCityFilter, isSingleItem, freshOnly, freshThresholdMins, sortBy, minConfidence);
+        const trades = processArbitrage(data, quality, tier, enchantment, includeBM, buyCityFilter, sellCityFilter, isSingleItem, freshMode, freshThresholdMins, sortBy, minConfidence);
         renderArbitrage(trades, isSingleItem);
         await updateDbStatus();
     } catch (e) {
@@ -2119,11 +2124,11 @@ async function init() {
 
     initTabs();
 
-    // Fresh Only toggle enables/disables threshold dropdown
-    const freshToggle = document.getElementById('fresh-only-toggle');
-    const freshThreshold = document.getElementById('fresh-threshold');
-    freshToggle.addEventListener('change', () => {
-        freshThreshold.disabled = !freshToggle.checked;
+    // Fresh filter mode shows/hides threshold dropdown
+    const freshMode = document.getElementById('fresh-mode');
+    const freshThresholdGroup = document.getElementById('fresh-threshold-group');
+    freshMode.addEventListener('change', () => {
+        freshThresholdGroup.style.display = freshMode.value === 'off' ? 'none' : '';
     });
 
     // Arbitrage tab
