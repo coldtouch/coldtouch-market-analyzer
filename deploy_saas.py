@@ -820,6 +820,59 @@ app.get('/api/spread-stats/top', (req, res) => {
   );
 });
 
+// === TRANSPORT ROUTES API ===
+// Returns profitable routes enriched with daily volume data for bulk transport
+app.get('/api/transport-routes', (req, res) => {
+  const buyCity = req.query.buy_city || '';
+  const sellCity = req.query.sell_city || '';
+  const minProfit = parseInt(req.query.min_profit) || 0;
+  const minConfidence = parseInt(req.query.min_confidence) || 0;
+  const limit = Math.min(parseInt(req.query.limit) || 100, 200);
+
+  // Get spread_stats routes that are profitable, then enrich with volume
+  const cutoff7d = Date.now() - 7 * 24 * 60 * 60 * 1000;
+
+  let whereClause = `WHERE ss.window_days = 7 AND ss.avg_spread > ? AND ss.confidence_score >= ?`;
+  const params = [minProfit, minConfidence];
+
+  if (buyCity) { whereClause += ` AND ss.buy_city = ?`; params.push(buyCity); }
+  if (sellCity) { whereClause += ` AND ss.sell_city = ?`; params.push(sellCity); }
+
+  // Join spread_stats with volume data from price_averages
+  // Volume = average daily item_count (sample_count) over last 7 days for the buy city
+  const sql = `
+    SELECT
+      ss.item_id, ss.quality, ss.buy_city, ss.sell_city,
+      ss.avg_spread, ss.median_spread, ss.consistency_pct,
+      ss.sample_count, ss.confidence_score,
+      COALESCE(vol_buy.avg_volume, 0) as buy_volume,
+      COALESCE(vol_sell.avg_volume, 0) as sell_volume
+    FROM spread_stats ss
+    LEFT JOIN (
+      SELECT item_id, quality, city, AVG(sample_count) as avg_volume
+      FROM price_averages
+      WHERE period_type = 'daily' AND period_start > ?
+      GROUP BY item_id, quality, city
+    ) vol_buy ON vol_buy.item_id = ss.item_id AND vol_buy.quality = ss.quality AND vol_buy.city = ss.buy_city
+    LEFT JOIN (
+      SELECT item_id, quality, city, AVG(sample_count) as avg_volume
+      FROM price_averages
+      WHERE period_type = 'daily' AND period_start > ?
+      GROUP BY item_id, quality, city
+    ) vol_sell ON vol_sell.item_id = ss.item_id AND vol_sell.quality = ss.quality AND vol_sell.city = ss.sell_city
+    ${whereClause}
+    ORDER BY (ss.avg_spread * COALESCE(vol_buy.avg_volume, 0)) DESC
+    LIMIT ?
+  `;
+  params.unshift(cutoff7d, cutoff7d);
+  params.push(limit);
+
+  db.all(sql, params, (err, rows) => {
+    if (err) return res.status(500).json({ error: err.message });
+    res.json(rows || []);
+  });
+});
+
 app.get('/api/price-history', (req, res) => {
   const { item_id, city, days } = req.query;
   if (!item_id) return res.status(400).json({ error: 'item_id required' });
