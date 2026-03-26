@@ -2080,3 +2080,101 @@ footer a:hover {
     border-radius: 3px;
     font-size: 0.78rem;
 }
+
+/* ====== TRANSPORT TAB ====== */
+.transport-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-lg);
+    padding: 1.25rem;
+    transition: border-color var(--transition), box-shadow var(--transition);
+}
+.transport-card:hover {
+    border-color: var(--accent);
+    box-shadow: 0 0 16px rgba(212, 175, 55, 0.08);
+}
+.transport-card-header {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    margin-bottom: 1rem;
+}
+.transport-card-header .item-icon {
+    width: 40px;
+    height: 40px;
+}
+.transport-card-header .header-titles {
+    flex: 1;
+}
+.transport-stats-row {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+    gap: 0.75rem;
+    margin-bottom: 0.75rem;
+}
+.transport-stat {
+    background: var(--bg-elevated);
+    border-radius: var(--radius);
+    padding: 0.6rem 0.75rem;
+    text-align: center;
+}
+.transport-stat-label {
+    font-size: 0.65rem;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 0.2rem;
+}
+.transport-stat-value {
+    font-size: 1rem;
+    font-weight: 700;
+    color: var(--text-primary);
+}
+.transport-stat-value.profit { color: var(--profit-green); }
+.transport-stat-value.loss { color: var(--loss-red); }
+.transport-stat-value.accent { color: var(--accent); }
+.transport-route-bar {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+    margin-bottom: 0.75rem;
+}
+.transport-route-bar .city-tag {
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    padding: 0.2rem 0.6rem;
+    font-weight: 600;
+    color: var(--text-primary);
+    font-size: 0.8rem;
+}
+.transport-trip-summary {
+    background: linear-gradient(135deg, rgba(74, 222, 128, 0.05), rgba(212, 175, 55, 0.05));
+    border: 1px solid rgba(74, 222, 128, 0.15);
+    border-radius: var(--radius);
+    padding: 0.75rem 1rem;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+}
+.transport-trip-label {
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+}
+.transport-trip-value {
+    font-size: 1.2rem;
+    font-weight: 800;
+    color: var(--profit-green);
+}
+.transport-results-grid {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 1rem;
+    margin-top: 1rem;
+}

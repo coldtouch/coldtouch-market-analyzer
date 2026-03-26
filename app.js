@@ -2169,6 +2169,9 @@ async function init() {
     });
     document.getElementById('craft-search').addEventListener('input', () => { craftSearchExactId = null; });
 
+    // Transport tab
+    document.getElementById('transport-scan-btn').addEventListener('click', doTransportScan);
+
     // Alerts tab
     document.getElementById('alert-create-btn').addEventListener('click', createAlert);
     // Load alerts/community when switching to those tabs
@@ -2290,6 +2293,212 @@ function initLiveSync() {
             // Silently drop unparseable packets to avoid console spam
         }
     };
+}
+
+// ====== TRANSPORT TAB ======
+async function doTransportScan() {
+    const spinner = document.getElementById('transport-spinner');
+    const errorEl = document.getElementById('transport-error');
+    const container = document.getElementById('transport-results');
+    const buyCity = document.getElementById('transport-buy-city').value;
+    const sellCity = document.getElementById('transport-sell-city').value;
+    const budget = parseInt(document.getElementById('transport-budget').value) || 500000;
+    const minConfidence = parseInt(document.getElementById('transport-min-confidence').value) || 0;
+    const sortBy = document.getElementById('transport-sort').value;
+
+    container.innerHTML = '';
+    hideError(errorEl);
+    spinner.classList.remove('hidden');
+
+    try {
+        // Fetch transport routes from backend (volume + spread stats combined)
+        const params = new URLSearchParams({ min_confidence: minConfidence, limit: 150 });
+        if (buyCity) params.set('buy_city', buyCity);
+        if (sellCity) params.set('sell_city', sellCity);
+        const res = await fetch(`${VPS_BASE}/api/transport-routes?${params}`);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const routes = await res.json();
+
+        // Enrich with current live prices from IndexedDB
+        const cachedData = await MarketDB.getAllPrices();
+        const priceMap = {};
+        cachedData.forEach(p => {
+            let city = p.city;
+            if (city && city.includes('Black Market')) city = 'Black Market';
+            const key = `${p.item_id}_${p.quality}_${city}`;
+            if (!priceMap[key]) priceMap[key] = { sellMin: 0, buyMax: 0, sellDate: '', buyDate: '' };
+            if (p.sell_price_min > 0 && (priceMap[key].sellMin === 0 || p.sell_price_min < priceMap[key].sellMin)) {
+                priceMap[key].sellMin = p.sell_price_min;
+                priceMap[key].sellDate = p.sell_price_min_date || '';
+            }
+            if (p.buy_price_max > 0 && p.buy_price_max > priceMap[key].buyMax) {
+                priceMap[key].buyMax = p.buy_price_max;
+                priceMap[key].buyDate = p.buy_price_max_date || '';
+            }
+        });
+
+        const enriched = [];
+        for (const r of routes) {
+            const buyKey = `${r.item_id}_${r.quality}_${r.buy_city}`;
+            const sellKey = `${r.item_id}_${r.quality}_${r.sell_city}`;
+            const buyData = priceMap[buyKey];
+            const sellData = priceMap[sellKey];
+
+            if (!buyData || buyData.sellMin <= 0) continue; // No buy price available
+            if (!sellData || sellData.buyMax <= 0) continue; // No sell price available
+
+            const buyPrice = buyData.sellMin; // We buy at sell order (instant buy)
+            const sellPrice = sellData.buyMax; // We sell at buy order (instant sell)
+            const tax = sellPrice * TAX_RATE;
+            const profitPerUnit = sellPrice - buyPrice - tax;
+            if (profitPerUnit <= 0) continue;
+
+            const roi = (profitPerUnit / buyPrice) * 100;
+            const volume = Math.max(r.buy_volume || 0, r.sell_volume || 0);
+            const unitsCanBuy = Math.floor(budget / buyPrice);
+            const tripProfit = profitPerUnit * unitsCanBuy;
+            const transportScore = profitPerUnit * volume; // profit × daily volume
+
+            enriched.push({
+                itemId: r.item_id,
+                quality: r.quality,
+                buyCity: r.buy_city,
+                sellCity: r.sell_city,
+                buyPrice,
+                sellPrice,
+                tax,
+                profitPerUnit,
+                roi,
+                volume: Math.round(volume),
+                unitsCanBuy,
+                tripProfit,
+                transportScore,
+                confidence: r.confidence_score,
+                consistencyPct: r.consistency_pct,
+                avgSpread: r.avg_spread,
+                sampleCount: r.sample_count,
+                dateBuy: buyData.sellDate,
+                dateSell: sellData.buyDate
+            });
+        }
+
+        // Sort
+        if (sortBy === 'trip_profit') enriched.sort((a, b) => b.tripProfit - a.tripProfit);
+        else if (sortBy === 'transport_score') enriched.sort((a, b) => b.transportScore - a.transportScore);
+        else if (sortBy === 'profit_per_unit') enriched.sort((a, b) => b.profitPerUnit - a.profitPerUnit);
+        else if (sortBy === 'volume') enriched.sort((a, b) => b.volume - a.volume);
+        else if (sortBy === 'confidence') enriched.sort((a, b) => b.confidence - a.confidence);
+
+        const results = enriched.slice(0, 60);
+        spinner.classList.add('hidden');
+        renderTransportResults(results, budget);
+    } catch (e) {
+        spinner.classList.add('hidden');
+        showError(errorEl, 'Failed to load transport routes: ' + e.message);
+    }
+}
+
+function renderTransportResults(routes, budget) {
+    const container = document.getElementById('transport-results');
+    container.innerHTML = '';
+
+    if (routes.length === 0) {
+        container.innerHTML = '<div class="empty-state"><p>No profitable transport routes found.</p><p class="hint">Try adjusting your filters, budget, or city selection.</p></div>';
+        return;
+    }
+
+    const countBar = document.createElement('div');
+    countBar.className = 'result-count-bar';
+    countBar.innerHTML = `Showing <strong>${routes.length}</strong> transport routes &bull; Budget: <strong>${budget.toLocaleString()}</strong> silver`;
+    container.appendChild(countBar);
+
+    const grid = document.createElement('div');
+    grid.className = 'transport-results-grid';
+
+    routes.forEach(r => {
+        const card = document.createElement('div');
+        card.className = 'transport-card';
+        card.innerHTML = `
+            <div class="transport-card-header">
+                <div style="position:relative; display:flex;">
+                    <img class="item-icon" src="https://render.albiononline.com/v1/item/${r.itemId}.png" alt="" loading="lazy">
+                    ${getEnchantmentBadge(r.itemId)}
+                </div>
+                <div class="header-titles">
+                    <div class="item-name">${getFriendlyName(r.itemId)}</div>
+                    <span class="item-quality">${getQualityName(r.quality)} ${getTierEnchLabel(r.itemId)}</span>
+                </div>
+                ${r.confidence !== null ? getConfidenceBadge(r.confidence) : ''}
+            </div>
+            <div class="transport-route-bar">
+                <span class="city-tag">${r.buyCity}</span>
+                <span>➔</span>
+                <span class="city-tag">${r.sellCity}</span>
+                <span style="margin-left:auto; font-size:0.7rem; color:var(--text-muted);">
+                    ${getFreshnessIndicator(r.dateBuy)} Buy: ${timeAgo(r.dateBuy)} &nbsp;
+                    ${getFreshnessIndicator(r.dateSell)} Sell: ${timeAgo(r.dateSell)}
+                </span>
+            </div>
+            <div class="transport-stats-row">
+                <div class="transport-stat">
+                    <div class="transport-stat-label">Buy Price</div>
+                    <div class="transport-stat-value">${Math.floor(r.buyPrice).toLocaleString()}</div>
+                </div>
+                <div class="transport-stat">
+                    <div class="transport-stat-label">Sell Price</div>
+                    <div class="transport-stat-value">${Math.floor(r.sellPrice).toLocaleString()}</div>
+                </div>
+                <div class="transport-stat">
+                    <div class="transport-stat-label">Profit/Unit</div>
+                    <div class="transport-stat-value profit">+${Math.floor(r.profitPerUnit).toLocaleString()}</div>
+                </div>
+                <div class="transport-stat">
+                    <div class="transport-stat-label">ROI</div>
+                    <div class="transport-stat-value ${r.roi >= 10 ? 'profit' : 'accent'}">${r.roi.toFixed(1)}%</div>
+                </div>
+                <div class="transport-stat">
+                    <div class="transport-stat-label">Daily Volume</div>
+                    <div class="transport-stat-value accent">${r.volume > 0 ? r.volume.toLocaleString() : '—'}</div>
+                </div>
+                <div class="transport-stat">
+                    <div class="transport-stat-label">Units (Budget)</div>
+                    <div class="transport-stat-value">${r.unitsCanBuy.toLocaleString()}</div>
+                </div>
+            </div>
+            <div class="transport-trip-summary">
+                <div>
+                    <div class="transport-trip-label">Est. Trip Profit</div>
+                    <div class="transport-trip-value">+${Math.floor(r.tripProfit).toLocaleString()} silver</div>
+                </div>
+                <div style="text-align:right;">
+                    <div class="transport-trip-label">Transport Score</div>
+                    <div style="font-size:1rem; font-weight:700; color:var(--accent);">${r.transportScore > 1000000 ? (r.transportScore / 1000000).toFixed(1) + 'M' : r.transportScore > 1000 ? (r.transportScore / 1000).toFixed(0) + 'K' : Math.round(r.transportScore)}</div>
+                </div>
+                ${r.confidence !== null ? `<div style="text-align:right;">
+                    <div class="transport-trip-label">Reliability</div>
+                    <div style="font-size:0.8rem; color:var(--text-secondary);">Profitable ${r.consistencyPct}% of the time</div>
+                </div>` : ''}
+            </div>
+            <div class="item-card-actions" style="margin-top:0.75rem;">
+                <button class="btn-card-action" data-action="compare" data-item="${r.itemId}" title="Compare prices">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="20" x2="18" y2="10"></line><line x1="12" y1="20" x2="12" y2="4"></line><line x1="6" y1="20" x2="6" y2="14"></line></svg>
+                    Compare
+                </button>
+                <button class="btn-card-action" data-action="refresh" data-item="${r.itemId}" title="Refresh prices">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 4v6h-6"></path><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path></svg>
+                    Refresh
+                </button>
+                <button class="btn-card-action" data-action="graph" data-item="${r.itemId}" title="Price history">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"></polyline></svg>
+                    Graph
+                </button>
+            </div>
+        `;
+        grid.appendChild(card);
+    });
+
+    container.appendChild(grid);
+    setupCardButtons(container);
 }
 
 // ====== CONTRIBUTION TRACKING ======

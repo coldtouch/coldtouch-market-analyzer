@@ -2,6 +2,22 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-03-26 — Bulk Transport Profits
+
+#### New Feature: Transport Tab
+- **Bulk Transport Route Finder**: New "Transport" tab optimized for mammoth runs and bulk hauling between cities.
+- **Budget-Based Calculations**: Enter your silver budget to see how many units you can buy and estimated trip profit.
+- **Transport Score**: Routes ranked by profit x daily volume — highlights items that sell in quantity AND are profitable.
+- **Daily Volume Data**: Pulled from historical Charts API data to show actual trading activity per item/city.
+- **Confidence Integration**: All routes include spread stats confidence scores and consistency percentages.
+- **5 Sort Modes**: Trip Profit, Transport Score, Profit/Unit, Volume, and Confidence.
+- **City Filters**: Select specific buy/sell cities — defaults to Black Market as sell target.
+
+#### Backend
+- **`GET /api/transport-routes`**: New endpoint joining spread_stats with volume data from price_averages.
+
+---
+
 ### 2026-03-25 — Phase 3: Community Scanning Incentives
 
 #### Backend (VPS)
