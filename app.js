@@ -1701,6 +1701,11 @@ function setupCardButtons(container) {
                     await doCraftScan();
                     window.scrollTo(0, scrollY);
                 }
+                else if (currentTab === 'transport' && lastTransportRoutes) {
+                    const budget = parseInt(document.getElementById('transport-budget').value) || 500000;
+                    const sortBy = document.getElementById('transport-sort').value;
+                    await enrichAndRenderTransport(lastTransportRoutes, budget, sortBy);
+                }
             } catch (err) {
                 console.error('Refresh failed:', err);
             }
@@ -2171,6 +2176,16 @@ async function init() {
 
     // Transport tab
     document.getElementById('transport-scan-btn').addEventListener('click', doTransportScan);
+    document.getElementById('transport-exclude-caerleon').addEventListener('change', function () {
+        const sellSelect = document.getElementById('transport-sell-city');
+        const exclude = this.checked;
+        sellSelect.querySelectorAll('option[value="Caerleon"], option[value="Black Market"]').forEach(opt => {
+            opt.hidden = exclude;
+        });
+        if (exclude && (sellSelect.value === 'Caerleon' || sellSelect.value === 'Black Market')) {
+            sellSelect.value = '';
+        }
+    });
 
     // Alerts tab
     document.getElementById('alert-create-btn').addEventListener('click', createAlert);
@@ -2296,6 +2311,8 @@ function initLiveSync() {
 }
 
 // ====== TRANSPORT TAB ======
+let lastTransportRoutes = null;
+
 async function doTransportScan() {
     const spinner = document.getElementById('transport-spinner');
     const errorEl = document.getElementById('transport-error');
@@ -2318,90 +2335,94 @@ async function doTransportScan() {
         const res = await fetch(`${VPS_BASE}/api/transport-routes?${params}`);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const routes = await res.json();
+        lastTransportRoutes = routes;
 
-        // Enrich with current live prices from IndexedDB
-        const cachedData = await MarketDB.getAllPrices();
-        const priceMap = {};
-        cachedData.forEach(p => {
-            let city = p.city;
-            if (city && city.includes('Black Market')) city = 'Black Market';
-            const key = `${p.item_id}_${p.quality}_${city}`;
-            if (!priceMap[key]) priceMap[key] = { sellMin: 0, buyMax: 0, sellDate: '', buyDate: '' };
-            if (p.sell_price_min > 0 && (priceMap[key].sellMin === 0 || p.sell_price_min < priceMap[key].sellMin)) {
-                priceMap[key].sellMin = p.sell_price_min;
-                priceMap[key].sellDate = p.sell_price_min_date || '';
-            }
-            if (p.buy_price_max > 0 && p.buy_price_max > priceMap[key].buyMax) {
-                priceMap[key].buyMax = p.buy_price_max;
-                priceMap[key].buyDate = p.buy_price_max_date || '';
-            }
-        });
-
-        const enriched = [];
-        for (const r of routes) {
-            const buyKey = `${r.item_id}_${r.quality}_${r.buy_city}`;
-            const sellKey = `${r.item_id}_${r.quality}_${r.sell_city}`;
-            const buyData = priceMap[buyKey];
-            const sellData = priceMap[sellKey];
-
-            if (!buyData || buyData.sellMin <= 0) continue; // No buy price available
-            if (!sellData || sellData.buyMax <= 0) continue; // No sell price available
-
-            const buyPrice = buyData.sellMin; // We buy at sell order (instant buy)
-            const sellPrice = sellData.buyMax; // We sell at buy order (instant sell)
-            const tax = sellPrice * TAX_RATE;
-            const profitPerUnit = sellPrice - buyPrice - tax;
-            if (profitPerUnit <= 0) continue;
-
-            const roi = (profitPerUnit / buyPrice) * 100;
-            const volume = Math.max(r.buy_volume || 0, r.sell_volume || 0);
-            const unitsCanBuy = Math.floor(budget / buyPrice);
-            const tripProfit = profitPerUnit * unitsCanBuy;
-            const transportScore = profitPerUnit * volume; // profit × daily volume
-
-            enriched.push({
-                itemId: r.item_id,
-                quality: r.quality,
-                buyCity: r.buy_city,
-                sellCity: r.sell_city,
-                buyPrice,
-                sellPrice,
-                tax,
-                profitPerUnit,
-                roi,
-                volume: Math.round(volume),
-                unitsCanBuy,
-                tripProfit,
-                transportScore,
-                confidence: r.confidence_score,
-                consistencyPct: r.consistency_pct,
-                avgSpread: r.avg_spread,
-                sampleCount: r.sample_count,
-                dateBuy: buyData.sellDate,
-                dateSell: sellData.buyDate
-            });
-        }
-
-        // Sort
-        if (sortBy === 'trip_profit') enriched.sort((a, b) => b.tripProfit - a.tripProfit);
-        else if (sortBy === 'transport_score') enriched.sort((a, b) => b.transportScore - a.transportScore);
-        else if (sortBy === 'profit_per_unit') enriched.sort((a, b) => b.profitPerUnit - a.profitPerUnit);
-        else if (sortBy === 'volume') enriched.sort((a, b) => b.volume - a.volume);
-        else if (sortBy === 'confidence') enriched.sort((a, b) => b.confidence - a.confidence);
-
-        const excludeCaerleon = document.getElementById('transport-exclude-caerleon').checked;
-        const caerleonCities = new Set(['Caerleon', 'Black Market']);
-        const filtered = excludeCaerleon
-            ? enriched.filter(r => !caerleonCities.has(r.sellCity) && !caerleonCities.has(r.buyCity))
-            : enriched;
-
-        const results = filtered.slice(0, 60);
         spinner.classList.add('hidden');
-        renderTransportResults(results, budget);
+        await enrichAndRenderTransport(routes, budget, sortBy);
     } catch (e) {
         spinner.classList.add('hidden');
         showError(errorEl, 'Failed to load transport routes: ' + e.message);
     }
+}
+
+async function enrichAndRenderTransport(routes, budget, sortBy) {
+    // Enrich with current live prices from IndexedDB
+    const cachedData = await MarketDB.getAllPrices();
+    const priceMap = {};
+    cachedData.forEach(p => {
+        let city = p.city;
+        if (city && city.includes('Black Market')) city = 'Black Market';
+        const key = `${p.item_id}_${p.quality}_${city}`;
+        if (!priceMap[key]) priceMap[key] = { sellMin: 0, buyMax: 0, sellDate: '', buyDate: '' };
+        if (p.sell_price_min > 0 && (priceMap[key].sellMin === 0 || p.sell_price_min < priceMap[key].sellMin)) {
+            priceMap[key].sellMin = p.sell_price_min;
+            priceMap[key].sellDate = p.sell_price_min_date || '';
+        }
+        if (p.buy_price_max > 0 && p.buy_price_max > priceMap[key].buyMax) {
+            priceMap[key].buyMax = p.buy_price_max;
+            priceMap[key].buyDate = p.buy_price_max_date || '';
+        }
+    });
+
+    const enriched = [];
+    for (const r of routes) {
+        const buyKey = `${r.item_id}_${r.quality}_${r.buy_city}`;
+        const sellKey = `${r.item_id}_${r.quality}_${r.sell_city}`;
+        const buyData = priceMap[buyKey];
+        const sellData = priceMap[sellKey];
+
+        if (!buyData || buyData.sellMin <= 0) continue; // No buy price available
+        if (!sellData || sellData.buyMax <= 0) continue; // No sell price available
+
+        const buyPrice = buyData.sellMin; // We buy at sell order (instant buy)
+        const sellPrice = sellData.buyMax; // We sell at buy order (instant sell)
+        const tax = sellPrice * TAX_RATE;
+        const profitPerUnit = sellPrice - buyPrice - tax;
+        if (profitPerUnit <= 0) continue;
+
+        const roi = (profitPerUnit / buyPrice) * 100;
+        const volume = Math.max(r.buy_volume || 0, r.sell_volume || 0);
+        const unitsCanBuy = Math.floor(budget / buyPrice);
+        const tripProfit = profitPerUnit * unitsCanBuy;
+        const transportScore = profitPerUnit * volume; // profit × daily volume
+
+        enriched.push({
+            itemId: r.item_id,
+            quality: r.quality,
+            buyCity: r.buy_city,
+            sellCity: r.sell_city,
+            buyPrice,
+            sellPrice,
+            tax,
+            profitPerUnit,
+            roi,
+            volume: Math.round(volume),
+            unitsCanBuy,
+            tripProfit,
+            transportScore,
+            confidence: r.confidence_score,
+            consistencyPct: r.consistency_pct,
+            avgSpread: r.avg_spread,
+            sampleCount: r.sample_count,
+            dateBuy: buyData.sellDate,
+            dateSell: sellData.buyDate
+        });
+    }
+
+    // Sort
+    if (sortBy === 'trip_profit') enriched.sort((a, b) => b.tripProfit - a.tripProfit);
+    else if (sortBy === 'transport_score') enriched.sort((a, b) => b.transportScore - a.transportScore);
+    else if (sortBy === 'profit_per_unit') enriched.sort((a, b) => b.profitPerUnit - a.profitPerUnit);
+    else if (sortBy === 'volume') enriched.sort((a, b) => b.volume - a.volume);
+    else if (sortBy === 'confidence') enriched.sort((a, b) => b.confidence - a.confidence);
+
+    const excludeCaerleon = document.getElementById('transport-exclude-caerleon').checked;
+    const caerleonCities = new Set(['Caerleon', 'Black Market']);
+    const filtered = excludeCaerleon
+        ? enriched.filter(r => !caerleonCities.has(r.sellCity) && !caerleonCities.has(r.buyCity))
+        : enriched;
+
+    renderTransportResults(filtered.slice(0, 60), budget);
 }
 
 function renderTransportResults(routes, budget) {
