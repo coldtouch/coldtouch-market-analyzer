@@ -664,8 +664,8 @@ function processArbitrage(data, quality, tier, enchantment, includeBM, buyCityFi
         const now = new Date();
         const thresholdMs = freshThresholdMins * 60 * 1000;
         filtered = trades.filter(t => {
-            const buyAge = t.dateBuy && !t.dateBuy.startsWith('0001') ? now - new Date(t.dateBuy + 'Z') : Infinity;
-            const sellAge = t.dateSell && !t.dateSell.startsWith('0001') ? now - new Date(t.dateSell + 'Z') : Infinity;
+            const buyAge = t.dateBuy && !t.dateBuy.startsWith('0001') ? now - new Date(t.dateBuy.endsWith('Z') ? t.dateBuy : t.dateBuy + 'Z') : Infinity;
+            const sellAge = t.dateSell && !t.dateSell.startsWith('0001') ? now - new Date(t.dateSell.endsWith('Z') ? t.dateSell : t.dateSell + 'Z') : Infinity;
             if (freshMode === 'buy') return buyAge < thresholdMs;
             if (freshMode === 'sell') return sellAge < thresholdMs;
             return buyAge < thresholdMs && sellAge < thresholdMs; // 'both'
