@@ -2390,8 +2390,9 @@ async function doTransportScan() {
         else if (sortBy === 'confidence') enriched.sort((a, b) => b.confidence - a.confidence);
 
         const excludeCaerleon = document.getElementById('transport-exclude-caerleon').checked;
+        const caerleonCities = new Set(['Caerleon', 'Black Market']);
         const filtered = excludeCaerleon
-            ? enriched.filter(r => r.sellCity !== 'Caerleon' && r.buyCity !== 'Caerleon')
+            ? enriched.filter(r => !caerleonCities.has(r.sellCity) && !caerleonCities.has(r.buyCity))
             : enriched;
 
         const results = filtered.slice(0, 60);
