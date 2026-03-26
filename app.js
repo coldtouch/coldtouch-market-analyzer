@@ -2389,7 +2389,12 @@ async function doTransportScan() {
         else if (sortBy === 'volume') enriched.sort((a, b) => b.volume - a.volume);
         else if (sortBy === 'confidence') enriched.sort((a, b) => b.confidence - a.confidence);
 
-        const results = enriched.slice(0, 60);
+        const excludeCaerleon = document.getElementById('transport-exclude-caerleon').checked;
+        const filtered = excludeCaerleon
+            ? enriched.filter(r => r.sellCity !== 'Caerleon' && r.buyCity !== 'Caerleon')
+            : enriched;
+
+        const results = filtered.slice(0, 60);
         spinner.classList.add('hidden');
         renderTransportResults(results, budget);
     } catch (e) {
