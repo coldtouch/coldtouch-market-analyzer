@@ -584,14 +584,20 @@ function processArbitrage(data, quality, tier, enchantment, includeBM, buyCityFi
         if (!includeBM && city === 'Black Market') return;
 
         let current = itemsData[itemKey][city];
-        const entryDate = entry.sell_price_min_date > entry.buy_price_max_date ? entry.sell_price_min_date : entry.buy_price_max_date;
+        const sellDate = entry.sell_price_min_date || '';
+        const buyDate = entry.buy_price_max_date || '';
 
         if (!current) {
-            itemsData[itemKey][city] = { sellMin: entry.sell_price_min, buyMax: entry.buy_price_max, updateDate: entryDate };
+            itemsData[itemKey][city] = { sellMin: entry.sell_price_min, buyMax: entry.buy_price_max, sellDate, buyDate };
         } else {
-            if (entry.sell_price_min > 0 && (current.sellMin === 0 || entry.sell_price_min < current.sellMin)) current.sellMin = entry.sell_price_min;
-            if (entry.buy_price_max > 0 && entry.buy_price_max > current.buyMax) current.buyMax = entry.buy_price_max;
-            if (entryDate > '0001' && entryDate > current.updateDate) current.updateDate = entryDate;
+            if (entry.sell_price_min > 0 && (current.sellMin === 0 || entry.sell_price_min < current.sellMin)) {
+                current.sellMin = entry.sell_price_min;
+                if (sellDate > current.sellDate) current.sellDate = sellDate;
+            }
+            if (entry.buy_price_max > 0 && entry.buy_price_max > current.buyMax) {
+                current.buyMax = entry.buy_price_max;
+                if (buyDate > current.buyDate) current.buyDate = buyDate;
+            }
         }
     });
 
@@ -628,8 +634,10 @@ function processArbitrage(data, quality, tier, enchantment, includeBM, buyCityFi
                     }
 
                     if (profit > 0 || isSingleItem) {
-                        const dateBuy = citiesObj[cityBuy].updateDate;
-                        const dateSell = citiesObj[citySell].updateDate;
+                        // dateBuy = freshness of the price we BUY at (buy city's sell_price_min_date)
+                        // dateSell = freshness of the price we SELL at (sell city's buy_price_max_date)
+                        const dateBuy = citiesObj[cityBuy].sellDate;
+                        const dateSell = citiesObj[citySell].buyDate;
                         const stat = getSpreadStat(itemId, qual, cityBuy, citySell);
                         trades.push({
                             itemId, quality: qual, buyCity: cityBuy, sellCity: citySell,
@@ -656,8 +664,8 @@ function processArbitrage(data, quality, tier, enchantment, includeBM, buyCityFi
         const now = new Date();
         const thresholdMs = freshThresholdMins * 60 * 1000;
         filtered = trades.filter(t => {
-            const buyAge = t.dateBuy && !t.dateBuy.startsWith('0001') ? now - new Date(t.dateBuy) : Infinity;
-            const sellAge = t.dateSell && !t.dateSell.startsWith('0001') ? now - new Date(t.dateSell) : Infinity;
+            const buyAge = t.dateBuy && !t.dateBuy.startsWith('0001') ? now - new Date(t.dateBuy + 'Z') : Infinity;
+            const sellAge = t.dateSell && !t.dateSell.startsWith('0001') ? now - new Date(t.dateSell + 'Z') : Infinity;
             if (freshMode === 'buy') return buyAge < thresholdMs;
             if (freshMode === 'sell') return sellAge < thresholdMs;
             return buyAge < thresholdMs && sellAge < thresholdMs; // 'both'
