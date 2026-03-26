@@ -1976,3 +1976,107 @@ footer a:hover {
     color: var(--accent);
     white-space: nowrap;
 }
+
+/* ====== ABOUT TAB ====== */
+.about-container {
+    max-width: 900px;
+    margin: 0 auto;
+    padding: 1rem 0;
+}
+.about-section {
+    margin-bottom: 2.5rem;
+}
+.about-heading {
+    color: var(--accent);
+    font-size: 1.4rem;
+    font-weight: 800;
+    margin-bottom: 1.25rem;
+    padding-bottom: 0.5rem;
+    border-bottom: 1px solid var(--border-color);
+}
+.features-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    gap: 1rem;
+}
+.feature-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-lg);
+    padding: 1.25rem;
+    transition: border-color var(--transition), transform var(--transition);
+}
+.feature-card:hover {
+    border-color: var(--accent);
+    transform: translateY(-2px);
+}
+.feature-icon {
+    font-size: 1.6rem;
+    margin-bottom: 0.5rem;
+}
+.feature-card h3 {
+    color: var(--text-primary);
+    font-size: 0.95rem;
+    font-weight: 700;
+    margin-bottom: 0.4rem;
+}
+.feature-card p {
+    color: var(--text-secondary);
+    font-size: 0.8rem;
+    line-height: 1.5;
+}
+
+/* Changelog */
+.changelog-list {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+}
+.changelog-entry {
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-lg);
+    padding: 1.25rem;
+    position: relative;
+    border-left: 3px solid var(--accent);
+}
+.changelog-date {
+    font-size: 0.7rem;
+    font-weight: 600;
+    color: var(--accent);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 0.25rem;
+}
+.changelog-title {
+    font-size: 1rem;
+    font-weight: 700;
+    color: var(--text-primary);
+    margin-bottom: 0.6rem;
+}
+.changelog-entry ul {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+}
+.changelog-entry li {
+    color: var(--text-secondary);
+    font-size: 0.82rem;
+    line-height: 1.6;
+    padding-left: 1rem;
+    position: relative;
+}
+.changelog-entry li::before {
+    content: '•';
+    position: absolute;
+    left: 0;
+    color: var(--accent);
+    font-weight: 700;
+}
+.changelog-entry code {
+    background: var(--bg-elevated);
+    color: var(--accent-light);
+    padding: 1px 5px;
+    border-radius: 3px;
+    font-size: 0.78rem;
+}
