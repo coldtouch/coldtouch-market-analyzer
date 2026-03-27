@@ -928,8 +928,59 @@ function getCity(id) { return API_LOCALE_MAP[id] || CITY_NAMES[id] || 'City-'+id
 function getFriendlyName(id) { return itemNames[id] || id; }
 function getQualityName(q) { return ['', 'Normal', 'Good', 'Outstanding', 'Excellent', 'Masterpiece'][q] || 'Normal'; }
 
+// Live price validation — fetches current prices from the API right before sending an alert
+// to confirm the spread still exists and hasn't moved significantly since it was cached.
+async function validatePricesLive(id, q, buyCity, sellCity, expectedSellPrice, expectedBuyPrice) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 5000);
+  try {
+    const locs = [buyCity, sellCity].map(c => encodeURIComponent(c)).join(',');
+    const url = `${API_BASE}/${encodeURIComponent(id)}.json?locations=${locs}&qualities=${q}`;
+    const res = await fetch(url, { signal: controller.signal });
+    clearTimeout(timeoutId);
+    if (!res.ok) return true; // Can't verify — allow through rather than silence valid alerts
+
+    const data = await res.json();
+    let liveSellMin = 0, liveBuyMax = 0;
+    for (const entry of data) {
+      if (entry.city === buyCity && entry.quality === q && entry.sell_price_min > 0) {
+        if (liveSellMin === 0 || entry.sell_price_min < liveSellMin) liveSellMin = entry.sell_price_min;
+      }
+      if (entry.city === sellCity && entry.quality === q && entry.buy_price_max > 0) {
+        if (entry.buy_price_max > liveBuyMax) liveBuyMax = entry.buy_price_max;
+      }
+    }
+    // Listing is gone entirely
+    if (liveSellMin <= 0 || liveBuyMax <= 0) {
+      console.log(`[Validate] ${id} q${q}: listing gone (sell=${liveSellMin} buy=${liveBuyMax}), skipping alert`);
+      return false;
+    }
+    // Sell price moved >10% higher — deal is worse than what we cached
+    if (liveSellMin > expectedSellPrice * 1.1) {
+      console.log(`[Validate] ${id} q${q}: sell price moved up ${liveSellMin} vs expected ~${Math.round(expectedSellPrice)}, skipping`);
+      return false;
+    }
+    // Buy order moved >10% lower — deal is worse than what we cached
+    if (liveBuyMax < expectedBuyPrice * 0.9) {
+      console.log(`[Validate] ${id} q${q}: buy price moved down ${liveBuyMax} vs expected ~${Math.round(expectedBuyPrice)}, skipping`);
+      return false;
+    }
+    // Re-verify profit is still positive with live prices
+    if (liveBuyMax - liveSellMin - (liveBuyMax * TAX_RATE) <= 0) {
+      console.log(`[Validate] ${id} q${q}: live prices no longer profitable, skipping`);
+      return false;
+    }
+    return true;
+  } catch (e) {
+    clearTimeout(timeoutId);
+    if (e.name === 'AbortError') console.log(`[Validate] ${id} q${q}: timed out, allowing alert through`);
+    return true; // Allow through on timeout/error — don't silence potentially valid alerts
+  }
+}
+
 const alertCooldowns = {};
 const FRESHNESS_THRESHOLD = 30 * 60 * 1000; // 30 min — data must be this fresh to trigger alerts
+const MIN_SAMPLE_THRESHOLD = 3; // Minimum historical samples required before alerting (blocks low-liquidity false positives)
 
 // Seed alerter from the periodic server scan so it starts with full market coverage
 function seedAlerterFromScan(allPrices) {
@@ -1036,21 +1087,33 @@ function checkAndAlert(id, q) {
     const consistencyPct = stats ? stats.consistency_pct : null;
     const sampleCount = stats ? stats.sample_count : 0;
 
-    db.all(`SELECT channel_id, cooldown_ms, min_confidence FROM alerts WHERE min_profit <= ?`, [profit], (err, rows) => {
-      if (err || !rows) return;
+    db.all(`SELECT channel_id, cooldown_ms, min_confidence FROM alerts WHERE min_profit <= ?`, [profit], async (err, rows) => {
+      if (err || !rows || rows.length === 0) return;
 
-      // Sort by confidence: high-confidence alerts get processed first
+      // Live price validation — confirm the spread still exists before pinging any channel
+      const priceValid = await validatePricesLive(id, q, buyCity, sellCity, bestSell.price, bestBuy.price);
+      if (!priceValid) {
+        console.log(`[Alert] Live validation rejected ${id} q${q} route ${buyCity}→${sellCity}`);
+        return;
+      }
+
       rows.forEach(row => {
         const cacheKey = `${id}_${q}_${row.channel_id}`;
         const last = alertCooldowns[cacheKey] || 0;
         const cooldown = row.cooldown_ms || 600000;
         if (now - last < cooldown) return;
 
+        // Minimum sample threshold — block alerts on near-zero-liquidity items even when min_confidence=0
+        if (sampleCount < MIN_SAMPLE_THRESHOLD) {
+          console.log(`[Alert] Skipping ${id} q${q}: only ${sampleCount} samples (min ${MIN_SAMPLE_THRESHOLD} required)`);
+          return;
+        }
+
         // Check confidence threshold
         const minConf = row.min_confidence || 0;
         if (minConf > 0 && (confidence === null || confidence < minConf)) return;
 
-        alertCooldowns[cacheKey] = now;
+        alertCooldowns[cacheKey] = now; // Set cooldown only after all checks pass
         const channel = client.channels.cache.get(row.channel_id);
         if (!channel) return;
 
