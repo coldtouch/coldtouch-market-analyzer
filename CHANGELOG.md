@@ -2,6 +2,23 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-03-27 — Data Quality & Server Fix
+
+#### Critical Fix
+- **VPS now scans Europe server** instead of Americas (West). All cached prices, spread stats, and confidence scores now reflect the correct game server.
+- **Server auto-migration**: On deploy, old West server data is automatically cleared and re-collected from Europe APIs (Charts, History, live scans).
+- **Configurable game server**: VPS uses `GAME_SERVER` env var (defaults to `europe`), allowing other deployers to target any region.
+
+#### Data Quality Improvements
+- **Junk price filtering**: Arbitrage scanner now detects and skips placeholder listings (prices >20x median for the same item), eliminating false routes caused by 999,999 silver junk orders.
+- **10x more spread stats**: Frontend now loads up to 2,000 spread stats (was 200), so far more trade routes show confidence scores.
+- **Lower confidence threshold**: Minimum confidence for loading stats reduced from 10% to 5%, showing data for more routes.
+
+#### Frontend
+- **Auto server detection**: Website automatically selects the correct server dropdown (Europe) based on which server the VPS scans.
+
+---
+
 ### 2026-03-26 — Bulk Transport Profits
 
 #### New Feature: Transport Tab

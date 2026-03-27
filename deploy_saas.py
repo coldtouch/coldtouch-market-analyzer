@@ -97,9 +97,10 @@ const CLIENT_SECRET = process.env.DISCORD_CLIENT_SECRET;
 const BOT_TOKEN = process.env.DISCORD_BOT_TOKEN;
 const SESSION_SECRET = process.env.SESSION_SECRET;
 
-const API_BASE = 'https://west.albion-online-data.com/api/v2/stats/prices';
-const CHARTS_BASE = 'https://west.albion-online-data.com/api/v2/stats/charts';
-const HISTORY_BASE = 'https://west.albion-online-data.com/api/v2/stats/history';
+const GAME_SERVER = process.env.GAME_SERVER || 'europe';
+const API_BASE = `https://${GAME_SERVER}.albion-online-data.com/api/v2/stats/prices`;
+const CHARTS_BASE = `https://${GAME_SERVER}.albion-online-data.com/api/v2/stats/charts`;
+const HISTORY_BASE = `https://${GAME_SERVER}.albion-online-data.com/api/v2/stats/history`;
 const ITEMS_URL = 'https://coldtouch.github.io/coldtouch-market-analyzer/items.json';
 const CHUNK_SIZE = 100;
 const SCAN_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
@@ -178,6 +179,22 @@ db.serialize(() => {
     tier TEXT DEFAULT 'bronze',
     updated_at INTEGER NOT NULL
   )`);
+
+
+  // === SERVER MIGRATION: detect if data was collected from a different game server ===
+  // Store which game server the data was collected from
+  db.run(`CREATE TABLE IF NOT EXISTS meta_config (key TEXT PRIMARY KEY, value TEXT)`);
+  db.get(`SELECT value FROM meta_config WHERE key = 'game_server'`, (err, row) => {
+    const prevServer = row ? row.value : null;
+    if (prevServer && prevServer !== GAME_SERVER) {
+      console.log(`[Migration] Game server changed from ${prevServer} to ${GAME_SERVER}. Clearing historical data for re-collection...`);
+      db.run(`DELETE FROM price_snapshots`);
+      db.run(`DELETE FROM price_averages`);
+      db.run(`DELETE FROM spread_stats`);
+      console.log('[Migration] Old data cleared. Backfill will re-run for new server.');
+    }
+    db.run(`INSERT OR REPLACE INTO meta_config (key, value) VALUES ('game_server', ?)`, [GAME_SERVER]);
+  });
 });
 
 // === SHARED MARKET CACHE ===
@@ -656,7 +673,8 @@ app.get('/api/market-cache/status', (req, res) => {
     timestamp: cacheTimestamp,
     entries: cacheItemCount,
     sizeKB: cachedGzipBuffer ? Math.round(cachedGzipBuffer.length / 1024) : 0,
-    scanning: scanInProgress
+    scanning: scanInProgress,
+    gameServer: GAME_SERVER
   });
 });
 
@@ -1532,11 +1550,13 @@ server.listen(443, () => console.log('SaaS Backend (Express + Discord + WSS + Ma
     run_wait(f"echo '{b64_server}' | base64 -d > /opt/albion-saas/backend.js")
 
     # Write env file with restricted permissions
+    game_server = os.environ.get('GAME_SERVER', 'europe')
     env_content = f"""DOMAIN={domain}
 DISCORD_CLIENT_ID={CLIENT_ID}
 DISCORD_CLIENT_SECRET={CLIENT_SECRET}
 DISCORD_BOT_TOKEN={BOT_TOKEN}
 SESSION_SECRET={session_secret}
+GAME_SERVER={game_server}
 """
     b64_env = base64.b64encode(env_content.encode()).decode()
     run_wait(f"echo '{b64_env}' | base64 -d > /opt/albion-saas/.env")

@@ -535,7 +535,7 @@ async function loadSpreadStats() {
     // Cache for 10 minutes
     if (now - spreadStatsCacheTime < 10 * 60 * 1000 && Object.keys(spreadStatsCache).length > 0) return;
     try {
-        const res = await fetch(`${VPS_BASE}/api/spread-stats/top?limit=200&min_confidence=10`);
+        const res = await fetch(`${VPS_BASE}/api/spread-stats/top?limit=2000&min_confidence=5`);
         if (!res.ok) return;
         const rows = await res.json();
         spreadStatsCache = {};
@@ -601,6 +601,16 @@ function processArbitrage(data, quality, tier, enchantment, includeBM, buyCityFi
         }
     });
 
+    // Build cross-item median sell prices per item to detect junk listings
+    const itemMedians = {};
+    for (const [itemKey, citiesObj] of Object.entries(itemsData)) {
+        const sells = Object.values(citiesObj).map(c => c.sellMin).filter(p => p > 0);
+        if (sells.length >= 2) {
+            sells.sort((a, b) => a - b);
+            itemMedians[itemKey] = sells[Math.floor(sells.length / 2)];
+        }
+    }
+
     const trades = [];
     for (const [itemKey, citiesObj] of Object.entries(itemsData)) {
         const lastUnderscore = itemKey.lastIndexOf('_');
@@ -620,6 +630,11 @@ function processArbitrage(data, quality, tier, enchantment, includeBM, buyCityFi
 
                 const priceBuy = citiesObj[cityBuy].sellMin;
                 const priceSell = citiesObj[citySell].buyMax;
+
+                // Skip junk/placeholder sell prices (buy-from side)
+                // A price >20x the median for the same item is almost certainly a junk listing
+                const median = itemMedians[itemKey];
+                if (median && priceBuy > median * 20) continue;
 
                 if (priceBuy > 0 && priceSell > 0) {
                     const tax = priceSell * TAX_RATE;
@@ -2116,6 +2131,21 @@ async function loadServerCache(silent = false) {
 async function init() {
     await checkDiscordAuth();
     await loadData();
+
+    // Auto-detect which game server the VPS scans and match the dropdown
+    try {
+        const statusRes = await fetch(`${VPS_BASE}/api/market-cache/status`);
+        if (statusRes.ok) {
+            const statusData = await statusRes.json();
+            if (statusData.gameServer) {
+                const serverMap = { 'west': 'west', 'east': 'east', 'europe': 'europe' };
+                const serverVal = serverMap[statusData.gameServer];
+                if (serverVal) {
+                    document.getElementById('server-select').value = serverVal;
+                }
+            }
+        }
+    } catch (e) { /* ignore */ }
 
     // Load shared server cache (always — keeps data fresh for all users)
     await loadServerCache();
