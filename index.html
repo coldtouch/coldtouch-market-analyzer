@@ -28,7 +28,7 @@
         <div class="header-content" style="display:flex; justify-content:space-between; align-items:center;">
             <div>
                 <h1 class="sleek-title">Coldtouch Market Analyzer</h1>
-                <p class="header-subtitle">Scan the entire Albion market &bull; Find flips &bull; Compare cities &bull; Profit</p>
+                <p class="header-subtitle">Market Flipping &bull; BM Flipper &bull; Crafting &bull; Transport &bull; Journals &bull; Farming &bull; Builds &bull; 20+ Free Tools</p>
             </div>
                 <div style="display:flex; align-items:center; gap:0.5rem;" title="How to use:&#10;1) Click Login&#10;2) Click 'Invite Bot to Server'&#10;3) Go to your Discord server and type /setup_alerts to start receiving market flips!">
                     <a id="login-discord-btn" href="https://209-97-129-125.nip.io/auth/discord" class="btn-discord" style="background:#5865F2; color:#fff; border-radius:4px; padding:0.5rem 1rem; display:flex; align-items:center; gap:0.5rem; text-decoration:none; font-weight:600; font-size:0.9rem;">
@@ -99,6 +99,50 @@
             <button class="nav-tab" data-tab="transport">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="1" y="3" width="15" height="13"></rect><polygon points="16 8 20 8 23 11 23 16 16 16 16 8"></polygon><circle cx="5.5" cy="18.5" r="2.5"></circle><circle cx="18.5" cy="18.5" r="2.5"></circle></svg>
                 Transport
+            </button>
+            <button class="nav-tab" data-tab="bmflipper">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path><polyline points="9 22 9 12 15 12 15 22"></polyline></svg>
+                BM Flipper
+            </button>
+            <button class="nav-tab" data-tab="journals">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path></svg>
+                Journals
+            </button>
+            <button class="nav-tab" data-tab="rrr">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="19" y1="5" x2="5" y2="19"></line><circle cx="6.5" cy="6.5" r="2.5"></circle><circle cx="17.5" cy="17.5" r="2.5"></circle></svg>
+                RRR Calc
+            </button>
+            <button class="nav-tab" data-tab="repair">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"></path></svg>
+                Repair Cost
+            </button>
+            <button class="nav-tab" data-tab="itempower">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg>
+                Item Power
+            </button>
+            <button class="nav-tab" data-tab="favorites">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg>
+                Favorites
+            </button>
+            <button class="nav-tab" data-tab="mounts">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 12h-4l-3 9L9 3l-3 9H2"></path></svg>
+                Mounts
+            </button>
+            <button class="nav-tab" data-tab="toptraded">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20V10"></path><path d="M18 20V4"></path><path d="M6 20v-4"></path></svg>
+                Top Traded
+            </button>
+            <button class="nav-tab" data-tab="portfolio">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="7" width="20" height="14" rx="2" ry="2"></rect><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"></path></svg>
+                Portfolio
+            </button>
+            <button class="nav-tab" data-tab="farming">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22c4-4 8-7.5 8-12a8 8 0 1 0-16 0c0 4.5 4 8 8 12z"></path><circle cx="12" cy="10" r="3"></circle></svg>
+                Farming
+            </button>
+            <button class="nav-tab" data-tab="builds">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="8.5" cy="7" r="4"></circle><line x1="20" y1="8" x2="20" y2="14"></line><line x1="23" y1="11" x2="17" y2="11"></line></svg>
+                Builds
             </button>
             <button class="nav-tab" data-tab="alerts">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path><path d="M13.73 21a2 2 0 0 1-3.46 0"></path></svg>
@@ -402,6 +446,11 @@
                     </div>
                 </div>
                 <button id="craft-search-btn" class="btn-primary">Calculate</button>
+                <button id="craft-save-btn" class="btn-secondary" style="height:38px; padding:0 0.75rem; font-size:0.85rem;" title="Save current setup">💾 Save</button>
+                <select id="craft-load-select" style="height:38px; min-width:120px;">
+                    <option value="">Load Setup...</option>
+                </select>
+                <button id="craft-delete-setup-btn" class="btn-secondary" style="height:38px; padding:0 0.5rem; font-size:0.85rem; color:var(--loss-red);" title="Delete selected setup">🗑️</button>
             </div>
 
             <!-- Crafting Settings -->
@@ -436,6 +485,14 @@
 
             <!-- Single item detail view -->
             <div id="craft-detail-view" style="display:none;"></div>
+
+            <div id="craft-shopping-list" style="display:none;">
+                <div class="controls-panel" style="margin-top:0.5rem;">
+                    <h3 style="color:var(--accent); margin:0 0 0.5rem 0; font-size:1rem;">🛒 Shopping List</h3>
+                    <p style="color:var(--text-secondary); font-size:0.8rem; margin:0 0 0.5rem 0;">Materials needed, grouped by where to buy them cheapest.</p>
+                    <div id="craft-shopping-content"></div>
+                </div>
+            </div>
 
             <!-- Bulk scan section -->
             <div id="craft-bulk-section">
@@ -583,6 +640,564 @@
             <div id="transport-results"></div>
         </section>
 
+        <!-- ====== TAB: BLACK MARKET FLIPPER ====== -->
+        <section class="tab-pane hidden" id="pane-bmflipper">
+            <div class="controls-panel">
+                <h2 style="color:var(--accent); margin:0 0 0.5rem 0; font-size:1.2rem;">🏪 Black Market Flipper</h2>
+                <p style="color:var(--text-secondary); font-size:0.85rem; margin:0 0 1rem 0;">Find profitable items to buy from city markets and sell to the Black Market in Caerleon. Compares real-time prices to identify the best flips.</p>
+                <div style="display:flex; gap:1rem; align-items:flex-end; flex-wrap:wrap;">
+                    <div class="control-group">
+                        <label for="bm-tier">Tier</label>
+                        <select id="bm-tier">
+                            <option value="all">All Tiers</option>
+                            <option value="4">T4</option>
+                            <option value="5">T5</option>
+                            <option value="6">T6</option>
+                            <option value="7">T7</option>
+                            <option value="8">T8</option>
+                        </select>
+                    </div>
+                    <div class="control-group">
+                        <label for="bm-enchantment">Enchantment</label>
+                        <select id="bm-enchantment">
+                            <option value="all">All</option>
+                            <option value="0">.0 (Base)</option>
+                            <option value="1">.1</option>
+                            <option value="2">.2</option>
+                            <option value="3">.3</option>
+                            <option value="4">.4</option>
+                        </select>
+                    </div>
+                    <div class="control-group">
+                        <label for="bm-category">Category</label>
+                        <select id="bm-category">
+                            <option value="all">All Items</option>
+                            <option value="weapons">Weapons</option>
+                            <option value="armor">Armor</option>
+                            <option value="accessories">Accessories</option>
+                            <option value="materials">Materials</option>
+                            <option value="consumables">Consumables</option>
+                        </select>
+                    </div>
+                    <div class="control-group">
+                        <label for="bm-min-profit">Min Profit</label>
+                        <input type="number" id="bm-min-profit" value="0" min="0" step="1000" style="width:120px;">
+                    </div>
+                    <div class="control-group">
+                        <label for="bm-sort">Sort By</label>
+                        <select id="bm-sort">
+                            <option value="profit">Profit</option>
+                            <option value="roi">ROI</option>
+                            <option value="confidence">Confidence</option>
+                        </select>
+                    </div>
+                    <button id="bm-scan-btn" class="btn-scan" style="height:38px; padding:0 1.5rem; font-size:0.85rem;">Find BM Flips</button>
+                </div>
+            </div>
+            <div class="loading-state hidden" id="bm-spinner">
+                <div class="spinner"></div>
+                <p>Scanning Black Market prices...</p>
+            </div>
+            <div id="bm-error" class="error-message hidden"></div>
+            <div class="results-grid" id="bm-results"></div>
+        </section>
+
+        <!-- ====== TAB: JOURNALS CALCULATOR ====== -->
+        <section class="tab-pane hidden" id="pane-journals">
+            <div class="controls-panel">
+                <h2 style="color:var(--accent); margin:0 0 0.5rem 0; font-size:1.2rem;">📒 Journals Calculator</h2>
+                <p style="color:var(--text-secondary); font-size:0.85rem; margin:0 0 1rem 0;">Calculate labourer journal profits. Find the best journals to fill and sell based on current market prices.</p>
+                <div style="display:flex; gap:1rem; align-items:flex-end; flex-wrap:wrap;">
+                    <div class="control-group">
+                        <label for="journal-type">Journal Type</label>
+                        <select id="journal-type">
+                            <option value="all">All Types</option>
+                            <option value="mercenary">Mercenary</option>
+                            <option value="lumberjack">Lumberjack</option>
+                            <option value="stonecutter">Stonecutter</option>
+                            <option value="prospector">Prospector</option>
+                            <option value="cropper">Cropper</option>
+                            <option value="gamekeeper">Gamekeeper</option>
+                            <option value="blacksmith">Blacksmith</option>
+                            <option value="fletcher">Fletcher</option>
+                            <option value="imbuer">Imbuer</option>
+                            <option value="tinker">Tinker</option>
+                        </select>
+                    </div>
+                    <div class="control-group">
+                        <label for="journal-city">City</label>
+                        <select id="journal-city">
+                            <option value="Brecilien">Brecilien</option>
+                            <option value="Bridgewatch">Bridgewatch</option>
+                            <option value="Caerleon">Caerleon</option>
+                            <option value="Fort Sterling">Fort Sterling</option>
+                            <option value="Lymhurst">Lymhurst</option>
+                            <option value="Martlock">Martlock</option>
+                            <option value="Thetford">Thetford</option>
+                            <option value="Black Market">Black Market</option>
+                        </select>
+                    </div>
+                    <div class="control-group checkbox-group">
+                        <label><input type="checkbox" id="journal-premium" checked> Premium Account</label>
+                    </div>
+                    <button id="journal-calc-btn" class="btn-scan" style="height:38px; padding:0 1.5rem; font-size:0.85rem;">Calculate</button>
+                </div>
+            </div>
+            <div class="loading-state hidden" id="journals-spinner">
+                <div class="spinner"></div>
+                <p>Calculating journal profits...</p>
+            </div>
+            <div id="journals-results"></div>
+        </section>
+
+        <!-- ====== TAB: RRR CALCULATOR ====== -->
+        <section class="tab-pane hidden" id="pane-rrr">
+            <div class="controls-panel">
+                <h2 style="color:var(--accent); margin:0 0 0.5rem 0; font-size:1.2rem;">📊 Resource Return Rate Calculator</h2>
+                <p style="color:var(--text-secondary); font-size:0.85rem; margin:0 0 1rem 0;">Calculate your effective resource return rate based on specialization, city bonuses, focus, and premium status.</p>
+                <div style="display:flex; gap:1rem; align-items:flex-end; flex-wrap:wrap;">
+                    <div class="control-group">
+                        <label for="rrr-activity">Activity Type</label>
+                        <select id="rrr-activity">
+                            <option value="crafting">Crafting</option>
+                            <option value="refining">Refining</option>
+                        </select>
+                    </div>
+                    <div class="control-group">
+                        <label for="rrr-spec">Spec Level</label>
+                        <input type="number" id="rrr-spec" min="0" max="120" value="0" style="width:80px;">
+                    </div>
+                    <div class="control-group">
+                        <label for="rrr-city-bonus">City Bonus %</label>
+                        <input type="number" id="rrr-city-bonus" min="0" max="50" value="0" step="1" style="width:80px;">
+                    </div>
+                    <div class="control-group checkbox-group">
+                        <label><input type="checkbox" id="rrr-use-focus"> Use Focus</label>
+                    </div>
+                    <div class="control-group checkbox-group">
+                        <label><input type="checkbox" id="rrr-premium" checked> Premium Account</label>
+                    </div>
+                    <button id="rrr-calc-btn" class="btn-scan" style="height:38px; padding:0 1.5rem; font-size:0.85rem;">Calculate</button>
+                </div>
+            </div>
+            <div id="rrr-results">
+                <div class="controls-panel" style="margin-top:1rem;">
+                    <h3 style="color:var(--text-primary); margin:0 0 0.75rem 0; font-size:1rem;">Results</h3>
+                    <div style="display:flex; gap:2rem; flex-wrap:wrap; margin-bottom:1rem;">
+                        <div>
+                            <span style="color:var(--text-secondary); font-size:0.8rem;">Effective Return Rate</span>
+                            <div id="rrr-rate" style="font-size:1.5rem; font-weight:700; color:var(--accent);">--</div>
+                        </div>
+                        <div>
+                            <span style="color:var(--text-secondary); font-size:0.8rem;">Materials Saved per 100 Crafts</span>
+                            <div id="rrr-saved" style="font-size:1.5rem; font-weight:700; color:var(--text-primary);">--</div>
+                        </div>
+                        <div>
+                            <span style="color:var(--text-secondary); font-size:0.8rem;">Break-even Analysis</span>
+                            <div id="rrr-breakeven" style="font-size:1rem; font-weight:600; color:var(--text-primary);">--</div>
+                        </div>
+                    </div>
+                    <div style="background:var(--bg-secondary); border-radius:6px; padding:0.5rem; margin-top:0.5rem;">
+                        <div style="display:flex; align-items:center; gap:0.5rem; margin-bottom:0.25rem;">
+                            <span style="color:var(--text-secondary); font-size:0.8rem;">Return Rate</span>
+                            <span id="rrr-bar-label" style="color:var(--accent); font-size:0.8rem; font-weight:600;">0%</span>
+                        </div>
+                        <div style="background:var(--bg-primary); border-radius:4px; height:24px; overflow:hidden;">
+                            <div id="rrr-bar" style="height:100%; width:0%; background:linear-gradient(90deg, var(--accent), #f0c040); border-radius:4px; transition:width 0.5s ease;"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ====== TAB: REPAIR COST CALCULATOR ====== -->
+        <section class="tab-pane hidden" id="pane-repair">
+            <div class="controls-panel">
+                <h2 style="color:var(--accent); margin:0 0 0.5rem 0; font-size:1.2rem;">🔧 Repair Cost Calculator</h2>
+                <p style="color:var(--text-secondary); font-size:0.85rem; margin:0 0 1rem 0;">Calculate the silver cost to repair your gear. Search for an item and see the exact repair cost based on quality and durability.</p>
+                <div style="display:flex; gap:1rem; align-items:flex-end; flex-wrap:wrap;">
+                    <div class="control-group search-group">
+                        <label for="repair-search">Search Item</label>
+                        <div class="search-input-wrapper">
+                            <input type="text" id="repair-search" placeholder="e.g. Elder's Claymore, T7 Plate..." autocomplete="off">
+                            <svg class="search-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+                            <div id="repair-autocomplete" class="autocomplete-items hidden"></div>
+                        </div>
+                    </div>
+                    <div class="control-group">
+                        <label for="repair-quality">Quality</label>
+                        <select id="repair-quality">
+                            <option value="1">Normal</option>
+                            <option value="2">Good</option>
+                            <option value="3">Outstanding</option>
+                            <option value="4">Excellent</option>
+                            <option value="5">Masterpiece</option>
+                        </select>
+                    </div>
+                    <div class="control-group">
+                        <label for="repair-durability">Current Durability %</label>
+                        <input type="number" id="repair-durability" min="0" max="100" value="0" style="width:100px;">
+                    </div>
+                    <button id="repair-calc-btn" class="btn-scan" style="height:38px; padding:0 1.5rem; font-size:0.85rem;">Calculate</button>
+                </div>
+            </div>
+            <div id="repair-results"></div>
+            <div id="repair-breakdown" class="controls-panel" style="margin-top:1rem; display:none;">
+                <h3 style="color:var(--text-primary); margin:0 0 0.75rem 0; font-size:1rem;">Repair Cost Breakdown</h3>
+                <div id="repair-breakdown-content"></div>
+            </div>
+        </section>
+
+        <!-- ====== TAB: ITEM POWER CHECKER ====== -->
+        <section class="tab-pane hidden" id="pane-itempower">
+            <div class="controls-panel">
+                <h2 style="color:var(--accent); margin:0 0 0.5rem 0; font-size:1.2rem;">⚡ Item Power Price Checker</h2>
+                <p style="color:var(--text-secondary); font-size:0.85rem; margin:0 0 1rem 0;">Compare item power vs price to find the best value gear. Lower silver per IP point = better deal.</p>
+                <div style="display:flex; gap:1rem; align-items:flex-end; flex-wrap:wrap;">
+                    <div class="control-group">
+                        <label for="ip-category">Category</label>
+                        <select id="ip-category">
+                            <option value="weapons">Weapons</option>
+                            <option value="armor">Armor</option>
+                            <option value="accessories">Accessories</option>
+                        </select>
+                    </div>
+                    <div class="control-group">
+                        <label for="ip-tier">Tier</label>
+                        <select id="ip-tier">
+                            <option value="all">All Tiers</option>
+                            <option value="4">T4</option>
+                            <option value="5">T5</option>
+                            <option value="6">T6</option>
+                            <option value="7">T7</option>
+                            <option value="8">T8</option>
+                        </select>
+                    </div>
+                    <div class="control-group">
+                        <label for="ip-city">City</label>
+                        <select id="ip-city">
+                            <option value="Bridgewatch">Bridgewatch</option>
+                            <option value="Caerleon">Caerleon</option>
+                            <option value="Fort Sterling">Fort Sterling</option>
+                            <option value="Lymhurst">Lymhurst</option>
+                            <option value="Martlock">Martlock</option>
+                            <option value="Thetford">Thetford</option>
+                            <option value="Brecilien">Brecilien</option>
+                        </select>
+                    </div>
+                    <div class="control-group">
+                        <label for="ip-sort">Sort By</label>
+                        <select id="ip-sort">
+                            <option value="silverPerIP">Lowest Silver/IP</option>
+                            <option value="ip">Highest IP</option>
+                            <option value="price">Lowest Price</option>
+                        </select>
+                    </div>
+                    <button id="ip-scan-btn" class="btn-scan" style="height:38px; padding:0 1.5rem; font-size:0.85rem;">Compare IP</button>
+                </div>
+            </div>
+            <div class="loading-state hidden" id="ip-spinner">
+                <div class="spinner"></div>
+                <p>Analyzing item power values...</p>
+            </div>
+            <div id="ip-results"></div>
+        </section>
+
+        <!-- ====== TAB: FAVORITES ====== -->
+        <section class="tab-pane hidden" id="pane-favorites">
+            <div class="controls-panel">
+                <h2 style="color:var(--accent); margin:0 0 0.5rem 0; font-size:1.2rem;">⭐ Favorites</h2>
+                <p style="color:var(--text-secondary); font-size:0.85rem; margin:0 0 1rem 0;">Save and manage custom item lists for quick price checking. All lists are stored locally in your browser.</p>
+                <div style="display:flex; gap:1rem; align-items:flex-end; flex-wrap:wrap;">
+                    <div class="control-group">
+                        <label for="fav-list-select">Saved Lists</label>
+                        <select id="fav-list-select">
+                            <option value="">-- Select a list --</option>
+                        </select>
+                    </div>
+                    <button id="fav-load-btn" class="btn-secondary" style="height:38px; padding:0 1rem; font-size:0.85rem;">Load List</button>
+                    <button id="fav-new-btn" class="btn-scan" style="height:38px; padding:0 1rem; font-size:0.85rem;">+ New List</button>
+                    <button id="fav-delete-btn" class="btn-secondary" style="height:38px; padding:0 1rem; font-size:0.85rem; color:var(--loss-red);">Delete List</button>
+                </div>
+            </div>
+
+            <!-- Create/Edit list panel -->
+            <div id="fav-editor" class="controls-panel" style="display:none; margin-top:0.5rem;">
+                <div style="display:flex; gap:1rem; align-items:flex-end; flex-wrap:wrap;">
+                    <div class="control-group" style="flex:1; min-width:200px;">
+                        <label for="fav-list-name">List Name</label>
+                        <input type="text" id="fav-list-name" placeholder="e.g. My Crafting Mats" style="width:100%;">
+                    </div>
+                    <div class="control-group search-group" style="flex:1; min-width:200px;">
+                        <label for="fav-item-search">Add Item</label>
+                        <div class="search-input-wrapper">
+                            <input type="text" id="fav-item-search" placeholder="Search item to add..." autocomplete="off">
+                            <svg class="search-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+                            <div id="fav-autocomplete" class="autocomplete-items hidden"></div>
+                        </div>
+                    </div>
+                    <button id="fav-save-btn" class="btn-primary" style="height:38px; padding:0 1.5rem; font-size:0.85rem;">Save List</button>
+                </div>
+                <div id="fav-items-list" style="margin-top:1rem; display:flex; flex-wrap:wrap; gap:0.5rem;"></div>
+            </div>
+
+            <!-- Loaded list results -->
+            <div id="fav-results" style="margin-top:1rem;"></div>
+        </section>
+
+        <!-- ====== TAB: MOUNTS ====== -->
+        <section class="tab-pane hidden" id="pane-mounts">
+            <div class="controls-panel">
+                <h2 style="color:var(--accent); margin:0 0 0.5rem 0; font-size:1.2rem;">🐎 Mounts Database</h2>
+                <p style="color:var(--text-secondary); font-size:0.85rem; margin:0 0 1rem 0;">Browse all mounts with their stats and current market prices. Find the best value mount for your needs.</p>
+                <div style="display:flex; gap:1rem; align-items:flex-end; flex-wrap:wrap;">
+                    <div class="control-group search-group" style="min-width:200px;">
+                        <label for="mount-search">Search</label>
+                        <div class="search-input-wrapper">
+                            <input type="text" id="mount-search" placeholder="Search mounts..." autocomplete="off">
+                            <svg class="search-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+                        </div>
+                    </div>
+                    <div class="control-group">
+                        <label for="mount-tier">Tier</label>
+                        <select id="mount-tier">
+                            <option value="all">All Tiers</option>
+                            <option value="3">T3</option>
+                            <option value="4">T4</option>
+                            <option value="5">T5</option>
+                            <option value="6">T6</option>
+                            <option value="7">T7</option>
+                            <option value="8">T8</option>
+                        </select>
+                    </div>
+                    <div class="control-group">
+                        <label for="mount-sort">Sort By</label>
+                        <select id="mount-sort">
+                            <option value="name">Name</option>
+                            <option value="price">Lowest Price</option>
+                            <option value="speed">Highest Speed</option>
+                            <option value="load">Highest Load</option>
+                        </select>
+                    </div>
+                    <div class="control-group">
+                        <label for="mount-city">Price City</label>
+                        <select id="mount-city">
+                            <option value="Caerleon">Caerleon</option>
+                            <option value="Bridgewatch">Bridgewatch</option>
+                            <option value="Fort Sterling">Fort Sterling</option>
+                            <option value="Lymhurst">Lymhurst</option>
+                            <option value="Martlock">Martlock</option>
+                            <option value="Thetford">Thetford</option>
+                            <option value="Brecilien">Brecilien</option>
+                        </select>
+                    </div>
+                    <button id="mount-scan-btn" class="btn-scan" style="height:38px; padding:0 1.5rem; font-size:0.85rem;">Load Mounts</button>
+                </div>
+            </div>
+            <div class="loading-state hidden" id="mount-spinner">
+                <div class="spinner"></div>
+                <p>Loading mount data...</p>
+            </div>
+            <div id="mount-results"></div>
+        </section>
+
+        <!-- ====== TAB: TOP TRADED ====== -->
+        <section class="tab-pane hidden" id="pane-toptraded">
+            <div class="controls-panel">
+                <h2 style="color:var(--accent); margin:0 0 0.5rem 0; font-size:1.2rem;">📊 Top Traded Items</h2>
+                <p style="color:var(--text-secondary); font-size:0.85rem; margin:0 0 1rem 0;">See the most actively traded items based on daily volume. Higher volume means more liquidity and faster trades.</p>
+                <div style="display:flex; gap:1rem; align-items:flex-end; flex-wrap:wrap;">
+                    <div class="control-group">
+                        <label for="top-city">City</label>
+                        <select id="top-city">
+                            <option value="all">All Cities</option>
+                            <option value="Bridgewatch">Bridgewatch</option>
+                            <option value="Caerleon">Caerleon</option>
+                            <option value="Fort Sterling">Fort Sterling</option>
+                            <option value="Lymhurst">Lymhurst</option>
+                            <option value="Martlock">Martlock</option>
+                            <option value="Thetford">Thetford</option>
+                            <option value="Brecilien">Brecilien</option>
+                            <option value="Black Market">Black Market</option>
+                        </select>
+                    </div>
+                    <div class="control-group">
+                        <label for="top-tier">Tier</label>
+                        <select id="top-tier">
+                            <option value="all">All Tiers</option>
+                            <option value="4">T4</option>
+                            <option value="5">T5</option>
+                            <option value="6">T6</option>
+                            <option value="7">T7</option>
+                            <option value="8">T8</option>
+                        </select>
+                    </div>
+                    <div class="control-group">
+                        <label for="top-category">Category</label>
+                        <select id="top-category">
+                            <option value="all">All</option>
+                            <option value="weapons">Weapons</option>
+                            <option value="armor">Armor</option>
+                            <option value="accessories">Accessories</option>
+                            <option value="materials">Materials</option>
+                            <option value="consumables">Consumables</option>
+                        </select>
+                    </div>
+                    <div class="control-group">
+                        <label for="top-limit">Show Top</label>
+                        <select id="top-limit">
+                            <option value="25">25</option>
+                            <option value="50" selected>50</option>
+                            <option value="100">100</option>
+                        </select>
+                    </div>
+                    <button id="top-scan-btn" class="btn-scan" style="height:38px; padding:0 1.5rem; font-size:0.85rem;">Load Top Items</button>
+                </div>
+            </div>
+            <div class="loading-state hidden" id="top-spinner">
+                <div class="spinner"></div>
+                <p>Analyzing trading volumes...</p>
+            </div>
+            <div id="top-results"></div>
+        </section>
+
+        <!-- ====== TAB: PORTFOLIO ====== -->
+        <section class="tab-pane hidden" id="pane-portfolio">
+            <div class="controls-panel">
+                <h2 style="color:var(--accent); margin:0 0 0.5rem 0; font-size:1.2rem;">💼 Portfolio Tracker</h2>
+                <p style="color:var(--text-secondary); font-size:0.85rem; margin:0 0 1rem 0;">Track your trades, calculate realized profit/loss, and monitor your trading performance. All data stored locally.</p>
+                <div style="display:flex; gap:1rem; align-items:flex-end; flex-wrap:wrap;">
+                    <button id="portfolio-add-btn" class="btn-scan" style="height:38px; padding:0 1.5rem; font-size:0.85rem;">+ Log Trade</button>
+                    <button id="portfolio-export-btn" class="btn-secondary" style="height:38px; padding:0 1rem; font-size:0.85rem;">Export CSV</button>
+                    <button id="portfolio-clear-btn" class="btn-secondary" style="height:38px; padding:0 1rem; font-size:0.85rem; color:var(--loss-red);">Clear All</button>
+                </div>
+            </div>
+
+            <!-- Add Trade Form (hidden by default) -->
+            <div id="portfolio-form" class="controls-panel" style="display:none; margin-top:0.5rem;">
+                <h3 style="color:var(--text-primary); margin:0 0 0.75rem 0; font-size:1rem;">Log a Trade</h3>
+                <div style="display:flex; gap:1rem; align-items:flex-end; flex-wrap:wrap;">
+                    <div class="control-group">
+                        <label for="portfolio-type">Type</label>
+                        <select id="portfolio-type">
+                            <option value="buy">Buy</option>
+                            <option value="sell">Sell</option>
+                        </select>
+                    </div>
+                    <div class="control-group search-group" style="min-width:200px;">
+                        <label for="portfolio-item-search">Item</label>
+                        <div class="search-input-wrapper">
+                            <input type="text" id="portfolio-item-search" placeholder="Search item..." autocomplete="off">
+                            <svg class="search-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+                            <div id="portfolio-autocomplete" class="autocomplete-items hidden"></div>
+                        </div>
+                    </div>
+                    <div class="control-group">
+                        <label for="portfolio-quantity">Quantity</label>
+                        <input type="number" id="portfolio-quantity" min="1" value="1" style="width:80px;">
+                    </div>
+                    <div class="control-group">
+                        <label for="portfolio-price">Price per Unit</label>
+                        <input type="number" id="portfolio-price" min="0" value="0" style="width:120px;">
+                    </div>
+                    <div class="control-group">
+                        <label for="portfolio-city">City</label>
+                        <select id="portfolio-city">
+                            <option value="Bridgewatch">Bridgewatch</option>
+                            <option value="Caerleon">Caerleon</option>
+                            <option value="Fort Sterling">Fort Sterling</option>
+                            <option value="Lymhurst">Lymhurst</option>
+                            <option value="Martlock">Martlock</option>
+                            <option value="Thetford">Thetford</option>
+                            <option value="Brecilien">Brecilien</option>
+                            <option value="Black Market">Black Market</option>
+                        </select>
+                    </div>
+                    <button id="portfolio-submit-btn" class="btn-primary" style="height:38px; padding:0 1.5rem; font-size:0.85rem;">Add Trade</button>
+                    <button id="portfolio-cancel-btn" class="btn-secondary" style="height:38px; padding:0 1rem; font-size:0.85rem;">Cancel</button>
+                </div>
+            </div>
+
+            <!-- Portfolio Summary -->
+            <div id="portfolio-summary" style="margin-top:1rem;"></div>
+
+            <!-- Trade History -->
+            <div id="portfolio-trades" style="margin-top:1rem;"></div>
+        </section>
+
+        <!-- ====== TAB: FARMING ====== -->
+        <section class="tab-pane hidden" id="pane-farming">
+            <div class="controls-panel">
+                <h2 style="color:var(--accent); margin:0 0 0.5rem 0; font-size:1.2rem;">🌾 Farm & Breed Calculator</h2>
+                <p style="color:var(--text-secondary); font-size:0.85rem; margin:0 0 1rem 0;">Calculate profit for farming crops, herbs, and breeding animals on your personal island.</p>
+                <div style="display:flex; gap:1rem; align-items:flex-end; flex-wrap:wrap;">
+                    <div class="control-group">
+                        <label for="farm-type">Farm Type</label>
+                        <select id="farm-type">
+                            <option value="crops">Crops</option>
+                            <option value="herbs">Herbs</option>
+                            <option value="animals">Animals</option>
+                        </select>
+                    </div>
+                    <div class="control-group">
+                        <label for="farm-city">City</label>
+                        <select id="farm-city">
+                            <option value="Caerleon">Caerleon</option>
+                            <option value="Bridgewatch">Bridgewatch</option>
+                            <option value="Fort Sterling">Fort Sterling</option>
+                            <option value="Lymhurst">Lymhurst</option>
+                            <option value="Martlock">Martlock</option>
+                            <option value="Thetford">Thetford</option>
+                            <option value="Brecilien">Brecilien</option>
+                        </select>
+                    </div>
+                    <div class="control-group checkbox-group">
+                        <label><input type="checkbox" id="farm-premium" checked> Premium</label>
+                    </div>
+                    <div class="control-group checkbox-group">
+                        <label><input type="checkbox" id="farm-focus"> Use Focus</label>
+                    </div>
+                    <button id="farm-calc-btn" class="btn-scan" style="height:38px; padding:0 1.5rem; font-size:0.85rem;">Calculate Profits</button>
+                </div>
+            </div>
+            <div class="loading-state hidden" id="farm-spinner">
+                <div class="spinner"></div>
+                <p>Fetching farming prices...</p>
+            </div>
+            <div id="farm-results"></div>
+        </section>
+
+        <!-- ====== TAB: BUILDS ====== -->
+        <section class="tab-pane hidden" id="pane-builds">
+            <div class="controls-panel">
+                <h2 style="color:var(--accent); margin:0 0 0.5rem 0; font-size:1.2rem;">⚔️ Community Builds</h2>
+                <p style="color:var(--text-secondary); font-size:0.85rem; margin:0 0 1rem 0;">Browse community-created character builds. Powered by AlbionFreeMarket's public builds database.</p>
+                <div style="display:flex; gap:1rem; align-items:flex-end; flex-wrap:wrap;">
+                    <div class="control-group search-group" style="min-width:200px;">
+                        <label for="builds-search">Search</label>
+                        <div class="search-input-wrapper">
+                            <input type="text" id="builds-search" placeholder="Search builds..." autocomplete="off">
+                            <svg class="search-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+                        </div>
+                    </div>
+                    <div class="control-group">
+                        <label for="builds-sort">Sort By</label>
+                        <select id="builds-sort">
+                            <option value="netVotes">Most Popular</option>
+                            <option value="createdAt">Newest</option>
+                        </select>
+                    </div>
+                    <button id="builds-load-btn" class="btn-scan" style="height:38px; padding:0 1.5rem; font-size:0.85rem;">Load Builds</button>
+                    <button id="builds-more-btn" class="btn-secondary" style="height:38px; padding:0 1rem; font-size:0.85rem; display:none;">Load More</button>
+                </div>
+            </div>
+            <div class="loading-state hidden" id="builds-spinner">
+                <div class="spinner"></div>
+                <p>Loading community builds...</p>
+            </div>
+            <div id="builds-results" class="results-grid"></div>
+        </section>
+
         <!-- ====== TAB: ALERTS ====== -->
         <section class="tab-pane hidden" id="pane-alerts">
             <div class="controls-panel">
@@ -661,6 +1276,61 @@
                             <h3>Community Scanners</h3>
                             <p>Contribute to the data pool by refreshing item prices. Climb the leaderboard and earn tier ranks: Bronze, Silver, Gold, and Diamond.</p>
                         </div>
+                        <div class="feature-card">
+                            <div class="feature-icon">🏪</div>
+                            <h3>BM Flipper</h3>
+                            <p>Dedicated Black Market flipping tool. Find profitable items to buy from royal cities and sell to the Black Market with confidence scoring.</p>
+                        </div>
+                        <div class="feature-card">
+                            <div class="feature-icon">📒</div>
+                            <h3>Journals Calculator</h3>
+                            <p>Calculate labourer journal profits for all 10 types across T3-T8. See buy-empty, sell-full prices, profit, and ROI at a glance.</p>
+                        </div>
+                        <div class="feature-card">
+                            <div class="feature-icon">🔄</div>
+                            <h3>RRR Calculator</h3>
+                            <p>Resource Return Rate calculator with spec level, city bonus, and focus support. Visual breakdown of each bonus contribution.</p>
+                        </div>
+                        <div class="feature-card">
+                            <div class="feature-icon">🔧</div>
+                            <h3>Repair Cost</h3>
+                            <p>Estimate repair costs for any item. Accounts for tier, enchantment, quality, and durability level with quick reference grids.</p>
+                        </div>
+                        <div class="feature-card">
+                            <div class="feature-icon">⚡</div>
+                            <h3>Item Power Checker</h3>
+                            <p>Compare item power vs price to find the best value gear. Sort by silver-per-IP ratio across weapons, armor, and accessories.</p>
+                        </div>
+                        <div class="feature-card">
+                            <div class="feature-icon">⭐</div>
+                            <h3>Favorites</h3>
+                            <p>Save custom item lists for quick price checking. Create named lists, load them to see prices across all cities with color-coded best deals.</p>
+                        </div>
+                        <div class="feature-card">
+                            <div class="feature-icon">🐎</div>
+                            <h3>Mounts Database</h3>
+                            <p>Browse all mounts with live prices, categorized by type. Filter by tier, search by name, sort by price or speed.</p>
+                        </div>
+                        <div class="feature-card">
+                            <div class="feature-icon">📊</div>
+                            <h3>Top Traded Items</h3>
+                            <p>See the most actively traded items ranked by 7-day volume. Higher volume means more liquidity and faster trades.</p>
+                        </div>
+                        <div class="feature-card">
+                            <div class="feature-icon">💼</div>
+                            <h3>Portfolio Tracker</h3>
+                            <p>Track your trades with FIFO cost basis matching. Log buys and sells, monitor realized P/L, and export to CSV.</p>
+                        </div>
+                        <div class="feature-card">
+                            <div class="feature-icon">🌾</div>
+                            <h3>Farming Calculator</h3>
+                            <p>Calculate farming profits for crops, herbs, and animals. Shows seed cost, harvest revenue, growth times, and profit per hour.</p>
+                        </div>
+                        <div class="feature-card">
+                            <div class="feature-icon">⚔️</div>
+                            <h3>Community Builds</h3>
+                            <p>Browse character builds from the community. View equipment loadouts, role tags, vote counts, and build strategies.</p>
+                        </div>
                     </div>
                 </div>
 
@@ -668,6 +1338,24 @@
                 <div class="about-section">
                     <h2 class="about-heading">Changelog</h2>
                     <div class="changelog-list">
+                        <div class="changelog-entry">
+                            <div class="changelog-date">March 28, 2026</div>
+                            <div class="changelog-title">Massive Feature Expansion (12 New Tools)</div>
+                            <ul>
+                                <li>BM Flipper: dedicated Black Market flipping tool with profit/confidence scoring</li>
+                                <li>Journals Calculator: all 10 labourer types, T3-T8, with buy-empty/sell-full profit</li>
+                                <li>RRR Calculator: resource return rate with spec, city, and focus breakdown</li>
+                                <li>Repair Cost Calculator: estimate repair costs for any item by tier/enchant/quality</li>
+                                <li>Item Power Checker: compare IP vs price for best silver-per-IP value</li>
+                                <li>Favorites: save custom item lists with cross-city price comparison</li>
+                                <li>Mounts Database: browse all mounts with live prices by type</li>
+                                <li>Top Traded Items: ranked by 7-day volume from Charts API</li>
+                                <li>Portfolio Tracker: trade journal with FIFO P/L and CSV export</li>
+                                <li>Farm &amp; Breed Calculator: crop, herb, and animal profit analysis</li>
+                                <li>Builds Browser: community builds from AlbionFreeMarket API</li>
+                                <li>Crafting upgrades: save/load setups and shopping list</li>
+                            </ul>
+                        </div>
                         <div class="changelog-entry">
                             <div class="changelog-date">March 27, 2026</div>
                             <div class="changelog-title">Data Quality &amp; Server Fix</div>

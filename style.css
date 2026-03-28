@@ -278,8 +278,8 @@ header::after {
 .nav-tab {
     display: flex;
     align-items: center;
-    gap: 0.5rem;
-    padding: 1rem 1.5rem;
+    gap: 0.4rem;
+    padding: 0.75rem 0.9rem;
     background: none;
     border: none;
     border-bottom: 2px solid transparent;
@@ -2177,4 +2177,154 @@ footer a:hover {
     grid-template-columns: 1fr;
     gap: 1rem;
     margin-top: 1rem;
+}
+
+/* ====== NEW FEATURES: SHARED STYLES ====== */
+
+/* Table scroll wrapper */
+.table-scroll-wrapper {
+    overflow-x: auto;
+    margin-top: 0.5rem;
+    border-radius: var(--radius);
+    border: 1px solid var(--border-color);
+}
+
+.table-scroll-wrapper table {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+/* RRR Calculator */
+.rrr-rate-display {
+    text-align: center;
+    padding: 2rem;
+    background: var(--bg-card);
+    border-radius: var(--radius-lg);
+    border: 1px solid var(--border-color);
+    margin-bottom: 1rem;
+}
+
+.rrr-rate-value {
+    font-size: 3rem;
+    font-weight: 800;
+    color: var(--accent);
+    line-height: 1;
+}
+
+.rrr-progress-bar {
+    width: 100%;
+    height: 12px;
+    background: var(--bg-elevated);
+    border-radius: 6px;
+    margin-top: 1rem;
+    overflow: hidden;
+}
+
+.rrr-progress-fill {
+    height: 100%;
+    background: linear-gradient(90deg, var(--accent), var(--profit-green));
+    border-radius: 6px;
+    transition: width 0.4s ease;
+}
+
+/* Favorites chips */
+.fav-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.35rem 0.75rem;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-color);
+    border-radius: 20px;
+    font-size: 0.8rem;
+    color: var(--text-primary);
+}
+
+.fav-chip img {
+    width: 20px;
+    height: 20px;
+    image-rendering: pixelated;
+}
+
+.fav-chip-remove {
+    background: none;
+    border: none;
+    color: var(--loss-red);
+    cursor: pointer;
+    font-size: 1rem;
+    line-height: 1;
+    padding: 0;
+    margin-left: 0.2rem;
+}
+
+/* Portfolio summary cards */
+.portfolio-stat-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius);
+    padding: 1rem;
+    text-align: center;
+}
+
+.portfolio-stat-label {
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+}
+
+.portfolio-stat-value {
+    font-size: 1.5rem;
+    font-weight: 800;
+    color: var(--text-primary);
+}
+
+/* Build cards */
+.build-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius);
+    padding: 1rem;
+    transition: border-color var(--transition);
+}
+
+.build-card:hover {
+    border-color: var(--accent);
+}
+
+.build-slot-grid {
+    display: flex;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+}
+
+.build-tag {
+    background: var(--accent-dim);
+    color: var(--accent);
+    padding: 0.15rem 0.5rem;
+    border-radius: 12px;
+    font-size: 0.65rem;
+    white-space: nowrap;
+}
+
+/* Mount type headers */
+.mount-type-header {
+    color: var(--accent);
+    font-size: 1.1rem;
+    font-weight: 700;
+    margin: 1.5rem 0 0.5rem 0;
+    padding-bottom: 0.3rem;
+    border-bottom: 1px solid var(--border-color);
+}
+
+/* Nav scrollbar styling */
+.main-nav-inner::-webkit-scrollbar {
+    height: 3px;
+}
+
+.main-nav-inner::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+.main-nav-inner::-webkit-scrollbar-thumb {
+    background: var(--border-color);
+    border-radius: 3px;
 }

@@ -2080,6 +2080,750 @@ async function deleteAlert(channelId) {
     }
 }
 
+// ============================================================
+// BLACK MARKET FLIPPER
+// ============================================================
+let bmSearchExactId = null;
+
+async function doBMFlipperScan() {
+    if (itemsList.length === 0) await loadData();
+    await loadSpreadStats();
+
+    const spinner = document.getElementById('bm-spinner');
+    const errorEl = document.getElementById('bm-error');
+    const container = document.getElementById('bm-results');
+
+    const tier = document.getElementById('bm-tier').value;
+    const enchantment = document.getElementById('bm-enchantment').value;
+    const category = document.getElementById('bm-category').value;
+    const minProfit = parseInt(document.getElementById('bm-min-profit').value) || 0;
+    const sortBy = document.getElementById('bm-sort').value;
+
+    hideError(errorEl);
+    container.innerHTML = '';
+    spinner.classList.remove('hidden');
+
+    try {
+        const cachedData = await MarketDB.getAllPrices();
+        spinner.classList.add('hidden');
+
+        if (cachedData.length === 0) {
+            showError(errorEl, 'No cached data available yet. Data loads automatically — please wait a moment and try again.');
+            return;
+        }
+
+        // Filter by category if set
+        let filteredData = cachedData;
+        if (category !== 'all') {
+            filteredData = cachedData.filter(entry => {
+                if (recipesData[entry.item_id] && recipesData[entry.item_id].category === category) return true;
+                if (category === 'materials') return categorizeItem(entry.item_id) === 'materials' || categorizeItem(entry.item_id) === 'resources';
+                if (category === 'bags') return categorizeItem(entry.item_id) === 'accessories';
+                if (category === 'gear') return categorizeItem(entry.item_id) === 'weapons' || categorizeItem(entry.item_id) === 'armor';
+                return false;
+            });
+        }
+
+        // Use processArbitrage with BM-specific params
+        const trades = processArbitrage(
+            filteredData,
+            'all',           // quality - all
+            tier,            // tier filter
+            enchantment,     // enchantment filter
+            true,            // includeBM = true
+            'all',           // buyCityFilter = all royal cities
+            'Black Market',  // sellCityFilter = Black Market only
+            false,           // isSingleItem
+            'off',           // freshMode
+            30,              // freshThresholdMins
+            sortBy,          // sort
+            0                // minConfidence
+        );
+
+        // Filter for BM sell and minimum profit
+        const bmTrades = trades.filter(t => t.sellCity === 'Black Market' && t.profit >= minProfit);
+
+        renderBMFlips(bmTrades);
+    } catch (e) {
+        spinner.classList.add('hidden');
+        showError(errorEl, 'Error: ' + e.message);
+    }
+}
+
+function renderBMFlips(trades) {
+    const container = document.getElementById('bm-results');
+    container.innerHTML = '';
+
+    if (trades.length === 0) {
+        container.innerHTML = `<div class="empty-state"><p>No profitable Black Market flips found.</p><p class="hint">Try lowering the minimum profit or adjusting filters.</p></div>`;
+        return;
+    }
+
+    const countBar = document.createElement('div');
+    countBar.className = 'result-count-bar';
+    countBar.innerHTML = `Showing <strong>${trades.length}</strong> Black Market flips`;
+    container.appendChild(countBar);
+
+    trades.forEach(trade => {
+        const card = document.createElement('div');
+        card.className = 'trade-card';
+        card.dataset.itemId = trade.itemId;
+        card.dataset.buyCity = trade.buyCity;
+        card.dataset.sellCity = trade.sellCity;
+        card.innerHTML = `
+            <div class="card-header">
+                <div style="position: relative; display: flex;">
+                    <img class="item-icon" src="https://render.albiononline.com/v1/item/${trade.itemId}.png" alt="" loading="lazy">
+                    ${getEnchantmentBadge(trade.itemId)}
+                </div>
+                <div class="header-titles">
+                    <div class="item-name">${getFriendlyName(trade.itemId)}</div>
+                    <span class="item-quality">${getQualityName(trade.quality)} ${getTierEnchLabel(trade.itemId)}</span>
+                </div>
+            </div>
+            <div class="trade-route">
+                <div class="city buy-city">
+                    <span class="route-label">Buy From</span>
+                    <strong class="city-name">${trade.buyCity}</strong>
+                    <div style="display:flex; align-items:center; gap:0.5rem; justify-content:center;">
+                        <span class="price" title="Instant Buy (Cheapest Sell Order)">${Math.floor(trade.buyPrice).toLocaleString()} silver</span>
+                    </div>
+                </div>
+                <div class="arrow">➔</div>
+                <div class="city sell-city" style="border-color: #6b21a8;">
+                    <span class="route-label">Sell to Black Market</span>
+                    <strong class="city-name" style="color: #a855f7;">Black Market</strong>
+                    <div style="display:flex; align-items:center; gap:0.5rem; justify-content:center;">
+                        <span class="price" title="BM Buy Order Price">${Math.floor(trade.sellPrice).toLocaleString()} silver</span>
+                    </div>
+                </div>
+            </div>
+            <div class="profit-section">
+                <div class="profit-row"><span>Tax (6.5%):</span><span class="text-red">-${Math.floor(trade.tax).toLocaleString()} silver</span></div>
+                <div class="profit-row total"><span>Net Profit:</span><strong class="${trade.profit >= 0 ? 'text-green' : 'text-red'}">${Math.floor(trade.profit).toLocaleString()} silver</strong></div>
+                <div class="roi-row"><span>ROI:</span><strong class="${trade.roi >= 0 ? 'text-green' : 'text-red'}">${trade.roi.toFixed(1)}%</strong></div>
+            </div>
+            <div style="text-align:center; font-size:0.7rem; color:var(--text-muted); padding: 0.5rem 0 0 0; font-style:italic;">
+                <div style="display:flex; justify-content:center; gap:1rem; flex-wrap:wrap;">
+                    <span title="Buy Data Age">${getFreshnessIndicator(trade.dateBuy)} ${trade.buyCity}: ${timeAgo(trade.dateBuy)}</span>
+                    <span title="Sell Data Age">${getFreshnessIndicator(trade.dateSell)} BM: ${timeAgo(trade.dateSell)}</span>
+                </div>
+                ${trade.confidence !== null ? `
+                <div style="margin-top:0.4rem; display:flex; justify-content:center; align-items:center; gap:0.5rem;">
+                    ${getConfidenceBadge(trade.confidence)}
+                    <span title="Profitable ${trade.consistencyPct}% of the time over 7 days (${trade.sampleCount} samples)">
+                        Profitable ${trade.consistencyPct}% of the time
+                    </span>
+                </div>` : ''}
+            </div>
+            <div class="item-card-actions">
+                <button class="btn-card-action" data-action="compare" data-item="${trade.itemId}" title="Compare prices across cities">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="20" x2="18" y2="10"></line><line x1="12" y1="20" x2="12" y2="4"></line><line x1="6" y1="20" x2="6" y2="14"></line></svg>
+                    Compare
+                </button>
+                <button class="btn-card-action" data-action="refresh" data-item="${trade.itemId}" title="Refresh this item's data">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 4v6h-6"></path><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path></svg>
+                    Refresh
+                </button>
+                <button class="btn-card-action" data-action="graph" data-item="${trade.itemId}" title="View price history">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"></polyline></svg>
+                    Graph
+                </button>
+            </div>
+        `;
+        container.appendChild(card);
+    });
+
+    setupCardButtons(container);
+}
+
+// ============================================================
+// JOURNALS CALCULATOR
+// ============================================================
+const JOURNAL_DATA = {
+    mercenary: {
+        name: 'Mercenary',
+        tiers: {
+            3: { empty: 'T3_JOURNAL_MERCENARY_EMPTY', full: 'T3_JOURNAL_MERCENARY_FULL' },
+            4: { empty: 'T4_JOURNAL_MERCENARY_EMPTY', full: 'T4_JOURNAL_MERCENARY_FULL' },
+            5: { empty: 'T5_JOURNAL_MERCENARY_EMPTY', full: 'T5_JOURNAL_MERCENARY_FULL' },
+            6: { empty: 'T6_JOURNAL_MERCENARY_EMPTY', full: 'T6_JOURNAL_MERCENARY_FULL' },
+            7: { empty: 'T7_JOURNAL_MERCENARY_EMPTY', full: 'T7_JOURNAL_MERCENARY_FULL' },
+            8: { empty: 'T8_JOURNAL_MERCENARY_EMPTY', full: 'T8_JOURNAL_MERCENARY_FULL' }
+        }
+    },
+    lumberjack: {
+        name: 'Lumberjack',
+        tiers: {
+            3: { empty: 'T3_JOURNAL_WOOD_EMPTY', full: 'T3_JOURNAL_WOOD_FULL' },
+            4: { empty: 'T4_JOURNAL_WOOD_EMPTY', full: 'T4_JOURNAL_WOOD_FULL' },
+            5: { empty: 'T5_JOURNAL_WOOD_EMPTY', full: 'T5_JOURNAL_WOOD_FULL' },
+            6: { empty: 'T6_JOURNAL_WOOD_EMPTY', full: 'T6_JOURNAL_WOOD_FULL' },
+            7: { empty: 'T7_JOURNAL_WOOD_EMPTY', full: 'T7_JOURNAL_WOOD_FULL' },
+            8: { empty: 'T8_JOURNAL_WOOD_EMPTY', full: 'T8_JOURNAL_WOOD_FULL' }
+        }
+    },
+    stonecutter: {
+        name: 'Stonecutter',
+        tiers: {
+            3: { empty: 'T3_JOURNAL_STONE_EMPTY', full: 'T3_JOURNAL_STONE_FULL' },
+            4: { empty: 'T4_JOURNAL_STONE_EMPTY', full: 'T4_JOURNAL_STONE_FULL' },
+            5: { empty: 'T5_JOURNAL_STONE_EMPTY', full: 'T5_JOURNAL_STONE_FULL' },
+            6: { empty: 'T6_JOURNAL_STONE_EMPTY', full: 'T6_JOURNAL_STONE_FULL' },
+            7: { empty: 'T7_JOURNAL_STONE_EMPTY', full: 'T7_JOURNAL_STONE_FULL' },
+            8: { empty: 'T8_JOURNAL_STONE_EMPTY', full: 'T8_JOURNAL_STONE_FULL' }
+        }
+    },
+    prospector: {
+        name: 'Prospector',
+        tiers: {
+            3: { empty: 'T3_JOURNAL_ORE_EMPTY', full: 'T3_JOURNAL_ORE_FULL' },
+            4: { empty: 'T4_JOURNAL_ORE_EMPTY', full: 'T4_JOURNAL_ORE_FULL' },
+            5: { empty: 'T5_JOURNAL_ORE_EMPTY', full: 'T5_JOURNAL_ORE_FULL' },
+            6: { empty: 'T6_JOURNAL_ORE_EMPTY', full: 'T6_JOURNAL_ORE_FULL' },
+            7: { empty: 'T7_JOURNAL_ORE_EMPTY', full: 'T7_JOURNAL_ORE_FULL' },
+            8: { empty: 'T8_JOURNAL_ORE_EMPTY', full: 'T8_JOURNAL_ORE_FULL' }
+        }
+    },
+    cropper: {
+        name: 'Cropper',
+        tiers: {
+            3: { empty: 'T3_JOURNAL_FIBER_EMPTY', full: 'T3_JOURNAL_FIBER_FULL' },
+            4: { empty: 'T4_JOURNAL_FIBER_EMPTY', full: 'T4_JOURNAL_FIBER_FULL' },
+            5: { empty: 'T5_JOURNAL_FIBER_EMPTY', full: 'T5_JOURNAL_FIBER_FULL' },
+            6: { empty: 'T6_JOURNAL_FIBER_EMPTY', full: 'T6_JOURNAL_FIBER_FULL' },
+            7: { empty: 'T7_JOURNAL_FIBER_EMPTY', full: 'T7_JOURNAL_FIBER_FULL' },
+            8: { empty: 'T8_JOURNAL_FIBER_EMPTY', full: 'T8_JOURNAL_FIBER_FULL' }
+        }
+    },
+    gamekeeper: {
+        name: 'Gamekeeper',
+        tiers: {
+            3: { empty: 'T3_JOURNAL_HIDE_EMPTY', full: 'T3_JOURNAL_HIDE_FULL' },
+            4: { empty: 'T4_JOURNAL_HIDE_EMPTY', full: 'T4_JOURNAL_HIDE_FULL' },
+            5: { empty: 'T5_JOURNAL_HIDE_EMPTY', full: 'T5_JOURNAL_HIDE_FULL' },
+            6: { empty: 'T6_JOURNAL_HIDE_EMPTY', full: 'T6_JOURNAL_HIDE_FULL' },
+            7: { empty: 'T7_JOURNAL_HIDE_EMPTY', full: 'T7_JOURNAL_HIDE_FULL' },
+            8: { empty: 'T8_JOURNAL_HIDE_EMPTY', full: 'T8_JOURNAL_HIDE_FULL' }
+        }
+    },
+    blacksmith: {
+        name: 'Blacksmith',
+        tiers: {
+            3: { empty: 'T3_JOURNAL_WARRIOR_EMPTY', full: 'T3_JOURNAL_WARRIOR_FULL' },
+            4: { empty: 'T4_JOURNAL_WARRIOR_EMPTY', full: 'T4_JOURNAL_WARRIOR_FULL' },
+            5: { empty: 'T5_JOURNAL_WARRIOR_EMPTY', full: 'T5_JOURNAL_WARRIOR_FULL' },
+            6: { empty: 'T6_JOURNAL_WARRIOR_EMPTY', full: 'T6_JOURNAL_WARRIOR_FULL' },
+            7: { empty: 'T7_JOURNAL_WARRIOR_EMPTY', full: 'T7_JOURNAL_WARRIOR_FULL' },
+            8: { empty: 'T8_JOURNAL_WARRIOR_EMPTY', full: 'T8_JOURNAL_WARRIOR_FULL' }
+        }
+    },
+    fletcher: {
+        name: 'Fletcher',
+        tiers: {
+            3: { empty: 'T3_JOURNAL_HUNTER_EMPTY', full: 'T3_JOURNAL_HUNTER_FULL' },
+            4: { empty: 'T4_JOURNAL_HUNTER_EMPTY', full: 'T4_JOURNAL_HUNTER_FULL' },
+            5: { empty: 'T5_JOURNAL_HUNTER_EMPTY', full: 'T5_JOURNAL_HUNTER_FULL' },
+            6: { empty: 'T6_JOURNAL_HUNTER_EMPTY', full: 'T6_JOURNAL_HUNTER_FULL' },
+            7: { empty: 'T7_JOURNAL_HUNTER_EMPTY', full: 'T7_JOURNAL_HUNTER_FULL' },
+            8: { empty: 'T8_JOURNAL_HUNTER_EMPTY', full: 'T8_JOURNAL_HUNTER_FULL' }
+        }
+    },
+    imbuer: {
+        name: 'Imbuer',
+        tiers: {
+            3: { empty: 'T3_JOURNAL_MAGE_EMPTY', full: 'T3_JOURNAL_MAGE_FULL' },
+            4: { empty: 'T4_JOURNAL_MAGE_EMPTY', full: 'T4_JOURNAL_MAGE_FULL' },
+            5: { empty: 'T5_JOURNAL_MAGE_EMPTY', full: 'T5_JOURNAL_MAGE_FULL' },
+            6: { empty: 'T6_JOURNAL_MAGE_EMPTY', full: 'T6_JOURNAL_MAGE_FULL' },
+            7: { empty: 'T7_JOURNAL_MAGE_EMPTY', full: 'T7_JOURNAL_MAGE_FULL' },
+            8: { empty: 'T8_JOURNAL_MAGE_EMPTY', full: 'T8_JOURNAL_MAGE_FULL' }
+        }
+    },
+    tinker: {
+        name: 'Tinker',
+        tiers: {
+            3: { empty: 'T3_JOURNAL_TOOLMAKER_EMPTY', full: 'T3_JOURNAL_TOOLMAKER_FULL' },
+            4: { empty: 'T4_JOURNAL_TOOLMAKER_EMPTY', full: 'T4_JOURNAL_TOOLMAKER_FULL' },
+            5: { empty: 'T5_JOURNAL_TOOLMAKER_EMPTY', full: 'T5_JOURNAL_TOOLMAKER_FULL' },
+            6: { empty: 'T6_JOURNAL_TOOLMAKER_EMPTY', full: 'T6_JOURNAL_TOOLMAKER_FULL' },
+            7: { empty: 'T7_JOURNAL_TOOLMAKER_EMPTY', full: 'T7_JOURNAL_TOOLMAKER_FULL' },
+            8: { empty: 'T8_JOURNAL_TOOLMAKER_EMPTY', full: 'T8_JOURNAL_TOOLMAKER_FULL' }
+        }
+    }
+};
+
+async function calculateJournals() {
+    const spinner = document.getElementById('journals-spinner');
+    const container = document.getElementById('journals-results');
+    const city = document.getElementById('journal-city').value;
+    const buyCity = city;
+    const sellCity = city;
+
+    container.innerHTML = '';
+    spinner.classList.remove('hidden');
+
+    // Collect all journal item IDs
+    const allJournalIds = [];
+    for (const [typeKey, typeData] of Object.entries(JOURNAL_DATA)) {
+        for (const [tier, ids] of Object.entries(typeData.tiers)) {
+            allJournalIds.push(ids.empty, ids.full);
+        }
+    }
+
+    try {
+        const server = getServer();
+        const locations = [buyCity, sellCity].filter((v, i, a) => v && a.indexOf(v) === i).join(',');
+
+        // Fetch prices from API in chunks
+        let allPrices = [];
+        for (let i = 0; i < allJournalIds.length; i += API_CHUNK_SIZE) {
+            const chunk = allJournalIds.slice(i, i + API_CHUNK_SIZE);
+            const url = `${API_URLS[server]}/${chunk.join(',')}.json?locations=${locations}`;
+            const res = await fetch(url);
+            if (res.ok) {
+                const data = await res.json();
+                allPrices = allPrices.concat(data);
+            }
+        }
+
+        // Save to cache
+        if (allPrices.length > 0) await MarketDB.saveMarketData(allPrices);
+
+        spinner.classList.add('hidden');
+
+        // Index prices: itemId → city → { sellMin, buyMax }
+        const priceIndex = {};
+        for (const entry of allPrices) {
+            const id = entry.item_id;
+            let city = entry.city;
+            if (city && city.includes('Black Market')) city = 'Black Market';
+            if (!priceIndex[id]) priceIndex[id] = {};
+            const existing = priceIndex[id][city];
+            if (!existing) {
+                priceIndex[id][city] = {
+                    sellMin: entry.sell_price_min || 0,
+                    buyMax: entry.buy_price_max || 0
+                };
+            } else {
+                if (entry.sell_price_min > 0 && (existing.sellMin === 0 || entry.sell_price_min < existing.sellMin)) {
+                    existing.sellMin = entry.sell_price_min;
+                }
+                if (entry.buy_price_max > 0 && entry.buy_price_max > existing.buyMax) {
+                    existing.buyMax = entry.buy_price_max;
+                }
+            }
+        }
+
+        // Calculate results
+        const results = [];
+        for (const [typeKey, typeData] of Object.entries(JOURNAL_DATA)) {
+            const row = { type: typeData.name, tiers: {} };
+            for (const [tier, ids] of Object.entries(typeData.tiers)) {
+                const emptyPrices = priceIndex[ids.empty];
+                const fullPrices = priceIndex[ids.full];
+
+                // Buy empty in buyCity (instant buy = sellMin), sell full in sellCity (instant sell = buyMax)
+                const emptyBuyPrice = emptyPrices && emptyPrices[buyCity] ? emptyPrices[buyCity].sellMin : 0;
+                const fullSellPrice = fullPrices && fullPrices[sellCity] ? fullPrices[sellCity].buyMax : 0;
+
+                // Also get sell order price for full journals (for sell order profit)
+                const fullSellOrderPrice = fullPrices && fullPrices[sellCity] ? fullPrices[sellCity].sellMin : 0;
+
+                if (emptyBuyPrice > 0 && fullSellPrice > 0) {
+                    const tax = fullSellPrice * TAX_RATE;
+                    const profit = fullSellPrice - emptyBuyPrice - tax;
+                    const roi = (profit / emptyBuyPrice) * 100;
+
+                    let soProfit = 0, soRoi = 0;
+                    if (fullSellOrderPrice > 0) {
+                        const soTax = fullSellOrderPrice * TAX_RATE;
+                        soProfit = fullSellOrderPrice - emptyBuyPrice - soTax;
+                        soRoi = (soProfit / emptyBuyPrice) * 100;
+                    }
+
+                    row.tiers[tier] = {
+                        emptyBuyPrice,
+                        fullSellPrice,
+                        fullSellOrderPrice,
+                        tax,
+                        profit,
+                        roi,
+                        soProfit,
+                        soRoi,
+                        emptyId: ids.empty,
+                        fullId: ids.full
+                    };
+                } else {
+                    row.tiers[tier] = null;
+                }
+            }
+            results.push(row);
+        }
+
+        renderJournalResults(results);
+        await updateDbStatus();
+    } catch (e) {
+        spinner.classList.add('hidden');
+        container.innerHTML = `<div class="empty-state"><p>Failed to fetch journal prices: ${e.message}</p></div>`;
+    }
+}
+
+function renderJournalResults(results) {
+    const container = document.getElementById('journals-results');
+    container.innerHTML = '';
+
+    if (results.length === 0) {
+        container.innerHTML = `<div class="empty-state"><p>No journal data available.</p></div>`;
+        return;
+    }
+
+    const tiers = [3, 4, 5, 6, 7, 8];
+    let tableHTML = `<div class="table-scroll-wrapper">
+        <table class="compare-table">
+            <thead>
+                <tr>
+                    <th>Journal Type</th>
+                    ${tiers.map(t => `<th>T${t}</th>`).join('')}
+                </tr>
+            </thead>
+            <tbody>`;
+
+    for (const row of results) {
+        tableHTML += `<tr><td style="font-weight:700; white-space:nowrap;">${row.type}</td>`;
+        for (const t of tiers) {
+            const data = row.tiers[t];
+            if (!data) {
+                tableHTML += `<td style="text-align:center; color:var(--text-muted);">--</td>`;
+            } else {
+                const profitColor = data.profit >= 0 ? 'var(--green, #22c55e)' : 'var(--red, #ef4444)';
+                const soProfitColor = data.soProfit >= 0 ? 'var(--green, #22c55e)' : 'var(--red, #ef4444)';
+                tableHTML += `<td style="text-align:center; padding:0.5rem;">
+                    <div style="font-size:0.7rem; color:var(--text-muted);">Empty: ${data.emptyBuyPrice.toLocaleString()}</div>
+                    <div style="font-size:0.7rem; color:var(--text-muted);">Full: ${data.fullSellPrice.toLocaleString()}</div>
+                    <div style="font-weight:700; color:${profitColor}; font-size:0.9rem; margin-top:0.2rem;">
+                        ${data.profit >= 0 ? '+' : ''}${Math.floor(data.profit).toLocaleString()}
+                    </div>
+                    <div style="font-size:0.7rem; color:${profitColor};">${data.roi.toFixed(1)}% ROI</div>
+                    ${data.fullSellOrderPrice > 0 ? `<div style="font-size:0.65rem; color:${soProfitColor}; margin-top:0.2rem; border-top:1px solid rgba(255,255,255,0.05); padding-top:0.2rem;" title="Sell Order profit">
+                        SO: ${data.soProfit >= 0 ? '+' : ''}${Math.floor(data.soProfit).toLocaleString()}
+                    </div>` : ''}
+                </td>`;
+            }
+        }
+        tableHTML += `</tr>`;
+    }
+
+    tableHTML += `</tbody></table></div>`;
+
+    const header = document.createElement('div');
+    header.className = 'result-count-bar';
+    header.innerHTML = `Showing <strong>${results.length}</strong> journal types across T3-T8`;
+    container.appendChild(header);
+    container.insertAdjacentHTML('beforeend', tableHTML);
+}
+
+// ============================================================
+// RRR CALCULATOR (STANDALONE TAB)
+// ============================================================
+function calculateRRRStandalone() {
+    const activityType = document.getElementById('rrr-activity').value; // 'crafting' or 'refining'
+    const specLevel = parseInt(document.getElementById('rrr-spec').value) || 0;
+    const cityBonus = parseFloat(document.getElementById('rrr-city-bonus').value) || 0;
+    const useFocus = document.getElementById('rrr-use-focus').checked;
+
+    // Base production bonus values
+    const basePB = activityType === 'refining' ? 18 : 18; // Royal city base for both
+    const focusPB = useFocus ? 59 : 0;
+    // Spec bonus: each spec level adds production bonus
+    // In Albion, specialization adds to production bonus: specLevel * 0.2 effective PB
+    const specPB = specLevel * 0.2;
+    const totalPB = basePB + cityBonus + focusPB + specPB;
+    const returnRate = 1 - 1 / (1 + totalPB / 100);
+
+    // Breakdown
+    const baseRR = 1 - 1 / (1 + basePB / 100);
+    const withSpecRR = 1 - 1 / (1 + (basePB + specPB) / 100);
+    const withCityRR = 1 - 1 / (1 + (basePB + specPB + cityBonus) / 100);
+    const fullRR = returnRate;
+
+    const results = {
+        returnRate: fullRR * 100,
+        baseContribution: baseRR * 100,
+        specContribution: (withSpecRR - baseRR) * 100,
+        cityContribution: (withCityRR - withSpecRR) * 100,
+        focusContribution: useFocus ? (fullRR - withCityRR) * 100 : 0,
+        materialsSavedPer100: (fullRR * 100).toFixed(1),
+        specLevel,
+        cityBonus,
+        useFocus,
+        activityType
+    };
+
+    renderRRRResults(results);
+}
+
+function renderRRRResults(results) {
+    const container = document.getElementById('rrr-results');
+    container.innerHTML = '';
+
+    const rr = results.returnRate;
+    const barWidth = Math.min(100, rr);
+    const barColor = rr >= 50 ? 'var(--green, #22c55e)' : rr >= 30 ? 'var(--accent, #c64a38)' : 'var(--red, #ef4444)';
+
+    let html = `
+        <div class="craft-summary-card">
+            <h3 style="margin:0 0 1rem 0; color:var(--accent);">Resource Return Rate</h3>
+            <div style="text-align:center; margin-bottom:1.5rem;">
+                <div style="font-size:3rem; font-weight:800; color:${barColor};">${rr.toFixed(1)}%</div>
+                <div style="font-size:0.85rem; color:var(--text-muted);">Effective Return Rate (${results.activityType})</div>
+            </div>
+            <div class="profit-gauge" style="height:12px; border-radius:6px; margin-bottom:1.5rem;">
+                <div class="profit-gauge-fill positive" style="width:${barWidth}%; background:${barColor}; border-radius:6px; height:100%;"></div>
+            </div>
+
+            <div style="margin-bottom:1.5rem;">
+                <h4 style="color:var(--text-secondary); margin:0 0 0.5rem 0; font-size:0.85rem;">Breakdown</h4>
+                <table class="compare-table" style="width:100%;">
+                    <tbody>
+                        <tr>
+                            <td>Base (Royal City)</td>
+                            <td style="text-align:right; font-weight:700;">${results.baseContribution.toFixed(1)}%</td>
+                        </tr>
+                        <tr>
+                            <td>Specialization (Spec ${results.specLevel})</td>
+                            <td style="text-align:right; font-weight:700; color:var(--accent);">+${results.specContribution.toFixed(1)}%</td>
+                        </tr>
+                        <tr>
+                            <td>City Bonus (+${results.cityBonus}% PB)</td>
+                            <td style="text-align:right; font-weight:700; color:var(--accent);">+${results.cityContribution.toFixed(1)}%</td>
+                        </tr>
+                        ${results.useFocus ? `<tr>
+                            <td>Focus</td>
+                            <td style="text-align:right; font-weight:700; color:var(--green, #22c55e);">+${results.focusContribution.toFixed(1)}%</td>
+                        </tr>` : ''}
+                        <tr class="total-row">
+                            <td><strong>Total RRR</strong></td>
+                            <td style="text-align:right; font-weight:800; color:${barColor};">${rr.toFixed(1)}%</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <div style="margin-bottom:1rem;">
+                <h4 style="color:var(--text-secondary); margin:0 0 0.5rem 0; font-size:0.85rem;">Materials Saved</h4>
+                <div class="craft-summary-stats">
+                    <div class="stat-box">
+                        <div class="stat-label">Per 100 Crafts (100 mats each)</div>
+                        <div class="stat-value text-green">${results.materialsSavedPer100} materials returned</div>
+                    </div>
+                    <div class="stat-box">
+                        <div class="stat-label">Effective Cost Multiplier</div>
+                        <div class="stat-value text-accent">${(100 - rr).toFixed(1)}%</div>
+                    </div>
+                </div>
+            </div>
+
+            <div style="font-size:0.75rem; color:var(--text-muted); border-top:1px solid var(--border); padding-top:0.75rem;">
+                <strong>Note:</strong> Premium adds 50% more crafting focus regeneration per day but does not directly increase the return rate.
+                Focus provides a significant boost to return rate when active. The formula uses Albion's Production Bonus system:
+                RRR = 1 - 1/(1 + totalPB/100), where PB = base(18) + cityBonus + focusPB(59 if active) + specPB(spec * 0.2).
+            </div>
+        </div>
+    `;
+
+    container.innerHTML = html;
+}
+
+// ============================================================
+// REPAIR COST CALCULATOR
+// ============================================================
+const REPAIR_BASE_VALUES = { 4: 256, 5: 512, 6: 1024, 7: 2048, 8: 4096 };
+const REPAIR_ENCH_MULTIPLIER = 3.2;
+const REPAIR_QUALITY_MULTIPLIERS = {
+    '1': 1.0,   // Normal
+    '2': 1.04,  // Good
+    '3': 1.08,  // Outstanding
+    '4': 1.12,  // Excellent
+    '5': 1.16   // Masterpiece
+};
+
+let repairSearchExactId = null;
+
+async function calculateRepairCost() {
+    const searchInput = document.getElementById('repair-search');
+    const container = document.getElementById('repair-results');
+
+    const itemId = repairSearchExactId || searchInput.value.trim();
+    if (!itemId) {
+        container.innerHTML = `<div class="empty-state"><p>Please search for an item first.</p></div>`;
+        return;
+    }
+
+    // Resolve to exact ID
+    let resolvedId = repairSearchExactId;
+    if (!resolvedId) {
+        const searchLower = itemId.toLowerCase();
+        for (const id of itemsList) {
+            if (getFriendlyName(id).toLowerCase() === searchLower || id.toLowerCase() === searchLower) {
+                resolvedId = id;
+                break;
+            }
+        }
+        if (!resolvedId) {
+            const words = searchLower.split(' ').filter(w => w);
+            for (const id of itemsList) {
+                const target = (getFriendlyName(id) + ' ' + id.replace(/_/g, ' ')).toLowerCase();
+                if (words.every(w => target.includes(w))) {
+                    resolvedId = id;
+                    break;
+                }
+            }
+        }
+    }
+
+    if (!resolvedId) {
+        container.innerHTML = `<div class="empty-state"><p>Item not found. Try another search.</p></div>`;
+        return;
+    }
+
+    const quality = document.getElementById('repair-quality').value;
+    const durabilityFrom = parseInt(document.getElementById('repair-durability').value) || 0;
+    const durabilityTo = 100; // always repair to full
+    const maxDurability = 100;
+
+    // Extract tier and enchantment
+    const tier = parseInt(extractTier(resolvedId)) || 0;
+    const enchantment = parseInt(extractEnchantment(resolvedId)) || 0;
+
+    // Calculate item base value
+    let baseValue = REPAIR_BASE_VALUES[tier] || 0;
+    if (tier < 4) {
+        // T3 and below: estimate
+        baseValue = Math.pow(2, tier + 5); // T3=256 approximation via lower
+        if (tier === 3) baseValue = 128;
+        if (tier === 2) baseValue = 64;
+        if (tier === 1) baseValue = 32;
+    }
+
+    // Apply enchantment multiplier
+    let itemValue = baseValue;
+    for (let i = 0; i < enchantment; i++) {
+        itemValue *= REPAIR_ENCH_MULTIPLIER;
+    }
+
+    const qualityMultiplier = REPAIR_QUALITY_MULTIPLIERS[quality] || 1.0;
+
+    // Repair cost = itemValue * (1 - currentDurability/maxDurability) * qualityMultiplier
+    // For a range: cost to repair from durabilityFrom to durabilityTo
+    const damagePortion = (durabilityTo - durabilityFrom) / maxDurability;
+    const repairCost = Math.ceil(itemValue * damagePortion * qualityMultiplier);
+
+    // Full repair cost (from 0 to 100)
+    const fullRepairCost = Math.ceil(itemValue * 1.0 * qualityMultiplier);
+
+    const results = {
+        itemId: resolvedId,
+        name: getFriendlyName(resolvedId),
+        tier,
+        enchantment,
+        quality,
+        qualityName: getQualityName(quality),
+        qualityMultiplier,
+        durabilityFrom,
+        durabilityTo,
+        maxDurability,
+        baseValue: Math.floor(baseValue),
+        itemValue: Math.floor(itemValue),
+        repairCost,
+        fullRepairCost
+    };
+
+    renderRepairResults(results);
+}
+
+function renderRepairResults(results) {
+    const container = document.getElementById('repair-results');
+    container.innerHTML = '';
+
+    const tierEnch = results.enchantment > 0 ? `T${results.tier}.${results.enchantment}` : `T${results.tier}`;
+    const durabilityPct = ((results.durabilityTo - results.durabilityFrom) / results.maxDurability * 100).toFixed(0);
+
+    let html = `
+        <div class="craft-summary-card">
+            <div class="craft-summary-header">
+                <div style="position:relative;display:flex;">
+                    <img class="item-icon" src="https://render.albiononline.com/v1/item/${results.itemId}.png" alt="" loading="lazy">
+                    ${getEnchantmentBadge(results.itemId)}
+                </div>
+                <div>
+                    <h2>${results.name} <span class="tier-badge">${tierEnch}</span></h2>
+                    <span style="color:var(--text-muted);font-size:0.8rem;">${results.itemId} | ${results.qualityName}</span>
+                </div>
+            </div>
+
+            <div class="craft-summary-stats">
+                <div class="stat-box highlight">
+                    <div class="stat-label">Repair Cost (${results.durabilityFrom}% -> ${results.durabilityTo}%)</div>
+                    <div class="stat-value text-red">${results.repairCost.toLocaleString()} silver</div>
+                </div>
+                <div class="stat-box">
+                    <div class="stat-label">Full Repair (0% -> 100%)</div>
+                    <div class="stat-value text-accent">${results.fullRepairCost.toLocaleString()} silver</div>
+                </div>
+            </div>
+
+            <div style="margin-top:1rem;">
+                <h4 style="color:var(--text-secondary); margin:0 0 0.5rem 0; font-size:0.85rem;">Calculation Breakdown</h4>
+                <table class="compare-table" style="width:100%;">
+                    <tbody>
+                        <tr>
+                            <td>Base Item Value (T${results.tier})</td>
+                            <td style="text-align:right; font-weight:700;">${results.baseValue.toLocaleString()} silver</td>
+                        </tr>
+                        ${results.enchantment > 0 ? `<tr>
+                            <td>Enchantment (x${REPAIR_ENCH_MULTIPLIER} per level, ${results.enchantment} levels)</td>
+                            <td style="text-align:right; font-weight:700;">${Math.floor(results.itemValue).toLocaleString()} silver</td>
+                        </tr>` : ''}
+                        <tr>
+                            <td>Quality Multiplier (${results.qualityName})</td>
+                            <td style="text-align:right; font-weight:700;">x${results.qualityMultiplier.toFixed(2)}</td>
+                        </tr>
+                        <tr>
+                            <td>Durability Restored</td>
+                            <td style="text-align:right; font-weight:700;">${results.durabilityFrom}% -> ${results.durabilityTo}% (${durabilityPct}%)</td>
+                        </tr>
+                        <tr class="total-row">
+                            <td><strong>Total Repair Cost</strong></td>
+                            <td style="text-align:right; font-weight:800; color:var(--red, #ef4444);">${results.repairCost.toLocaleString()} silver</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <div style="margin-top:1rem; padding:0.75rem; background:rgba(255,255,255,0.03); border-radius:0.5rem;">
+                <h4 style="color:var(--text-secondary); margin:0 0 0.5rem 0; font-size:0.85rem;">Quick Reference</h4>
+                <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap:0.5rem;">
+                    ${[25, 50, 75, 100].map(pct => {
+                        const cost = Math.ceil(results.itemValue * (pct / 100) * results.qualityMultiplier);
+                        return `<div style="text-align:center; padding:0.5rem; background:rgba(0,0,0,0.2); border-radius:0.3rem;">
+                            <div style="font-size:0.7rem; color:var(--text-muted);">Repair ${pct}%</div>
+                            <div style="font-weight:700; color:var(--text-primary);">${cost.toLocaleString()}</div>
+                        </div>`;
+                    }).join('')}
+                </div>
+            </div>
+
+            <div style="font-size:0.75rem; color:var(--text-muted); border-top:1px solid var(--border); padding-top:0.75rem; margin-top:1rem;">
+                <strong>Formula:</strong> Repair Cost = Item Value x (Durability Restored / Max Durability) x Quality Multiplier.
+                Base values: T4=256, T5=512, T6=1024, T7=2048, T8=4096. Each enchantment level multiplies by ${REPAIR_ENCH_MULTIPLIER}.
+            </div>
+        </div>
+    `;
+
+    container.innerHTML = html;
+}
+
 // ====== INITIALIZATION ======
 
 async function checkDiscordAuth() {
@@ -2204,6 +2948,15 @@ async function init() {
     });
     document.getElementById('craft-search').addEventListener('input', () => { craftSearchExactId = null; });
 
+    // Crafting save/load
+    const craftSaveBtn = document.getElementById('craft-save-btn');
+    if (craftSaveBtn) craftSaveBtn.addEventListener('click', saveCraftSetup);
+    const craftLoadSelect = document.getElementById('craft-load-select');
+    if (craftLoadSelect) craftLoadSelect.addEventListener('change', loadCraftSetup);
+    const craftDeleteSetupBtn = document.getElementById('craft-delete-setup-btn');
+    if (craftDeleteSetupBtn) craftDeleteSetupBtn.addEventListener('click', deleteCraftSetup);
+    loadCraftSetupDropdown();
+
     // Transport tab
     document.getElementById('transport-scan-btn').addEventListener('click', doTransportScan);
     document.getElementById('transport-exclude-caerleon').addEventListener('change', function () {
@@ -2252,9 +3005,114 @@ async function init() {
         document.getElementById('chart-modal').classList.add('hidden');
     });
 
+    // Black Market Flipper tab
+    const bmScanBtn = document.getElementById('bm-scan-btn');
+    if (bmScanBtn) {
+        bmScanBtn.addEventListener('click', () => doBMFlipperScan());
+    }
+
+    // Journals Calculator tab
+    const journalCalcBtn = document.getElementById('journal-calc-btn');
+    if (journalCalcBtn) {
+        journalCalcBtn.addEventListener('click', () => calculateJournals());
+    }
+
+    // RRR Calculator tab
+    const rrrCalcBtn = document.getElementById('rrr-calc-btn');
+    if (rrrCalcBtn) {
+        rrrCalcBtn.addEventListener('click', () => calculateRRRStandalone());
+    }
+    // Also auto-calculate on input changes for RRR
+    ['rrr-activity', 'rrr-spec', 'rrr-city-bonus', 'rrr-use-focus'].forEach(elId => {
+        const el = document.getElementById(elId);
+        if (el) {
+            el.addEventListener('change', () => calculateRRRStandalone());
+            if (el.type === 'number' || el.type === 'range') {
+                el.addEventListener('input', () => calculateRRRStandalone());
+            }
+        }
+    });
+
+    // Repair Cost Calculator tab
+    const repairCalcBtn = document.getElementById('repair-calc-btn');
+    if (repairCalcBtn) {
+        repairCalcBtn.addEventListener('click', () => calculateRepairCost());
+    }
+    setupAutocomplete('repair-search', 'repair-autocomplete', (id) => { repairSearchExactId = id; });
+    const repairSearchInput = document.getElementById('repair-search');
+    if (repairSearchInput) {
+        repairSearchInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') calculateRepairCost();
+        });
+        repairSearchInput.addEventListener('input', () => { repairSearchExactId = null; });
+    }
+
+    // Item Power Checker
+    const ipScanBtn = document.getElementById('ip-scan-btn');
+    if (ipScanBtn) ipScanBtn.addEventListener('click', doItemPowerScan);
+
+    // Favorites
+    const favNewBtn = document.getElementById('fav-new-btn');
+    if (favNewBtn) favNewBtn.addEventListener('click', () => {
+        document.getElementById('fav-editor').style.display = 'block';
+        favCurrentItems = [];
+        document.getElementById('fav-list-name').value = '';
+        document.getElementById('fav-items-list').innerHTML = '';
+    });
+    const favSaveBtn = document.getElementById('fav-save-btn');
+    if (favSaveBtn) favSaveBtn.addEventListener('click', saveFavoriteList);
+    const favLoadBtn = document.getElementById('fav-load-btn');
+    if (favLoadBtn) favLoadBtn.addEventListener('click', loadFavoriteListPrices);
+    const favDeleteBtn = document.getElementById('fav-delete-btn');
+    if (favDeleteBtn) favDeleteBtn.addEventListener('click', deleteFavoriteList);
+    setupAutocomplete('fav-item-search', 'fav-autocomplete', (id) => { addFavoriteItem(id); });
+
+    // Mounts
+    const mountScanBtn = document.getElementById('mount-scan-btn');
+    if (mountScanBtn) mountScanBtn.addEventListener('click', loadMountsDatabase);
+
+    // Top Traded
+    const topScanBtn = document.getElementById('top-scan-btn');
+    if (topScanBtn) topScanBtn.addEventListener('click', loadTopTraded);
+
+    // Portfolio
+    const portfolioAddBtn = document.getElementById('portfolio-add-btn');
+    if (portfolioAddBtn) portfolioAddBtn.addEventListener('click', () => {
+        document.getElementById('portfolio-form').style.display = 'block';
+    });
+    const portfolioCancelBtn = document.getElementById('portfolio-cancel-btn');
+    if (portfolioCancelBtn) portfolioCancelBtn.addEventListener('click', () => {
+        document.getElementById('portfolio-form').style.display = 'none';
+    });
+    const portfolioSubmitBtn = document.getElementById('portfolio-submit-btn');
+    if (portfolioSubmitBtn) portfolioSubmitBtn.addEventListener('click', addPortfolioTrade);
+    const portfolioExportBtn = document.getElementById('portfolio-export-btn');
+    if (portfolioExportBtn) portfolioExportBtn.addEventListener('click', exportPortfolioCSV);
+    const portfolioClearBtn = document.getElementById('portfolio-clear-btn');
+    if (portfolioClearBtn) portfolioClearBtn.addEventListener('click', clearPortfolio);
+    setupAutocomplete('portfolio-item-search', 'portfolio-autocomplete', (id) => { portfolioSearchExactId = id; });
+    const portfolioSearchInput = document.getElementById('portfolio-item-search');
+    if (portfolioSearchInput) portfolioSearchInput.addEventListener('input', () => { portfolioSearchExactId = null; });
+
+    // Farming
+    const farmCalcBtn = document.getElementById('farm-calc-btn');
+    if (farmCalcBtn) farmCalcBtn.addEventListener('click', calculateFarming);
+
+    // Builds Browser
+    const buildsLoadBtn = document.getElementById('builds-load-btn');
+    if (buildsLoadBtn) buildsLoadBtn.addEventListener('click', () => loadBuilds(false));
+    const buildsMoreBtn = document.getElementById('builds-more-btn');
+    if (buildsMoreBtn) buildsMoreBtn.addEventListener('click', () => loadBuilds(true));
+
+    // Initialize portfolio on load
+    renderPortfolio();
+
+    // Load favorites dropdown on page load
+    loadFavoriteLists();
+
     // Initialize 0-Delay Live Sync
     initLiveSync();
-    
+
     // Initial render
     renderBrowser();
 }
@@ -2658,6 +3516,1399 @@ async function loadCommunityTab() {
     } catch (e) {
         console.log('Failed to load leaderboard:', e);
     }
+}
+
+// ============================================================
+// ITEM POWER CHECKER
+// ============================================================
+const BASE_ITEM_POWER = { 4: 700, 5: 800, 6: 900, 7: 1000, 8: 1100 };
+const IP_PER_ENCHANT = 100;
+
+function getItemPower(itemId) {
+    const tier = parseInt(extractTier(itemId)) || 0;
+    const ench = parseInt(extractEnchantment(itemId)) || 0;
+    const base = BASE_ITEM_POWER[tier];
+    if (!base) return 0;
+    return base + (ench * IP_PER_ENCHANT);
+}
+
+async function doItemPowerScan() {
+    if (itemsList.length === 0) await loadData();
+
+    const spinner = document.getElementById('ip-spinner');
+    const errorEl = document.getElementById('ip-error');
+    const container = document.getElementById('ip-results');
+
+    const category = document.getElementById('ip-category').value;
+    const tierFilter = document.getElementById('ip-tier').value;
+    const city = document.getElementById('ip-city').value;
+    const sortBy = document.getElementById('ip-sort').value;
+
+    if (errorEl) hideError(errorEl);
+    container.innerHTML = '';
+    if (spinner) spinner.classList.remove('hidden');
+
+    try {
+        const cachedData = await MarketDB.getAllPrices();
+        if (spinner) spinner.classList.add('hidden');
+
+        if (cachedData.length === 0) {
+            if (errorEl) showError(errorEl, 'No cached data available yet. Data loads automatically — please wait a moment and try again.');
+            return;
+        }
+
+        // Build price map: item_id -> { city -> sell_price_min }
+        const priceMap = {};
+        for (const p of cachedData) {
+            if (!priceMap[p.item_id]) priceMap[p.item_id] = {};
+            if (p.sell_price_min > 0) {
+                if (!priceMap[p.item_id][p.city] || p.sell_price_min < priceMap[p.item_id][p.city]) {
+                    priceMap[p.item_id][p.city] = p.sell_price_min;
+                }
+            }
+        }
+
+        // Get unique item IDs from cached data that have IP
+        const seenItems = new Set();
+        const results = [];
+
+        for (const itemId of Object.keys(priceMap)) {
+            if (seenItems.has(itemId)) continue;
+            seenItems.add(itemId);
+
+            const ip = getItemPower(itemId);
+            if (ip === 0) continue;
+
+            // Filter by category
+            if (category !== 'all') {
+                const cat = categorizeItem(itemId);
+                if (category === 'gear') {
+                    if (cat !== 'weapons' && cat !== 'armor' && cat !== 'offhand') continue;
+                } else if (cat !== category) {
+                    continue;
+                }
+            }
+
+            // Filter by tier
+            if (tierFilter !== 'all') {
+                const itemTier = extractTier(itemId);
+                if (itemTier !== tierFilter) continue;
+            }
+
+            // Get price for selected city
+            const cityPrices = priceMap[itemId];
+            let price = 0;
+            if (city === 'all') {
+                // Use cheapest across all cities
+                for (const c of Object.values(cityPrices)) {
+                    if (c > 0 && (price === 0 || c < price)) price = c;
+                }
+            } else {
+                price = cityPrices[city] || 0;
+            }
+
+            if (price <= 0) continue;
+
+            const silverPerIP = price / ip;
+
+            results.push({
+                itemId,
+                ip,
+                price,
+                silverPerIP,
+                tier: parseInt(extractTier(itemId)) || 0,
+                ench: parseInt(extractEnchantment(itemId)) || 0
+            });
+        }
+
+        // Sort
+        if (sortBy === 'silver_per_ip') {
+            results.sort((a, b) => a.silverPerIP - b.silverPerIP);
+        } else if (sortBy === 'ip_desc') {
+            results.sort((a, b) => b.ip - a.ip);
+        } else if (sortBy === 'price_asc') {
+            results.sort((a, b) => a.price - b.price);
+        } else if (sortBy === 'price_desc') {
+            results.sort((a, b) => b.price - a.price);
+        }
+
+        renderItemPowerResults(results);
+    } catch (e) {
+        if (spinner) spinner.classList.add('hidden');
+        if (errorEl) showError(errorEl, 'Error: ' + e.message);
+    }
+}
+
+function renderItemPowerResults(results) {
+    const container = document.getElementById('ip-results');
+    container.innerHTML = '';
+
+    if (results.length === 0) {
+        container.innerHTML = `<div class="empty-state"><p>No items found matching your filters.</p><p class="hint">Try adjusting the category, tier, or city filters.</p></div>`;
+        return;
+    }
+
+    const countBar = document.createElement('div');
+    countBar.className = 'result-count-bar';
+    countBar.innerHTML = `Showing <strong>${results.length}</strong> items sorted by efficiency`;
+    container.appendChild(countBar);
+
+    // Calculate silver/IP range for color coding
+    const sipValues = results.map(r => r.silverPerIP).filter(v => v > 0);
+    const sipMin = Math.min(...sipValues);
+    const sipMax = Math.max(...sipValues);
+
+    const table = document.createElement('div');
+    table.style.overflowX = 'auto';
+    table.innerHTML = `
+        <table class="compare-table" style="width:100%;">
+            <thead>
+                <tr>
+                    <th style="width:64px;"></th>
+                    <th>Item</th>
+                    <th>Tier</th>
+                    <th>IP</th>
+                    <th>Price</th>
+                    <th>Silver/IP</th>
+                </tr>
+            </thead>
+            <tbody>
+                ${results.map(r => {
+                    // Color code: green = good value (low silver/IP), red = bad value
+                    const ratio = sipMax > sipMin ? (r.silverPerIP - sipMin) / (sipMax - sipMin) : 0;
+                    let sipColor;
+                    if (ratio < 0.33) sipColor = '#22c55e'; // green - good value
+                    else if (ratio < 0.66) sipColor = '#eab308'; // yellow - mid value
+                    else sipColor = '#ef4444'; // red - expensive per IP
+
+                    return `
+                        <tr class="ip-result-row" data-item-id="${r.itemId}" style="cursor:pointer;" title="Click to view in City Comparison">
+                            <td style="padding:0.25rem;"><img src="https://render.albiononline.com/v1/item/${r.itemId}.png" style="width:48px;height:48px;" loading="lazy"></td>
+                            <td><strong>${getFriendlyName(r.itemId)}</strong><br><span style="font-size:0.7rem;color:var(--text-muted);">${r.itemId}</span></td>
+                            <td>${getTierEnchLabel(r.itemId)}</td>
+                            <td><strong>${r.ip}</strong></td>
+                            <td>${Math.floor(r.price).toLocaleString()}</td>
+                            <td style="color:${sipColor};font-weight:bold;">${r.silverPerIP.toFixed(1)}</td>
+                        </tr>`;
+                }).join('')}
+            </tbody>
+        </table>`;
+    container.appendChild(table);
+
+    // Make rows clickable to switch to City Comparison tab
+    table.querySelectorAll('.ip-result-row').forEach(row => {
+        row.addEventListener('click', () => {
+            const itemId = row.dataset.itemId;
+            switchToCompare(itemId);
+        });
+    });
+}
+
+// ============================================================
+// FAVORITES SYSTEM
+// ============================================================
+const FAV_STORAGE_KEY = 'albion_favorites';
+let favCurrentItems = [];
+let favSearchExactId = null;
+
+function loadFavoriteLists() {
+    const select = document.getElementById('fav-list-select');
+    if (!select) return;
+
+    const lists = JSON.parse(localStorage.getItem(FAV_STORAGE_KEY) || '{}');
+    select.innerHTML = '<option value="">-- Select a list --</option>';
+
+    const names = Object.keys(lists).sort();
+    names.forEach(name => {
+        const opt = document.createElement('option');
+        opt.value = name;
+        opt.textContent = `${name} (${lists[name].items.length} items)`;
+        select.appendChild(opt);
+    });
+}
+
+function saveFavoriteList() {
+    const nameInput = document.getElementById('fav-list-name');
+    const name = nameInput.value.trim();
+
+    if (!name) {
+        alert('Please enter a list name.');
+        return;
+    }
+    if (favCurrentItems.length === 0) {
+        alert('Please add at least one item to the list.');
+        return;
+    }
+
+    const lists = JSON.parse(localStorage.getItem(FAV_STORAGE_KEY) || '{}');
+    lists[name] = {
+        items: [...favCurrentItems],
+        created: Date.now()
+    };
+    localStorage.setItem(FAV_STORAGE_KEY, JSON.stringify(lists));
+
+    loadFavoriteLists();
+
+    // Select the saved list in the dropdown
+    const select = document.getElementById('fav-list-select');
+    if (select) select.value = name;
+
+    // Hide editor
+    const editor = document.getElementById('fav-editor');
+    if (editor) editor.style.display = 'none';
+}
+
+function deleteFavoriteList() {
+    const select = document.getElementById('fav-list-select');
+    const name = select ? select.value : '';
+
+    if (!name) {
+        alert('Please select a list to delete.');
+        return;
+    }
+
+    if (!confirm(`Delete the list "${name}"?`)) return;
+
+    const lists = JSON.parse(localStorage.getItem(FAV_STORAGE_KEY) || '{}');
+    delete lists[name];
+    localStorage.setItem(FAV_STORAGE_KEY, JSON.stringify(lists));
+
+    loadFavoriteLists();
+
+    // Clear results
+    const container = document.getElementById('fav-results');
+    if (container) container.innerHTML = '';
+}
+
+function addFavoriteItem(itemId) {
+    if (favCurrentItems.includes(itemId)) return; // no duplicates
+    favCurrentItems.push(itemId);
+    renderFavoriteChips();
+
+    // Clear the search input
+    const input = document.getElementById('fav-item-search');
+    if (input) input.value = '';
+}
+
+function removeFavoriteItem(itemId) {
+    favCurrentItems = favCurrentItems.filter(id => id !== itemId);
+    renderFavoriteChips();
+}
+
+function renderFavoriteChips() {
+    const chipContainer = document.getElementById('fav-items-list');
+    if (!chipContainer) return;
+
+    chipContainer.innerHTML = favCurrentItems.map(id => `
+        <span class="fav-chip" style="display:inline-flex;align-items:center;gap:0.25rem;background:var(--surface-2);padding:0.25rem 0.5rem;border-radius:0.5rem;margin:0.125rem;font-size:0.8rem;">
+            <img src="https://render.albiononline.com/v1/item/${id}.png" style="width:20px;height:20px;" loading="lazy">
+            ${getFriendlyName(id)}
+            <button onclick="removeFavoriteItem('${id}')" style="background:none;border:none;color:var(--text-muted);cursor:pointer;padding:0 0.25rem;font-size:1rem;line-height:1;">&times;</button>
+        </span>
+    `).join('');
+}
+
+async function loadFavoriteListPrices() {
+    const select = document.getElementById('fav-list-select');
+    const name = select ? select.value : '';
+    const container = document.getElementById('fav-results');
+    const spinner = document.getElementById('fav-spinner');
+    const errorEl = document.getElementById('fav-error');
+
+    if (!name) {
+        if (errorEl) showError(errorEl, 'Please select a list first.');
+        return;
+    }
+
+    const lists = JSON.parse(localStorage.getItem(FAV_STORAGE_KEY) || '{}');
+    const list = lists[name];
+    if (!list || list.items.length === 0) {
+        if (errorEl) showError(errorEl, 'Selected list is empty.');
+        return;
+    }
+
+    if (errorEl) hideError(errorEl);
+    if (container) container.innerHTML = '';
+    if (spinner) spinner.classList.remove('hidden');
+
+    try {
+        const server = getServer();
+        const priceData = await fetchMarketData(server, list.items);
+        if (spinner) spinner.classList.add('hidden');
+
+        // Build price map: item_id -> { city -> sell_price_min }
+        const priceMap = {};
+        for (const p of priceData) {
+            if (!priceMap[p.item_id]) priceMap[p.item_id] = {};
+            if (p.sell_price_min > 0) {
+                if (!priceMap[p.item_id][p.city] || p.sell_price_min < priceMap[p.item_id][p.city]) {
+                    priceMap[p.item_id][p.city] = p.sell_price_min;
+                }
+            }
+        }
+
+        renderFavoritePrices(list.items, priceMap);
+    } catch (e) {
+        if (spinner) spinner.classList.add('hidden');
+        if (errorEl) showError(errorEl, 'Error fetching prices: ' + e.message);
+    }
+}
+
+function renderFavoritePrices(items, priceMap) {
+    const container = document.getElementById('fav-results');
+    if (!container) return;
+    container.innerHTML = '';
+
+    if (items.length === 0) {
+        container.innerHTML = `<div class="empty-state"><p>No items in this list.</p></div>`;
+        return;
+    }
+
+    const countBar = document.createElement('div');
+    countBar.className = 'result-count-bar';
+    countBar.innerHTML = `Showing prices for <strong>${items.length}</strong> items`;
+    container.appendChild(countBar);
+
+    const cities = CITIES.filter(c => c !== 'Black Market');
+
+    const table = document.createElement('div');
+    table.style.overflowX = 'auto';
+    table.innerHTML = `
+        <table class="compare-table" style="width:100%;">
+            <thead>
+                <tr>
+                    <th style="width:48px;"></th>
+                    <th>Item</th>
+                    ${cities.map(c => `<th>${c}</th>`).join('')}
+                </tr>
+            </thead>
+            <tbody>
+                ${items.map(itemId => {
+                    const cityPrices = priceMap[itemId] || {};
+                    const prices = cities.map(c => cityPrices[c] || 0);
+                    const validPrices = prices.filter(p => p > 0);
+                    const minPrice = validPrices.length > 0 ? Math.min(...validPrices) : 0;
+                    const maxPrice = validPrices.length > 0 ? Math.max(...validPrices) : 0;
+
+                    return `
+                        <tr>
+                            <td style="padding:0.25rem;"><img src="https://render.albiononline.com/v1/item/${itemId}.png" style="width:40px;height:40px;" loading="lazy"></td>
+                            <td><strong>${getFriendlyName(itemId)}</strong><br><span style="font-size:0.65rem;color:var(--text-muted);">${getTierEnchLabel(itemId)}</span></td>
+                            ${cities.map((c, i) => {
+                                const p = prices[i];
+                                if (p <= 0) return '<td style="color:var(--text-muted);">—</td>';
+                                let color = 'inherit';
+                                if (validPrices.length > 1) {
+                                    if (p === minPrice) color = '#22c55e';
+                                    else if (p === maxPrice) color = '#ef4444';
+                                }
+                                return `<td style="color:${color};font-weight:${p === minPrice ? 'bold' : 'normal'};">${Math.floor(p).toLocaleString()}</td>`;
+                            }).join('')}
+                        </tr>`;
+                }).join('')}
+            </tbody>
+        </table>`;
+    container.appendChild(table);
+}
+
+// ============================================================
+// MOUNTS DATABASE
+// ============================================================
+function classifyMount(itemId) {
+    const id = itemId.toUpperCase();
+    if (id.includes('MULE') || id.includes('OX') || id.includes('MAMMOTH_TRANSPORT') || id.includes('TRANSPORT')) {
+        return 'transport';
+    }
+    if (id.includes('BATTLE') || id.includes('SIEGE') || id.includes('COMMAND_MAMMOTH') || id.includes('MOOSE_BATTLE')) {
+        return 'battle';
+    }
+    return 'riding';
+}
+
+function getMountTypeLabel(type) {
+    const labels = { riding: 'Riding', transport: 'Transport', battle: 'Battle' };
+    return labels[type] || 'Other';
+}
+
+async function loadMountsDatabase() {
+    if (itemsList.length === 0) await loadData();
+
+    const spinner = document.getElementById('mount-spinner');
+    const errorEl = document.getElementById('mount-error');
+    const container = document.getElementById('mount-results');
+    const city = document.getElementById('mount-city') ? document.getElementById('mount-city').value : 'Caerleon';
+    const searchVal = document.getElementById('mount-search') ? document.getElementById('mount-search').value.toLowerCase().trim() : '';
+    const typeFilter = document.getElementById('mount-type') ? document.getElementById('mount-type').value : 'all';
+    const sortBy = document.getElementById('mount-sort') ? document.getElementById('mount-sort').value : 'price_asc';
+
+    if (errorEl) hideError(errorEl);
+    if (container) container.innerHTML = '';
+    if (spinner) spinner.classList.remove('hidden');
+
+    try {
+        // Filter items that contain MOUNT in the ID
+        const mountItems = itemsList.filter(id => id.toUpperCase().includes('MOUNT'));
+
+        if (mountItems.length === 0) {
+            if (spinner) spinner.classList.add('hidden');
+            if (container) container.innerHTML = `<div class="empty-state"><p>No mount items found in the database.</p></div>`;
+            return;
+        }
+
+        // Fetch live prices for mount items
+        const server = getServer();
+        const priceData = await fetchMarketData(server, mountItems);
+        if (spinner) spinner.classList.add('hidden');
+
+        // Build price map for selected city
+        const priceMap = {};
+        for (const p of priceData) {
+            if (p.city === city && p.sell_price_min > 0) {
+                if (!priceMap[p.item_id] || p.sell_price_min < priceMap[p.item_id]) {
+                    priceMap[p.item_id] = p.sell_price_min;
+                }
+            }
+        }
+
+        // Build mount data
+        let mounts = mountItems.map(itemId => {
+            const tier = parseInt(extractTier(itemId)) || 0;
+            const ench = parseInt(extractEnchantment(itemId)) || 0;
+            const mountType = classifyMount(itemId);
+            const price = priceMap[itemId] || 0;
+
+            return {
+                itemId,
+                name: getFriendlyName(itemId),
+                tier,
+                ench,
+                tierLabel: getTierEnchLabel(itemId),
+                mountType,
+                price
+            };
+        });
+
+        // Filter by search text
+        if (searchVal) {
+            const words = searchVal.split(' ').filter(w => w);
+            mounts = mounts.filter(m => {
+                const target = (m.name + ' ' + m.itemId.replace(/_/g, ' ') + ' ' + m.tierLabel).toLowerCase();
+                return words.every(w => target.includes(w));
+            });
+        }
+
+        // Filter by type
+        if (typeFilter !== 'all') {
+            mounts = mounts.filter(m => m.mountType === typeFilter);
+        }
+
+        // Sort
+        if (sortBy === 'price_asc') {
+            mounts.sort((a, b) => {
+                const aP = a.price > 0 ? a.price : Infinity;
+                const bP = b.price > 0 ? b.price : Infinity;
+                return aP - bP;
+            });
+        } else if (sortBy === 'price_desc') {
+            mounts.sort((a, b) => (b.price || 0) - (a.price || 0));
+        } else if (sortBy === 'tier_asc') {
+            mounts.sort((a, b) => (a.tier + a.ench * 0.1) - (b.tier + b.ench * 0.1));
+        } else if (sortBy === 'tier_desc') {
+            mounts.sort((a, b) => (b.tier + b.ench * 0.1) - (a.tier + a.ench * 0.1));
+        } else if (sortBy === 'name') {
+            mounts.sort((a, b) => a.name.localeCompare(b.name));
+        }
+
+        renderMountsDatabase(mounts, city);
+    } catch (e) {
+        if (spinner) spinner.classList.add('hidden');
+        if (errorEl) showError(errorEl, 'Error: ' + e.message);
+    }
+}
+
+function renderMountsDatabase(mounts, city) {
+    const container = document.getElementById('mount-results');
+    if (!container) return;
+    container.innerHTML = '';
+
+    if (mounts.length === 0) {
+        container.innerHTML = `<div class="empty-state"><p>No mounts found matching your filters.</p><p class="hint">Try adjusting the search, type, or city filters.</p></div>`;
+        return;
+    }
+
+    const countBar = document.createElement('div');
+    countBar.className = 'result-count-bar';
+    countBar.innerHTML = `Showing <strong>${mounts.length}</strong> mounts in <strong>${city}</strong>`;
+    container.appendChild(countBar);
+
+    // Group by type
+    const groups = {};
+    for (const m of mounts) {
+        const type = m.mountType;
+        if (!groups[type]) groups[type] = [];
+        groups[type].push(m);
+    }
+
+    const typeOrder = ['riding', 'transport', 'battle'];
+
+    for (const type of typeOrder) {
+        const group = groups[type];
+        if (!group || group.length === 0) continue;
+
+        const section = document.createElement('div');
+        section.style.marginBottom = '1.5rem';
+        section.innerHTML = `
+            <h3 style="color:var(--accent);margin:0.75rem 0 0.5rem 0;font-size:1rem;border-bottom:1px solid var(--border);padding-bottom:0.25rem;">
+                ${getMountTypeLabel(type)} Mounts (${group.length})
+            </h3>
+            <div style="overflow-x:auto;">
+                <table class="compare-table" style="width:100%;">
+                    <thead>
+                        <tr>
+                            <th style="width:64px;"></th>
+                            <th>Mount</th>
+                            <th>Tier</th>
+                            <th>Type</th>
+                            <th>Price (${city})</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${group.map(m => `
+                            <tr style="cursor:pointer;" class="mount-row" data-item-id="${m.itemId}" title="Click to view in City Comparison">
+                                <td style="padding:0.25rem;"><img src="https://render.albiononline.com/v1/item/${m.itemId}.png" style="width:48px;height:48px;" loading="lazy"></td>
+                                <td><strong>${m.name}</strong><br><span style="font-size:0.65rem;color:var(--text-muted);">${m.itemId}</span></td>
+                                <td>${m.tierLabel}</td>
+                                <td><span style="text-transform:capitalize;">${m.mountType}</span></td>
+                                <td>${m.price > 0 ? `<strong>${Math.floor(m.price).toLocaleString()}</strong> silver` : '<span style="color:var(--text-muted);">No data</span>'}</td>
+                            </tr>
+                        `).join('')}
+                    </tbody>
+                </table>
+            </div>`;
+        container.appendChild(section);
+
+        // Make rows clickable
+        section.querySelectorAll('.mount-row').forEach(row => {
+            row.addEventListener('click', () => {
+                switchToCompare(row.dataset.itemId);
+            });
+        });
+    }
+}
+
+// ============================================================
+// TOP TRADED ITEMS
+// ============================================================
+async function loadTopTraded() {
+    const spinner = document.getElementById('top-spinner');
+    const container = document.getElementById('top-results');
+    const city = document.getElementById('top-city').value;
+    const tier = document.getElementById('top-tier').value;
+    const category = document.getElementById('top-category').value;
+    const limit = parseInt(document.getElementById('top-limit').value) || 50;
+
+    container.innerHTML = '';
+    spinner.classList.remove('hidden');
+
+    try {
+        // Use cached prices from IndexedDB
+        const cachedData = await MarketDB.getAllPrices();
+
+        // Build volume data from our price cache
+        // Group by item_id, sum up volumes per city
+        const itemVolumes = {};
+        for (const entry of cachedData) {
+            if (tier !== 'all' && !entry.item_id.startsWith('T' + tier)) continue;
+            if (category !== 'all' && categorizeItem(entry.item_id) !== category &&
+                !(category === 'materials' && categorizeItem(entry.item_id) === 'resources')) continue;
+
+            let entryCity = entry.city;
+            if (entryCity && entryCity.includes('Black Market')) entryCity = 'Black Market';
+            if (city !== 'all' && entryCity !== city) continue;
+
+            // Use sell_price_min as indicator of active item
+            if (entry.sell_price_min <= 0 && entry.buy_price_max <= 0) continue;
+
+            if (!itemVolumes[entry.item_id]) {
+                itemVolumes[entry.item_id] = {
+                    totalValue: 0,
+                    cityCount: 0,
+                    avgPrice: 0,
+                    prices: [],
+                    cities: new Set()
+                };
+            }
+
+            const vol = itemVolumes[entry.item_id];
+            if (entry.sell_price_min > 0) {
+                vol.prices.push(entry.sell_price_min);
+                vol.totalValue += entry.sell_price_min;
+                vol.cities.add(entryCity);
+            }
+        }
+
+        // Now fetch Charts API for actual volume data for top items
+        // Get items that appear in most cities (proxy for most traded)
+        let ranked = Object.entries(itemVolumes)
+            .map(([id, vol]) => ({
+                itemId: id,
+                cityCount: vol.cities.size,
+                avgPrice: vol.prices.length > 0 ? Math.floor(vol.prices.reduce((a,b)=>a+b,0) / vol.prices.length) : 0,
+                cities: [...vol.cities]
+            }))
+            .filter(r => r.avgPrice > 0)
+            .sort((a, b) => b.cityCount - a.cityCount || b.avgPrice - a.avgPrice);
+
+        // Take top items and fetch their chart data for actual daily volumes
+        const topItems = ranked.slice(0, Math.min(limit * 2, 200));
+
+        if (topItems.length > 0) {
+            const server = getServer();
+            const chartBase = CHART_API_URLS[server];
+            // Fetch in chunks
+            let chartData = [];
+            for (let i = 0; i < topItems.length; i += API_CHUNK_SIZE) {
+                const chunk = topItems.slice(i, i + API_CHUNK_SIZE);
+                const ids = chunk.map(t => t.itemId).join(',');
+                const loc = city !== 'all' ? city : 'Caerleon,Bridgewatch,Fort Sterling,Lymhurst,Martlock,Thetford';
+                try {
+                    const res = await fetch(`${chartBase}/${ids}.json?locations=${loc}&date=${new Date(Date.now() - 7*86400000).toISOString().split('T')[0]}&end_date=${new Date().toISOString().split('T')[0]}`);
+                    if (res.ok) {
+                        const data = await res.json();
+                        chartData = chartData.concat(data);
+                    }
+                } catch(e) { /* continue */ }
+            }
+
+            // Aggregate daily volumes
+            const volumeMap = {};
+            for (const entry of chartData) {
+                const id = entry.item_id;
+                if (!volumeMap[id]) volumeMap[id] = 0;
+                if (entry.data && entry.data.item_count) {
+                    const counts = entry.data.item_count;
+                    volumeMap[id] += counts.reduce((a,b) => a + b, 0);
+                }
+            }
+
+            // Merge volume data and re-sort
+            for (const item of topItems) {
+                item.volume = volumeMap[item.itemId] || 0;
+            }
+            topItems.sort((a, b) => b.volume - a.volume);
+        }
+
+        spinner.classList.add('hidden');
+        renderTopTraded(topItems.slice(0, limit));
+    } catch (e) {
+        spinner.classList.add('hidden');
+        container.innerHTML = `<div class="empty-state"><p>Failed to load top items: ${e.message}</p></div>`;
+    }
+}
+
+function renderTopTraded(items) {
+    const container = document.getElementById('top-results');
+    container.innerHTML = '';
+
+    if (items.length === 0) {
+        container.innerHTML = `<div class="empty-state"><p>No trading data available. Make sure market data is loaded.</p></div>`;
+        return;
+    }
+
+    const header = document.createElement('div');
+    header.className = 'result-count-bar';
+    header.innerHTML = `Showing top <strong>${items.length}</strong> most traded items`;
+    container.appendChild(header);
+
+    let tableHTML = `<div class="table-scroll-wrapper"><table class="compare-table">
+        <thead><tr>
+            <th>#</th><th>Item</th><th>Tier</th><th>Avg Price</th><th>7-Day Volume</th><th>Cities Listed</th>
+        </tr></thead><tbody>`;
+
+    items.forEach((item, i) => {
+        const name = getFriendlyName(item.itemId);
+        const tierLabel = getTierEnchLabel(item.itemId);
+        const enchBadge = getEnchantmentBadge(item.itemId);
+        tableHTML += `<tr style="cursor:pointer;" onclick="switchToCompare('${item.itemId}')">
+            <td style="font-weight:700; color:var(--accent);">${i + 1}</td>
+            <td style="display:flex; align-items:center; gap:0.5rem;">
+                <img src="https://render.albiononline.com/v1/item/${item.itemId}.png" width="32" height="32" style="image-rendering:pixelated;" onerror="this.style.display='none'">
+                <span>${name}</span>${enchBadge}
+            </td>
+            <td>${tierLabel}</td>
+            <td>${item.avgPrice > 0 ? item.avgPrice.toLocaleString() : '--'}</td>
+            <td style="font-weight:700; color:var(--accent);">${item.volume > 0 ? item.volume.toLocaleString() : '--'}</td>
+            <td>${item.cityCount}</td>
+        </tr>`;
+    });
+
+    tableHTML += `</tbody></table></div>`;
+    container.insertAdjacentHTML('beforeend', tableHTML);
+}
+
+// ============================================================
+// PORTFOLIO TRACKER
+// ============================================================
+const PORTFOLIO_STORAGE_KEY = 'albion_portfolio';
+let portfolioSearchExactId = null;
+
+function getPortfolioTrades() {
+    try {
+        return JSON.parse(localStorage.getItem(PORTFOLIO_STORAGE_KEY)) || [];
+    } catch { return []; }
+}
+
+function savePortfolioTrades(trades) {
+    localStorage.setItem(PORTFOLIO_STORAGE_KEY, JSON.stringify(trades));
+}
+
+function addPortfolioTrade() {
+    const type = document.getElementById('portfolio-type').value;
+    const itemId = portfolioSearchExactId || document.getElementById('portfolio-item-search').value.trim();
+    const quantity = parseInt(document.getElementById('portfolio-quantity').value) || 0;
+    const price = parseInt(document.getElementById('portfolio-price').value) || 0;
+    const city = document.getElementById('portfolio-city').value;
+
+    if (!itemId || quantity <= 0 || price <= 0) {
+        alert('Please fill in all fields.');
+        return;
+    }
+
+    // Resolve item ID
+    let resolvedId = portfolioSearchExactId || itemId;
+    if (!portfolioSearchExactId) {
+        const match = itemsList.find(i => getFriendlyName(i).toLowerCase() === itemId.toLowerCase() || i.toLowerCase() === itemId.toLowerCase());
+        if (match) resolvedId = match;
+    }
+
+    const trade = {
+        id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+        type,
+        itemId: resolvedId,
+        quantity,
+        price,
+        city,
+        timestamp: new Date().toISOString()
+    };
+
+    const trades = getPortfolioTrades();
+    trades.push(trade);
+    savePortfolioTrades(trades);
+
+    // Reset form
+    document.getElementById('portfolio-form').style.display = 'none';
+    portfolioSearchExactId = null;
+    document.getElementById('portfolio-item-search').value = '';
+    document.getElementById('portfolio-quantity').value = '1';
+    document.getElementById('portfolio-price').value = '0';
+
+    renderPortfolio();
+}
+
+function deletePortfolioTrade(tradeId) {
+    const trades = getPortfolioTrades().filter(t => t.id !== tradeId);
+    savePortfolioTrades(trades);
+    renderPortfolio();
+}
+
+function clearPortfolio() {
+    if (!confirm('Delete all portfolio trades? This cannot be undone.')) return;
+    localStorage.removeItem(PORTFOLIO_STORAGE_KEY);
+    renderPortfolio();
+}
+
+function exportPortfolioCSV() {
+    const trades = getPortfolioTrades();
+    if (trades.length === 0) { alert('No trades to export.'); return; }
+
+    const header = 'Type,Item,Quantity,Price,Total,City,Date\n';
+    const rows = trades.map(t => {
+        const name = getFriendlyName(t.itemId);
+        const total = t.quantity * t.price;
+        const date = new Date(t.timestamp).toLocaleDateString();
+        return `${t.type},${name},${t.quantity},${t.price},${total},${t.city},${date}`;
+    }).join('\n');
+
+    const blob = new Blob([header + rows], { type: 'text/csv' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `albion_portfolio_${new Date().toISOString().split('T')[0]}.csv`;
+    a.click();
+}
+
+function renderPortfolio() {
+    const trades = getPortfolioTrades();
+    const summaryEl = document.getElementById('portfolio-summary');
+    const tradesEl = document.getElementById('portfolio-trades');
+
+    // Calculate summary by item using FIFO
+    const itemStats = {};
+    for (const trade of trades) {
+        if (!itemStats[trade.itemId]) {
+            itemStats[trade.itemId] = { buys: [], sells: [], totalBought: 0, totalSold: 0, totalSpent: 0, totalEarned: 0, realizedPL: 0 };
+        }
+        const stat = itemStats[trade.itemId];
+        if (trade.type === 'buy') {
+            stat.buys.push({ qty: trade.quantity, price: trade.price, remaining: trade.quantity });
+            stat.totalBought += trade.quantity;
+            stat.totalSpent += trade.quantity * trade.price;
+        } else {
+            stat.totalSold += trade.quantity;
+            stat.totalEarned += trade.quantity * trade.price;
+
+            // FIFO matching
+            let sellQty = trade.quantity;
+            for (const buy of stat.buys) {
+                if (sellQty <= 0) break;
+                if (buy.remaining <= 0) continue;
+                const matched = Math.min(sellQty, buy.remaining);
+                stat.realizedPL += matched * (trade.price - buy.price);
+                buy.remaining -= matched;
+                sellQty -= matched;
+            }
+        }
+    }
+
+    // Summary cards
+    let totalPL = 0;
+    let totalInvested = 0;
+    for (const stat of Object.values(itemStats)) {
+        totalPL += stat.realizedPL;
+        totalInvested += stat.totalSpent;
+    }
+    const taxEstimate = Object.values(itemStats).reduce((sum, s) => sum + s.totalEarned * TAX_RATE, 0);
+    const netPL = totalPL - taxEstimate;
+
+    summaryEl.innerHTML = `
+        <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(180px, 1fr)); gap:1rem;">
+            <div style="background:var(--bg-card); border:1px solid var(--border-color); border-radius:var(--radius); padding:1rem; text-align:center;">
+                <div style="font-size:0.75rem; color:var(--text-secondary);">Total Trades</div>
+                <div style="font-size:1.5rem; font-weight:800; color:var(--text-primary);">${trades.length}</div>
+            </div>
+            <div style="background:var(--bg-card); border:1px solid var(--border-color); border-radius:var(--radius); padding:1rem; text-align:center;">
+                <div style="font-size:0.75rem; color:var(--text-secondary);">Total Invested</div>
+                <div style="font-size:1.5rem; font-weight:800; color:var(--text-primary);">${totalInvested.toLocaleString()}</div>
+            </div>
+            <div style="background:var(--bg-card); border:1px solid var(--border-color); border-radius:var(--radius); padding:1rem; text-align:center;">
+                <div style="font-size:0.75rem; color:var(--text-secondary);">Realized P/L (pre-tax)</div>
+                <div style="font-size:1.5rem; font-weight:800; color:${totalPL >= 0 ? 'var(--profit-green)' : 'var(--loss-red)'};">${totalPL >= 0 ? '+' : ''}${Math.floor(totalPL).toLocaleString()}</div>
+            </div>
+            <div style="background:var(--bg-card); border:1px solid var(--border-color); border-radius:var(--radius); padding:1rem; text-align:center;">
+                <div style="font-size:0.75rem; color:var(--text-secondary);">Net P/L (after ${(TAX_RATE*100).toFixed(1)}% tax)</div>
+                <div style="font-size:1.5rem; font-weight:800; color:${netPL >= 0 ? 'var(--profit-green)' : 'var(--loss-red)'};">${netPL >= 0 ? '+' : ''}${Math.floor(netPL).toLocaleString()}</div>
+            </div>
+        </div>`;
+
+    // Trade history table
+    if (trades.length === 0) {
+        tradesEl.innerHTML = `<div class="empty-state"><p>No trades logged yet.</p><p class="hint">Click "+ Log Trade" to start tracking your trades.</p></div>`;
+        return;
+    }
+
+    let tableHTML = `<div class="table-scroll-wrapper"><table class="compare-table">
+        <thead><tr>
+            <th>Date</th><th>Type</th><th>Item</th><th>Qty</th><th>Price/Unit</th><th>Total</th><th>City</th><th></th>
+        </tr></thead><tbody>`;
+
+    // Show most recent first
+    [...trades].reverse().forEach(t => {
+        const name = getFriendlyName(t.itemId);
+        const total = t.quantity * t.price;
+        const date = new Date(t.timestamp).toLocaleDateString();
+        const typeColor = t.type === 'buy' ? 'var(--loss-red)' : 'var(--profit-green)';
+        const typeLabel = t.type === 'buy' ? 'BUY' : 'SELL';
+        tableHTML += `<tr>
+            <td>${date}</td>
+            <td><span style="font-weight:700; color:${typeColor};">${typeLabel}</span></td>
+            <td style="display:flex; align-items:center; gap:0.5rem;">
+                <img src="https://render.albiononline.com/v1/item/${t.itemId}.png" width="24" height="24" style="image-rendering:pixelated;" onerror="this.style.display='none'">
+                ${name}
+            </td>
+            <td>${t.quantity.toLocaleString()}</td>
+            <td>${t.price.toLocaleString()}</td>
+            <td style="font-weight:700;">${total.toLocaleString()}</td>
+            <td>${t.city}</td>
+            <td><button onclick="deletePortfolioTrade('${t.id}')" style="background:none; border:none; color:var(--loss-red); cursor:pointer; font-size:1rem;" title="Delete trade">×</button></td>
+        </tr>`;
+    });
+
+    tableHTML += `</tbody></table></div>`;
+    tradesEl.innerHTML = tableHTML;
+}
+
+// ============================================================
+// FARM & BREED CALCULATOR
+// ============================================================
+const FARM_DATA = {
+    crops: [
+        { tier: 1, seed: 'T1_FARM_CARROT_SEED', crop: 'T1_FARM_CARROT', name: 'Carrot', yield: 9, growthHours: 22 },
+        { tier: 2, seed: 'T2_FARM_BEAN_SEED', crop: 'T2_FARM_BEAN', name: 'Bean', yield: 9, growthHours: 22 },
+        { tier: 3, seed: 'T3_FARM_WHEAT_SEED', crop: 'T3_FARM_WHEAT', name: 'Wheat', yield: 9, growthHours: 22 },
+        { tier: 4, seed: 'T4_FARM_TURNIP_SEED', crop: 'T4_FARM_TURNIP', name: 'Turnip', yield: 9, growthHours: 22 },
+        { tier: 5, seed: 'T5_FARM_CABBAGE_SEED', crop: 'T5_FARM_CABBAGE', name: 'Cabbage', yield: 9, growthHours: 22 },
+        { tier: 6, seed: 'T6_FARM_POTATO_SEED', crop: 'T6_FARM_POTATO', name: 'Potato', yield: 9, growthHours: 22 },
+        { tier: 7, seed: 'T7_FARM_CORN_SEED', crop: 'T7_FARM_CORN', name: 'Corn', yield: 9, growthHours: 22 },
+        { tier: 8, seed: 'T8_FARM_PUMPKIN_SEED', crop: 'T8_FARM_PUMPKIN', name: 'Pumpkin', yield: 9, growthHours: 22 }
+    ],
+    herbs: [
+        { tier: 2, seed: 'T2_FARM_AGARIC_SEED', crop: 'T2_FARM_AGARIC', name: 'Arcane Agaric', yield: 9, growthHours: 22 },
+        { tier: 3, seed: 'T3_FARM_COMFREY_SEED', crop: 'T3_FARM_COMFREY', name: 'Brightleaf Comfrey', yield: 9, growthHours: 22 },
+        { tier: 4, seed: 'T4_FARM_BURDOCK_SEED', crop: 'T4_FARM_BURDOCK', name: 'Crenellated Burdock', yield: 9, growthHours: 22 },
+        { tier: 5, seed: 'T5_FARM_TEASEL_SEED', crop: 'T5_FARM_TEASEL', name: 'Dragon Teasel', yield: 9, growthHours: 22 },
+        { tier: 6, seed: 'T6_FARM_FOXGLOVE_SEED', crop: 'T6_FARM_FOXGLOVE', name: 'Elusive Foxglove', yield: 9, growthHours: 22 },
+        { tier: 7, seed: 'T7_FARM_MULLEIN_SEED', crop: 'T7_FARM_MULLEIN', name: 'Firetouched Mullein', yield: 9, growthHours: 22 },
+        { tier: 8, seed: 'T8_FARM_YARROW_SEED', crop: 'T8_FARM_YARROW', name: 'Ghoul Yarrow', yield: 9, growthHours: 22 }
+    ],
+    animals: [
+        { tier: 3, baby: 'T3_FARM_OX_BABY', grown: 'T3_FARM_OX_GROWN', name: 'Ox', product: null, growthHours: 44 },
+        { tier: 4, baby: 'T4_FARM_OX_BABY', grown: 'T4_FARM_OX_GROWN', name: 'Ox', product: null, growthHours: 44 },
+        { tier: 5, baby: 'T5_FARM_OX_BABY', grown: 'T5_FARM_OX_GROWN', name: 'Ox', product: null, growthHours: 44 },
+        { tier: 6, baby: 'T6_FARM_OX_BABY', grown: 'T6_FARM_OX_GROWN', name: 'Ox', product: null, growthHours: 44 },
+        { tier: 7, baby: 'T7_FARM_OX_BABY', grown: 'T7_FARM_OX_GROWN', name: 'Ox', product: null, growthHours: 44 },
+        { tier: 8, baby: 'T8_FARM_OX_BABY', grown: 'T8_FARM_OX_GROWN', name: 'Ox', product: null, growthHours: 44 },
+        { tier: 3, baby: 'T3_FARM_HORSE_BABY', grown: 'T3_FARM_HORSE_GROWN', name: 'Horse', product: null, growthHours: 44 },
+        { tier: 4, baby: 'T4_FARM_HORSE_BABY', grown: 'T4_FARM_HORSE_GROWN', name: 'Horse', product: null, growthHours: 44 },
+        { tier: 5, baby: 'T5_FARM_HORSE_BABY', grown: 'T5_FARM_HORSE_GROWN', name: 'Horse', product: null, growthHours: 44 },
+        { tier: 6, baby: 'T6_FARM_HORSE_BABY', grown: 'T6_FARM_HORSE_GROWN', name: 'Horse', product: null, growthHours: 44 },
+        { tier: 7, baby: 'T7_FARM_HORSE_BABY', grown: 'T7_FARM_HORSE_GROWN', name: 'Horse', product: null, growthHours: 44 },
+        { tier: 8, baby: 'T8_FARM_HORSE_BABY', grown: 'T8_FARM_HORSE_GROWN', name: 'Horse', product: null, growthHours: 44 },
+        { tier: 3, baby: 'T3_FARM_HEN_BABY', grown: 'T3_FARM_HEN', name: 'Hen', product: 'T3_FARM_HEN_EGG', growthHours: 22 },
+        { tier: 4, baby: 'T4_FARM_GOOSE_BABY', grown: 'T4_FARM_GOOSE', name: 'Goose', product: 'T4_FARM_GOOSE_EGG', growthHours: 44 },
+        { tier: 5, baby: 'T5_FARM_GOAT_BABY', grown: 'T5_FARM_GOAT', name: 'Goat', product: 'T5_FARM_GOAT_MILK', growthHours: 44 },
+        { tier: 6, baby: 'T6_FARM_SHEEP_BABY', grown: 'T6_FARM_SHEEP', name: 'Sheep', product: 'T6_FARM_SHEEP_MILK', growthHours: 44 },
+        { tier: 7, baby: 'T7_FARM_PIG_BABY', grown: 'T7_FARM_PIG', name: 'Pig', product: 'T7_FARM_PIG_MILK', growthHours: 44 },
+        { tier: 8, baby: 'T8_FARM_COW_BABY', grown: 'T8_FARM_COW', name: 'Cow', product: 'T8_FARM_COW_MILK', growthHours: 44 }
+    ]
+};
+
+async function calculateFarming() {
+    const farmType = document.getElementById('farm-type').value;
+    const city = document.getElementById('farm-city').value;
+    const premium = document.getElementById('farm-premium').checked;
+    const useFocus = document.getElementById('farm-focus').checked;
+    const spinner = document.getElementById('farm-spinner');
+    const container = document.getElementById('farm-results');
+
+    container.innerHTML = '';
+    spinner.classList.remove('hidden');
+
+    try {
+        const items = FARM_DATA[farmType];
+        // Collect all item IDs to fetch
+        const allIds = [];
+        for (const item of items) {
+            if (farmType === 'animals') {
+                allIds.push(item.baby, item.grown);
+                if (item.product) allIds.push(item.product);
+            } else {
+                allIds.push(item.seed, item.crop);
+            }
+        }
+
+        // Fetch prices
+        const server = getServer();
+        let allPrices = [];
+        for (let i = 0; i < allIds.length; i += API_CHUNK_SIZE) {
+            const chunk = allIds.slice(i, i + API_CHUNK_SIZE);
+            const url = `${API_URLS[server]}/${chunk.join(',')}.json?locations=${city}`;
+            const res = await fetch(url);
+            if (res.ok) {
+                const data = await res.json();
+                allPrices = allPrices.concat(data);
+            }
+        }
+        if (allPrices.length > 0) await MarketDB.saveMarketData(allPrices);
+
+        // Index prices
+        const priceIndex = {};
+        for (const entry of allPrices) {
+            let c = entry.city;
+            if (c && c.includes('Black Market')) c = 'Black Market';
+            if (c !== city) continue;
+            if (!priceIndex[entry.item_id] || (entry.sell_price_min > 0 && entry.sell_price_min < (priceIndex[entry.item_id].sellMin || Infinity))) {
+                priceIndex[entry.item_id] = {
+                    sellMin: entry.sell_price_min || 0,
+                    buyMax: entry.buy_price_max || 0
+                };
+            }
+        }
+
+        spinner.classList.add('hidden');
+
+        // Calculate profits
+        const results = [];
+        for (const item of items) {
+            if (farmType === 'animals') {
+                const babyPrice = priceIndex[item.baby] ? priceIndex[item.baby].sellMin : 0;
+                const grownPrice = priceIndex[item.grown] ? priceIndex[item.grown].buyMax : 0;
+                const productPrice = item.product && priceIndex[item.product] ? priceIndex[item.product].buyMax : 0;
+
+                const cost = babyPrice; // buy baby
+                const revenue = grownPrice; // sell grown
+                const productRevenue = productPrice; // sell product (if applicable)
+                const tax = revenue * TAX_RATE + productRevenue * TAX_RATE;
+                const profit = revenue + productRevenue - cost - tax;
+
+                // Premium gives 50% more offspring chance
+                const premiumBonus = premium ? 1.5 : 1.0;
+
+                results.push({
+                    name: `T${item.tier} ${item.name}`,
+                    tier: item.tier,
+                    costLabel: 'Baby',
+                    costPrice: babyPrice,
+                    revenueLabel: 'Grown',
+                    revenuePrice: grownPrice,
+                    productLabel: item.product ? 'Product' : null,
+                    productPrice: productPrice,
+                    profit,
+                    growthHours: item.growthHours,
+                    profitPerHour: item.growthHours > 0 ? profit / item.growthHours : 0,
+                    seedId: item.baby,
+                    cropId: item.grown
+                });
+            } else {
+                const seedPrice = priceIndex[item.seed] ? priceIndex[item.seed].sellMin : 0;
+                const cropPrice = priceIndex[item.crop] ? priceIndex[item.crop].buyMax : 0;
+
+                const yieldAmount = premium ? Math.floor(item.yield * 1.5) : item.yield;
+                const seedReturn = premium ? 3 : 2; // seeds returned on harvest
+
+                const cost = seedPrice; // buy 1 seed
+                const revenue = cropPrice * yieldAmount;
+                const seedSavings = seedPrice * seedReturn; // returned seeds worth
+                const tax = revenue * TAX_RATE;
+                const profit = revenue + seedSavings - cost - tax;
+
+                results.push({
+                    name: `T${item.tier} ${item.name}`,
+                    tier: item.tier,
+                    costLabel: 'Seed',
+                    costPrice: seedPrice,
+                    revenueLabel: `Crop (x${yieldAmount})`,
+                    revenuePrice: cropPrice * yieldAmount,
+                    productLabel: `Seeds back (x${seedReturn})`,
+                    productPrice: seedPrice * seedReturn,
+                    profit,
+                    growthHours: item.growthHours,
+                    profitPerHour: item.growthHours > 0 ? profit / item.growthHours : 0,
+                    seedId: item.seed,
+                    cropId: item.crop
+                });
+            }
+        }
+
+        // Sort by profit descending
+        results.sort((a, b) => b.profit - a.profit);
+        renderFarmResults(results, farmType);
+    } catch (e) {
+        spinner.classList.add('hidden');
+        container.innerHTML = `<div class="empty-state"><p>Failed to calculate farming profits: ${e.message}</p></div>`;
+    }
+}
+
+function renderFarmResults(results, farmType) {
+    const container = document.getElementById('farm-results');
+    container.innerHTML = '';
+
+    if (results.length === 0) {
+        container.innerHTML = `<div class="empty-state"><p>No farming data available.</p></div>`;
+        return;
+    }
+
+    const header = document.createElement('div');
+    header.className = 'result-count-bar';
+    header.innerHTML = `Showing <strong>${results.length}</strong> ${farmType} profit calculations`;
+    container.appendChild(header);
+
+    let tableHTML = `<div class="table-scroll-wrapper"><table class="compare-table">
+        <thead><tr>
+            <th>Item</th><th>Cost (Buy)</th><th>Revenue (Sell)</th>
+            ${results.some(r => r.productLabel) ? '<th>Extra Revenue</th>' : ''}
+            <th>Profit</th><th>Growth Time</th><th>Profit/Hour</th>
+        </tr></thead><tbody>`;
+
+    for (const r of results) {
+        const profitColor = r.profit >= 0 ? 'var(--profit-green)' : 'var(--loss-red)';
+        const pphColor = r.profitPerHour >= 0 ? 'var(--profit-green)' : 'var(--loss-red)';
+
+        tableHTML += `<tr>
+            <td style="display:flex; align-items:center; gap:0.5rem; font-weight:700;">
+                <img src="https://render.albiononline.com/v1/item/${r.cropId}.png" width="32" height="32" style="image-rendering:pixelated;" onerror="this.style.display='none'">
+                ${r.name}
+            </td>
+            <td>${r.costPrice > 0 ? r.costPrice.toLocaleString() : '--'} <span style="color:var(--text-muted); font-size:0.75rem;">(${r.costLabel})</span></td>
+            <td>${r.revenuePrice > 0 ? r.revenuePrice.toLocaleString() : '--'} <span style="color:var(--text-muted); font-size:0.75rem;">(${r.revenueLabel})</span></td>
+            ${results.some(res => res.productLabel) ? `<td>${r.productLabel ? `${r.productPrice > 0 ? r.productPrice.toLocaleString() : '--'} <span style="color:var(--text-muted); font-size:0.75rem;">(${r.productLabel})</span>` : '--'}</td>` : ''}
+            <td style="font-weight:700; color:${profitColor};">${r.profit >= 0 ? '+' : ''}${Math.floor(r.profit).toLocaleString()}</td>
+            <td>${r.growthHours}h</td>
+            <td style="font-weight:700; color:${pphColor};">${Math.floor(r.profitPerHour).toLocaleString()}/h</td>
+        </tr>`;
+    }
+
+    tableHTML += `</tbody></table></div>`;
+    container.insertAdjacentHTML('beforeend', tableHTML);
+}
+
+// ============================================================
+// BUILDS BROWSER (AlbionFreeMarket Public API)
+// ============================================================
+const BUILDS_API = 'https://api.albionfreemarket.com/be/builds';
+let buildsCursor = null;
+let buildsCurrentSort = 'netVotes';
+
+async function loadBuilds(append = false) {
+    const spinner = document.getElementById('builds-spinner');
+    const container = document.getElementById('builds-results');
+    const moreBtn = document.getElementById('builds-more-btn');
+    const sortBy = document.getElementById('builds-sort').value;
+
+    if (!append) {
+        container.innerHTML = '';
+        buildsCursor = null;
+        buildsCurrentSort = sortBy;
+    }
+    spinner.classList.remove('hidden');
+
+    try {
+        let url = `${BUILDS_API}?limit=20&sort=${buildsCurrentSort}&order=-1`;
+        if (buildsCursor) {
+            url += `&lastValue=${buildsCursor.lastValue}&lastId=${buildsCursor.lastId}`;
+        }
+
+        const res = await fetch(url);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+
+        spinner.classList.add('hidden');
+
+        const builds = data.builds || [];
+        buildsCursor = data.nextCursor || null;
+
+        if (builds.length === 0 && !append) {
+            container.innerHTML = `<div class="empty-state"><p>No builds found.</p></div>`;
+            moreBtn.style.display = 'none';
+            return;
+        }
+
+        // Filter by search
+        const search = document.getElementById('builds-search').value.toLowerCase().trim();
+        const filtered = search
+            ? builds.filter(b => (b.name || '').toLowerCase().includes(search) ||
+                (b.authorName || '').toLowerCase().includes(search) ||
+                (b.weaponItemGroup || '').toLowerCase().includes(search))
+            : builds;
+
+        for (const build of filtered) {
+            const card = createBuildCard(build);
+            container.appendChild(card);
+        }
+
+        moreBtn.style.display = buildsCursor ? 'inline-flex' : 'none';
+    } catch (e) {
+        spinner.classList.add('hidden');
+        if (!append) {
+            container.innerHTML = `<div class="empty-state"><p>Failed to load builds: ${e.message}</p></div>`;
+        }
+    }
+}
+
+function createBuildCard(build) {
+    const card = document.createElement('div');
+    card.className = 'trade-card';
+    card.style.cursor = 'default';
+
+    // Equipment slots
+    const slots = build.slots || [];
+    const mainHand = slots.find(s => s.slot === 'mainhand');
+    const offHand = slots.find(s => s.slot === 'offhand');
+    const head = slots.find(s => s.slot === 'head');
+    const armor = slots.find(s => s.slot === 'armor');
+    const shoes = slots.find(s => s.slot === 'shoes');
+    const cape = slots.find(s => s.slot === 'cape');
+    const food = slots.find(s => s.slot === 'food');
+    const potion = slots.find(s => s.slot === 'potion');
+
+    const getSlotItem = (slot) => {
+        if (!slot || !slot.mainItemSelection || !slot.mainItemSelection.itemUniqueName) return null;
+        return slot.mainItemSelection.itemUniqueName;
+    };
+
+    const renderSlotIcon = (slot, label) => {
+        const itemId = getSlotItem(slot);
+        if (!itemId) return `<div style="width:48px; height:48px; background:var(--bg-elevated); border-radius:var(--radius-sm); display:flex; align-items:center; justify-content:center; font-size:0.6rem; color:var(--text-muted);" title="${label}">${label}</div>`;
+        return `<img src="https://render.albiononline.com/v1/item/${itemId}.png" width="48" height="48" style="image-rendering:pixelated; border-radius:var(--radius-sm); background:var(--bg-elevated);" title="${getFriendlyName(itemId) || itemId}" onerror="this.style.display='none'">`;
+    };
+
+    // Tags
+    const allTags = [
+        ...(build.roleTags || []),
+        ...(build.zoneTags || []),
+        ...(build.activityTags || []),
+        ...(build.sizeTags || [])
+    ];
+    const tagsHTML = allTags.slice(0, 5).map(t =>
+        `<span style="background:var(--accent-dim); color:var(--accent); padding:0.15rem 0.5rem; border-radius:12px; font-size:0.65rem; white-space:nowrap;">${t}</span>`
+    ).join('');
+
+    const votes = (build.upvotesCount || 0) - (build.downvotesCount || 0);
+    const votesColor = votes >= 0 ? 'var(--profit-green)' : 'var(--loss-red)';
+    const dateStr = build.createdAt ? new Date(build.createdAt).toLocaleDateString() : '';
+
+    card.innerHTML = `
+        <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:0.75rem;">
+            <div>
+                <div style="font-weight:700; font-size:1rem; color:var(--text-primary);">${build.name || 'Unnamed Build'}</div>
+                <div style="font-size:0.75rem; color:var(--text-secondary);">by ${build.authorName || 'Unknown'} &bull; ${dateStr}</div>
+            </div>
+            <div style="display:flex; align-items:center; gap:0.25rem; font-weight:700; color:${votesColor};">
+                <span style="font-size:1.1rem;">${votes >= 0 ? '+' : ''}${votes}</span>
+                <span style="font-size:0.7rem; color:var(--text-muted);">votes</span>
+            </div>
+        </div>
+        <div style="display:flex; gap:0.5rem; flex-wrap:wrap; margin-bottom:0.75rem;">
+            ${renderSlotIcon(mainHand, 'Main')}
+            ${renderSlotIcon(offHand, 'Off')}
+            ${renderSlotIcon(head, 'Head')}
+            ${renderSlotIcon(armor, 'Armor')}
+            ${renderSlotIcon(shoes, 'Shoes')}
+            ${renderSlotIcon(cape, 'Cape')}
+            ${renderSlotIcon(food, 'Food')}
+            ${renderSlotIcon(potion, 'Pot')}
+        </div>
+        ${allTags.length > 0 ? `<div style="display:flex; gap:0.25rem; flex-wrap:wrap;">${tagsHTML}</div>` : ''}
+        ${build.strengths && build.strengths.length > 0 ? `<div style="margin-top:0.5rem; font-size:0.75rem; color:var(--profit-green);">+ ${build.strengths.slice(0, 2).join(' | ')}</div>` : ''}
+    `;
+
+    return card;
+}
+
+// ============================================================
+// CRAFTING SAVE/LOAD & SHOPPING LIST
+// ============================================================
+const CRAFT_SETUPS_KEY = 'albion_craft_setups';
+
+function getCraftSetups() {
+    try { return JSON.parse(localStorage.getItem(CRAFT_SETUPS_KEY)) || {}; }
+    catch { return {}; }
+}
+
+function saveCraftSetup() {
+    const searchInput = document.getElementById('craft-search');
+    const itemId = craftSearchExactId || searchInput.value.trim();
+    if (!itemId) { alert('Search for an item first.'); return; }
+
+    const name = prompt('Name this crafting setup:', getFriendlyName(itemId) || itemId);
+    if (!name) return;
+
+    const setup = {
+        itemId: craftSearchExactId || itemId,
+        searchText: searchInput.value,
+        useFocus: document.getElementById('craft-use-focus').checked,
+        spec: document.getElementById('craft-spec').value,
+        mastery: document.getElementById('craft-mastery').value,
+        cityBonus: document.getElementById('craft-city-bonus').value,
+        fee: document.getElementById('craft-fee').value,
+        savedAt: new Date().toISOString()
+    };
+
+    const setups = getCraftSetups();
+    setups[name] = setup;
+    localStorage.setItem(CRAFT_SETUPS_KEY, JSON.stringify(setups));
+    loadCraftSetupDropdown();
+}
+
+function loadCraftSetupDropdown() {
+    const select = document.getElementById('craft-load-select');
+    if (!select) return;
+    const setups = getCraftSetups();
+    select.innerHTML = '<option value="">Load Setup...</option>';
+    for (const name of Object.keys(setups)) {
+        const opt = document.createElement('option');
+        opt.value = name;
+        opt.textContent = name;
+        select.appendChild(opt);
+    }
+}
+
+function loadCraftSetup() {
+    const select = document.getElementById('craft-load-select');
+    const name = select.value;
+    if (!name) return;
+
+    const setups = getCraftSetups();
+    const setup = setups[name];
+    if (!setup) return;
+
+    document.getElementById('craft-search').value = setup.searchText || '';
+    document.getElementById('craft-use-focus').checked = setup.useFocus || false;
+    document.getElementById('craft-spec').value = setup.spec || '0';
+    document.getElementById('craft-mastery').value = setup.mastery || '0';
+    document.getElementById('craft-city-bonus').value = setup.cityBonus || '0';
+    document.getElementById('craft-fee').value = setup.fee || '0';
+
+    if (setup.itemId) {
+        craftSearchExactId = setup.itemId;
+    }
+
+    // Auto-calculate
+    const calcBtn = document.getElementById('craft-search-btn');
+    if (calcBtn) calcBtn.click();
+}
+
+function deleteCraftSetup() {
+    const select = document.getElementById('craft-load-select');
+    const name = select.value;
+    if (!name) return;
+    if (!confirm(`Delete setup "${name}"?`)) return;
+
+    const setups = getCraftSetups();
+    delete setups[name];
+    localStorage.setItem(CRAFT_SETUPS_KEY, JSON.stringify(setups));
+    loadCraftSetupDropdown();
+}
+
+function generateShoppingList(recipe, itemId) {
+    const container = document.getElementById('craft-shopping-list');
+    const content = document.getElementById('craft-shopping-content');
+    if (!container || !content || !recipe || !recipe.materials) {
+        if (container) container.style.display = 'none';
+        return;
+    }
+
+    container.style.display = 'block';
+
+    // Build shopping list from materials
+    let html = '<div class="table-scroll-wrapper"><table class="compare-table"><thead><tr>';
+    html += '<th>Material</th><th>Quantity</th><th>Estimated Cost</th>';
+    html += '</tr></thead><tbody>';
+
+    let totalCost = 0;
+    for (const mat of recipe.materials) {
+        const name = getFriendlyName(mat.id);
+        // Try to get price from cache
+        const price = mat.estimatedPrice || 0;
+        const cost = price * mat.qty;
+        totalCost += cost;
+
+        html += `<tr>
+            <td style="display:flex; align-items:center; gap:0.5rem;">
+                <img src="https://render.albiononline.com/v1/item/${mat.id}.png" width="24" height="24" style="image-rendering:pixelated;" onerror="this.style.display='none'">
+                ${name}
+            </td>
+            <td style="font-weight:700;">${mat.qty}</td>
+            <td>${price > 0 ? cost.toLocaleString() + ' silver' : '--'}</td>
+        </tr>`;
+    }
+
+    html += `<tr style="border-top:2px solid var(--border-color);">
+        <td style="font-weight:700;">Total</td>
+        <td></td>
+        <td style="font-weight:700; color:var(--accent);">${totalCost > 0 ? totalCost.toLocaleString() + ' silver' : '--'}</td>
+    </tr>`;
+    html += '</tbody></table></div>';
+
+    content.innerHTML = html;
 }
 
 window.addEventListener('load', init);
