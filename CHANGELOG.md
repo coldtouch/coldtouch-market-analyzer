@@ -2,6 +2,33 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-03-28 — Massive Feature Expansion (12 New Tools)
+
+Inspired by AlbionFreeMarket.com, this update adds 12 new features — all completely free with no paywalls.
+
+#### New Tabs
+- **Black Market Flipper**: Dedicated tool for finding profitable items to sell to the Black Market. Filters by tier, enchantment, category, and minimum profit. Reuses the proven arbitrage engine with BM-hardcoded sell target.
+- **Journals Calculator**: Calculate labourer journal profits for all 10 journal types (Mercenary, Lumberjack, Stonecutter, Prospector, Cropper, Gamekeeper, Blacksmith, Fletcher, Imbuer, Tinker) across T3-T8. Shows buy-empty/sell-full profit with ROI and sell-order alternatives.
+- **RRR Calculator**: Standalone Resource Return Rate calculator. Input spec level, city bonus, focus toggle — see effective return rate, materials saved per 100 crafts, and a visual breakdown of each bonus contribution.
+- **Repair Cost Calculator**: Estimate repair costs for any item. Accounts for tier, enchantment, quality, and current durability. Shows quick reference grid for 25%/50%/75%/100% repairs.
+- **Item Power Checker**: Compare item power vs price across items in the same category. Find the best silver-per-IP ratio. Sortable by IP, price, or value efficiency.
+- **Favorites**: Save and manage custom item lists stored in your browser. Create named lists, add items via autocomplete, load lists to see prices across all cities with cheapest/most expensive color coding.
+- **Mounts Database**: Browse all mounts with live prices, categorized by type (riding, transport, battle). Filter by tier, search by name, sort by price or speed.
+- **Top Traded Items**: See the most actively traded items ranked by 7-day volume from the Charts API. Filter by city, tier, and category.
+- **Portfolio Tracker**: Trade journal with FIFO cost basis matching. Log buys and sells, track realized P/L with tax estimates, export to CSV. All stored locally.
+- **Farm & Breed Calculator**: Calculate farming profits for crops, herbs, and animals. Shows seed cost vs harvest revenue, growth times, and profit-per-hour. Accounts for premium bonuses.
+- **Builds Browser**: Browse community character builds from AlbionFreeMarket's public API. View equipment loadouts, tags, vote counts, and build descriptions.
+
+#### Crafting Calculator Upgrades
+- **Save/Load Setups**: Save crafting configurations to localStorage and reload them instantly.
+- **Shopping List**: See a material breakdown table with estimated costs when calculating a recipe.
+
+#### UI Improvements
+- Navigation bar optimized for 15+ tabs with compact styling and smooth horizontal scrolling
+- New CSS styles for tables, progress bars, favorite chips, build cards, and mount groupings
+
+---
+
 ### 2026-03-27 — Data Quality & Server Fix
 
 #### Critical Fix
