@@ -264,31 +264,63 @@ header::after {
     position: sticky;
     top: 0;
     z-index: 100;
+    display: flex;
+    align-items: stretch;
+}
+
+.nav-scroll-btn {
+    background: var(--bg-surface);
+    border: none;
+    color: var(--accent);
+    font-size: 1.4rem;
+    font-weight: 700;
+    cursor: pointer;
+    padding: 0 0.5rem;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    opacity: 0.6;
+    transition: opacity var(--transition), background var(--transition);
+    border-bottom: 1px solid var(--border-color);
+}
+
+.nav-scroll-btn:hover {
+    opacity: 1;
+    background: var(--bg-elevated);
+}
+
+.nav-scroll-btn.hidden {
+    display: none;
 }
 
 .main-nav-inner {
-    max-width: 1400px;
+    max-width: 100%;
     margin: 0 auto;
     display: flex;
-    padding: 0 1rem;
+    padding: 0 0.5rem;
     gap: 0;
     overflow-x: auto;
+    overflow-y: hidden;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: thin;
 }
 
 .nav-tab {
     display: flex;
     align-items: center;
-    gap: 0.4rem;
-    padding: 0.75rem 0.9rem;
+    gap: 0.3rem;
+    padding: 0.6rem 0.65rem;
     background: none;
     border: none;
     border-bottom: 2px solid transparent;
     color: var(--text-secondary);
-    font-size: 0.9rem;
+    font-size: 0.78rem;
     font-weight: 600;
     cursor: pointer;
     transition: all var(--transition);
     white-space: nowrap;
+    flex-shrink: 0;
 }
 
 .nav-tab:hover {
@@ -2317,14 +2349,18 @@ footer a:hover {
 
 /* Nav scrollbar styling */
 .main-nav-inner::-webkit-scrollbar {
-    height: 3px;
+    height: 4px;
 }
 
 .main-nav-inner::-webkit-scrollbar-track {
-    background: transparent;
+    background: rgba(255, 255, 255, 0.03);
 }
 
 .main-nav-inner::-webkit-scrollbar-thumb {
-    background: var(--border-color);
-    border-radius: 3px;
+    background: var(--accent);
+    border-radius: 4px;
+}
+
+.main-nav-inner::-webkit-scrollbar-thumb:hover {
+    background: var(--accent-light);
 }
