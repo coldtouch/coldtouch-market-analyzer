@@ -186,6 +186,10 @@ async function updateDbStatus() {
 // ====== TAB NAVIGATION ======
 function initTabs() {
     const tabs = document.querySelectorAll('.nav-tab');
+    const navInner = document.getElementById('nav-inner');
+    const scrollLeft = document.getElementById('nav-scroll-left');
+    const scrollRight = document.getElementById('nav-scroll-right');
+
     tabs.forEach(tab => {
         tab.addEventListener('click', () => {
             tabs.forEach(t => t.classList.remove('active'));
@@ -196,8 +200,35 @@ function initTabs() {
             document.getElementById(`pane-${currentTab}`).classList.remove('hidden');
 
             if (currentTab === 'browser') renderBrowser();
+
+            // Scroll the clicked tab into view
+            tab.scrollIntoView({ behavior: 'smooth', inline: 'nearest', block: 'nearest' });
         });
     });
+
+    // Nav scroll buttons
+    if (navInner && scrollLeft && scrollRight) {
+        const scrollAmount = 200;
+
+        scrollLeft.addEventListener('click', () => {
+            navInner.scrollBy({ left: -scrollAmount, behavior: 'smooth' });
+        });
+        scrollRight.addEventListener('click', () => {
+            navInner.scrollBy({ left: scrollAmount, behavior: 'smooth' });
+        });
+
+        function updateScrollButtons() {
+            const atStart = navInner.scrollLeft <= 5;
+            const atEnd = navInner.scrollLeft + navInner.clientWidth >= navInner.scrollWidth - 5;
+            scrollLeft.classList.toggle('hidden', atStart);
+            scrollRight.classList.toggle('hidden', atEnd);
+        }
+
+        navInner.addEventListener('scroll', updateScrollButtons);
+        window.addEventListener('resize', updateScrollButtons);
+        // Initial check after a tick (DOM needs to render)
+        setTimeout(updateScrollButtons, 100);
+    }
 }
 
 // ============================================================
