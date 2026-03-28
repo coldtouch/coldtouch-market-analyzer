@@ -79,72 +79,64 @@
 
     <!-- ====== NAVIGATION TABS ====== -->
     <nav class="main-nav">
-        <button class="nav-scroll-btn nav-scroll-left" id="nav-scroll-left" aria-label="Scroll tabs left">&#8249;</button>
         <div class="main-nav-inner" id="nav-inner">
-            <button class="nav-tab active" data-tab="browser">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="3" y="14" width="7" height="7"></rect><rect x="14" y="14" width="7" height="7"></rect></svg>
-                Market Browser
-            </button>
-            <button class="nav-tab" data-tab="arbitrage">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"></polyline><polyline points="17 6 23 6 23 12"></polyline></svg>
-                Market Flipping
-            </button>
-            <button class="nav-tab" data-tab="compare">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="20" x2="18" y2="10"></line><line x1="12" y1="20" x2="12" y2="4"></line><line x1="6" y1="20" x2="6" y2="14"></line></svg>
-                City Comparison
-            </button>
-            <button class="nav-tab" data-tab="crafting">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"></path></svg>
-                Crafting Profits
-            </button>
-            <button class="nav-tab" data-tab="transport">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="1" y="3" width="15" height="13"></rect><polygon points="16 8 20 8 23 11 23 16 16 16 16 8"></polygon><circle cx="5.5" cy="18.5" r="2.5"></circle><circle cx="18.5" cy="18.5" r="2.5"></circle></svg>
-                Transport
-            </button>
-            <button class="nav-tab" data-tab="bmflipper">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path><polyline points="9 22 9 12 15 12 15 22"></polyline></svg>
-                BM Flipper
-            </button>
-            <button class="nav-tab" data-tab="journals">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path></svg>
-                Journals
-            </button>
-            <button class="nav-tab" data-tab="rrr">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="19" y1="5" x2="5" y2="19"></line><circle cx="6.5" cy="6.5" r="2.5"></circle><circle cx="17.5" cy="17.5" r="2.5"></circle></svg>
-                RRR Calc
-            </button>
-            <button class="nav-tab" data-tab="repair">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"></path></svg>
-                Repair Cost
-            </button>
-            <button class="nav-tab" data-tab="itempower">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg>
-                Item Power
-            </button>
-            <button class="nav-tab" data-tab="favorites">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg>
-                Favorites
-            </button>
-            <button class="nav-tab" data-tab="mounts">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 12h-4l-3 9L9 3l-3 9H2"></path></svg>
-                Mounts
-            </button>
-            <button class="nav-tab" data-tab="toptraded">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20V10"></path><path d="M18 20V4"></path><path d="M6 20v-4"></path></svg>
-                Top Traded
-            </button>
-            <button class="nav-tab" data-tab="portfolio">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="7" width="20" height="14" rx="2" ry="2"></rect><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"></path></svg>
-                Portfolio
-            </button>
-            <button class="nav-tab" data-tab="farming">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22c4-4 8-7.5 8-12a8 8 0 1 0-16 0c0 4.5 4 8 8 12z"></path><circle cx="12" cy="10" r="3"></circle></svg>
-                Farming
-            </button>
-            <button class="nav-tab" data-tab="builds">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="8.5" cy="7" r="4"></circle><line x1="20" y1="8" x2="20" y2="14"></line><line x1="23" y1="11" x2="17" y2="11"></line></svg>
-                Builds
-            </button>
+            <!-- Market group -->
+            <div class="nav-group">
+                <button class="nav-group-toggle active" data-default-tab="browser">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"></polyline><polyline points="17 6 23 6 23 12"></polyline></svg>
+                    Market
+                    <svg class="nav-chevron" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="6 9 12 15 18 9"></polyline></svg>
+                </button>
+                <div class="nav-dropdown">
+                    <button class="nav-tab active" data-tab="browser">Market Browser</button>
+                    <button class="nav-tab" data-tab="arbitrage">Market Flipping</button>
+                    <button class="nav-tab" data-tab="bmflipper">BM Flipper</button>
+                    <button class="nav-tab" data-tab="compare">City Comparison</button>
+                    <button class="nav-tab" data-tab="toptraded">Top Traded</button>
+                    <button class="nav-tab" data-tab="itempower">Item Power</button>
+                    <button class="nav-tab" data-tab="favorites">Favorites</button>
+                </div>
+            </div>
+            <!-- Crafting group -->
+            <div class="nav-group">
+                <button class="nav-group-toggle" data-default-tab="crafting">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"></path></svg>
+                    Crafting
+                    <svg class="nav-chevron" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="6 9 12 15 18 9"></polyline></svg>
+                </button>
+                <div class="nav-dropdown">
+                    <button class="nav-tab" data-tab="crafting">Crafting Profits</button>
+                    <button class="nav-tab" data-tab="journals">Journals</button>
+                    <button class="nav-tab" data-tab="rrr">RRR Calculator</button>
+                    <button class="nav-tab" data-tab="repair">Repair Cost</button>
+                </div>
+            </div>
+            <!-- Trading group -->
+            <div class="nav-group">
+                <button class="nav-group-toggle" data-default-tab="transport">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="1" y="3" width="15" height="13"></rect><polygon points="16 8 20 8 23 11 23 16 16 16 16 8"></polygon><circle cx="5.5" cy="18.5" r="2.5"></circle><circle cx="18.5" cy="18.5" r="2.5"></circle></svg>
+                    Trading
+                    <svg class="nav-chevron" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="6 9 12 15 18 9"></polyline></svg>
+                </button>
+                <div class="nav-dropdown">
+                    <button class="nav-tab" data-tab="transport">Transport Routes</button>
+                    <button class="nav-tab" data-tab="portfolio">Portfolio Tracker</button>
+                </div>
+            </div>
+            <!-- Game Tools group -->
+            <div class="nav-group">
+                <button class="nav-group-toggle" data-default-tab="mounts">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 12h-4l-3 9L9 3l-3 9H2"></path></svg>
+                    Game Tools
+                    <svg class="nav-chevron" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="6 9 12 15 18 9"></polyline></svg>
+                </button>
+                <div class="nav-dropdown">
+                    <button class="nav-tab" data-tab="mounts">Mounts Database</button>
+                    <button class="nav-tab" data-tab="farming">Farm Calculator</button>
+                    <button class="nav-tab" data-tab="builds">Community Builds</button>
+                </div>
+            </div>
+            <!-- Standalone tabs -->
             <button class="nav-tab" data-tab="alerts">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path><path d="M13.73 21a2 2 0 0 1-3.46 0"></path></svg>
                 Alerts
@@ -158,7 +150,6 @@
                 Community
             </button>
         </div>
-        <button class="nav-scroll-btn nav-scroll-right" id="nav-scroll-right" aria-label="Scroll tabs right">&#8250;</button>
     </nav>
 
     <main>
@@ -1339,6 +1330,15 @@
                 <div class="about-section">
                     <h2 class="about-heading">Changelog</h2>
                     <div class="changelog-list">
+                        <div class="changelog-entry">
+                            <div class="changelog-date">March 28, 2026</div>
+                            <div class="changelog-title">Navigation Redesign</div>
+                            <ul>
+                                <li>Reorganized 19 tabs into 4 dropdown groups: Market, Crafting, Trading, Game Tools</li>
+                                <li>Cleaner navigation with dropdown menus and chevron indicators</li>
+                                <li>Mobile-friendly responsive dropdowns</li>
+                            </ul>
+                        </div>
                         <div class="changelog-entry">
                             <div class="changelog-date">March 28, 2026</div>
                             <div class="changelog-title">Massive Feature Expansion (12 New Tools)</div>
