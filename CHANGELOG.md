@@ -26,6 +26,7 @@ Inspired by AlbionFreeMarket.com, this update adds 12 new features — all compl
 #### UI Improvements
 - Navigation bar optimized for 15+ tabs with compact styling and smooth horizontal scrolling
 - New CSS styles for tables, progress bars, favorite chips, build cards, and mount groupings
+- **City Comparison Toolbar**: Injected the Global Action Toolbar (Refresh, History) directly into the City Comparison item headers to match the rest of the site and provide instant 0-delay refreshes and 24h/7d/4w volume graphs.
 
 ---
 

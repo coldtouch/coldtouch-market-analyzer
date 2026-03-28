@@ -1051,9 +1051,19 @@ async function doCompare() {
                     <img src="https://render.albiononline.com/v1/item/${itemId}.png" alt="">
                     ${getEnchantmentBadge(itemId)}
                 </div>
-                <div>
+                <div style="flex:1;">
                     <h3>${name} <span class="tier-badge">${getTierEnchLabel(itemId)}</span></h3>
                     <span style="color:var(--text-muted);font-size:0.8rem;">${itemId}</span>
+                </div>
+                <div class="item-card-actions" style="margin-left: auto; display: flex; gap: 0.5rem; justify-content: flex-end;">
+                    <button class="btn-card-action" data-action="refresh" data-item="${itemId}" title="Refresh this item's data">
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 4v6h-6"></path><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path></svg>
+                        Refresh
+                    </button>
+                    <button class="btn-card-action" data-action="graph" data-item="${itemId}" title="View price history">
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"></polyline></svg>
+                        History
+                    </button>
                 </div>
             </div>
         `;
@@ -1150,6 +1160,32 @@ async function doCompare() {
             tableHTML += `</tbody></table>`;
             container.insertAdjacentHTML('beforeend', tableHTML);
         }
+
+        // Wire up actions
+        container.querySelectorAll('[data-action="refresh"]').forEach(btn => {
+            btn.addEventListener('click', async () => {
+                const id = btn.dataset.item;
+                btn.disabled = true;
+                const originalHtml = btn.innerHTML;
+                btn.innerHTML = '<div class="spinner" style="width:12px;height:12px;border-width:2px;margin:0;"></div>';
+                try {
+                    const chunk = await fetchMarketChunk(getServer(), [id]);
+                    if (chunk.length > 0) await MarketDB.saveMarketData(chunk);
+                    trackContribution(1);
+                    await doCompare();
+                } catch (e) {
+                    console.error('Refresh failed:', e);
+                }
+                if (document.contains(btn)) {
+                    btn.disabled = false;
+                    btn.innerHTML = originalHtml;
+                }
+            });
+        });
+
+        container.querySelectorAll('[data-action="graph"]').forEach(btn => {
+            btn.addEventListener('click', () => showGraph(btn.dataset.item));
+        });
 
         await updateDbStatus();
     } catch (e) {
