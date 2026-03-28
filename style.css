@@ -268,54 +268,95 @@ header::after {
     align-items: stretch;
 }
 
-.nav-scroll-btn {
-    background: var(--bg-surface);
-    border: none;
-    color: var(--accent);
-    font-size: 1.4rem;
-    font-weight: 700;
-    cursor: pointer;
-    padding: 0 0.5rem;
-    flex-shrink: 0;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    opacity: 0.6;
-    transition: opacity var(--transition), background var(--transition);
-    border-bottom: 1px solid var(--border-color);
-}
-
-.nav-scroll-btn:hover {
-    opacity: 1;
-    background: var(--bg-elevated);
-}
-
-.nav-scroll-btn.hidden {
-    display: none;
-}
-
 .main-nav-inner {
     max-width: 100%;
     margin: 0 auto;
     display: flex;
     padding: 0 0.5rem;
-    gap: 0;
-    overflow-x: auto;
-    overflow-y: hidden;
-    -webkit-overflow-scrolling: touch;
-    scrollbar-width: thin;
+    gap: 0.15rem;
+    align-items: stretch;
 }
 
-.nav-tab {
+/* Nav group (dropdown container) */
+.nav-group {
+    position: relative;
+}
+
+.nav-group-toggle {
     display: flex;
     align-items: center;
-    gap: 0.3rem;
-    padding: 0.6rem 0.65rem;
+    gap: 0.35rem;
+    padding: 0.7rem 0.75rem;
     background: none;
     border: none;
     border-bottom: 2px solid transparent;
     color: var(--text-secondary);
-    font-size: 0.78rem;
+    font-size: 0.82rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all var(--transition);
+    white-space: nowrap;
+}
+
+.nav-group-toggle:hover {
+    color: var(--text-primary);
+    background: rgba(255, 255, 255, 0.03);
+}
+
+.nav-group-toggle.active {
+    color: var(--accent);
+    border-bottom-color: var(--accent);
+}
+
+.nav-group-toggle svg:not(.nav-chevron) {
+    opacity: 0.6;
+}
+
+.nav-group-toggle.active svg:not(.nav-chevron) {
+    opacity: 1;
+}
+
+.nav-chevron {
+    transition: transform 0.2s ease;
+    opacity: 0.5;
+    margin-left: 0.1rem;
+}
+
+.nav-group.open .nav-chevron {
+    transform: rotate(180deg);
+}
+
+/* Dropdown menu */
+.nav-dropdown {
+    display: none;
+    position: absolute;
+    top: 100%;
+    left: 0;
+    min-width: 180px;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-color);
+    border-radius: 0 0 var(--radius) var(--radius);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+    z-index: 200;
+    flex-direction: column;
+    padding: 0.25rem 0;
+}
+
+.nav-group.open .nav-dropdown {
+    display: flex;
+}
+
+/* Nav tabs (both standalone and inside dropdowns) */
+.nav-tab {
+    display: flex;
+    align-items: center;
+    gap: 0.3rem;
+    padding: 0.7rem 0.75rem;
+    background: none;
+    border: none;
+    border-bottom: 2px solid transparent;
+    color: var(--text-secondary);
+    font-size: 0.8rem;
     font-weight: 600;
     cursor: pointer;
     transition: all var(--transition);
@@ -325,7 +366,7 @@ header::after {
 
 .nav-tab:hover {
     color: var(--text-primary);
-    background: rgba(255, 255, 255, 0.02);
+    background: rgba(255, 255, 255, 0.03);
 }
 
 .nav-tab.active {
@@ -339,6 +380,25 @@ header::after {
 
 .nav-tab.active svg {
     opacity: 1;
+}
+
+/* Tabs inside dropdowns: different styling */
+.nav-dropdown .nav-tab {
+    border-bottom: none;
+    padding: 0.55rem 1rem;
+    font-size: 0.78rem;
+    width: 100%;
+    text-align: left;
+    border-radius: 0;
+}
+
+.nav-dropdown .nav-tab:hover {
+    background: rgba(255, 255, 255, 0.06);
+}
+
+.nav-dropdown .nav-tab.active {
+    color: var(--accent);
+    background: rgba(var(--accent-rgb, 59, 130, 246), 0.1);
 }
 
 /* ====== MAIN CONTENT ====== */
@@ -1371,12 +1431,35 @@ footer a:hover {
         gap: 0.75rem;
     }
 
-    .nav-tab {
-        padding: 0.75rem 1rem;
-        font-size: 0.8rem;
+    .main-nav-inner {
+        flex-wrap: wrap;
+        gap: 0;
     }
 
-    .nav-tab svg {
+    .nav-group {
+        position: static;
+    }
+
+    .nav-group-toggle {
+        padding: 0.6rem 0.6rem;
+        font-size: 0.75rem;
+    }
+
+    .nav-dropdown {
+        position: fixed;
+        top: auto;
+        left: 0.5rem;
+        right: 0.5rem;
+        min-width: auto;
+    }
+
+    .nav-tab {
+        padding: 0.6rem 0.6rem;
+        font-size: 0.75rem;
+    }
+
+    .nav-tab svg,
+    .nav-group-toggle svg:not(.nav-chevron) {
         display: none;
     }
 
@@ -2347,20 +2430,3 @@ footer a:hover {
     border-bottom: 1px solid var(--border-color);
 }
 
-/* Nav scrollbar styling */
-.main-nav-inner::-webkit-scrollbar {
-    height: 4px;
-}
-
-.main-nav-inner::-webkit-scrollbar-track {
-    background: rgba(255, 255, 255, 0.03);
-}
-
-.main-nav-inner::-webkit-scrollbar-thumb {
-    background: var(--accent);
-    border-radius: 4px;
-}
-
-.main-nav-inner::-webkit-scrollbar-thumb:hover {
-    background: var(--accent-light);
-}

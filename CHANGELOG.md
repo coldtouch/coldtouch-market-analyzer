@@ -2,6 +2,15 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-03-28 — Navigation Redesign (Grouped Dropdowns)
+
+- Reorganized 19 tabs into 4 dropdown groups: Market, Crafting, Trading, Game Tools
+- Each group has a toggle button with chevron indicator and dropdown menu
+- Standalone tabs (Alerts, About, Community) remain directly accessible
+- Dropdowns auto-close when clicking a tab or clicking outside
+- Mobile responsive: dropdowns use fixed positioning for full-width menus
+- Removed old horizontal scroll buttons (no longer needed)
+
 ### 2026-03-28 — Massive Feature Expansion (12 New Tools)
 
 Inspired by AlbionFreeMarket.com, this update adds 12 new features — all completely free with no paywalls.

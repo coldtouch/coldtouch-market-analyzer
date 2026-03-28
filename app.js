@@ -186,49 +186,59 @@ async function updateDbStatus() {
 // ====== TAB NAVIGATION ======
 function initTabs() {
     const tabs = document.querySelectorAll('.nav-tab');
-    const navInner = document.getElementById('nav-inner');
-    const scrollLeft = document.getElementById('nav-scroll-left');
-    const scrollRight = document.getElementById('nav-scroll-right');
+    const groups = document.querySelectorAll('.nav-group');
+    const groupToggles = document.querySelectorAll('.nav-group-toggle');
 
+    // Close all dropdowns
+    function closeAllDropdowns() {
+        groups.forEach(g => g.classList.remove('open'));
+    }
+
+    // Handle group toggle clicks (open/close dropdown)
+    groupToggles.forEach(toggle => {
+        toggle.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const group = toggle.closest('.nav-group');
+            const isOpen = group.classList.contains('open');
+            closeAllDropdowns();
+            if (!isOpen) group.classList.add('open');
+        });
+    });
+
+    // Handle tab clicks (switch tab content)
     tabs.forEach(tab => {
-        tab.addEventListener('click', () => {
+        tab.addEventListener('click', (e) => {
+            e.stopPropagation();
+
+            // Deactivate all tabs and group toggles
             tabs.forEach(t => t.classList.remove('active'));
+            groupToggles.forEach(g => g.classList.remove('active'));
+
+            // Activate clicked tab
             tab.classList.add('active');
             currentTab = tab.dataset.tab;
 
+            // Activate parent group toggle if tab is inside a dropdown
+            const parentGroup = tab.closest('.nav-group');
+            if (parentGroup) {
+                parentGroup.querySelector('.nav-group-toggle').classList.add('active');
+            }
+
+            // Switch pane
             document.querySelectorAll('.tab-pane').forEach(p => p.classList.add('hidden'));
             document.getElementById(`pane-${currentTab}`).classList.remove('hidden');
 
             if (currentTab === 'browser') renderBrowser();
 
-            // Scroll the clicked tab into view
-            tab.scrollIntoView({ behavior: 'smooth', inline: 'nearest', block: 'nearest' });
+            // Close dropdown after selection
+            closeAllDropdowns();
         });
     });
 
-    // Nav scroll buttons
-    if (navInner && scrollLeft && scrollRight) {
-        const scrollAmount = 200;
-
-        scrollLeft.addEventListener('click', () => {
-            navInner.scrollBy({ left: -scrollAmount, behavior: 'smooth' });
-        });
-        scrollRight.addEventListener('click', () => {
-            navInner.scrollBy({ left: scrollAmount, behavior: 'smooth' });
-        });
-
-        function updateScrollButtons() {
-            const atStart = navInner.scrollLeft <= 5;
-            const atEnd = navInner.scrollLeft + navInner.clientWidth >= navInner.scrollWidth - 5;
-            scrollLeft.classList.toggle('hidden', atStart);
-            scrollRight.classList.toggle('hidden', atEnd);
-        }
-
-        navInner.addEventListener('scroll', updateScrollButtons);
-        window.addEventListener('resize', updateScrollButtons);
-        // Initial check after a tick (DOM needs to render)
-        setTimeout(updateScrollButtons, 100);
-    }
+    // Close dropdowns when clicking outside
+    document.addEventListener('click', () => {
+        closeAllDropdowns();
+    });
 }
 
 // ============================================================
