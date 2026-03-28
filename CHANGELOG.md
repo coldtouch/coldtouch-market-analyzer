@@ -2,6 +2,12 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-03-29 — Fix: UI instantly interactive on page load
+
+- Moved all event listener setup + Live Sync connect to run before async VPS fetches
+- Added 5s timeout to Discord auth check (`/api/me`) — prevents slow VPS response from blocking UI
+- Previously, slow VPS startup caused buttons/menus to be unresponsive for 10–25 seconds
+
 ### 2026-03-28 — Navigation Redesign (Grouped Dropdowns)
 
 - Reorganized 19 tabs into 4 dropdown groups: Market, Crafting, Trading, Game Tools

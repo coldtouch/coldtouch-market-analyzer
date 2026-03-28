@@ -2908,7 +2908,7 @@ function renderRepairResults(results) {
 
 async function checkDiscordAuth() {
     try {
-        const res = await fetch(`${VPS_BASE}/api/me`, {credentials: 'include'});
+        const res = await fetch(`${VPS_BASE}/api/me`, {credentials: 'include', signal: AbortSignal.timeout(5000)});
         const data = await res.json();
         if (data.loggedIn) {
             discordUser = data.user;
@@ -2953,42 +2953,8 @@ async function loadServerCache(silent = false) {
 }
 
 async function init() {
-    await checkDiscordAuth();
-    await loadData();
-
-    // Auto-detect which game server the VPS scans and match the dropdown
-    try {
-        const statusRes = await fetch(`${VPS_BASE}/api/market-cache/status`);
-        if (statusRes.ok) {
-            const statusData = await statusRes.json();
-            if (statusData.gameServer) {
-                const serverMap = { 'west': 'west', 'east': 'east', 'europe': 'europe' };
-                const serverVal = serverMap[statusData.gameServer];
-                if (serverVal) {
-                    document.getElementById('server-select').value = serverVal;
-                }
-            }
-        }
-    } catch (e) { /* ignore */ }
-
-    // Load shared server cache (always — keeps data fresh for all users)
-    await loadServerCache();
-
-    // Evict stale prices older than 24h
-    await MarketDB.evictStale(24 * 60 * 60 * 1000);
-
-    await updateDbStatus();
-
-    // Background refresh: pull server cache every 5 min + evict stale data
-    setInterval(async () => {
-        await loadServerCache(true);
-        await MarketDB.evictStale(24 * 60 * 60 * 1000);
-        if (currentTab === 'browser') renderBrowser();
-    }, 5 * 60 * 1000);
-
-    // Keep db-status indicator fresh
-    setInterval(updateDbStatus, 60 * 1000);
-
+    // === IMMEDIATE: attach all UI listeners before any async work ===
+    // Scripts are at bottom of <body> so DOM is fully ready here.
     initTabs();
 
     // Fresh filter mode shows/hides threshold dropdown
@@ -3187,13 +3153,50 @@ async function init() {
     // Initialize portfolio on load
     renderPortfolio();
 
-    // Load favorites dropdown on page load
+    // Load favorites dropdown on load
     loadFavoriteLists();
 
-    // Initialize 0-Delay Live Sync
+    // Connect live sync immediately — doesn't need data
     initLiveSync();
 
-    // Initial render
+    // === ASYNC: load data and update UI in background ===
+    await checkDiscordAuth();
+    await loadData();
+
+    // Auto-detect which game server the VPS scans and match the dropdown
+    try {
+        const statusRes = await fetch(`${VPS_BASE}/api/market-cache/status`);
+        if (statusRes.ok) {
+            const statusData = await statusRes.json();
+            if (statusData.gameServer) {
+                const serverMap = { 'west': 'west', 'east': 'east', 'europe': 'europe' };
+                const serverVal = serverMap[statusData.gameServer];
+                if (serverVal) {
+                    document.getElementById('server-select').value = serverVal;
+                }
+            }
+        }
+    } catch (e) { /* ignore */ }
+
+    // Load shared server cache (always — keeps data fresh for all users)
+    await loadServerCache();
+
+    // Evict stale prices older than 24h
+    await MarketDB.evictStale(24 * 60 * 60 * 1000);
+
+    await updateDbStatus();
+
+    // Background refresh: pull server cache every 5 min + evict stale data
+    setInterval(async () => {
+        await loadServerCache(true);
+        await MarketDB.evictStale(24 * 60 * 60 * 1000);
+        if (currentTab === 'browser') renderBrowser();
+    }, 5 * 60 * 1000);
+
+    // Keep db-status indicator fresh
+    setInterval(updateDbStatus, 60 * 1000);
+
+    // Initial render (now we have item data)
     renderBrowser();
 }
 
