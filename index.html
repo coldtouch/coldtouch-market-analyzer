@@ -692,7 +692,9 @@
                 <p>Scanning Black Market prices...</p>
             </div>
             <div id="bm-error" class="error-message hidden"></div>
-            <div class="results-grid" id="bm-results"></div>
+            <div class="results-grid" id="bm-results">
+                <div class="empty-state"><p>Click "Scan Black Market" to find profitable items to flip to the BM.</p><p class="hint">Compares buy prices in royal cities against Black Market sell orders.</p></div>
+            </div>
         </section>
 
         <!-- ====== TAB: JOURNALS CALCULATOR ====== -->
@@ -739,7 +741,9 @@
                 <div class="spinner"></div>
                 <p>Calculating journal profits...</p>
             </div>
-            <div id="journals-results"></div>
+            <div id="journals-results">
+                <div class="empty-state"><p>Click "Calculate" to see journal profit across all types and tiers.</p><p class="hint">Shows buy-empty / sell-full profit with ROI for each journal type.</p></div>
+            </div>
         </section>
 
         <!-- ====== TAB: RRR CALCULATOR ====== -->
@@ -833,7 +837,9 @@
                     <button id="repair-calc-btn" class="btn-scan" style="height:38px; padding:0 1.5rem; font-size:0.85rem;">Calculate</button>
                 </div>
             </div>
-            <div id="repair-results"></div>
+            <div id="repair-results">
+                <div class="empty-state"><p>Search for an item and click "Calculate" to see repair costs.</p><p class="hint">Shows cost breakdown by tier, enchantment, and quality level.</p></div>
+            </div>
             <div id="repair-breakdown" class="controls-panel" style="margin-top:1rem; display:none;">
                 <h3 style="color:var(--text-primary); margin:0 0 0.75rem 0; font-size:1rem;">Repair Cost Breakdown</h3>
                 <div id="repair-breakdown-content"></div>
@@ -849,9 +855,10 @@
                     <div class="control-group">
                         <label for="ip-category">Category</label>
                         <select id="ip-category">
+                            <option value="all">All Gear</option>
                             <option value="weapons">Weapons</option>
                             <option value="armor">Armor</option>
-                            <option value="accessories">Accessories</option>
+                            <option value="offhand">Off-hand</option>
                         </select>
                     </div>
                     <div class="control-group">
@@ -880,9 +887,10 @@
                     <div class="control-group">
                         <label for="ip-sort">Sort By</label>
                         <select id="ip-sort">
-                            <option value="silverPerIP">Lowest Silver/IP</option>
-                            <option value="ip">Highest IP</option>
-                            <option value="price">Lowest Price</option>
+                            <option value="silver_per_ip">Best Value (Silver/IP)</option>
+                            <option value="ip_desc">Highest IP</option>
+                            <option value="price_asc">Lowest Price</option>
+                            <option value="price_desc">Highest Price</option>
                         </select>
                     </div>
                     <button id="ip-scan-btn" class="btn-scan" style="height:38px; padding:0 1.5rem; font-size:0.85rem;">Compare IP</button>
@@ -892,7 +900,10 @@
                 <div class="spinner"></div>
                 <p>Analyzing item power values...</p>
             </div>
-            <div id="ip-results"></div>
+            <div class="error-message hidden" id="ip-error"></div>
+            <div id="ip-results">
+                <div class="empty-state"><p>Click "Compare IP" to analyze item power vs price across gear.</p><p class="hint">Lower silver per IP = better value for money.</p></div>
+            </div>
         </section>
 
         <!-- ====== TAB: FAVORITES ====== -->
@@ -934,7 +945,14 @@
             </div>
 
             <!-- Loaded list results -->
-            <div id="fav-results" style="margin-top:1rem;"></div>
+            <div class="loading-state hidden" id="fav-spinner">
+                <div class="spinner"></div>
+                <p>Loading favorite list prices...</p>
+            </div>
+            <div class="error-message hidden" id="fav-error"></div>
+            <div id="fav-results" style="margin-top:1rem;">
+                <div class="empty-state"><p>Create a new list or load a saved one to see prices.</p><p class="hint">Click "+ New List" to get started.</p></div>
+            </div>
         </section>
 
         <!-- ====== TAB: MOUNTS ====== -->
@@ -963,12 +981,22 @@
                         </select>
                     </div>
                     <div class="control-group">
+                        <label for="mount-type">Type</label>
+                        <select id="mount-type">
+                            <option value="all">All Types</option>
+                            <option value="riding">Riding</option>
+                            <option value="transport">Transport</option>
+                            <option value="battle">Battle</option>
+                        </select>
+                    </div>
+                    <div class="control-group">
                         <label for="mount-sort">Sort By</label>
                         <select id="mount-sort">
                             <option value="name">Name</option>
-                            <option value="price">Lowest Price</option>
-                            <option value="speed">Highest Speed</option>
-                            <option value="load">Highest Load</option>
+                            <option value="price_asc">Lowest Price</option>
+                            <option value="price_desc">Highest Price</option>
+                            <option value="tier_asc">Tier (Low-High)</option>
+                            <option value="tier_desc">Tier (High-Low)</option>
                         </select>
                     </div>
                     <div class="control-group">
@@ -990,7 +1018,10 @@
                 <div class="spinner"></div>
                 <p>Loading mount data...</p>
             </div>
-            <div id="mount-results"></div>
+            <div class="error-message hidden" id="mount-error"></div>
+            <div id="mount-results">
+                <div class="empty-state"><p>Click "Load Mounts" to browse all available mounts with live prices.</p><p class="hint">Filter by type, tier, and sort by price.</p></div>
+            </div>
         </section>
 
         <!-- ====== TAB: TOP TRADED ====== -->
@@ -1050,7 +1081,9 @@
                 <div class="spinner"></div>
                 <p>Analyzing trading volumes...</p>
             </div>
-            <div id="top-results"></div>
+            <div id="top-results">
+                <div class="empty-state"><p>Click "Load Top Items" to see the most actively traded items.</p><p class="hint">Ranked by 7-day trading volume from the Charts API.</p></div>
+            </div>
         </section>
 
         <!-- ====== TAB: PORTFOLIO ====== -->
@@ -1156,7 +1189,9 @@
                 <div class="spinner"></div>
                 <p>Fetching farming prices...</p>
             </div>
-            <div id="farm-results"></div>
+            <div id="farm-results">
+                <div class="empty-state"><p>Click "Calculate" to see farming profit for each crop, herb, or animal.</p><p class="hint">Shows seed cost vs harvest revenue and profit per hour.</p></div>
+            </div>
         </section>
 
         <!-- ====== TAB: BUILDS ====== -->
@@ -1187,7 +1222,9 @@
                 <div class="spinner"></div>
                 <p>Loading community builds...</p>
             </div>
-            <div id="builds-results" class="results-grid"></div>
+            <div id="builds-results" class="results-grid">
+                <div class="empty-state"><p>Click "Load Builds" to browse community character builds.</p><p class="hint">View equipment loadouts, tags, and vote counts from AlbionFreeMarket.</p></div>
+            </div>
         </section>
 
         <!-- ====== TAB: ALERTS ====== -->
@@ -1330,6 +1367,16 @@
                 <div class="about-section">
                     <h2 class="about-heading">Changelog</h2>
                     <div class="changelog-list">
+                        <div class="changelog-entry">
+                            <div class="changelog-date">March 29, 2026</div>
+                            <div class="changelog-title">Feature Audit &amp; Polish Pass</div>
+                            <ul>
+                                <li>Added empty-state hints to all new tabs (no more blank screens)</li>
+                                <li>Fixed missing UI elements: spinners, error messages, mount type filter</li>
+                                <li>Fixed RRR Calculator rendering and auto-calculation on load</li>
+                                <li>Improved Item Power and Mounts filtering/sorting options</li>
+                            </ul>
+                        </div>
                         <div class="changelog-entry">
                             <div class="changelog-date">March 28, 2026</div>
                             <div class="changelog-title">Navigation Redesign</div>

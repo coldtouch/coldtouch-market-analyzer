@@ -2644,75 +2644,36 @@ function calculateRRRStandalone() {
 }
 
 function renderRRRResults(results) {
-    const container = document.getElementById('rrr-results');
-    container.innerHTML = '';
-
     const rr = results.returnRate;
-    const barWidth = Math.min(100, rr);
-    const barColor = rr >= 50 ? 'var(--green, #22c55e)' : rr >= 30 ? 'var(--accent, #c64a38)' : 'var(--red, #ef4444)';
+    const barColor = rr >= 50 ? '#22c55e' : rr >= 30 ? 'var(--accent)' : '#ef4444';
 
-    let html = `
-        <div class="craft-summary-card">
-            <h3 style="margin:0 0 1rem 0; color:var(--accent);">Resource Return Rate</h3>
-            <div style="text-align:center; margin-bottom:1.5rem;">
-                <div style="font-size:3rem; font-weight:800; color:${barColor};">${rr.toFixed(1)}%</div>
-                <div style="font-size:0.85rem; color:var(--text-muted);">Effective Return Rate (${results.activityType})</div>
-            </div>
-            <div class="profit-gauge" style="height:12px; border-radius:6px; margin-bottom:1.5rem;">
-                <div class="profit-gauge-fill positive" style="width:${barWidth}%; background:${barColor}; border-radius:6px; height:100%;"></div>
-            </div>
+    // Update the built-in HTML elements
+    const rateEl = document.getElementById('rrr-rate');
+    const savedEl = document.getElementById('rrr-saved');
+    const breakevenEl = document.getElementById('rrr-breakeven');
+    const barEl = document.getElementById('rrr-bar');
+    const barLabelEl = document.getElementById('rrr-bar-label');
 
-            <div style="margin-bottom:1.5rem;">
-                <h4 style="color:var(--text-secondary); margin:0 0 0.5rem 0; font-size:0.85rem;">Breakdown</h4>
-                <table class="compare-table" style="width:100%;">
-                    <tbody>
-                        <tr>
-                            <td>Base (Royal City)</td>
-                            <td style="text-align:right; font-weight:700;">${results.baseContribution.toFixed(1)}%</td>
-                        </tr>
-                        <tr>
-                            <td>Specialization (Spec ${results.specLevel})</td>
-                            <td style="text-align:right; font-weight:700; color:var(--accent);">+${results.specContribution.toFixed(1)}%</td>
-                        </tr>
-                        <tr>
-                            <td>City Bonus (+${results.cityBonus}% PB)</td>
-                            <td style="text-align:right; font-weight:700; color:var(--accent);">+${results.cityContribution.toFixed(1)}%</td>
-                        </tr>
-                        ${results.useFocus ? `<tr>
-                            <td>Focus</td>
-                            <td style="text-align:right; font-weight:700; color:var(--green, #22c55e);">+${results.focusContribution.toFixed(1)}%</td>
-                        </tr>` : ''}
-                        <tr class="total-row">
-                            <td><strong>Total RRR</strong></td>
-                            <td style="text-align:right; font-weight:800; color:${barColor};">${rr.toFixed(1)}%</td>
-                        </tr>
-                    </tbody>
-                </table>
-            </div>
-
-            <div style="margin-bottom:1rem;">
-                <h4 style="color:var(--text-secondary); margin:0 0 0.5rem 0; font-size:0.85rem;">Materials Saved</h4>
-                <div class="craft-summary-stats">
-                    <div class="stat-box">
-                        <div class="stat-label">Per 100 Crafts (100 mats each)</div>
-                        <div class="stat-value text-green">${results.materialsSavedPer100} materials returned</div>
-                    </div>
-                    <div class="stat-box">
-                        <div class="stat-label">Effective Cost Multiplier</div>
-                        <div class="stat-value text-accent">${(100 - rr).toFixed(1)}%</div>
-                    </div>
-                </div>
-            </div>
-
-            <div style="font-size:0.75rem; color:var(--text-muted); border-top:1px solid var(--border); padding-top:0.75rem;">
-                <strong>Note:</strong> Premium adds 50% more crafting focus regeneration per day but does not directly increase the return rate.
-                Focus provides a significant boost to return rate when active. The formula uses Albion's Production Bonus system:
-                RRR = 1 - 1/(1 + totalPB/100), where PB = base(18) + cityBonus + focusPB(59 if active) + specPB(spec * 0.2).
-            </div>
-        </div>
-    `;
-
-    container.innerHTML = html;
+    if (rateEl) {
+        rateEl.textContent = rr.toFixed(1) + '%';
+        rateEl.style.color = barColor;
+    }
+    if (savedEl) {
+        savedEl.textContent = results.materialsSavedPer100 + ' mats';
+        savedEl.style.color = barColor;
+    }
+    if (breakevenEl) {
+        const costMult = (100 - rr).toFixed(1);
+        breakevenEl.innerHTML = `You only pay <strong style="color:${barColor};">${costMult}%</strong> of material costs`;
+    }
+    if (barEl) {
+        barEl.style.width = Math.min(100, rr) + '%';
+        barEl.style.background = `linear-gradient(90deg, ${barColor}, #f0c040)`;
+    }
+    if (barLabelEl) {
+        barLabelEl.textContent = rr.toFixed(1) + '%';
+        barLabelEl.style.color = barColor;
+    }
 }
 
 // ============================================================
@@ -3069,7 +3030,7 @@ async function init() {
         rrrCalcBtn.addEventListener('click', () => calculateRRRStandalone());
     }
     // Also auto-calculate on input changes for RRR
-    ['rrr-activity', 'rrr-spec', 'rrr-city-bonus', 'rrr-use-focus'].forEach(elId => {
+    ['rrr-activity', 'rrr-spec', 'rrr-city-bonus', 'rrr-use-focus', 'rrr-premium'].forEach(elId => {
         const el = document.getElementById(elId);
         if (el) {
             el.addEventListener('change', () => calculateRRRStandalone());
@@ -3155,6 +3116,9 @@ async function init() {
 
     // Load favorites dropdown on load
     loadFavoriteLists();
+
+    // Initialize RRR with default values so it doesn't show "--"
+    calculateRRRStandalone();
 
     // Connect live sync immediately — doesn't need data
     initLiveSync();

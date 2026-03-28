@@ -2,6 +2,17 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-03-29 — Feature Audit & Polish Pass
+
+- Added missing HTML elements: `ip-error`, `fav-spinner`, `fav-error`, `mount-error`, `mount-type` filter
+- Added empty-state placeholder hints to all 9 new feature tabs (no more blank screens on first visit)
+- Fixed RRR Calculator: now updates built-in result elements instead of replacing them; auto-calculates on load
+- Added Mount Type filter (Riding / Transport / Battle) to Mounts Database
+- Fixed Item Power sort options to match JS (silver/IP, highest IP, lowest/highest price)
+- Added "All Gear" and "Off-hand" categories to Item Power Checker
+- Fixed Mount sort options (removed non-functional speed/load sorts, added tier sorting)
+- RRR premium checkbox now triggers recalculation
+
 ### 2026-03-29 — Fix: UI instantly interactive on page load
 
 - Moved all event listener setup + Live Sync connect to run before async VPS fetches
