@@ -1308,15 +1308,15 @@ function computeSpreadStats() {
 setTimeout(computeSpreadStats, 5 * 60 * 1000);
 setInterval(computeSpreadStats, 60 * 60 * 1000);
 
-// === DATA COMPACTION (runs daily) ===
+// === DATA COMPACTION (runs every 6 hours) ===
 function compactOldData() {
   const now = Date.now();
-  const sevenDaysAgo = now - 7 * 24 * 60 * 60 * 1000;
+  const oneDayAgo = now - 24 * 60 * 60 * 1000;
   const thirtyDaysAgo = now - 30 * 24 * 60 * 60 * 1000;
 
   console.log('[Compaction] Starting...');
 
-  // Compact >7 day old raw snapshots into hourly averages
+  // Compact >24h old raw snapshots into hourly averages
   db.all(
     `SELECT item_id, quality, city,
       CAST(recorded_at / 3600000 AS INTEGER) * 3600000 as hour_start,
@@ -1324,12 +1324,12 @@ function compactOldData() {
       AVG(buy_price_max) as avg_buy,
       COUNT(*) as cnt
     FROM price_snapshots
-    WHERE recorded_at < ? AND recorded_at > ?
+    WHERE recorded_at < ?
     GROUP BY item_id, quality, city, hour_start`,
-    [sevenDaysAgo, thirtyDaysAgo],
+    [oneDayAgo],
     (err, rows) => {
       if (err || !rows || rows.length === 0) {
-        console.log('[Compaction] No data to compact (7-30d range)');
+        console.log('[Compaction] No raw snapshots older than 24h to compact');
         return;
       }
 
@@ -1340,9 +1340,9 @@ function compactOldData() {
       }
       db.run('COMMIT', () => {
         stmt.finalize();
-        // Delete the compacted raw snapshots
-        db.run(`DELETE FROM price_snapshots WHERE recorded_at < ? AND recorded_at > ?`, [sevenDaysAgo, thirtyDaysAgo], (err2) => {
-          if (!err2) console.log(`[Compaction] Compacted ${rows.length} hourly averages, deleted raw snapshots (7-30d)`);
+        // Delete all compacted raw snapshots (older than 24h)
+        db.run(`DELETE FROM price_snapshots WHERE recorded_at < ?`, [oneDayAgo], (err2) => {
+          if (!err2) console.log(`[Compaction] Compacted ${rows.length} hourly averages, deleted raw snapshots older than 24h`);
         });
       });
     }
@@ -1384,9 +1384,9 @@ function compactOldData() {
   db.run(`DELETE FROM contributions WHERE created_at < ?`, [sixtyDaysAgo]);
 }
 
-// Run compaction daily, first run 10 minutes after start
+// Run compaction every 6 hours, first run 10 minutes after start
 setTimeout(compactOldData, 10 * 60 * 1000);
-setInterval(compactOldData, 24 * 60 * 60 * 1000);
+setInterval(compactOldData, 6 * 60 * 60 * 1000);
 
 // === HISTORICAL BACKFILL (Charts + History APIs) ===
 // Runs once on start if no historical data exists
