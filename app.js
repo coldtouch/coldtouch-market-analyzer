@@ -2373,7 +2373,9 @@ async function calculateJournals() {
 
     try {
         const server = getServer();
-        const locations = [buyCity, sellCity].filter((v, i, a) => v && a.indexOf(v) === i).join(',');
+        // Fetch from all cities to maximize data coverage, then filter to selected city
+        const allCities = ['Bridgewatch','Caerleon','Fort Sterling','Lymhurst','Martlock','Thetford','Brecilien'];
+        const locations = encodeURIComponent(allCities.join(','));
 
         // Fetch prices from API in chunks
         let allPrices = [];
@@ -2430,18 +2432,19 @@ async function calculateJournals() {
                 // Also get sell order price for full journals (for sell order profit)
                 const fullSellOrderPrice = fullPrices && fullPrices[sellCity] ? fullPrices[sellCity].sellMin : 0;
 
-                if (emptyBuyPrice > 0 && fullSellPrice > 0) {
-                    const tax = fullSellPrice * TAX_RATE;
-                    const profit = fullSellPrice - emptyBuyPrice - tax;
-                    const roi = (profit / emptyBuyPrice) * 100;
+                // Show data even if one price is missing (show what we have)
+                const tax = fullSellPrice > 0 ? fullSellPrice * TAX_RATE : 0;
+                const profit = (emptyBuyPrice > 0 && fullSellPrice > 0) ? fullSellPrice - emptyBuyPrice - tax : 0;
+                const roi = (emptyBuyPrice > 0 && profit !== 0) ? (profit / emptyBuyPrice) * 100 : 0;
 
-                    let soProfit = 0, soRoi = 0;
-                    if (fullSellOrderPrice > 0) {
-                        const soTax = fullSellOrderPrice * TAX_RATE;
-                        soProfit = fullSellOrderPrice - emptyBuyPrice - soTax;
-                        soRoi = (soProfit / emptyBuyPrice) * 100;
-                    }
+                let soProfit = 0, soRoi = 0;
+                if (fullSellOrderPrice > 0 && emptyBuyPrice > 0) {
+                    const soTax = fullSellOrderPrice * TAX_RATE;
+                    soProfit = fullSellOrderPrice - emptyBuyPrice - soTax;
+                    soRoi = (soProfit / emptyBuyPrice) * 100;
+                }
 
+                if (emptyBuyPrice > 0 || fullSellPrice > 0) {
                     row.tiers[tier] = {
                         emptyBuyPrice,
                         fullSellPrice,
