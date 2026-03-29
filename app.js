@@ -48,7 +48,7 @@ function getQualityName(q) {
 
 function timeAgo(dateString) {
     if (!dateString || dateString.startsWith('0001')) return 'Never';
-    const date = new Date(dateString + 'Z');
+    const date = new Date(dateString.endsWith('Z') ? dateString : dateString + 'Z');
     const now = new Date();
     const diffMs = now - date;
     const diffMins = Math.floor(diffMs / 60000);
@@ -61,7 +61,7 @@ function timeAgo(dateString) {
 
 function getFreshnessIndicator(dateString) {
     if (!dateString || dateString.startsWith('0001')) return '<span class="freshness-dot stale" title="No data">⚫</span>';
-    const date = new Date(dateString + 'Z');
+    const date = new Date(dateString.endsWith('Z') ? dateString : dateString + 'Z');
     const now = new Date();
     const diffMins = Math.floor((now - date) / 60000);
     if (diffMins < 30) return '<span class="freshness-dot fresh" title="Updated < 30 min ago">🟢</span>';
