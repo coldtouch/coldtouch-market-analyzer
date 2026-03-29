@@ -2,6 +2,12 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-03-29 — Fix: timestamp Z-suffix in timeAgo and getFreshnessIndicator
+
+- `timeAgo()` and `getFreshnessIndicator()` were blindly appending `'Z'` to all date strings
+- Server-cache timestamps already have `'Z'`, producing double-Z → Invalid Date → "NaNd ago" and 🔴 for all cached prices
+- The same fix from `bea3063` (applied to `processArbitrage`) is now applied to both utility functions
+
 ### 2026-03-29 — Feature Audit & Polish Pass
 
 - Added missing HTML elements: `ip-error`, `fav-spinner`, `fav-error`, `mount-error`, `mount-type` filter
