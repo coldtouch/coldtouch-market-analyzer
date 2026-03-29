@@ -2,6 +2,18 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-03-29 — Feature: Transport Weight & Haul Planning System
+
+- Implemented Albion Online gear weight calculation: tier material weights (T4-T8) × equipment slot material counts (chest=16, head/shoes/offhand/cape=8, 1H=24, 2H=32)
+- Added Mount / Carry Weight selector with real mount capacities (T3-T8 Ox, Mammoth, Saddled Mammoth)
+- Transport now respects 48 inventory slot limit — gear takes 1 slot each, stackables compress
+- Volume-aware: never suggests buying more than daily sell volume (prevents unsellable hauls)
+- Shows limiting factor per item: Budget, Volume, Weight, or Slots — so you know what's capping you
+- Haul Plan grouping: packs multiple items from same route to fill remaining budget/weight/slots
+- Top 5 Haul Plans displayed above individual routes with total cost, weight, slots, and ROI
+- Items within each plan sorted by profit/unit (best items packed first)
+- Individual route cards now show Unit Weight, Carry Qty, Silver Used, and limiting factor
+
 ### 2026-03-29 — Feature: Discord OAuth Landing Page + Premium Visual Redesign
 
 - Added full-screen landing page overlay with animated glassmorphism UI (floating orbs, gold mesh grid, fade-in animation)

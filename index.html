@@ -623,7 +623,7 @@
         <section class="tab-pane hidden" id="pane-transport">
             <div class="controls-panel">
                 <h2 style="color:var(--accent); margin:0 0 0.5rem 0; font-size:1.2rem;">🐘 Bulk Transport Profits</h2>
-                <p style="color:var(--text-secondary); font-size:0.85rem; margin:0 0 1rem 0;">Find items worth transporting in bulk. Optimized for mammoth runs — shows high-volume items with consistent profit margins.</p>
+                <p style="color:var(--text-secondary); font-size:0.85rem; margin:0 0 1rem 0;">Find profitable transport routes with realistic haul planning. Accounts for carry weight, inventory slots (48), and daily sell volume — never suggests more than what actually sells. Groups multiple items per trip to maximize your budget.</p>
                 <div style="display:flex; gap:1rem; align-items:flex-end; flex-wrap:wrap;">
                     <div class="control-group">
                         <label for="transport-buy-city">Buy From</label>
@@ -661,6 +661,18 @@
                     <div class="control-group">
                         <label for="transport-budget">Budget (Silver)</label>
                         <input type="number" id="transport-budget" value="500000" min="10000" step="50000" style="width:140px;">
+                    </div>
+                    <div class="control-group">
+                        <label for="transport-mount">Mount / Carry Weight</label>
+                        <select id="transport-mount">
+                            <option value="0">No Mount (Inventory Only)</option>
+                            <option value="476">T3 Transport Ox (476 kg)</option>
+                            <option value="816">T5 Transport Ox (816 kg)</option>
+                            <option value="1262">T7 Transport Ox (1,262 kg)</option>
+                            <option value="1696" selected>T8 Transport Mammoth (1,696 kg)</option>
+                            <option value="2308">T8 Saddled Mammoth (2,308 kg)</option>
+                            <option value="999999">Ignore Weight (∞)</option>
+                        </select>
                     </div>
                     <div class="control-group">
                         <label for="transport-min-confidence">Min Confidence</label>
@@ -1424,6 +1436,17 @@
                 <div class="about-section">
                     <h2 class="about-heading">Changelog</h2>
                     <div class="changelog-list">
+                        <div class="changelog-entry">
+                            <div class="changelog-date">March 29, 2026</div>
+                            <div class="changelog-title">Transport Weight &amp; Haul Planning</div>
+                            <ul>
+                                <li>Gear weight system: calculates real item weight from tier &amp; slot type</li>
+                                <li>Mount carry weight selector (T3 Ox to Saddled Mammoth)</li>
+                                <li>Respects 48 inventory slots, daily sell volume, and budget</li>
+                                <li>Haul Plans: groups items per trip to maximize budget usage</li>
+                                <li>Shows limiting factor per item (weight/volume/slots/budget)</li>
+                            </ul>
+                        </div>
                         <div class="changelog-entry">
                             <div class="changelog-date">March 29, 2026</div>
                             <div class="changelog-title">Feature Audit &amp; Polish Pass</div>
