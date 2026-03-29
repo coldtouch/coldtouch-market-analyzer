@@ -2,6 +2,18 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-03-29 — Feature: Discord OAuth Landing Page + Premium Visual Redesign
+
+- Added full-screen landing page overlay with animated glassmorphism UI (floating orbs, gold mesh grid, fade-in animation)
+- Users must log in with Discord to access the main app; overlay dismisses with a smooth fade-out on successful auth
+- Handles `?login=success` redirect from OAuth callback and cleans the URL via `history.replaceState`
+- Overlay stays visible if auth check fails (network error or backend down), so user always has login access
+- Modernized `style.css` with glassmorphism across header, nav, top-bar, controls panel, item cards, and trade cards (`backdrop-filter: blur`)
+- Enhanced hover states: gold glow on cards, Discord button glow, input focus ring
+- Added styled scrollbar, `::selection` highlight, and tab pane fade-in animation
+- Tier badges (Bronze/Silver/Gold/Diamond) now have colored glow box-shadows
+- Feature pills on landing page highlight each of the 20+ tools available
+
 ### 2026-03-29 — Fix: timestamp Z-suffix in timeAgo and getFreshnessIndicator
 
 - `timeAgo()` and `getFreshnessIndicator()` were blindly appending `'Z'` to all date strings

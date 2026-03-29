@@ -2868,11 +2868,28 @@ function renderRepairResults(results) {
 // ====== INITIALIZATION ======
 
 async function checkDiscordAuth() {
+    const overlay = document.getElementById('landing-overlay');
+
+    // Handle ?login=success redirect back from OAuth callback
+    const urlParams = new URLSearchParams(window.location.search);
+    if (urlParams.get('login') === 'success') {
+        // Clean the URL without reloading
+        history.replaceState(null, '', window.location.pathname);
+    }
+
     try {
         const res = await fetch(`${VPS_BASE}/api/me`, {credentials: 'include', signal: AbortSignal.timeout(5000)});
         const data = await res.json();
         if (data.loggedIn) {
             discordUser = data.user;
+
+            // Dismiss the landing overlay with fade-out transition
+            if (overlay) {
+                overlay.classList.add('dismissed');
+                setTimeout(() => { overlay.style.display = 'none'; }, 750);
+            }
+
+            // Update header — hide login button, show profile
             document.getElementById('login-discord-btn').classList.add('hidden');
             const profile = document.getElementById('discord-user-profile');
             profile.classList.remove('hidden');
@@ -2887,9 +2904,14 @@ async function checkDiscordAuth() {
                 tierBadge.className = `tier-badge tier-${data.tier}`;
                 tierBadge.style.display = 'inline-block';
             }
+        } else {
+            // Not logged in — keep landing overlay visible
+            if (overlay) overlay.style.display = 'flex';
         }
     } catch (e) {
         console.log('Discord OAuth session not detected.', e);
+        // On error, keep landing overlay visible so user can log in
+        if (overlay) overlay.style.display = 'flex';
     }
 }
 
