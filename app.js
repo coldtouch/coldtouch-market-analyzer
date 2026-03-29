@@ -20,11 +20,13 @@ const ITEMS_PER_PAGE = 48;
 const MAX_INVENTORY_SLOTS = 48;
 
 // Weight system — material weight per tier × materials needed per slot
-const TIER_MATERIAL_WEIGHT = { 4: 0.2125, 5: 0.3125, 6: 0.475, 7: 0.7125, 8: 1.06875 };
+const TIER_MATERIAL_WEIGHT = { 2: 0.1, 3: 0.1, 4: 0.2125, 5: 0.3125, 6: 0.475, 7: 0.7125, 8: 1.06875 };
 const SLOT_MATERIAL_COUNT = {
     chest: 16, head: 8, shoes: 8, offhand: 8,
     onehand: 24, twohand: 32, cape: 8, bag: 16
 };
+// Stack sizes for non-gear items (per inventory slot)
+const STACK_SIZE = { resources: 999, materials: 999, consumables: 999, other: 999, mounts: 1 };
 const API_CHUNK_SIZE = 100;
 
 // ====== STATE ======
@@ -147,15 +149,28 @@ function getEquipmentSlot(itemId) {
     return null; // Not gear — weight = 0 (stackable items like resources, consumables)
 }
 
-// Calculate single item weight using tier × material count
+// Calculate single item weight using tier × material count (gear) or tier weight (resources)
 function calcItemWeight(itemId) {
     const tier = parseInt(extractTier(itemId));
-    if (!tier || tier < 4) return 0; // Below T4 has no meaningful weight for transport
+    if (!tier) return 0;
     const slot = getEquipmentSlot(itemId);
-    if (!slot) return 0; // Non-gear items (resources, consumables, etc.) are essentially weightless/stackable
-    const matWeight = TIER_MATERIAL_WEIGHT[tier] || TIER_MATERIAL_WEIGHT[8]; // Cap at T8 weight
-    const matCount = SLOT_MATERIAL_COUNT[slot] || 8;
-    return matWeight * matCount;
+    const matWeight = TIER_MATERIAL_WEIGHT[tier] || TIER_MATERIAL_WEIGHT[8];
+    if (slot) {
+        // Gear: tier weight × materials needed
+        const matCount = SLOT_MATERIAL_COUNT[slot] || 8;
+        return matWeight * matCount;
+    }
+    // Non-gear (resources, materials, consumables, fish, etc.): each unit = 1× tier material weight
+    // This is the base unit weight in Albion — 1 resource unit = its tier's material weight
+    return matWeight;
+}
+
+// Get how many items fit in one inventory slot
+function getStackSize(itemId) {
+    const slot = getEquipmentSlot(itemId);
+    if (slot) return 1; // Gear: 1 per slot
+    const cat = categorizeItem(itemId);
+    return STACK_SIZE[cat] || 999;
 }
 
 // Check if an item is stackable (resources, materials, consumables — NOT gear)
@@ -3401,11 +3416,14 @@ async function enrichAndRenderTransport(routes, budget, sortBy, mountCapacity) {
         // Weight + slot calculation
         const itemWeight = calcItemWeight(r.item_id);
         const stackable = isStackableItem(r.item_id);
+        const stackSize = getStackSize(r.item_id);
+        const category = categorizeItem(r.item_id);
 
         // How many can we actually carry?
         let maxByBudget = Math.floor(budget / buyPrice);
-        let maxByVolume = realisticVolume > 0 ? Math.ceil(realisticVolume) : maxByBudget; // Don't suggest more than daily volume
-        let maxBySlots = stackable ? maxByBudget : MAX_INVENTORY_SLOTS; // Gear takes 1 slot each, stackable items compress
+        let maxByVolume = realisticVolume > 0 ? Math.ceil(realisticVolume) : maxByBudget;
+        // Slot calc: gear = 1 per slot, stackable = stackSize per slot
+        let maxBySlots = MAX_INVENTORY_SLOTS * stackSize;
         let maxByWeight = (mountCapacity > 0 && itemWeight > 0) ? Math.floor(mountCapacity / itemWeight) : maxByBudget;
 
         // The realistic unit count is the minimum of all constraints
@@ -3429,12 +3447,15 @@ async function enrichAndRenderTransport(routes, budget, sortBy, mountCapacity) {
             volume: Math.round(volume),
             realisticVolume: Math.round(realisticVolume),
             unitsCanCarry,
+            slotsUsed: stackable ? Math.ceil(unitsCanCarry / stackSize) : unitsCanCarry,
             silverUsed: Math.round(silverUsed),
             tripProfit,
             transportScore,
             itemWeight,
             totalWeight: itemWeight * unitsCanCarry,
             stackable,
+            stackSize,
+            category,
             limitingFactor,
             confidence: r.confidence_score,
             consistencyPct: r.consistency_pct,
@@ -3454,9 +3475,13 @@ async function enrichAndRenderTransport(routes, budget, sortBy, mountCapacity) {
 
     const excludeCaerleon = document.getElementById('transport-exclude-caerleon').checked;
     const caerleonCities = new Set(['Caerleon', 'Black Market']);
-    const filtered = excludeCaerleon
-        ? enriched.filter(r => !caerleonCities.has(r.sellCity) && !caerleonCities.has(r.buyCity))
-        : enriched;
+    const itemTypeFilter = document.getElementById('transport-item-type').value;
+
+    let filtered = enriched;
+    if (excludeCaerleon) filtered = filtered.filter(r => !caerleonCities.has(r.sellCity) && !caerleonCities.has(r.buyCity));
+    if (itemTypeFilter === 'gear') filtered = filtered.filter(r => !r.stackable);
+    else if (itemTypeFilter === 'stackable') filtered = filtered.filter(r => r.stackable);
+    else if (itemTypeFilter !== 'all') filtered = filtered.filter(r => r.category === itemTypeFilter);
 
     // === GROUP ITEMS INTO HAUL PLANS ===
     // Group by route (buyCity → sellCity), then fill each trip to use remaining budget
@@ -3480,11 +3505,12 @@ async function enrichAndRenderTransport(routes, budget, sortBy, mountCapacity) {
 
         for (const item of items) {
             if (remainingBudget <= 0 || remainingSlots <= 0) break;
-            if (!item.stackable && item.itemWeight > 0 && remainingWeight < item.itemWeight) continue;
+            if (item.itemWeight > 0 && remainingWeight < item.itemWeight) continue;
 
             let maxAfford = Math.floor(remainingBudget / item.buyPrice);
             let maxVolume = item.realisticVolume > 0 ? Math.ceil(item.realisticVolume) : maxAfford;
-            let maxSlots = item.stackable ? maxAfford : remainingSlots;
+            // Slot calc: stackable items fill stacks, gear = 1 per slot
+            let maxSlots = item.stackable ? remainingSlots * item.stackSize : remainingSlots;
             let maxWeight = (item.itemWeight > 0 && mountCapacity > 0) ? Math.floor(remainingWeight / item.itemWeight) : maxAfford;
 
             const units = Math.max(1, Math.min(maxAfford, maxVolume, maxSlots, maxWeight));
@@ -3493,7 +3519,7 @@ async function enrichAndRenderTransport(routes, budget, sortBy, mountCapacity) {
             const cost = units * item.buyPrice;
             const profit = units * item.profitPerUnit;
             const weight = units * item.itemWeight;
-            const slots = item.stackable ? 1 : units; // Stackable items take ~1 slot
+            const slots = item.stackable ? Math.ceil(units / item.stackSize) : units;
 
             planItems.push({ ...item, planUnits: units, planCost: Math.round(cost), planProfit: Math.round(profit), planWeight: weight, planSlots: slots });
             remainingBudget -= cost;
@@ -3552,7 +3578,7 @@ function renderTransportResults(routes, budget, mountCapacity, haulPlans) {
 
             let itemsHtml = plan.items.map(item => {
                 const limitIcon = item.limitingFactor === 'volume' ? '📊' : item.limitingFactor === 'weight' ? '⚖️' : item.limitingFactor === 'slots' ? '🎒' : '💰';
-                const weightStr = item.itemWeight > 0 ? `${(item.planWeight).toFixed(1)} kg` : 'Stackable';
+                const weightStr = item.planWeight > 0 ? `${(item.planWeight).toFixed(1)} kg` : '—';
                 return `<div class="haul-item-row">
                     <div style="display:flex; align-items:center; gap:0.5rem; flex:1; min-width:0;">
                         <img class="item-icon-sm" src="https://render.albiononline.com/v1/item/${item.itemId}.png" alt="" loading="lazy" style="width:28px; height:28px; border-radius:4px;">
@@ -3624,9 +3650,10 @@ function renderTransportResults(routes, budget, mountCapacity, haulPlans) {
             : r.limitingFactor === 'slots' ? '<span title="Limited by 48 inventory slots" style="color:#8b5cf6;">🎒 Slot-capped</span>'
             : '<span title="Budget is the limiting factor" style="color:var(--accent);">💰 Budget-limited</span>';
 
-        const weightDisplay = r.itemWeight > 0
-            ? `<div class="transport-stat"><div class="transport-stat-label">Unit Weight</div><div class="transport-stat-value">${r.itemWeight.toFixed(1)} kg</div></div>`
-            : `<div class="transport-stat"><div class="transport-stat-label">Unit Weight</div><div class="transport-stat-value" style="color:var(--profit-green);">Stackable</div></div>`;
+        const weightLabel = r.stackable ? `${r.itemWeight.toFixed(2)} kg/ea` : `${r.itemWeight.toFixed(1)} kg`;
+        const slotsInfo = r.stackable ? `${r.slotsUsed} slots (×${r.stackSize}/stack)` : `${r.unitsCanCarry} slots`;
+        const totalWeightStr = r.totalWeight > 0 ? `${r.totalWeight.toFixed(1)} kg total` : '—';
+        const weightDisplay = `<div class="transport-stat"><div class="transport-stat-label">Unit Weight</div><div class="transport-stat-value">${weightLabel}</div></div>`;
 
         const card = document.createElement('div');
         card.className = 'transport-card';
@@ -3670,12 +3697,20 @@ function renderTransportResults(routes, budget, mountCapacity, haulPlans) {
                 </div>
                 ${weightDisplay}
                 <div class="transport-stat">
+                    <div class="transport-stat-label">Total Weight</div>
+                    <div class="transport-stat-value">${totalWeightStr}</div>
+                </div>
+                <div class="transport-stat">
                     <div class="transport-stat-label">Daily Vol Sold</div>
                     <div class="transport-stat-value accent">${r.realisticVolume > 0 ? r.realisticVolume.toLocaleString() : '—'}</div>
                 </div>
                 <div class="transport-stat">
                     <div class="transport-stat-label">Carry Qty</div>
                     <div class="transport-stat-value">${r.unitsCanCarry.toLocaleString()}</div>
+                </div>
+                <div class="transport-stat">
+                    <div class="transport-stat-label">Slots Used</div>
+                    <div class="transport-stat-value">${slotsInfo}</div>
                 </div>
             </div>
             <div class="transport-trip-summary">
