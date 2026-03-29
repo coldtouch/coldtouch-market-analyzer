@@ -17,6 +17,14 @@ const CHART_API_URLS = {
 const CITIES = ['Martlock', 'Thetford', 'Fort Sterling', 'Lymhurst', 'Bridgewatch', 'Caerleon', 'Brecilien', 'Black Market'];
 const TAX_RATE = 0.065;
 const ITEMS_PER_PAGE = 48;
+const MAX_INVENTORY_SLOTS = 48;
+
+// Weight system — material weight per tier × materials needed per slot
+const TIER_MATERIAL_WEIGHT = { 4: 0.2125, 5: 0.3125, 6: 0.475, 7: 0.7125, 8: 1.06875 };
+const SLOT_MATERIAL_COUNT = {
+    chest: 16, head: 8, shoes: 8, offhand: 8,
+    onehand: 24, twohand: 32, cape: 8, bag: 16
+};
 const API_CHUNK_SIZE = 100;
 
 // ====== STATE ======
@@ -111,6 +119,48 @@ function categorizeItem(itemId) {
     if (id.includes('MOUNT_') || id.includes('MOUNT')) return 'mounts';
     if (id.includes('2H_TOOL_')) return 'other';
     return 'other';
+}
+
+// Determine equipment slot type from item ID for weight calculation
+function getEquipmentSlot(itemId) {
+    const id = itemId.toUpperCase();
+    // Two-hand weapons (must check before one-hand)
+    if (id.includes('2H_') && !id.includes('TOOL_')) return 'twohand';
+    // One-hand weapons
+    if (id.includes('MAIN_')) return 'onehand';
+    // Head armor
+    if (id.includes('HEAD_') || id.includes('_HELMET') || id.includes('_HOOD') || id.includes('_COWL') || id.includes('_CAP')) {
+        if (id.includes('PLATE_') || id.includes('LEATHER_') || id.includes('CLOTH_') || id.includes('ARMOR_')) return 'head';
+    }
+    // Chest armor (ARMOR_ that isn't head/shoes)
+    if (id.includes('ARMOR_') || id.includes('_JACKET') || id.includes('_ROBE')) {
+        if ((id.includes('PLATE_') || id.includes('LEATHER_') || id.includes('CLOTH_')) && !id.includes('HEAD_') && !id.includes('SHOES_')) return 'chest';
+    }
+    // Shoes
+    if (id.includes('SHOES_')) return 'shoes';
+    // Off-hand / shield
+    if (id.includes('OFF_')) return 'offhand';
+    // Capes
+    if (id.includes('CAPE')) return 'cape';
+    // Bags / satchels
+    if (id.includes('BAG') || id.includes('SATCHEL')) return 'bag';
+    return null; // Not gear — weight = 0 (stackable items like resources, consumables)
+}
+
+// Calculate single item weight using tier × material count
+function calcItemWeight(itemId) {
+    const tier = parseInt(extractTier(itemId));
+    if (!tier || tier < 4) return 0; // Below T4 has no meaningful weight for transport
+    const slot = getEquipmentSlot(itemId);
+    if (!slot) return 0; // Non-gear items (resources, consumables, etc.) are essentially weightless/stackable
+    const matWeight = TIER_MATERIAL_WEIGHT[tier] || TIER_MATERIAL_WEIGHT[8]; // Cap at T8 weight
+    const matCount = SLOT_MATERIAL_COUNT[slot] || 8;
+    return matWeight * matCount;
+}
+
+// Check if an item is stackable (resources, materials, consumables — NOT gear)
+function isStackableItem(itemId) {
+    return getEquipmentSlot(itemId) === null;
 }
 
 function getServer() {
@@ -1796,7 +1846,8 @@ function setupCardButtons(container) {
                 else if (currentTab === 'transport' && lastTransportRoutes) {
                     const budget = parseInt(document.getElementById('transport-budget').value) || 500000;
                     const sortBy = document.getElementById('transport-sort').value;
-                    await enrichAndRenderTransport(lastTransportRoutes, budget, sortBy);
+                    const mountCapacity = parseInt(document.getElementById('transport-mount').value) || 0;
+                    await enrichAndRenderTransport(lastTransportRoutes, budget, sortBy, mountCapacity);
                 }
             } catch (err) {
                 console.error('Refresh failed:', err);
@@ -2870,11 +2921,15 @@ function renderRepairResults(results) {
 async function checkDiscordAuth() {
     const overlay = document.getElementById('landing-overlay');
 
-    // Handle ?login=success redirect back from OAuth callback
+    // Handle redirect back from OAuth callback
     const urlParams = new URLSearchParams(window.location.search);
-    if (urlParams.get('login') === 'success') {
-        // Clean the URL without reloading
+    const loginParam = urlParams.get('login');
+    if (loginParam) {
         history.replaceState(null, '', window.location.pathname);
+        if (loginParam === 'failed') {
+            const errEl = document.getElementById('landing-auth-error');
+            if (errEl) errEl.style.display = 'block';
+        }
     }
 
     try {
@@ -3279,13 +3334,13 @@ async function doTransportScan() {
     const budget = parseInt(document.getElementById('transport-budget').value) || 500000;
     const minConfidence = parseInt(document.getElementById('transport-min-confidence').value) || 0;
     const sortBy = document.getElementById('transport-sort').value;
+    const mountCapacity = parseInt(document.getElementById('transport-mount').value) || 0;
 
     container.innerHTML = '';
     hideError(errorEl);
     spinner.classList.remove('hidden');
 
     try {
-        // Fetch transport routes from backend (volume + spread stats combined)
         const params = new URLSearchParams({ min_confidence: minConfidence, limit: 150 });
         if (buyCity) params.set('buy_city', buyCity);
         if (sellCity) params.set('sell_city', sellCity);
@@ -3295,14 +3350,14 @@ async function doTransportScan() {
         lastTransportRoutes = routes;
 
         spinner.classList.add('hidden');
-        await enrichAndRenderTransport(routes, budget, sortBy);
+        await enrichAndRenderTransport(routes, budget, sortBy, mountCapacity);
     } catch (e) {
         spinner.classList.add('hidden');
         showError(errorEl, 'Failed to load transport routes: ' + e.message);
     }
 }
 
-async function enrichAndRenderTransport(routes, budget, sortBy) {
+async function enrichAndRenderTransport(routes, budget, sortBy, mountCapacity) {
     // Enrich with current live prices from IndexedDB
     const cachedData = await MarketDB.getAllPrices();
     const priceMap = {};
@@ -3328,35 +3383,59 @@ async function enrichAndRenderTransport(routes, budget, sortBy) {
         const buyData = priceMap[buyKey];
         const sellData = priceMap[sellKey];
 
-        if (!buyData || buyData.sellMin <= 0) continue; // No buy price available
-        if (!sellData || sellData.buyMax <= 0) continue; // No sell price available
+        if (!buyData || buyData.sellMin <= 0) continue;
+        if (!sellData || sellData.buyMax <= 0) continue;
 
-        const buyPrice = buyData.sellMin; // We buy at sell order (instant buy)
-        const sellPrice = sellData.buyMax; // We sell at buy order (instant sell)
+        const buyPrice = buyData.sellMin;
+        const sellPrice = sellData.buyMax;
         const tax = sellPrice * TAX_RATE;
         const profitPerUnit = sellPrice - buyPrice - tax;
         if (profitPerUnit <= 0) continue;
 
         const roi = (profitPerUnit / buyPrice) * 100;
-        const volume = Math.max(r.buy_volume || 0, r.sell_volume || 0);
-        const unitsCanBuy = Math.floor(budget / buyPrice);
-        const tripProfit = profitPerUnit * unitsCanBuy;
-        const transportScore = profitPerUnit * volume; // profit × daily volume
+        const sellVolume = r.sell_volume || 0;
+        const buyVolume = r.buy_volume || 0;
+        const volume = Math.max(buyVolume, sellVolume);
+        const realisticVolume = Math.min(buyVolume || volume, sellVolume || volume);
+
+        // Weight + slot calculation
+        const itemWeight = calcItemWeight(r.item_id);
+        const stackable = isStackableItem(r.item_id);
+
+        // How many can we actually carry?
+        let maxByBudget = Math.floor(budget / buyPrice);
+        let maxByVolume = realisticVolume > 0 ? Math.ceil(realisticVolume) : maxByBudget; // Don't suggest more than daily volume
+        let maxBySlots = stackable ? maxByBudget : MAX_INVENTORY_SLOTS; // Gear takes 1 slot each, stackable items compress
+        let maxByWeight = (mountCapacity > 0 && itemWeight > 0) ? Math.floor(mountCapacity / itemWeight) : maxByBudget;
+
+        // The realistic unit count is the minimum of all constraints
+        const unitsCanCarry = Math.max(1, Math.min(maxByBudget, maxByVolume, maxBySlots, maxByWeight));
+        const silverUsed = unitsCanCarry * buyPrice;
+        const tripProfit = profitPerUnit * unitsCanCarry;
+        const transportScore = profitPerUnit * volume;
+
+        // Determine limiting factor
+        let limitingFactor = 'budget';
+        if (unitsCanCarry === maxByVolume && maxByVolume < maxByBudget) limitingFactor = 'volume';
+        if (unitsCanCarry === maxBySlots && maxBySlots < maxByBudget && maxBySlots <= maxByVolume) limitingFactor = 'slots';
+        if (unitsCanCarry === maxByWeight && maxByWeight < maxByBudget && maxByWeight <= maxByVolume && maxByWeight <= maxBySlots) limitingFactor = 'weight';
 
         enriched.push({
             itemId: r.item_id,
             quality: r.quality,
             buyCity: r.buy_city,
             sellCity: r.sell_city,
-            buyPrice,
-            sellPrice,
-            tax,
-            profitPerUnit,
-            roi,
+            buyPrice, sellPrice, tax, profitPerUnit, roi,
             volume: Math.round(volume),
-            unitsCanBuy,
+            realisticVolume: Math.round(realisticVolume),
+            unitsCanCarry,
+            silverUsed: Math.round(silverUsed),
             tripProfit,
             transportScore,
+            itemWeight,
+            totalWeight: itemWeight * unitsCanCarry,
+            stackable,
+            limitingFactor,
             confidence: r.confidence_score,
             consistencyPct: r.consistency_pct,
             avgSpread: r.avg_spread,
@@ -3371,7 +3450,7 @@ async function enrichAndRenderTransport(routes, budget, sortBy) {
     else if (sortBy === 'transport_score') enriched.sort((a, b) => b.transportScore - a.transportScore);
     else if (sortBy === 'profit_per_unit') enriched.sort((a, b) => b.profitPerUnit - a.profitPerUnit);
     else if (sortBy === 'volume') enriched.sort((a, b) => b.volume - a.volume);
-    else if (sortBy === 'confidence') enriched.sort((a, b) => b.confidence - a.confidence);
+    else if (sortBy === 'confidence') enriched.sort((a, b) => (b.confidence||0) - (a.confidence||0));
 
     const excludeCaerleon = document.getElementById('transport-exclude-caerleon').checked;
     const caerleonCities = new Set(['Caerleon', 'Black Market']);
@@ -3379,10 +3458,75 @@ async function enrichAndRenderTransport(routes, budget, sortBy) {
         ? enriched.filter(r => !caerleonCities.has(r.sellCity) && !caerleonCities.has(r.buyCity))
         : enriched;
 
-    renderTransportResults(filtered.slice(0, 60), budget);
+    // === GROUP ITEMS INTO HAUL PLANS ===
+    // Group by route (buyCity → sellCity), then fill each trip to use remaining budget
+    const routeGroups = {};
+    for (const item of filtered) {
+        const routeKey = `${item.buyCity}→${item.sellCity}`;
+        if (!routeGroups[routeKey]) routeGroups[routeKey] = [];
+        routeGroups[routeKey].push(item);
+    }
+
+    // Build haul plans: for each route, pack items greedily until budget/weight/slots filled
+    const haulPlans = [];
+    for (const [routeKey, items] of Object.entries(routeGroups)) {
+        // Sort items within this route by profitPerUnit descending (pack best first)
+        items.sort((a, b) => b.profitPerUnit - a.profitPerUnit);
+
+        let remainingBudget = budget;
+        let remainingWeight = mountCapacity > 0 ? mountCapacity : 999999;
+        let remainingSlots = MAX_INVENTORY_SLOTS;
+        const planItems = [];
+
+        for (const item of items) {
+            if (remainingBudget <= 0 || remainingSlots <= 0) break;
+            if (!item.stackable && item.itemWeight > 0 && remainingWeight < item.itemWeight) continue;
+
+            let maxAfford = Math.floor(remainingBudget / item.buyPrice);
+            let maxVolume = item.realisticVolume > 0 ? Math.ceil(item.realisticVolume) : maxAfford;
+            let maxSlots = item.stackable ? maxAfford : remainingSlots;
+            let maxWeight = (item.itemWeight > 0 && mountCapacity > 0) ? Math.floor(remainingWeight / item.itemWeight) : maxAfford;
+
+            const units = Math.max(1, Math.min(maxAfford, maxVolume, maxSlots, maxWeight));
+            if (units <= 0) continue;
+
+            const cost = units * item.buyPrice;
+            const profit = units * item.profitPerUnit;
+            const weight = units * item.itemWeight;
+            const slots = item.stackable ? 1 : units; // Stackable items take ~1 slot
+
+            planItems.push({ ...item, planUnits: units, planCost: Math.round(cost), planProfit: Math.round(profit), planWeight: weight, planSlots: slots });
+            remainingBudget -= cost;
+            remainingWeight -= weight;
+            remainingSlots -= slots;
+        }
+
+        if (planItems.length > 0) {
+            const totalCost = planItems.reduce((s, i) => s + i.planCost, 0);
+            const totalProfit = planItems.reduce((s, i) => s + i.planProfit, 0);
+            const totalWeight = planItems.reduce((s, i) => s + i.planWeight, 0);
+            const totalSlots = planItems.reduce((s, i) => s + i.planSlots, 0);
+            haulPlans.push({
+                routeKey,
+                buyCity: planItems[0].buyCity,
+                sellCity: planItems[0].sellCity,
+                items: planItems,
+                totalCost,
+                totalProfit,
+                totalWeight,
+                totalSlots,
+                budgetUsed: ((totalCost / budget) * 100).toFixed(0)
+            });
+        }
+    }
+
+    // Sort haul plans by total profit
+    haulPlans.sort((a, b) => b.totalProfit - a.totalProfit);
+
+    renderTransportResults(filtered.slice(0, 60), budget, mountCapacity, haulPlans);
 }
 
-function renderTransportResults(routes, budget) {
+function renderTransportResults(routes, budget, mountCapacity, haulPlans) {
     const container = document.getElementById('transport-results');
     container.innerHTML = '';
 
@@ -3391,15 +3535,99 @@ function renderTransportResults(routes, budget) {
         return;
     }
 
+    // === HAUL PLANS SECTION ===
+    if (haulPlans && haulPlans.length > 0) {
+        const planSection = document.createElement('div');
+        planSection.className = 'haul-plans-section';
+        planSection.innerHTML = `<div class="section-header" style="display:flex; align-items:center; gap:0.5rem; margin-bottom:1rem;">
+            <h3 style="color:var(--accent); margin:0; font-size:1.1rem;">📦 Haul Plans</h3>
+            <span style="font-size:0.8rem; color:var(--text-muted);">Grouped items per trip to maximize your ${budget.toLocaleString()} silver budget</span>
+        </div>`;
+
+        const topPlans = haulPlans.slice(0, 5);
+        topPlans.forEach((plan, idx) => {
+            const planCard = document.createElement('div');
+            planCard.className = 'haul-plan-card';
+            const weightPct = mountCapacity > 0 && mountCapacity < 999999 ? ((plan.totalWeight / mountCapacity) * 100).toFixed(0) : null;
+
+            let itemsHtml = plan.items.map(item => {
+                const limitIcon = item.limitingFactor === 'volume' ? '📊' : item.limitingFactor === 'weight' ? '⚖️' : item.limitingFactor === 'slots' ? '🎒' : '💰';
+                const weightStr = item.itemWeight > 0 ? `${(item.planWeight).toFixed(1)} kg` : 'Stackable';
+                return `<div class="haul-item-row">
+                    <div style="display:flex; align-items:center; gap:0.5rem; flex:1; min-width:0;">
+                        <img class="item-icon-sm" src="https://render.albiononline.com/v1/item/${item.itemId}.png" alt="" loading="lazy" style="width:28px; height:28px; border-radius:4px;">
+                        <div style="min-width:0; flex:1;">
+                            <div style="font-size:0.82rem; font-weight:600; color:var(--text-primary); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${getFriendlyName(item.itemId)}</div>
+                            <div style="font-size:0.7rem; color:var(--text-muted);">${getTierEnchLabel(item.itemId)} ${getQualityName(item.quality)}</div>
+                        </div>
+                    </div>
+                    <div style="display:flex; gap:1rem; align-items:center; font-size:0.78rem; flex-shrink:0;">
+                        <span title="Quantity">${limitIcon} x${item.planUnits}</span>
+                        <span title="Cost" style="color:var(--text-secondary);">${item.planCost.toLocaleString()}s</span>
+                        <span title="Weight" style="color:var(--text-muted);">${weightStr}</span>
+                        <span title="Profit" style="color:var(--profit-green); font-weight:600;">+${item.planProfit.toLocaleString()}</span>
+                    </div>
+                </div>`;
+            }).join('');
+
+            planCard.innerHTML = `
+                <div class="haul-plan-header">
+                    <div style="display:flex; align-items:center; gap:0.75rem;">
+                        <span class="haul-plan-rank">#${idx + 1}</span>
+                        <div>
+                            <div class="haul-plan-route">${plan.buyCity} ➔ ${plan.sellCity}</div>
+                            <div style="font-size:0.75rem; color:var(--text-muted);">${plan.items.length} item${plan.items.length > 1 ? 's' : ''} • ${plan.budgetUsed}% budget used</div>
+                        </div>
+                    </div>
+                    <div class="haul-plan-profit">+${plan.totalProfit.toLocaleString()} silver</div>
+                </div>
+                <div class="haul-plan-stats">
+                    <div class="haul-plan-stat">
+                        <span class="haul-stat-label">💰 Cost</span>
+                        <span class="haul-stat-value">${plan.totalCost.toLocaleString()}</span>
+                    </div>
+                    <div class="haul-plan-stat">
+                        <span class="haul-stat-label">⚖️ Weight</span>
+                        <span class="haul-stat-value">${plan.totalWeight > 0 ? plan.totalWeight.toFixed(1) + ' kg' : 'Minimal'}${weightPct ? ` (${weightPct}%)` : ''}</span>
+                    </div>
+                    <div class="haul-plan-stat">
+                        <span class="haul-stat-label">🎒 Slots</span>
+                        <span class="haul-stat-value">${plan.totalSlots} / ${MAX_INVENTORY_SLOTS}</span>
+                    </div>
+                    <div class="haul-plan-stat">
+                        <span class="haul-stat-label">📈 ROI</span>
+                        <span class="haul-stat-value" style="color:var(--profit-green);">${plan.totalCost > 0 ? ((plan.totalProfit / plan.totalCost) * 100).toFixed(1) : 0}%</span>
+                    </div>
+                </div>
+                <div class="haul-items-list">${itemsHtml}</div>
+            `;
+            planSection.appendChild(planCard);
+        });
+
+        container.appendChild(planSection);
+    }
+
+    // === INDIVIDUAL ROUTES SECTION ===
+    const routeSection = document.createElement('div');
+    routeSection.style.marginTop = '2rem';
     const countBar = document.createElement('div');
     countBar.className = 'result-count-bar';
-    countBar.innerHTML = `Showing <strong>${routes.length}</strong> transport routes &bull; Budget: <strong>${budget.toLocaleString()}</strong> silver`;
-    container.appendChild(countBar);
+    countBar.innerHTML = `Showing <strong>${routes.length}</strong> individual items &bull; Budget: <strong>${budget.toLocaleString()}</strong> silver`;
+    routeSection.appendChild(countBar);
 
     const grid = document.createElement('div');
     grid.className = 'transport-results-grid';
 
     routes.forEach(r => {
+        const limitLabel = r.limitingFactor === 'volume' ? '<span title="Limited by daily sell volume" style="color:#f59e0b;">📊 Vol-capped</span>'
+            : r.limitingFactor === 'weight' ? '<span title="Limited by mount carry weight" style="color:#ef4444;">⚖️ Weight-capped</span>'
+            : r.limitingFactor === 'slots' ? '<span title="Limited by 48 inventory slots" style="color:#8b5cf6;">🎒 Slot-capped</span>'
+            : '<span title="Budget is the limiting factor" style="color:var(--accent);">💰 Budget-limited</span>';
+
+        const weightDisplay = r.itemWeight > 0
+            ? `<div class="transport-stat"><div class="transport-stat-label">Unit Weight</div><div class="transport-stat-value">${r.itemWeight.toFixed(1)} kg</div></div>`
+            : `<div class="transport-stat"><div class="transport-stat-label">Unit Weight</div><div class="transport-stat-value" style="color:var(--profit-green);">Stackable</div></div>`;
+
         const card = document.createElement('div');
         card.className = 'transport-card';
         card.innerHTML = `
@@ -3440,13 +3668,14 @@ function renderTransportResults(routes, budget) {
                     <div class="transport-stat-label">ROI</div>
                     <div class="transport-stat-value ${r.roi >= 10 ? 'profit' : 'accent'}">${r.roi.toFixed(1)}%</div>
                 </div>
+                ${weightDisplay}
                 <div class="transport-stat">
-                    <div class="transport-stat-label">Daily Volume</div>
-                    <div class="transport-stat-value accent">${r.volume > 0 ? r.volume.toLocaleString() : '—'}</div>
+                    <div class="transport-stat-label">Daily Vol Sold</div>
+                    <div class="transport-stat-value accent">${r.realisticVolume > 0 ? r.realisticVolume.toLocaleString() : '—'}</div>
                 </div>
                 <div class="transport-stat">
-                    <div class="transport-stat-label">Units (Budget)</div>
-                    <div class="transport-stat-value">${r.unitsCanBuy.toLocaleString()}</div>
+                    <div class="transport-stat-label">Carry Qty</div>
+                    <div class="transport-stat-value">${r.unitsCanCarry.toLocaleString()}</div>
                 </div>
             </div>
             <div class="transport-trip-summary">
@@ -3454,9 +3683,13 @@ function renderTransportResults(routes, budget) {
                     <div class="transport-trip-label">Est. Trip Profit</div>
                     <div class="transport-trip-value">+${Math.floor(r.tripProfit).toLocaleString()} silver</div>
                 </div>
+                <div style="text-align:center;">
+                    <div class="transport-trip-label">Limiting Factor</div>
+                    <div style="font-size:0.8rem; margin-top:2px;">${limitLabel}</div>
+                </div>
                 <div style="text-align:right;">
-                    <div class="transport-trip-label">Transport Score</div>
-                    <div style="font-size:1rem; font-weight:700; color:var(--accent);">${r.transportScore > 1000000 ? (r.transportScore / 1000000).toFixed(1) + 'M' : r.transportScore > 1000 ? (r.transportScore / 1000).toFixed(0) + 'K' : Math.round(r.transportScore)}</div>
+                    <div class="transport-trip-label">Silver Used</div>
+                    <div style="font-size:0.85rem; font-weight:600; color:var(--text-secondary);">${r.silverUsed.toLocaleString()} / ${budget.toLocaleString()}</div>
                 </div>
                 ${r.confidence !== null ? `<div style="text-align:right;">
                     <div class="transport-trip-label">Reliability</div>
@@ -3481,7 +3714,8 @@ function renderTransportResults(routes, budget) {
         grid.appendChild(card);
     });
 
-    container.appendChild(grid);
+    routeSection.appendChild(grid);
+    container.appendChild(routeSection);
     setupCardButtons(container);
 }
 
