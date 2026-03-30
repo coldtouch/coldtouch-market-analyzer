@@ -2948,7 +2948,7 @@ async function checkDiscordAuth() {
     }
 
     try {
-        const res = await fetch(`${VPS_BASE}/api/me`, {credentials: 'include', signal: AbortSignal.timeout(5000)});
+        const res = await fetch(`${VPS_BASE}/api/me`, {credentials: 'include', signal: AbortSignal.timeout(10000)});
         const data = await res.json();
         if (data.loggedIn) {
             discordUser = data.user;

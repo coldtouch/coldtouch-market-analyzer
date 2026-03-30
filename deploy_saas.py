@@ -613,7 +613,7 @@ app.use(session({
   store: new SQLiteStore({ db: 'sessions.sqlite', dir: '/opt/albion-saas' }),
   secret: SESSION_SECRET,
   resave: false,
-  saveUninitialized: false,
+  saveUninitialized: true,  // must be true so OAuth state is persisted before Discord redirect
   cookie: {
     secure: true,
     sameSite: 'none',
@@ -628,7 +628,7 @@ passport.use(new DiscordStrategy({
   clientID: CLIENT_ID,
   clientSecret: CLIENT_SECRET,
   callbackURL: `https://${domain}/auth/discord/callback`,
-  scope: ['identify', 'guilds']
+  scope: ['identify']  // 'guilds' removed — caused passport-discord to make a secondary API call that hangs
 }, (accessToken, refreshToken, profile, done) => {
   db.run(`INSERT OR REPLACE INTO users (id, username, avatar) VALUES (?, ?, ?)`, [profile.id, profile.username, profile.avatar]);
   return done(null, profile);
@@ -637,8 +637,9 @@ passport.use(new DiscordStrategy({
 app.use(passport.initialize());
 app.use(passport.session());
 
-app.get('/auth/discord', passport.authenticate('discord'));
-app.get('/auth/discord/callback', passport.authenticate('discord', { failureRedirect: '/' }), (req, res) => {
+// Explicit scope on the authenticate call; 'guilds' omitted intentionally (see strategy above)
+app.get('/auth/discord', passport.authenticate('discord', { scope: ['identify'] }));
+app.get('/auth/discord/callback', passport.authenticate('discord', { failureRedirect: 'https://coldtouch.github.io/coldtouch-market-analyzer?login=failed' }), (req, res) => {
   res.redirect(`https://coldtouch.github.io/coldtouch-market-analyzer?login=success`);
 });
 
@@ -1311,12 +1312,12 @@ setInterval(computeSpreadStats, 60 * 60 * 1000);
 // === DATA COMPACTION (runs every 6 hours) ===
 function compactOldData() {
   const now = Date.now();
-  const oneDayAgo = now - 24 * 60 * 60 * 1000;
+  const sixHoursAgo = now - 6 * 60 * 60 * 1000;
   const thirtyDaysAgo = now - 30 * 24 * 60 * 60 * 1000;
 
   console.log('[Compaction] Starting...');
 
-  // Compact >24h old raw snapshots into hourly averages
+  // Compact >6h old raw snapshots into hourly averages
   db.all(
     `SELECT item_id, quality, city,
       CAST(recorded_at / 3600000 AS INTEGER) * 3600000 as hour_start,
@@ -1326,10 +1327,10 @@ function compactOldData() {
     FROM price_snapshots
     WHERE recorded_at < ?
     GROUP BY item_id, quality, city, hour_start`,
-    [oneDayAgo],
+    [sixHoursAgo],
     (err, rows) => {
       if (err || !rows || rows.length === 0) {
-        console.log('[Compaction] No raw snapshots older than 24h to compact');
+        console.log('[Compaction] No raw snapshots older than 6h to compact');
         return;
       }
 
@@ -1340,9 +1341,9 @@ function compactOldData() {
       }
       db.run('COMMIT', () => {
         stmt.finalize();
-        // Delete all compacted raw snapshots (older than 24h)
-        db.run(`DELETE FROM price_snapshots WHERE recorded_at < ?`, [oneDayAgo], (err2) => {
-          if (!err2) console.log(`[Compaction] Compacted ${rows.length} hourly averages, deleted raw snapshots older than 24h`);
+        // Delete all compacted raw snapshots (older than 6h)
+        db.run(`DELETE FROM price_snapshots WHERE recorded_at < ?`, [sixHoursAgo], (err2) => {
+          if (!err2) console.log(`[Compaction] Compacted ${rows.length} hourly averages, deleted raw snapshots older than 6h`);
         });
       });
     }
@@ -1376,17 +1377,17 @@ function compactOldData() {
     }
   );
 
-  // Delete raw snapshots older than 30 days (should already be compacted)
-  db.run(`DELETE FROM price_snapshots WHERE recorded_at < ?`, [thirtyDaysAgo]);
+  // Safety net: delete any raw snapshots older than 24h (should already be compacted at 6h)
+  db.run(`DELETE FROM price_snapshots WHERE recorded_at < ?`, [now - 24 * 60 * 60 * 1000]);
 
   // Clean up old contributions (keep 60 days)
   const sixtyDaysAgo = now - 60 * 24 * 60 * 60 * 1000;
   db.run(`DELETE FROM contributions WHERE created_at < ?`, [sixtyDaysAgo]);
 }
 
-// Run compaction every 6 hours, first run 10 minutes after start
-setTimeout(compactOldData, 10 * 60 * 1000);
-setInterval(compactOldData, 6 * 60 * 60 * 1000);
+// Run compaction every hour, first run 5 minutes after start
+setTimeout(compactOldData, 5 * 60 * 1000);
+setInterval(compactOldData, 60 * 60 * 1000);
 
 // === HISTORICAL BACKFILL (Charts + History APIs) ===
 // Runs once on start if no historical data exists
@@ -1510,25 +1511,32 @@ async function backfillHistoricalData() {
 setTimeout(backfillHistoricalData, 90 * 1000);
 
 // === NATS SNAPSHOT BUFFER ===
-// Buffer incoming NATS orders and batch-write to price_snapshots every 60s
-let natsSnapshotBuffer = [];
-const NATS_FLUSH_INTERVAL = 60 * 1000; // 60 seconds
+// Buffer incoming NATS orders — deduplicated by item/quality/city, flushed every 60s
+// Only stores the BEST price per item/quality/city combo (lowest sell, highest buy)
+const natsSnapshotMap = {};  // key: "itemId_quality_city" → { sell, buy }
+const NATS_FLUSH_INTERVAL = 60 * 1000;
 
 function flushNatsBuffer() {
-  if (natsSnapshotBuffer.length === 0 || dbBusy || statsRunning) return;
-  const batch = natsSnapshotBuffer;
-  natsSnapshotBuffer = [];
+  const keys = Object.keys(natsSnapshotMap);
+  if (keys.length === 0 || dbBusy || statsRunning) return;
+
+  // Snapshot and clear the map
+  const batch = [];
+  for (const key of keys) {
+    batch.push(natsSnapshotMap[key]);
+    delete natsSnapshotMap[key];
+  }
   const now = Date.now();
 
   db.serialize(() => {
     db.run('BEGIN TRANSACTION');
-    const stmt = db.prepare(`INSERT INTO price_snapshots (item_id, quality, city, sell_price_min, buy_price_max, sell_date, buy_date, recorded_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`);
-    for (const entry of batch) {
-      stmt.run(entry.item_id, entry.quality, entry.city, entry.sell || 0, entry.buy || 0, '', '', now);
+    const stmt = db.prepare('INSERT INTO price_snapshots (item_id, quality, city, sell_price_min, buy_price_max, sell_date, buy_date, recorded_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
+    for (const e of batch) {
+      stmt.run(e.item_id, e.quality, e.city, e.sell || 0, e.buy || 0, '', '', now);
     }
     stmt.finalize();
     db.run('COMMIT', () => {
-      if (batch.length > 50) console.log(`[NATS-Snap] Flushed ${batch.length} live orders to snapshots`);
+      if (batch.length > 50) console.log('[NATS-Snap] Flushed ' + batch.length + ' deduped snapshots (was ' + keys.length + ' raw)');
     });
   });
 }
@@ -1575,12 +1583,14 @@ let natsConnection = null;
             alertMarketDb[id][q][city].buyDate = now;
           }
 
-          // Buffer for snapshot recording
-          natsSnapshotBuffer.push({
-            item_id: id, quality: q, city: city,
-            sell: p.AuctionType === 'offer' ? price : 0,
-            buy: p.AuctionType === 'request' ? price : 0
-          });
+          // Buffer for snapshot recording — deduplicated per item/quality/city
+          const snapKey = id + '_' + q + '_' + city;
+          if (!natsSnapshotMap[snapKey]) natsSnapshotMap[snapKey] = { item_id: id, quality: q, city: city, sell: 0, buy: 0 };
+          if (p.AuctionType === 'offer' && (natsSnapshotMap[snapKey].sell === 0 || price < natsSnapshotMap[snapKey].sell)) {
+            natsSnapshotMap[snapKey].sell = price;
+          } else if (p.AuctionType === 'request' && price > natsSnapshotMap[snapKey].buy) {
+            natsSnapshotMap[snapKey].buy = price;
+          }
 
           // Check for alerts on this item
           checkAndAlert(id, q);
