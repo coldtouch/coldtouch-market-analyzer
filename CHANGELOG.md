@@ -2,6 +2,12 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-04-01 — Fix: Discord OAuth hang + tier badge + XSS hardening
+
+- **Fix Discord OAuth login hang** (`deploy_saas.py`): Added `req.session.save()` callback before the post-auth redirect. Without this, `connect-sqlite3` wrote the session asynchronously — the browser called `/api/me` before the session was committed to SQLite, receiving `loggedIn: false` and staying on the landing overlay indefinitely. Session is now flushed before the redirect.
+- **Fix tier badge never showing** (`app.js`): `/api/me` returns `stats.tier` nested under `data.stats`, but the frontend checked `data.tier` (always `undefined`). Changed to `data.stats && data.stats.tier`.
+- **XSS hardening** (`app.js`): Added `esc()` HTML-escaping utility. Applied to all third-party data injected via `innerHTML`: builds tab (`build.name`, `build.authorName`, `build.strengths[]`, tag arrays from `albionfreemarket.com` API) and community leaderboard (`u.username` from VPS API).
+
 ### 2026-04-01 — Fix: Sync deploy_saas.py with deployed VPS state
 
 - Committed deploy changes that were on VPS (Mar 30 deploy) but missing from git
