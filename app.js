@@ -46,6 +46,11 @@ let spreadStatsCacheTime = 0;
 let discordUser = null; // stored on auth check for contribution tracking
 
 // ====== UTILITY ======
+function esc(str) {
+    if (!str) return '';
+    return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
+
 function getFriendlyName(id) {
     if (ITEM_NAMES[id] && ITEM_NAMES[id].trim() !== '') return ITEM_NAMES[id];
     return id.replace(/_/g, ' ').replace(/T(\d+)/, 'Tier $1').toLowerCase().replace(/\b\w/g, l => l.toUpperCase());
@@ -2967,11 +2972,12 @@ async function checkDiscordAuth() {
             document.getElementById('discord-avatar').src = `https://cdn.discordapp.com/avatars/${data.user.id}/${data.user.avatar}.png`;
             document.getElementById('discord-username').textContent = data.user.username;
 
-            // Show tier badge in header
-            if (data.tier) {
+            // Show tier badge in header (tier is nested under data.stats)
+            const tier = data.stats && data.stats.tier;
+            if (tier) {
                 const tierBadge = document.getElementById('discord-tier-badge');
-                tierBadge.textContent = data.tier.charAt(0).toUpperCase() + data.tier.slice(1);
-                tierBadge.className = `tier-badge tier-${data.tier}`;
+                tierBadge.textContent = tier.charAt(0).toUpperCase() + tier.slice(1);
+                tierBadge.className = `tier-badge tier-${tier}`;
                 tierBadge.style.display = 'inline-block';
             }
         } else {
@@ -3845,7 +3851,7 @@ async function loadCommunityTab() {
                     <div class="leaderboard-rank ${rankClass}">${medal}</div>
                     <img class="leaderboard-avatar" src="${avatarUrl}" alt="">
                     <div class="leaderboard-name">
-                        ${u.username || 'Unknown'}
+                        ${esc(u.username) || 'Unknown'}
                         <span class="tier-badge tier-${tier}">${tierLabel}</span>
                     </div>
                     <div class="leaderboard-scans">${(u.scans_30d || 0).toLocaleString()} scans</div>
@@ -5086,7 +5092,7 @@ function createBuildCard(build) {
         ...(build.sizeTags || [])
     ];
     const tagsHTML = allTags.slice(0, 5).map(t =>
-        `<span style="background:var(--accent-dim); color:var(--accent); padding:0.15rem 0.5rem; border-radius:12px; font-size:0.65rem; white-space:nowrap;">${t}</span>`
+        `<span style="background:var(--accent-dim); color:var(--accent); padding:0.15rem 0.5rem; border-radius:12px; font-size:0.65rem; white-space:nowrap;">${esc(t)}</span>`
     ).join('');
 
     const votes = (build.upvotesCount || 0) - (build.downvotesCount || 0);
@@ -5096,8 +5102,8 @@ function createBuildCard(build) {
     card.innerHTML = `
         <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:0.75rem;">
             <div>
-                <div style="font-weight:700; font-size:1rem; color:var(--text-primary);">${build.name || 'Unnamed Build'}</div>
-                <div style="font-size:0.75rem; color:var(--text-secondary);">by ${build.authorName || 'Unknown'} &bull; ${dateStr}</div>
+                <div style="font-weight:700; font-size:1rem; color:var(--text-primary);">${esc(build.name) || 'Unnamed Build'}</div>
+                <div style="font-size:0.75rem; color:var(--text-secondary);">by ${esc(build.authorName) || 'Unknown'} &bull; ${dateStr}</div>
             </div>
             <div style="display:flex; align-items:center; gap:0.25rem; font-weight:700; color:${votesColor};">
                 <span style="font-size:1.1rem;">${votes >= 0 ? '+' : ''}${votes}</span>
@@ -5115,7 +5121,7 @@ function createBuildCard(build) {
             ${renderSlotIcon(potion, 'Pot')}
         </div>
         ${allTags.length > 0 ? `<div style="display:flex; gap:0.25rem; flex-wrap:wrap;">${tagsHTML}</div>` : ''}
-        ${build.strengths && build.strengths.length > 0 ? `<div style="margin-top:0.5rem; font-size:0.75rem; color:var(--profit-green);">+ ${build.strengths.slice(0, 2).join(' | ')}</div>` : ''}
+        ${build.strengths && build.strengths.length > 0 ? `<div style="margin-top:0.5rem; font-size:0.75rem; color:var(--profit-green);">+ ${build.strengths.slice(0, 2).map(esc).join(' | ')}</div>` : ''}
     `;
 
     return card;
