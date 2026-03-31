@@ -37,6 +37,7 @@ def main():
         return stdout.read().decode()
 
     run_wait("mkdir -p /opt/albion-saas")
+    run_wait("systemctl disable --now albion-proxy || true")
     run_wait("apt-get update && apt-get install -y build-essential python3")
     
     pkg_json = """{
@@ -132,6 +133,8 @@ db.serialize(() => {
   )`);
   db.run(`CREATE INDEX IF NOT EXISTS idx_ps_item_city ON price_snapshots(item_id, city, recorded_at)`);
   db.run(`CREATE INDEX IF NOT EXISTS idx_ps_recorded ON price_snapshots(recorded_at)`);
+  db.run(`ALTER TABLE price_snapshots ADD COLUMN sell_date TEXT`, () => {});
+  db.run(`ALTER TABLE price_snapshots ADD COLUMN buy_date TEXT`, () => {});
 
   db.run(`CREATE TABLE IF NOT EXISTS spread_stats (
     item_id TEXT NOT NULL,
@@ -147,6 +150,7 @@ db.serialize(() => {
     updated_at INTEGER NOT NULL,
     PRIMARY KEY(item_id, quality, buy_city, sell_city, window_days)
   )`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_spread_stats_search ON spread_stats(window_days, avg_spread, confidence_score)`);
 
   db.run(`CREATE TABLE IF NOT EXISTS price_averages (
     item_id TEXT NOT NULL,
@@ -599,7 +603,7 @@ client.on('interactionCreate', async interaction => {
   }
 });
 
-client.login(BOT_TOKEN);
+client.login(BOT_TOKEN).catch(e => console.error('[Discord] Login failed (rate limited):', e.message));
 
 // === EXPRESS APP ===
 const app = express();
@@ -640,7 +644,13 @@ app.use(passport.session());
 // Explicit scope on the authenticate call; 'guilds' omitted intentionally (see strategy above)
 app.get('/auth/discord', passport.authenticate('discord', { scope: ['identify'] }));
 app.get('/auth/discord/callback', passport.authenticate('discord', { failureRedirect: 'https://coldtouch.github.io/coldtouch-market-analyzer?login=failed' }), (req, res) => {
-  res.redirect(`https://coldtouch.github.io/coldtouch-market-analyzer?login=success`);
+  // Explicitly flush session to SQLite before redirecting.
+  // Without this, there is a race condition: the browser arrives at ?login=success
+  // and immediately calls /api/me, but the session write is still pending,
+  // so req.user is undefined and the user appears logged out.
+  req.session.save(() => {
+    res.redirect(`https://coldtouch.github.io/coldtouch-market-analyzer?login=success`);
+  });
 });
 
 app.get('/api/me', (req, res) => {
@@ -852,7 +862,7 @@ app.get('/api/transport-routes', (req, res) => {
   const cutoff7d = Date.now() - 7 * 24 * 60 * 60 * 1000;
 
   let whereClause = `WHERE ss.window_days = 7 AND ss.avg_spread > ? AND ss.confidence_score >= ?`;
-  const params = [minProfit, minConfidence];
+  const params = [cutoff7d, cutoff7d, minProfit, minConfidence];
 
   if (buyCity) { whereClause += ` AND ss.buy_city = ?`; params.push(buyCity); }
   if (sellCity) { whereClause += ` AND ss.sell_city = ?`; params.push(sellCity); }
@@ -864,27 +874,14 @@ app.get('/api/transport-routes', (req, res) => {
       ss.item_id, ss.quality, ss.buy_city, ss.sell_city,
       ss.avg_spread, ss.median_spread, ss.consistency_pct,
       ss.sample_count, ss.confidence_score,
-      COALESCE(vol_buy.avg_volume, 0) as buy_volume,
-      COALESCE(vol_sell.avg_volume, 0) as sell_volume
+      (SELECT COALESCE(AVG(sample_count), 0) FROM price_averages WHERE item_id = ss.item_id AND quality = ss.quality AND city = ss.buy_city AND period_type = 'daily' AND period_start > ?) as buy_volume,
+      (SELECT COALESCE(AVG(sample_count), 0) FROM price_averages WHERE item_id = ss.item_id AND quality = ss.quality AND city = ss.sell_city AND period_type = 'daily' AND period_start > ?) as sell_volume
     FROM spread_stats ss
-    LEFT JOIN (
-      SELECT item_id, quality, city, AVG(sample_count) as avg_volume
-      FROM price_averages
-      WHERE period_type = 'daily' AND period_start > ?
-      GROUP BY item_id, quality, city
-    ) vol_buy ON vol_buy.item_id = ss.item_id AND vol_buy.quality = ss.quality AND vol_buy.city = ss.buy_city
-    LEFT JOIN (
-      SELECT item_id, quality, city, AVG(sample_count) as avg_volume
-      FROM price_averages
-      WHERE period_type = 'daily' AND period_start > ?
-      GROUP BY item_id, quality, city
-    ) vol_sell ON vol_sell.item_id = ss.item_id AND vol_sell.quality = ss.quality AND vol_sell.city = ss.sell_city
     ${whereClause}
-    ORDER BY (ss.avg_spread * COALESCE(vol_buy.avg_volume, 0)) DESC
+    ORDER BY (ss.avg_spread * (SELECT COALESCE(AVG(sample_count), 0) FROM price_averages WHERE item_id = ss.item_id AND quality = ss.quality AND city = ss.buy_city AND period_type = 'daily' AND period_start > ?)) DESC
     LIMIT ?
   `;
-  params.unshift(cutoff7d, cutoff7d);
-  params.push(limit);
+  params.push(cutoff7d, limit);
 
   db.all(sql, params, (err, rows) => {
     if (err) return res.status(500).json({ error: err.message });
