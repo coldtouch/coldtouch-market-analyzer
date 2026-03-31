@@ -2,6 +2,15 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-04-01 — Fix: Sync deploy_saas.py with deployed VPS state
+
+- Committed deploy changes that were on VPS (Mar 30 deploy) but missing from git
+- Disable albion-proxy service on deploy (NATS proxy consolidated into albion-saas)
+- Add `sell_date`/`buy_date` columns to `price_snapshots` table via ALTER TABLE
+- Add `idx_spread_stats_search` index on `spread_stats(window_days, avg_spread, confidence_score)`
+- Discord bot login now catches rate-limit errors gracefully (`.catch()`)
+- Transport routes query refactored: correlated subqueries replace double JOIN on `price_averages`; fixed params array order that caused wrong values being bound
+
 ### 2026-03-29 — Feature: Transport Weight & Haul Planning System
 
 - Implemented Albion Online gear weight calculation: tier material weights (T4-T8) × equipment slot material counts (chest=16, head/shoes/offhand/cape=8, 1H=24, 2H=32)
