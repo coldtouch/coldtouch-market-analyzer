@@ -1132,8 +1132,8 @@ async function doCompare() {
                     ${getEnchantmentBadge(itemId)}
                 </div>
                 <div style="flex:1;">
-                    <h3>${name} <span class="tier-badge">${getTierEnchLabel(itemId)}</span></h3>
-                    <span style="color:var(--text-muted);font-size:0.8rem;">${itemId}</span>
+                    <h3>${esc(name)} <span class="tier-badge">${getTierEnchLabel(itemId)}</span></h3>
+                    <span style="color:var(--text-muted);font-size:0.8rem;">${esc(itemId)}</span>
                 </div>
                 <div class="item-card-actions" style="margin-left: auto; display: flex; gap: 0.5rem; justify-content: flex-end;">
                     <button class="btn-card-action" data-action="refresh" data-item="${itemId}" title="Refresh this item's data">
@@ -1162,7 +1162,7 @@ async function doCompare() {
 
             let tableHTML = `<h4 style="color:var(--accent);margin:1.5rem 0 0.5rem;font-size:0.9rem;">${qualName} Quality</h4>`;
             tableHTML += `<table class="compare-table"><thead><tr><th></th>`;
-            orderedCities.forEach(c => tableHTML += `<th>${c}</th>`);
+            orderedCities.forEach(c => tableHTML += `<th>${esc(c)}</th>`);
             tableHTML += `</tr></thead><tbody>`;
 
             // Row 1: Buy Now (instant buy = cheapest sell order)
@@ -1715,7 +1715,7 @@ function renderCrafting(crafts) {
                             <img class="mat-icon" src="https://render.albiononline.com/v1/item/${mat.id}.png" alt="" loading="lazy">
                             ${getEnchantmentBadge(mat.id)}
                         </div>
-                        <span>${mat.effectiveQty || mat.qty}x ${getFriendlyName(mat.id)} <span class="mat-city">from ${mat.city}</span></span>
+                        <span>${mat.effectiveQty || mat.qty}x ${esc(getFriendlyName(mat.id))} <span class="mat-city">from ${esc(mat.city)}</span></span>
                     </div>
                     <span>${Math.floor(mat.total).toLocaleString()} 💰</span>
                 </div>
@@ -2130,7 +2130,7 @@ function setupAutocomplete(inputId, listId, onSelect) {
             list.classList.remove('hidden');
             matches.forEach(m => {
                 const div = document.createElement('div');
-                div.innerHTML = `<strong>${m.name}</strong> <span style="color:var(--text-muted);font-size:0.75rem;">(${m.id})</span>`;
+                div.innerHTML = `<strong>${esc(m.name)}</strong> <span style="color:var(--text-muted);font-size:0.75rem;">(${esc(m.id)})</span>`;
                 div.addEventListener('click', () => {
                     input.value = m.name;
                     list.classList.add('hidden');
@@ -2634,7 +2634,7 @@ async function calculateJournals() {
         await updateDbStatus();
     } catch (e) {
         spinner.classList.add('hidden');
-        container.innerHTML = `<div class="empty-state"><p>Failed to fetch journal prices: ${e.message}</p></div>`;
+        container.innerHTML = `<div class="empty-state"><p>Failed to fetch journal prices: ${esc(e.message)}</p></div>`;
     }
 }
 
@@ -2887,8 +2887,8 @@ function renderRepairResults(results) {
                     ${getEnchantmentBadge(results.itemId)}
                 </div>
                 <div>
-                    <h2>${results.name} <span class="tier-badge">${tierEnch}</span></h2>
-                    <span style="color:var(--text-muted);font-size:0.8rem;">${results.itemId} | ${results.qualityName}</span>
+                    <h2>${esc(results.name)} <span class="tier-badge">${tierEnch}</span></h2>
+                    <span style="color:var(--text-muted);font-size:0.8rem;">${esc(results.itemId)} | ${esc(results.qualityName)}</span>
                 </div>
             </div>
 
@@ -3629,7 +3629,7 @@ function renderTransportResults(routes, budget, mountCapacity, haulPlans) {
                     <div style="display:flex; align-items:center; gap:0.5rem; flex:1; min-width:0;">
                         <img class="item-icon-sm" src="https://render.albiononline.com/v1/item/${item.itemId}.png" alt="" loading="lazy" style="width:28px; height:28px; border-radius:4px;">
                         <div style="min-width:0; flex:1;">
-                            <div style="font-size:0.82rem; font-weight:600; color:var(--text-primary); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${getFriendlyName(item.itemId)}</div>
+                            <div style="font-size:0.82rem; font-weight:600; color:var(--text-primary); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${esc(getFriendlyName(item.itemId))}</div>
                             <div style="font-size:0.7rem; color:var(--text-muted);">${getTierEnchLabel(item.itemId)} ${getQualityName(item.quality)}</div>
                         </div>
                     </div>
@@ -3878,7 +3878,7 @@ async function loadCommunityTab() {
         listEl.innerHTML = lb.map((u, i) => {
             const rank = i + 1;
             const rankClass = rank <= 3 ? `top-${rank}` : '';
-            const tier = u.tier || 'bronze';
+            const tier = /^[a-z]+$/.test(u.tier || '') ? u.tier : 'bronze';
             const tierLabel = tier.charAt(0).toUpperCase() + tier.slice(1);
             const avatarUrl = u.avatar
                 ? `https://cdn.discordapp.com/avatars/${u.user_id}/${u.avatar}.png?size=64`
@@ -4067,7 +4067,7 @@ function renderItemPowerResults(results) {
                     return `
                         <tr class="ip-result-row" data-item-id="${r.itemId}" style="cursor:pointer;" title="Click to view in City Comparison">
                             <td style="padding:0.25rem;"><img src="https://render.albiononline.com/v1/item/${r.itemId}.png" style="width:48px;height:48px;" loading="lazy"></td>
-                            <td><strong>${getFriendlyName(r.itemId)}</strong><br><span style="font-size:0.7rem;color:var(--text-muted);">${r.itemId}</span></td>
+                            <td><strong>${esc(getFriendlyName(r.itemId))}</strong><br><span style="font-size:0.7rem;color:var(--text-muted);">${esc(r.itemId)}</span></td>
                             <td>${getTierEnchLabel(r.itemId)}</td>
                             <td><strong>${r.ip}</strong></td>
                             <td>${Math.floor(r.price).toLocaleString()}</td>
@@ -4185,7 +4185,7 @@ function renderFavoriteChips() {
     chipContainer.innerHTML = favCurrentItems.map(id => `
         <span class="fav-chip" style="display:inline-flex;align-items:center;gap:0.25rem;background:var(--surface-2);padding:0.25rem 0.5rem;border-radius:0.5rem;margin:0.125rem;font-size:0.8rem;">
             <img src="https://render.albiononline.com/v1/item/${id}.png" style="width:20px;height:20px;" loading="lazy">
-            ${getFriendlyName(id)}
+            ${esc(getFriendlyName(id))}
             <button onclick="removeFavoriteItem('${id}')" style="background:none;border:none;color:var(--text-muted);cursor:pointer;padding:0 0.25rem;font-size:1rem;line-height:1;">&times;</button>
         </span>
     `).join('');
@@ -4276,7 +4276,7 @@ function renderFavoritePrices(items, priceMap) {
                     return `
                         <tr>
                             <td style="padding:0.25rem;"><img src="https://render.albiononline.com/v1/item/${itemId}.png" style="width:40px;height:40px;" loading="lazy"></td>
-                            <td><strong>${getFriendlyName(itemId)}</strong><br><span style="font-size:0.65rem;color:var(--text-muted);">${getTierEnchLabel(itemId)}</span></td>
+                            <td><strong>${esc(getFriendlyName(itemId))}</strong><br><span style="font-size:0.65rem;color:var(--text-muted);">${getTierEnchLabel(itemId)}</span></td>
                             ${cities.map((c, i) => {
                                 const p = prices[i];
                                 if (p <= 0) return '<td style="color:var(--text-muted);">—</td>';
@@ -4616,7 +4616,7 @@ function renderTopTraded(items) {
             <td style="font-weight:700; color:var(--accent);">${i + 1}</td>
             <td style="display:flex; align-items:center; gap:0.5rem;">
                 <img src="https://render.albiononline.com/v1/item/${item.itemId}.png" width="32" height="32" style="image-rendering:pixelated;" onerror="this.style.display='none'">
-                <span>${name}</span>${enchBadge}
+                <span>${esc(name)}</span>${enchBadge}
             </td>
             <td>${tierLabel}</td>
             <td>${item.avgPrice > 0 ? item.avgPrice.toLocaleString() : '--'}</td>
@@ -4805,12 +4805,12 @@ function renderPortfolio() {
             <td><span style="font-weight:700; color:${typeColor};">${typeLabel}</span></td>
             <td style="display:flex; align-items:center; gap:0.5rem;">
                 <img src="https://render.albiononline.com/v1/item/${t.itemId}.png" width="24" height="24" style="image-rendering:pixelated;" onerror="this.style.display='none'">
-                ${name}
+                ${esc(name)}
             </td>
             <td>${t.quantity.toLocaleString()}</td>
             <td>${t.price.toLocaleString()}</td>
             <td style="font-weight:700;">${total.toLocaleString()}</td>
-            <td>${t.city}</td>
+            <td>${esc(t.city)}</td>
             <td><button onclick="deletePortfolioTrade('${t.id}')" style="background:none; border:none; color:var(--loss-red); cursor:pointer; font-size:1rem;" title="Delete trade">×</button></td>
         </tr>`;
     });
@@ -4986,7 +4986,7 @@ async function calculateFarming() {
         renderFarmResults(results, farmType);
     } catch (e) {
         spinner.classList.add('hidden');
-        container.innerHTML = `<div class="empty-state"><p>Failed to calculate farming profits: ${e.message}</p></div>`;
+        container.innerHTML = `<div class="empty-state"><p>Failed to calculate farming profits: ${esc(e.message)}</p></div>`;
     }
 }
 
