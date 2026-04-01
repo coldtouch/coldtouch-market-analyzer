@@ -2,6 +2,12 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-04-01 — XSS hardening + memory fix + .gitignore cleanup
+
+- **XSS hardening** (`app.js`): Applied `esc()` to all remaining unescaped external data in `innerHTML`: item names and IDs in browser cards, city names in arbitrage/transport/crafting/Black Market trade cards, error messages in `catch` blocks. All API-sourced strings now go through the HTML entity escaper before insertion.
+- **Performance fix** (`deploy_saas.py`): Added `spread_stats` cleanup in `compactOldData()` — deletes rows with `updated_at` older than 14 days. Prevents unbounded table growth (2.5M+ rows) that was causing OOM kills on the VPS.
+- **`.gitignore`**: Added `node_modules/`, debug Python scripts (`debug_dump.py`, `why_missing.py`, `check_avalon.py`, `check_stoneskin.py`, `check_mats.py`, `verify_dict.py`, `check_live_json.py`, `rebuild_items.py`, `fetch_latest_items.py`, `inspect_consumables.py`, `build_recipes.py`, `merge_consumables.py`), and test/debug JS files.
+
 ### 2026-04-01 — Security hardening + bug fixes (full review pass)
 
 **Critical fixes:**
