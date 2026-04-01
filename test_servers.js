@@ -1,23 +1,17 @@
-const https = require('https');
-
-https.get('https://europe.albion-online-data.com/api/v2/stats/prices/T5_2H_ENIGMATICORB_MORGANA.json', (res) => {
-  let data = '';
-  res.on('data', chunk => data += chunk);
-  res.on('end', () => {
-    const parsed = JSON.parse(data);
-    const valid = parsed.filter(p => p.sell_price_min > 0 || p.buy_price_max > 0);
-    const hasBuy = valid.filter(p => p.buy_price_max > 0).map(p => p.city);
-    console.log('Europe - Cities with buy orders:', [...new Set(hasBuy)]);
-  });
-});
-
-https.get('https://east.albion-online-data.com/api/v2/stats/prices/T5_2H_ENIGMATICORB_MORGANA.json', (res) => {
-  let data = '';
-  res.on('data', chunk => data += chunk);
-  res.on('end', () => {
-    const parsed = JSON.parse(data);
-    const valid = parsed.filter(p => p.sell_price_min > 0 || p.buy_price_max > 0);
-    const hasBuy = valid.filter(p => p.buy_price_max > 0).map(p => p.city);
-    console.log('East - Cities with buy orders:', [...new Set(hasBuy)]);
-  });
-});
+async function run() {
+    try {
+        const res = await fetch("https://raw.githubusercontent.com/broderickhyman/albiondata-client/master/locations.json");
+        const data = await res.json();
+        const cities = ['Martlock', 'Thetford', 'Fort Sterling', 'Lymhurst', 'Bridgewatch', 'Caerleon', 'Brecilien', 'Black Market'];
+        const map = {};
+        for (const [id, name] of Object.entries(data)) {
+            if (cities.includes(name)) {
+                map[id] = name;
+            }
+        }
+        console.log(JSON.stringify(map, null, 2));
+    } catch(e) {
+        console.log("ERR", e);
+    }
+}
+run();
