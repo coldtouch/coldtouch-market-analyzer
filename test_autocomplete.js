@@ -17,7 +17,7 @@ function getTierEnchLabel(itemId) {
     return label;
 }
 
-const val = "Dawnsong".toLowerCase();
+const val = "resistance potion".toLowerCase();
 const words = val.split(' ').filter(w => w);
 const matches = [];
 
