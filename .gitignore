@@ -1,9 +1,36 @@
+# Dependencies
+node_modules/
+
 # Python companion & test tools (not needed for the web app)
 companion.py
 test_nats.py
 patch_recipes.py
+rebuild_items.py
+fetch_latest_items.py
+inspect_consumables.py
+build_recipes.py
+merge_consumables.py
+debug_dump.py
+why_missing.py
+check_avalon.py
+check_stoneskin.py
+check_mats.py
+verify_dict.py
+check_live_json.py
 __pycache__/
 *.pyc
+
+# Debug/test JS files
+test_arb.js
+test_arb_live.js
+test_match.js
+test_match_2.js
+test_match_3.js
+test_api.js
+test_autocomplete.js
+test_servers.js
+check_ws.js
+add_potions.js
 
 # Large source file (items.txt is the raw dump; items.json is the processed version we keep)
 items.txt
