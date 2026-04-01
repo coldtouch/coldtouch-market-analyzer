@@ -2,6 +2,13 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-04-01 — XSS hardening pass 2 (security reviewer findings)
+
+- Applied `esc()` to all remaining `getFriendlyName()` calls in `innerHTML` contexts: crafting material names, compare tab headers/city columns, haul plan items, autocomplete dropdown, repair calculator, top-traded table, item power table, favorites chips and table.
+- Fixed stored XSS in portfolio tab: `t.city` from `localStorage` now escaped on read.
+- Fixed two more unescaped `e.message` in journal and farming error handlers.
+- Fixed leaderboard CSS class injection: `u.tier` from VPS API now validated against `/^[a-z]+$/` before use in `class="tier-${tier}"`.
+
 ### 2026-04-01 — XSS hardening + memory fix + .gitignore cleanup
 
 - **XSS hardening** (`app.js`): Applied `esc()` to all remaining unescaped external data in `innerHTML`: item names and IDs in browser cards, city names in arbitrage/transport/crafting/Black Market trade cards, error messages in `catch` blocks. All API-sourced strings now go through the HTML entity escaper before insertion.
