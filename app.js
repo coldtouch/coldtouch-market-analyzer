@@ -509,20 +509,20 @@ async function renderBrowser() {
                     ${getEnchantmentBadge(id)}
                 </div>
                 <div class="item-card-info">
-                    <div class="item-card-name" title="${name}">${name}</div>
-                    <div class="item-card-id">${id} <span class="tier-badge">${getTierEnchLabel(id)}</span></div>
+                    <div class="item-card-name" title="${esc(name)}">${esc(name)}</div>
+                    <div class="item-card-id">${esc(id)} <span class="tier-badge">${getTierEnchLabel(id)}</span></div>
                 </div>
             </div>
             <div class="item-card-prices">
                 <div class="price-cell">
                     <div class="pc-label">Buy Price</div>
                     <div class="pc-value text-accent">${bestSell ? bestSell.sell_price_min.toLocaleString() + ' 💰' : '—'}</div>
-                    <div class="pc-city">${bestSell ? bestSell.city : ''}</div>
+                    <div class="pc-city">${bestSell ? esc(bestSell.city) : ''}</div>
                 </div>
                 <div class="price-cell">
                     <div class="pc-label">Sell Price</div>
                     <div class="pc-value text-green">${bestBuy ? bestBuy.buy_price_max.toLocaleString() + ' 💰' : '—'}</div>
-                    <div class="pc-city">${bestBuy ? bestBuy.city : ''}</div>
+                    <div class="pc-city">${bestBuy ? esc(bestBuy.city) : ''}</div>
                 </div>
             </div>
             <div class="item-card-prices" style="padding-top:0.5rem; margin-top:0.5rem; border-top: 1px solid rgba(255,255,255,0.05);">
@@ -844,14 +844,14 @@ function buildArbitrageCardDOM(trade) {
                 ${getEnchantmentBadge(trade.itemId)}
             </div>
             <div class="header-titles">
-                <div class="item-name">${getFriendlyName(trade.itemId)}</div>
+                <div class="item-name">${esc(getFriendlyName(trade.itemId))}</div>
                 <span class="item-quality">${getQualityName(trade.quality)}</span>
             </div>
         </div>
         <div class="trade-route">
             <div class="city buy-city">
                 <span class="route-label">Buy from (Instant Buy)</span>
-                <strong class="city-name">${trade.buyCity}</strong>
+                <strong class="city-name">${esc(trade.buyCity)}</strong>
                 <div style="display:flex; align-items:center; gap:0.5rem; justify-content:center;">
                     <span class="price" title="Instant Buy (Cheapest Sell Order)">${Math.floor(trade.buyPrice).toLocaleString()} 💰</span>
                 </div>
@@ -862,7 +862,7 @@ function buildArbitrageCardDOM(trade) {
             <div class="arrow">➔</div>
             <div class="city sell-city">
                 <span class="route-label">Sell to (Instant Sell)</span>
-                <strong class="city-name">${trade.sellCity}</strong>
+                <strong class="city-name">${esc(trade.sellCity)}</strong>
                 <div style="display:flex; align-items:center; gap:0.5rem; justify-content:center;">
                     <span class="price" title="Instant Sell (Highest Buy Order)">${Math.floor(trade.sellPrice).toLocaleString()} 💰</span>
                 </div>
@@ -887,8 +887,8 @@ function buildArbitrageCardDOM(trade) {
         ` : ''}
         <div style="text-align:center; font-size:0.7rem; color:var(--text-muted); padding: 0.5rem 0 0 0; font-style:italic;">
             <div style="display:flex; justify-content:center; gap:1rem; flex-wrap:wrap;">
-                <span title="Buy Data Age">${getFreshnessIndicator(trade.dateBuy)} ${trade.buyCity}: ${timeAgo(trade.dateBuy)}</span>
-                <span title="Sell Data Age">${getFreshnessIndicator(trade.dateSell)} ${trade.sellCity}: ${timeAgo(trade.dateSell)}</span>
+                <span title="Buy Data Age">${getFreshnessIndicator(trade.dateBuy)} ${esc(trade.buyCity)}: ${timeAgo(trade.dateBuy)}</span>
+                <span title="Sell Data Age">${getFreshnessIndicator(trade.dateSell)} ${esc(trade.sellCity)}: ${timeAgo(trade.dateSell)}</span>
             </div>
             ${trade.confidence !== null ? `
             <div style="margin-top:0.4rem; display:flex; justify-content:center; align-items:center; gap:0.5rem;">
@@ -1270,7 +1270,7 @@ async function doCompare() {
         await updateDbStatus();
     } catch (e) {
         spinner.classList.add('hidden');
-        container.innerHTML = `<div class="empty-state"><p>Error fetching data: ${e.message}</p></div>`;
+        container.innerHTML = `<div class="empty-state"><p>Error fetching data: ${esc(e.message)}</p></div>`;
     }
 }
 
@@ -1732,7 +1732,7 @@ function renderCrafting(crafts) {
                     ${getEnchantmentBadge(craft.itemId)}
                 </div>
                 <div class="header-titles">
-                    <div class="item-name">${getFriendlyName(craft.itemId)}</div>
+                    <div class="item-name">${esc(getFriendlyName(craft.itemId))}</div>
                     <span class="item-quality">${getQualityName(craft.quality)}</span>
                 </div>
             </div>
@@ -1744,7 +1744,7 @@ function renderCrafting(crafts) {
             <div class="craft-sell-route">
                 <div>
                     <div class="craft-sell-label">Sell to</div>
-                    <strong class="city-name">${craft.sellCity}</strong>
+                    <strong class="city-name">${esc(craft.sellCity)}</strong>
                 </div>
                 <span class="price text-accent">${Math.floor(craft.sellPrice).toLocaleString()} 💰</span>
             </div>
@@ -2153,37 +2153,55 @@ function setupAutocomplete(inputId, listId, onSelect) {
 // ============================================================
 const VPS_BASE = 'https://209-97-129-125.nip.io';
 
+// Returns Authorization header for authenticated API calls.
+// Uses a JWT stored in localStorage — avoids cross-origin third-party cookie
+// restrictions (Safari ITP, Chrome Privacy Sandbox) that silently drop session
+// cookies when calling nip.io from github.io.
+function authHeaders() {
+    const token = localStorage.getItem('albion_auth_token');
+    return token ? { 'Authorization': `Bearer ${token}` } : {};
+}
+
 async function loadAlerts() {
     const listEl = document.getElementById('alerts-list');
     const emptyEl = document.getElementById('alerts-empty');
     if (!listEl) return;
 
     try {
-        const res = await fetch(`${VPS_BASE}/api/alerts`);
+        const res = await fetch(`${VPS_BASE}/api/alerts`, { headers: authHeaders() });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const alerts = await res.json();
-
-        if (!alerts || alerts.length === 0) {
+        if (!Array.isArray(alerts) || alerts.length === 0) {
             listEl.innerHTML = '';
             emptyEl.style.display = '';
             return;
         }
 
         emptyEl.style.display = 'none';
-        listEl.innerHTML = alerts.map(a => `
-            <div class="item-card" style="display:flex; justify-content:space-between; align-items:center; padding:1rem; margin-bottom:0.5rem;">
+        // Build cards with DOM — avoid inline onclick with channel_id (XSS via attribute injection)
+        listEl.innerHTML = '';
+        for (const a of alerts) {
+            const card = document.createElement('div');
+            card.className = 'item-card';
+            card.style.cssText = 'display:flex; justify-content:space-between; align-items:center; padding:1rem; margin-bottom:0.5rem;';
+            const sourceLabel = a.guild_id ? (a.guild_id.startsWith('web-') ? '🌐 Web' : '🤖 Discord') : '';
+            card.innerHTML = `
                 <div>
-                    <div style="font-weight:600; color:var(--text-primary);">📢 Channel: <span style="color:var(--accent);">${a.channel_id}</span></div>
+                    <div style="font-weight:600; color:var(--text-primary);">📢 Channel: <span style="color:var(--accent);"></span></div>
                     <div style="font-size:0.85rem; color:var(--text-secondary); margin-top:0.3rem;">
-                        Min Profit: <strong style="color:var(--profit-green);">${parseInt(a.min_profit).toLocaleString()} silver</strong>
-                        ${a.guild_id ? ` • Source: ${a.guild_id.startsWith('web-') ? '🌐 Web' : '🤖 Discord'}` : ''}
+                        Min Profit: <strong style="color:var(--profit-green);">${parseInt(a.min_profit || 0).toLocaleString()} silver</strong>
+                        ${sourceLabel ? ` • Source: ${sourceLabel}` : ''}
                     </div>
                 </div>
-                <button class="btn-card-action" style="color:var(--loss-red);" onclick="deleteAlert('${a.channel_id}')" title="Delete this alert">
+                <button class="btn-card-action" style="color:var(--loss-red);" title="Delete this alert">
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
                     Delete
-                </button>
-            </div>
-        `).join('');
+                </button>`;
+            // Set channel_id via textContent (safe) and wire delete button via closure (no inline onclick)
+            card.querySelector('span[style*="accent"]').textContent = a.channel_id;
+            card.querySelector('button').addEventListener('click', () => deleteAlert(a.channel_id));
+            listEl.appendChild(card);
+        }
     } catch (e) {
         listEl.innerHTML = '<div class="empty-state"><p>Could not load alerts. Is the bot server online?</p></div>';
     }
@@ -2199,7 +2217,7 @@ async function createAlert() {
     try {
         const res = await fetch(`${VPS_BASE}/api/alerts`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: { 'Content-Type': 'application/json', ...authHeaders() },
             body: JSON.stringify({ channel_id: channelId, min_profit: parseInt(minProfit) })
         });
         const data = await res.json();
@@ -2219,7 +2237,7 @@ async function deleteAlert(channelId) {
     try {
         await fetch(`${VPS_BASE}/api/alerts`, {
             method: 'DELETE',
-            headers: { 'Content-Type': 'application/json' },
+            headers: { 'Content-Type': 'application/json', ...authHeaders() },
             body: JSON.stringify({ channel_id: channelId })
         });
         await loadAlerts();
@@ -2325,14 +2343,14 @@ function renderBMFlips(trades) {
                     ${getEnchantmentBadge(trade.itemId)}
                 </div>
                 <div class="header-titles">
-                    <div class="item-name">${getFriendlyName(trade.itemId)}</div>
+                    <div class="item-name">${esc(getFriendlyName(trade.itemId))}</div>
                     <span class="item-quality">${getQualityName(trade.quality)} ${getTierEnchLabel(trade.itemId)}</span>
                 </div>
             </div>
             <div class="trade-route">
                 <div class="city buy-city">
                     <span class="route-label">Buy From</span>
-                    <strong class="city-name">${trade.buyCity}</strong>
+                    <strong class="city-name">${esc(trade.buyCity)}</strong>
                     <div style="display:flex; align-items:center; gap:0.5rem; justify-content:center;">
                         <span class="price" title="Instant Buy (Cheapest Sell Order)">${Math.floor(trade.buyPrice).toLocaleString()} silver</span>
                     </div>
@@ -2353,7 +2371,7 @@ function renderBMFlips(trades) {
             </div>
             <div style="text-align:center; font-size:0.7rem; color:var(--text-muted); padding: 0.5rem 0 0 0; font-style:italic;">
                 <div style="display:flex; justify-content:center; gap:1rem; flex-wrap:wrap;">
-                    <span title="Buy Data Age">${getFreshnessIndicator(trade.dateBuy)} ${trade.buyCity}: ${timeAgo(trade.dateBuy)}</span>
+                    <span title="Buy Data Age">${getFreshnessIndicator(trade.dateBuy)} ${esc(trade.buyCity)}: ${timeAgo(trade.dateBuy)}</span>
                     <span title="Sell Data Age">${getFreshnessIndicator(trade.dateSell)} BM: ${timeAgo(trade.dateSell)}</span>
                 </div>
                 ${trade.confidence !== null ? `
@@ -2944,7 +2962,11 @@ async function checkDiscordAuth() {
     // Handle redirect back from OAuth callback
     const urlParams = new URLSearchParams(window.location.search);
     const loginParam = urlParams.get('login');
-    if (loginParam) {
+    const tokenParam = urlParams.get('token');
+    if (loginParam || tokenParam) {
+        // Store JWT from OAuth redirect — used as Authorization: Bearer header
+        // instead of session cookies (which are blocked as third-party by Safari/Chrome).
+        if (tokenParam) localStorage.setItem('albion_auth_token', tokenParam);
         history.replaceState(null, '', window.location.pathname);
         if (loginParam === 'failed') {
             const errEl = document.getElementById('landing-auth-error');
@@ -2953,7 +2975,11 @@ async function checkDiscordAuth() {
     }
 
     try {
-        const res = await fetch(`${VPS_BASE}/api/me`, {credentials: 'include', signal: AbortSignal.timeout(10000)});
+        const res = await fetch(`${VPS_BASE}/api/me`, {
+            credentials: 'include',
+            headers: authHeaders(),
+            signal: AbortSignal.timeout(10000)
+        });
         const data = await res.json();
         if (data.loggedIn) {
             discordUser = data.user;
@@ -3222,7 +3248,10 @@ async function init() {
     initLiveSync();
 
     // === ASYNC: load data and update UI in background ===
-    await checkDiscordAuth();
+    // Run checkDiscordAuth concurrently with loadData — do NOT await it first.
+    // Awaiting it blocks the entire init chain for up to 10s if the VPS is slow,
+    // freezing the UI with the landing overlay showing and no feedback.
+    checkDiscordAuth(); // fire-and-forget — manages the overlay itself
     await loadData();
 
     // Auto-detect which game server the VPS scans and match the dropdown
@@ -3282,6 +3311,17 @@ const API_LOCALE_MAP = {
 function initLiveSync() {
     const syncDot = document.querySelector('.live-sync-dot');
     const syncText = document.querySelector('.live-sync-text');
+
+    // Tear down the old socket before creating a new one.
+    // Without this, the old socket's onclose fires after reconnect and creates
+    // a second concurrent connection, accumulating open sockets over time.
+    if (wsLink) {
+        wsLink.onopen = null;
+        wsLink.onclose = null;
+        wsLink.onmessage = null;
+        if (wsLink.readyState !== WebSocket.CLOSED) wsLink.close();
+        wsLink = null;
+    }
 
     // Connect to the new VPS Proxy
     wsLink = new WebSocket('wss://209-97-129-125.nip.io');
@@ -3670,15 +3710,15 @@ function renderTransportResults(routes, budget, mountCapacity, haulPlans) {
                     ${getEnchantmentBadge(r.itemId)}
                 </div>
                 <div class="header-titles">
-                    <div class="item-name">${getFriendlyName(r.itemId)}</div>
+                    <div class="item-name">${esc(getFriendlyName(r.itemId))}</div>
                     <span class="item-quality">${getQualityName(r.quality)} ${getTierEnchLabel(r.itemId)}</span>
                 </div>
                 ${r.confidence !== null ? getConfidenceBadge(r.confidence) : ''}
             </div>
             <div class="transport-route-bar">
-                <span class="city-tag">${r.buyCity}</span>
+                <span class="city-tag">${esc(r.buyCity)}</span>
                 <span>➔</span>
-                <span class="city-tag">${r.sellCity}</span>
+                <span class="city-tag">${esc(r.sellCity)}</span>
                 <span style="margin-left:auto; font-size:0.7rem; color:var(--text-muted);">
                     ${getFreshnessIndicator(r.dateBuy)} Buy: ${timeAgo(r.dateBuy)} &nbsp;
                     ${getFreshnessIndicator(r.dateSell)} Sell: ${timeAgo(r.dateSell)}
@@ -3765,8 +3805,7 @@ function trackContribution(itemCount) {
     if (!discordUser) return; // Only track for logged-in users
     fetch(`${VPS_BASE}/api/contributions`, {
         method: 'POST',
-        credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
         body: JSON.stringify({ source: 'web_refresh', item_count: itemCount })
     }).catch(() => {}); // Fire-and-forget
 }
@@ -3789,7 +3828,7 @@ async function loadCommunityTab() {
     // Load my stats if logged in
     if (discordUser) {
         try {
-            const res = await fetch(`${VPS_BASE}/api/my-stats`, { credentials: 'include' });
+            const res = await fetch(`${VPS_BASE}/api/my-stats`, { headers: authHeaders() });
             if (res.ok) {
                 const stats = await res.json();
                 const card = document.getElementById('community-my-stats');
