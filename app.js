@@ -919,6 +919,9 @@ function buildArbitrageCardDOM(trade) {
 function renderArbitrage(trades, isSingleItem = false, targetItemId = null) {
     const container = document.getElementById('arbitrage-results');
 
+    // Scroll results into view so the user sees the new data after re-scan
+    if (!targetItemId) container.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+
     if (targetItemId) {
         let existingCards = Array.from(container.querySelectorAll('.trade-card[data-item-id="' + targetItemId + '"]'));
         
@@ -998,6 +1001,10 @@ async function doArbScan(targetItemId = null) {
 
     let searchVal = searchInput.value.trim();
     let isSingleItem = false;
+
+    // If the search box was cleared but arbSearchExactId lingers from a
+    // previous autocomplete selection, reset it so we do a broad scan.
+    if (!searchVal) arbSearchExactId = null;
 
     if (arbSearchExactId) {
         searchVal = arbSearchExactId;
