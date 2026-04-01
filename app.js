@@ -2963,8 +2963,20 @@ function renderRepairResults(results) {
 
 // ====== INITIALIZATION ======
 
+function dismissLandingOverlay() {
+    const overlay = document.getElementById('landing-overlay');
+    if (overlay) {
+        overlay.classList.add('dismissed');
+        setTimeout(() => { overlay.style.display = 'none'; }, 750);
+    }
+}
+
 async function checkDiscordAuth() {
     const overlay = document.getElementById('landing-overlay');
+    const authChecking = document.getElementById('landing-auth-checking');
+    const authContent = document.getElementById('landing-auth-content');
+    const authError = document.getElementById('landing-auth-error');
+    const authErrorText = document.getElementById('landing-auth-error-text');
 
     // Handle redirect back from OAuth callback
     const urlParams = new URLSearchParams(window.location.search);
@@ -2976,26 +2988,53 @@ async function checkDiscordAuth() {
         if (tokenParam) localStorage.setItem('albion_auth_token', tokenParam);
         history.replaceState(null, '', window.location.pathname);
         if (loginParam === 'failed') {
-            const errEl = document.getElementById('landing-auth-error');
-            if (errEl) errEl.style.display = 'block';
+            // Show login UI immediately with error
+            if (authChecking) authChecking.style.display = 'none';
+            if (authContent) authContent.style.display = 'block';
+            if (authError) {
+                authError.style.display = 'flex';
+                if (authErrorText) authErrorText.textContent = 'Discord login failed. Please try again.';
+            }
+            return;
         }
     }
 
+    // If no JWT stored and no token arriving in URL, user is definitely not logged in.
+    // Skip the slow /api/me network call entirely — show login UI instantly.
+    let storedToken = localStorage.getItem('albion_auth_token');
+
+    // Check if stored JWT is expired (avoids a wasted round-trip)
+    if (storedToken && !tokenParam) {
+        try {
+            const payload = JSON.parse(atob(storedToken.split('.')[1]));
+            if (payload.exp && payload.exp * 1000 < Date.now()) {
+                localStorage.removeItem('albion_auth_token');
+                storedToken = null;
+            }
+        } catch { storedToken = null; localStorage.removeItem('albion_auth_token'); }
+    }
+    if (!storedToken && !tokenParam) {
+        if (authChecking) authChecking.style.display = 'none';
+        if (authContent) authContent.style.display = 'block';
+        if (overlay) overlay.style.display = 'flex';
+        return;
+    }
+
+    // Show the checking spinner (only for returning users with a stored JWT)
+    if (authChecking) authChecking.style.display = 'flex';
+    if (authContent) authContent.style.display = 'none';
+
     try {
         const res = await fetch(`${VPS_BASE}/api/me`, {
-            credentials: 'include',
             headers: authHeaders(),
-            signal: AbortSignal.timeout(10000)
+            signal: AbortSignal.timeout(5000)
         });
         const data = await res.json();
         if (data.loggedIn) {
             discordUser = data.user;
 
             // Dismiss the landing overlay with fade-out transition
-            if (overlay) {
-                overlay.classList.add('dismissed');
-                setTimeout(() => { overlay.style.display = 'none'; }, 750);
-            }
+            dismissLandingOverlay();
 
             // Update header — hide login button, show profile
             document.getElementById('login-discord-btn').classList.add('hidden');
@@ -3014,12 +3053,20 @@ async function checkDiscordAuth() {
                 tierBadge.style.display = 'inline-block';
             }
         } else {
-            // Not logged in — keep landing overlay visible
+            // Not logged in — show login/guest options
+            if (authChecking) authChecking.style.display = 'none';
+            if (authContent) authContent.style.display = 'block';
             if (overlay) overlay.style.display = 'flex';
         }
     } catch (e) {
-        console.log('Discord OAuth session not detected.', e);
-        // On error, keep landing overlay visible so user can log in
+        console.log('Discord OAuth check failed:', e.message);
+        // Show login UI with a connection error hint
+        if (authChecking) authChecking.style.display = 'none';
+        if (authContent) authContent.style.display = 'block';
+        if (authError) {
+            authError.style.display = 'flex';
+            if (authErrorText) authErrorText.textContent = 'Could not reach server. You can browse as guest or try logging in.';
+        }
         if (overlay) overlay.style.display = 'flex';
     }
 }
@@ -3241,6 +3288,18 @@ async function init() {
     if (buildsLoadBtn) buildsLoadBtn.addEventListener('click', () => loadBuilds(false));
     const buildsMoreBtn = document.getElementById('builds-more-btn');
     if (buildsMoreBtn) buildsMoreBtn.addEventListener('click', () => loadBuilds(true));
+
+    // Landing page: Guest skip button
+    const guestBtn = document.getElementById('landing-guest-btn');
+    if (guestBtn) guestBtn.addEventListener('click', dismissLandingOverlay);
+
+    // Landing page: Discord button loading state
+    const landingDiscordBtn = document.getElementById('landing-discord-btn');
+    if (landingDiscordBtn) {
+        landingDiscordBtn.addEventListener('click', () => {
+            landingDiscordBtn.classList.add('loading');
+        });
+    }
 
     // Initialize portfolio on load
     renderPortfolio();

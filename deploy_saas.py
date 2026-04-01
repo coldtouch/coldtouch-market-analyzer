@@ -107,8 +107,8 @@ const API_BASE = `https://${GAME_SERVER}.albion-online-data.com/api/v2/stats/pri
 const CHARTS_BASE = `https://${GAME_SERVER}.albion-online-data.com/api/v2/stats/charts`;
 const HISTORY_BASE = `https://${GAME_SERVER}.albion-online-data.com/api/v2/stats/history`;
 const ITEMS_URL = 'https://coldtouch.github.io/coldtouch-market-analyzer/items.json';
-const CHUNK_SIZE = 100;
-const SCAN_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
+const CHUNK_SIZE = 40;  // Reduced from 100 to lower memory spikes on 1GB VPS
+const SCAN_INTERVAL_MS = 10 * 60 * 1000; // 10 minutes (was 5) to give more breathing room
 const SITE_URL = 'https://coldtouch.github.io/coldtouch-market-analyzer';
 
 // Item name cache (loaded from items.json)
@@ -210,10 +210,25 @@ let cacheTimestamp = null;
 let cacheItemCount = 0;
 let cachedGzipBuffer = null;
 let scanInProgress = false;
+let scanStartTime = 0;
+let lastSnapshotTime = 0;
+const SNAPSHOT_INTERVAL = 15 * 60 * 1000; // Record snapshots every 15 min, not every scan
+const SCAN_TIMEOUT_MS = 4 * 60 * 1000;    // Auto-reset stuck scans after 4 minutes
 
 async function doServerScan() {
-  if (scanInProgress) { console.log('[Cache] Scan already in progress, skipping.'); return; }
+  // Watchdog: if a scan has been "in progress" for > 4 minutes, force-reset it
+  if (scanInProgress) {
+    const elapsed = Date.now() - scanStartTime;
+    if (elapsed > SCAN_TIMEOUT_MS) {
+      console.error(`[Cache] Scan stuck for ${Math.round(elapsed/1000)}s — force-resetting scanInProgress flag`);
+      scanInProgress = false;
+    } else {
+      console.log('[Cache] Scan already in progress, skipping.');
+      return;
+    }
+  }
   scanInProgress = true;
+  scanStartTime = Date.now();
   console.log('[Cache] Starting full market scan...');
 
   try {
@@ -264,9 +279,9 @@ async function doServerScan() {
         }
       } catch (e) { console.error(`[Cache] Chunk ${i} failed:`, e.message); }
 
-      // Brief pause between chunks to avoid hammering the API
+      // Slow down the scan: 500ms pause between chunks to give GC time to work
       if (i + CHUNK_SIZE < itemIds.length) {
-        await new Promise(r => setTimeout(r, 100));
+        await new Promise(r => setTimeout(r, 500));
       }
     }
 
@@ -279,19 +294,24 @@ async function doServerScan() {
     // Seed alerter with scan data
     seedAlerterFromScan(allPrices);
 
-    // Record snapshots for historical analysis
-    recordSnapshots(allPrices);
+    // Record snapshots only every SNAPSHOT_INTERVAL (15 min) to reduce DB pressure
+    const now = Date.now();
+    if (now - lastSnapshotTime >= SNAPSHOT_INTERVAL) {
+      recordSnapshots(allPrices);
+      lastSnapshotTime = now;
+    }
 
     const json = JSON.stringify({ timestamp: cacheTimestamp, count: cacheItemCount, data: allPrices });
     zlib.gzip(json, (err, buffer) => {
         if (!err) {
             cachedGzipBuffer = buffer;
-            console.log(`[Cache] Scan complete: ${cacheItemCount} entries. Compressed: ${Math.round(buffer.length/1024)}KB`);
+            const mem = process.memoryUsage();
+            console.log(`[Cache] Scan complete: ${cacheItemCount} entries. Compressed: ${Math.round(buffer.length/1024)}KB. RSS: ${Math.round(mem.rss/1024/1024)}MB Heap: ${Math.round(mem.heapUsed/1024/1024)}MB`);
         }
         scanInProgress = false;
     });
   } catch (err) {
-    console.error('[Cache] Scan failed:', err);
+    console.error('[Cache] Scan failed:', err.message);
     scanInProgress = false;
   }
 }
@@ -1245,6 +1265,7 @@ function recordSnapshots(allPrices) {
 }
 
 // === SPREAD STATISTICS COMPUTATION (runs hourly) ===
+// OPTIMIZED: Single bulk query instead of N+1 pattern (was 34K individual queries)
 let statsRunning = false;
 function computeSpreadStats() {
   if (dbBusy || statsRunning) { console.log('[SpreadStats] Busy, skipping this cycle'); return; }
@@ -1254,104 +1275,121 @@ function computeSpreadStats() {
   const windowMs = 7 * 24 * 60 * 60 * 1000; // 7 days
   const cutoff = now - windowMs;
 
-  console.log('[SpreadStats] Starting computation...');
+  const mem = process.memoryUsage();
+  console.log(`[SpreadStats] Starting computation... RSS: ${Math.round(mem.rss/1024/1024)}MB Heap: ${Math.round(mem.heapUsed/1024/1024)}MB`);
 
-  // Get distinct item+quality combos from recent snapshots
-  db.all(`SELECT DISTINCT item_id, quality FROM price_snapshots WHERE recorded_at > ?`, [cutoff], (err, items) => {
-    if (err || !items || items.length === 0) {
-      console.log('[SpreadStats] No data to process');
-      statsRunning = false;
-      return;
-    }
-
-    let processed = 0;
-    const batchSize = 200;
-
-    function processBatch(startIdx) {
-      const batch = items.slice(startIdx, startIdx + batchSize);
-      if (batch.length === 0) {
-        console.log(`[SpreadStats] Done. Processed ${processed} item/quality combos`);
+  // SINGLE bulk query — fetches ALL recent snapshots at once, grouped for processing
+  db.all(
+    `SELECT item_id, quality, city, sell_price_min, buy_price_max, recorded_at FROM price_snapshots WHERE recorded_at > ? ORDER BY item_id, quality, recorded_at`,
+    [cutoff],
+    (err, allRows) => {
+      if (err || !allRows || allRows.length === 0) {
+        console.log('[SpreadStats] No data to process');
         statsRunning = false;
         return;
       }
 
-      let pending = batch.length;
-      for (const { item_id, quality } of batch) {
-        // Get all snapshots for this item+quality grouped by recorded_at (scan cycle)
-        db.all(
-          `SELECT city, sell_price_min, buy_price_max, sell_date, buy_date, recorded_at FROM price_snapshots WHERE item_id = ? AND quality = ? AND recorded_at > ? ORDER BY recorded_at`,
-          [item_id, quality, cutoff],
-          (err2, rows) => {
-            if (!err2 && rows && rows.length > 0) {
-              // Group by scan cycle (recorded_at)
-              const cycles = {};
-              for (const r of rows) {
-                if (!cycles[r.recorded_at]) cycles[r.recorded_at] = {};
-                cycles[r.recorded_at][r.city] = { sell: r.sell_price_min, buy: r.buy_price_max, sellDate: r.sell_date, buyDate: r.buy_date };
+      console.log(`[SpreadStats] Processing ${allRows.length} snapshot rows in memory...`);
+
+      // Group rows by item_id + quality
+      const itemMap = {};  // "itemId_quality" -> { recorded_at -> { city -> {sell, buy} } }
+      for (const r of allRows) {
+        const key = r.item_id + '_' + r.quality;
+        if (!itemMap[key]) itemMap[key] = { item_id: r.item_id, quality: r.quality, cycles: {} };
+        if (!itemMap[key].cycles[r.recorded_at]) itemMap[key].cycles[r.recorded_at] = {};
+        itemMap[key].cycles[r.recorded_at][r.city] = { sell: r.sell_price_min, buy: r.buy_price_max };
+      }
+      // Release the raw rows array to free memory
+      allRows.length = 0;
+
+      const itemKeys = Object.keys(itemMap);
+      let processed = 0;
+      let statsWritten = 0;
+      const WRITE_BATCH = 500; // Batch DB writes
+      let writeBuf = [];
+
+      function flushWrites() {
+        if (writeBuf.length === 0) return;
+        const batch = writeBuf.splice(0);
+        db.serialize(() => {
+          db.run('BEGIN TRANSACTION');
+          const stmt = db.prepare(`INSERT OR REPLACE INTO spread_stats (item_id, quality, buy_city, sell_city, avg_spread, median_spread, consistency_pct, sample_count, window_days, confidence_score, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+          for (const r of batch) stmt.run(...r);
+          stmt.finalize();
+          db.run('COMMIT');
+        });
+        statsWritten += batch.length;
+      }
+
+      function processBatch(startIdx) {
+        const endIdx = Math.min(startIdx + 500, itemKeys.length);
+        if (startIdx >= itemKeys.length) {
+          flushWrites();
+          const mem2 = process.memoryUsage();
+          console.log(`[SpreadStats] Done. Processed ${processed} items, wrote ${statsWritten} spread stats. RSS: ${Math.round(mem2.rss/1024/1024)}MB`);
+          statsRunning = false;
+          return;
+        }
+
+        for (let idx = startIdx; idx < endIdx; idx++) {
+          const { item_id, quality, cycles } = itemMap[itemKeys[idx]];
+          delete itemMap[itemKeys[idx]]; // Release memory as we go
+
+          const citySet = new Set();
+          for (const c of Object.values(cycles)) {
+            for (const city of Object.keys(c)) citySet.add(city);
+          }
+          const cities = Array.from(citySet);
+          const cycleValues = Object.values(cycles);
+
+          for (let i = 0; i < cities.length; i++) {
+            for (let j = 0; j < cities.length; j++) {
+              if (i === j) continue;
+              const buyCity = cities[i];
+              const sellCity = cities[j];
+              if (buyCity === 'Black Market') continue;
+
+              const spreads = [];
+              for (const cycle of cycleValues) {
+                const buyData = cycle[buyCity];
+                const sellData = cycle[sellCity];
+                if (!buyData || !sellData) continue;
+                if (buyData.sell <= 0 || sellData.buy <= 0) continue;
+                spreads.push(sellData.buy - buyData.sell - (sellData.buy * TAX_RATE));
               }
 
-              // For each city pair, compute spreads across cycles
-              const citySet = new Set();
-              for (const c of Object.values(cycles)) {
-                for (const city of Object.keys(c)) citySet.add(city);
-              }
-              const cities = Array.from(citySet);
+              if (spreads.length < 3) continue;
 
-              for (let i = 0; i < cities.length; i++) {
-                for (let j = 0; j < cities.length; j++) {
-                  if (i === j) continue;
-                  const buyCity = cities[i];
-                  const sellCity = cities[j];
-                  if (buyCity === 'Black Market') continue;
+              const positive = spreads.filter(s => s > 0);
+              const consistencyPct = (positive.length / spreads.length) * 100;
+              const avg = spreads.reduce((a, b) => a + b, 0) / spreads.length;
+              const sorted = [...positive].sort((a, b) => a - b);
+              const median = sorted.length > 0 ? sorted[Math.floor(sorted.length / 2)] : 0;
 
-                  const spreads = [];
-                  for (const cycle of Object.values(cycles)) {
-                    const buyData = cycle[buyCity];
-                    const sellData = cycle[sellCity];
-                    if (!buyData || !sellData) continue;
-                    if (buyData.sell <= 0 || sellData.buy <= 0) continue;
-                    const spread = sellData.buy - buyData.sell - (sellData.buy * TAX_RATE);
-                    spreads.push(spread);
-                  }
+              const sampleScore = Math.min(spreads.length, 100) / 100 * 30;
+              const consistScore = consistencyPct * 0.5;
+              const spreadScore = Math.min(Math.max(avg, 0), 500000) / 500000 * 20;
+              const confidence = Math.round(Math.min(100, sampleScore + consistScore + spreadScore));
 
-                  if (spreads.length < 3) continue;
-
-                  const positive = spreads.filter(s => s > 0);
-                  const consistencyPct = (positive.length / spreads.length) * 100;
-                  const avg = spreads.reduce((a, b) => a + b, 0) / spreads.length;
-                  const sorted = [...positive].sort((a, b) => a - b);
-                  const median = sorted.length > 0 ? sorted[Math.floor(sorted.length / 2)] : 0;
-
-                  const sampleScore = Math.min(spreads.length, 100) / 100 * 30;
-                  const consistScore = consistencyPct * 0.5;
-                  const spreadScore = Math.min(Math.max(avg, 0), 500000) / 500000 * 20;
-                  const confidence = Math.round(Math.min(100, sampleScore + consistScore + spreadScore));
-
-                  db.run(`INSERT OR REPLACE INTO spread_stats (item_id, quality, buy_city, sell_city, avg_spread, median_spread, consistency_pct, sample_count, window_days, confidence_score, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-                    [item_id, quality, buyCity, sellCity, Math.round(avg), Math.round(median), Math.round(consistencyPct * 10) / 10, spreads.length, 7, confidence, now],
-                    () => {} // swallow errors silently
-                  );
-                }
-              }
-            }
-
-            processed++;
-            pending--;
-            if (pending === 0) {
-              // Process next batch with a yield
-              setTimeout(() => processBatch(startIdx + batchSize), 50);
+              writeBuf.push([item_id, quality, buyCity, sellCity, Math.round(avg), Math.round(median), Math.round(consistencyPct * 10) / 10, spreads.length, 7, confidence, now]);
             }
           }
-        );
-      }
-    }
+          processed++;
 
-    processBatch(0);
-  });
+          if (writeBuf.length >= WRITE_BATCH) flushWrites();
+        }
+
+        // Yield to event loop between batches so Express can still serve requests
+        setTimeout(() => processBatch(endIdx), 20);
+      }
+
+      processBatch(0);
+    }
+  );
 }
 
-// Run stats computation hourly, first run 5 minutes after start (after backfill)
-setTimeout(computeSpreadStats, 5 * 60 * 1000);
+// Run stats computation hourly, first run 10 minutes after start (after backfill)
+setTimeout(computeSpreadStats, 10 * 60 * 1000);
 setInterval(computeSpreadStats, 60 * 60 * 1000);
 
 // === DATA COMPACTION (runs every 6 hours) ===
@@ -1436,9 +1474,10 @@ function compactOldData() {
   db.run(`DELETE FROM contributions WHERE created_at < ?`, [sixtyDaysAgo]);
 }
 
-// Run compaction every hour, first run 5 minutes after start
-setTimeout(compactOldData, 5 * 60 * 1000);
-setInterval(compactOldData, 60 * 60 * 1000);
+// Run compaction every 2 hours, first run 25 minutes after start
+// STAGGERED: SpreadStats runs at 10min+hourly, compaction at 25min+2h — they never overlap
+setTimeout(compactOldData, 25 * 60 * 1000);
+setInterval(compactOldData, 2 * 60 * 60 * 1000);
 
 // === HISTORICAL BACKFILL (Charts + History APIs) ===
 // Runs once on start if no historical data exists
@@ -1515,7 +1554,8 @@ async function backfillHistoricalData() {
     } catch (e) {
       console.error(`[Backfill] Charts chunk ${i} failed:`, e.message);
     }
-    if (i + CHUNK_SIZE < itemIds.length) await new Promise(r => setTimeout(r, 150));
+    // Very gentle backfill: 1s pause between chunks
+    if (i + CHUNK_SIZE < itemIds.length) await new Promise(r => setTimeout(r, 1000));
     if (i % 1000 === 0 && i > 0) console.log(`[Backfill] Charts progress: ${i}/${itemIds.length} items`);
   }
   console.log(`[Backfill] Charts API: inserted ${dailyCount} daily averages`);
@@ -1547,9 +1587,11 @@ async function backfillHistoricalData() {
     } catch (e) {
       console.error(`[Backfill] History chunk ${i} failed:`, e.message);
     }
-    if (i + CHUNK_SIZE < itemIds.length) await new Promise(r => setTimeout(r, 150));
+    // Very gentle backfill: 1s pause between chunks
+    if (i + CHUNK_SIZE < itemIds.length) await new Promise(r => setTimeout(r, 1000));
     if (i % 1000 === 0 && i > 0) console.log(`[Backfill] History progress: ${i}/${itemIds.length} items`);
   }
+
   console.log(`[Backfill] History API: inserted ${hourlyCount} hourly averages`);
   dbBusy = false;
   console.log(`[Backfill] Complete! Total: ${dailyCount} daily + ${hourlyCount} hourly records`);
@@ -1558,8 +1600,8 @@ async function backfillHistoricalData() {
   setTimeout(computeSpreadStats, 5000);
 }
 
-// Start backfill 90 seconds after boot (after first scan completes)
-setTimeout(backfillHistoricalData, 90 * 1000);
+// Start backfill 30 minutes after boot (after first scan is long finished and server is stable)
+setTimeout(backfillHistoricalData, 30 * 60 * 1000);
 
 // === NATS SNAPSHOT BUFFER ===
 // Buffer incoming NATS orders — deduplicated by item/quality/city, flushed every 60s
@@ -1651,6 +1693,20 @@ let natsConnection = null;
   } catch(err){ console.error('[NATS] Connection failed:', err); }
 })();
 
+// === GLOBAL ERROR HANDLERS ===
+// Prevent uncaught errors from silently breaking scan/stats loops
+process.on('uncaughtException', (err) => {
+  console.error('[FATAL] Uncaught exception:', err.message, err.stack);
+  // Reset flags so loops can recover
+  scanInProgress = false;
+  statsRunning = false;
+});
+process.on('unhandledRejection', (reason) => {
+  console.error('[FATAL] Unhandled rejection:', reason);
+  scanInProgress = false;
+  statsRunning = false;
+});
+
 // === GRACEFUL SHUTDOWN ===
 function shutdown(signal) {
   console.log(`[Shutdown] Received ${signal}, closing...`);
@@ -1667,6 +1723,12 @@ function shutdown(signal) {
 }
 process.on('SIGTERM', () => shutdown('SIGTERM'));
 process.on('SIGINT', () => shutdown('SIGINT'));
+
+// Log memory usage periodically for diagnostics
+setInterval(() => {
+  const mem = process.memoryUsage();
+  console.log(`[Memory] RSS: ${Math.round(mem.rss/1024/1024)}MB Heap: ${Math.round(mem.heapUsed/1024/1024)}/${Math.round(mem.heapTotal/1024/1024)}MB External: ${Math.round(mem.external/1024/1024)}MB`);
+}, 10 * 60 * 1000);
 
 server.listen(443, () => console.log('SaaS Backend (Express + Discord + WSS + Market Cache) listening on 443!'));
 """
