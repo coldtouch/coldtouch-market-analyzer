@@ -2,6 +2,30 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-04-01 — Security hardening + bug fixes (full review pass)
+
+**Critical fixes:**
+- **CRIT-3: Alerts access control** (`deploy_saas.py`): `/api/alerts` GET/POST/DELETE were not scoped to the requesting user — any authenticated user could read or delete all guild alert configs. All three endpoints now filter by `guild_id = 'web-' + req.user.id`.
+- **CRIT-4: Contribution score manipulation** (`deploy_saas.py`): `/api/contributions` accepted unbounded `item_ids` arrays. Added `length > 500` cap to prevent score inflation and memory pressure.
+
+**High fixes:**
+- **session.regenerate() on OAuth callback** (`deploy_saas.py`): Added `req.session.regenerate()` before issuing the JWT to prevent session fixation attacks.
+- **Security headers** (`deploy_saas.py`): Added `helmet()` middleware — sets HSTS, X-Content-Type-Options, X-Frame-Options, and other security headers on all responses.
+- **Session store cleanup** (`deploy_saas.py`): Added `cleanupInterval: 86400` to `SQLiteStore` config so expired anonymous sessions are pruned daily instead of accumulating forever.
+- **WebSocket reconnect leak** (`app.js`): `initLiveSync` was overwriting `wsLink` without closing the old socket. The old socket's `onclose` would then fire after reconnect, triggering a second `initLiveSync` and stacking concurrent connections. Fixed by nulling all handlers and calling `.close()` before creating a new socket.
+
+**Bug fixes:**
+- **OAuth init blocking** (`app.js`): `await checkDiscordAuth()` was blocking the entire `init()` chain for up to 10s when the VPS is slow or unreachable, freezing the UI. Changed to fire-and-forget so `loadData()` runs concurrently.
+- **loadAlerts XSS + res.ok** (`app.js`): `a.channel_id` was injected into `onclick="deleteAlert('${a.channel_id}')"` — attribute injection escape. Rewrote to use DOM element + `textContent` + `addEventListener`. Also added missing `res.ok` check before `.json()`.
+- Added `helmet` and `jsonwebtoken` to backend `package.json`.
+
+### 2026-04-01 — Fix: OAuth cross-origin cookie blocking (the real login bug)
+
+- **Root cause identified**: Safari ITP and Chrome Privacy Sandbox treat the `nip.io` session cookie as a third-party cookie when called from `github.io` and silently drop it. This is why `?login=success` was received but `/api/me` always returned `loggedIn: false` — the session cookie was never sent.
+- **Fix (backend)**: After successful OAuth, issue a signed JWT (`jsonwebtoken`) containing `{id, username, avatar}` and append it as `?token=...` in the redirect URL. Added `resolveUser` middleware that accepts `Authorization: Bearer <token>` on all `/api/` routes as an alternative to the session cookie.
+- **Fix (frontend)**: `checkDiscordAuth()` now parses the `token` URL param and stores it in `localStorage('albion_auth_token')`. Added `authHeaders()` helper that returns the `Authorization: Bearer` header. All authenticated API calls (`/api/me`, `/api/my-stats`, `/api/alerts`, `/api/contributions`) now use `authHeaders()`.
+- Added `jsonwebtoken ^9.0.2` to backend dependencies.
+
 ### 2026-04-01 — Fix: Discord OAuth hang + tier badge + XSS hardening
 
 - **Fix Discord OAuth login hang** (`deploy_saas.py`): Added `req.session.save()` callback before the post-auth redirect. Without this, `connect-sqlite3` wrote the session asynchronously — the browser called `/api/me` before the session was committed to SQLite, receiving `loggedIn: false` and staying on the landing overlay indefinitely. Session is now flushed before the redirect.

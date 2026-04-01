@@ -55,7 +55,9 @@ def main():
     "sqlite3": "^5.1.7",
     "nats": "^2.19.0",
     "ws": "^8.16.0",
-    "cors": "^2.8.5"
+    "cors": "^2.8.5",
+    "jsonwebtoken": "^9.0.2",
+    "helmet": "^7.1.0"
   }
 }"""
     b64_pkg = base64.b64encode(pkg_json.encode()).decode()
@@ -91,6 +93,8 @@ const WebSocket = require('ws');
 const sqlite3 = require('sqlite3').verbose();
 const { connect, StringCodec } = require('nats');
 const { Client, GatewayIntentBits, REST, Routes } = require('discord.js');
+const jwt = require('jsonwebtoken');
+const helmet = require('helmet');
 
 const domain = process.env.DOMAIN;
 const CLIENT_ID = process.env.DISCORD_CLIENT_ID;
@@ -608,13 +612,20 @@ client.login(BOT_TOKEN).catch(e => console.error('[Discord] Login failed (rate l
 // === EXPRESS APP ===
 const app = express();
 app.use(cors({ origin: 'https://coldtouch.github.io', credentials: true }));
+// Security headers: HSTS, X-Content-Type-Options, X-Frame-Options, etc.
+// contentSecurityPolicy disabled — this is a JSON API, not an HTML server.
+app.use(helmet({ contentSecurityPolicy: false }));
 
 // Rate limiting
 const apiLimiter = rateLimit({ windowMs: 60 * 1000, max: 60, standardHeaders: true, legacyHeaders: false });
 app.use('/api/', apiLimiter);
 
 app.use(session({
-  store: new SQLiteStore({ db: 'sessions.sqlite', dir: '/opt/albion-saas' }),
+  store: new SQLiteStore({
+    db: 'sessions.sqlite',
+    dir: '/opt/albion-saas',
+    cleanupInterval: 24 * 60 * 60 // prune expired sessions daily
+  }),
   secret: SESSION_SECRET,
   resave: false,
   saveUninitialized: true,  // must be true so OAuth state is persisted before Discord redirect
@@ -644,21 +655,48 @@ app.use(passport.session());
 // Explicit scope on the authenticate call; 'guilds' omitted intentionally (see strategy above)
 app.get('/auth/discord', passport.authenticate('discord', { scope: ['identify'] }));
 app.get('/auth/discord/callback', passport.authenticate('discord', { failureRedirect: 'https://coldtouch.github.io/coldtouch-market-analyzer?login=failed' }), (req, res) => {
-  // Explicitly flush session to SQLite before redirecting.
-  // Without this, there is a race condition: the browser arrives at ?login=success
-  // and immediately calls /api/me, but the session write is still pending,
-  // so req.user is undefined and the user appears logged out.
-  req.session.save(() => {
-    res.redirect(`https://coldtouch.github.io/coldtouch-market-analyzer?login=success`);
+  const user = req.user;
+  // Regenerate session ID to prevent session fixation — an attacker who obtained
+  // the pre-auth session cookie cannot use it after successful login.
+  req.session.regenerate((err) => {
+    if (err) return res.redirect('https://coldtouch.github.io/coldtouch-market-analyzer?login=failed');
+    req.session.passport = { user };
+    // Issue a signed JWT for the frontend to store in localStorage.
+    // This bypasses cross-origin third-party cookie restrictions (Safari ITP, Chrome
+    // Privacy Sandbox) that silently drop session cookies from nip.io when called
+    // from github.io — the root cause of the OAuth "login always fails" bug.
+    const token = jwt.sign(
+      { id: user.id, username: user.username, avatar: user.avatar },
+      SESSION_SECRET,
+      { expiresIn: '30d' }
+    );
+    req.session.save(() => {
+      res.redirect(`https://coldtouch.github.io/coldtouch-market-analyzer?login=success&token=${encodeURIComponent(token)}`);
+    });
   });
 });
+
+// JWT auth middleware — runs before all /api routes.
+// Accepts token via Authorization: Bearer header (frontend localStorage approach)
+// OR falls back to passport session cookie (browsers that still allow it).
+function resolveUser(req, res, next) {
+  if (req.user) return next(); // passport session already set user
+  const auth = req.headers['authorization'];
+  if (auth && auth.startsWith('Bearer ')) {
+    try {
+      req.user = jwt.verify(auth.slice(7), SESSION_SECRET);
+    } catch(e) { /* invalid/expired token — req.user stays undefined */ }
+  }
+  next();
+}
+app.use('/api/', resolveUser);
 
 app.get('/api/me', (req, res) => {
   if(req.user) {
     db.get(`SELECT scans_30d, scans_total, tier FROM user_stats WHERE user_id = ?`, [req.user.id], (err, stats) => {
       res.json({
         loggedIn: true,
-        user: req.user,
+        user: { id: req.user.id, username: req.user.username, avatar: req.user.avatar },
         stats: stats || { scans_30d: 0, scans_total: 0, tier: 'bronze' }
       });
     });
@@ -697,8 +735,11 @@ function requireAuth(req, res, next) {
   next();
 }
 
+// Alerts are scoped to the requesting user's web guild ID ('web-<userId>').
+// This prevents any authenticated user from reading/deleting another user's alerts.
 app.get('/api/alerts', requireAuth, (req, res) => {
-  db.all(`SELECT guild_id, channel_id, min_profit, cooldown_ms FROM alerts`, [], (err, rows) => {
+  const guildId = 'web-' + req.user.id;
+  db.all(`SELECT guild_id, channel_id, min_profit, cooldown_ms FROM alerts WHERE guild_id = ?`, [guildId], (err, rows) => {
     if (err) return res.status(500).json({ error: err.message });
     res.json(rows || []);
   });
@@ -709,7 +750,7 @@ app.post('/api/alerts', requireAuth, (req, res) => {
   if (!channel_id || !min_profit) return res.status(400).json({ error: 'channel_id and min_profit required' });
   const profit = parseInt(min_profit);
   if (isNaN(profit) || profit < 0 || profit > 100000000) return res.status(400).json({ error: 'min_profit must be between 0 and 100,000,000' });
-  const guildId = 'web-' + channel_id;
+  const guildId = 'web-' + req.user.id;
   db.run(`INSERT OR REPLACE INTO alerts (guild_id, channel_id, min_profit) VALUES (?, ?, ?)`,
     [guildId, channel_id, profit], (err) => {
     if (err) return res.status(500).json({ error: err.message });
@@ -720,7 +761,9 @@ app.post('/api/alerts', requireAuth, (req, res) => {
 app.delete('/api/alerts', requireAuth, (req, res) => {
   const { channel_id } = req.body;
   if (!channel_id) return res.status(400).json({ error: 'channel_id required' });
-  db.run(`DELETE FROM alerts WHERE channel_id = ?`, [channel_id], (err) => {
+  const guildId = 'web-' + req.user.id;
+  // Scoped delete: only removes the alert if it belongs to the requesting user.
+  db.run(`DELETE FROM alerts WHERE channel_id = ? AND guild_id = ?`, [channel_id, guildId], (err) => {
     if (err) return res.status(500).json({ error: err.message });
     res.json({ success: true });
   });
@@ -770,6 +813,11 @@ app.post('/api/contributions', requireAuth, contribLimiter, (req, res) => {
   const { item_ids, source } = req.body;
   if (!item_ids || !Array.isArray(item_ids) || item_ids.length === 0) {
     return res.status(400).json({ error: 'item_ids array required' });
+  }
+  // Cap array length to prevent score manipulation and memory pressure.
+  // A real web refresh touches at most ~500 items per batch.
+  if (item_ids.length > 500) {
+    return res.status(400).json({ error: 'item_ids must contain 500 or fewer entries' });
   }
   const validSources = ['web_refresh', 'web_compare'];
   const src = validSources.includes(source) ? source : 'web_refresh';
@@ -1376,6 +1424,12 @@ function compactOldData() {
 
   // Safety net: delete any raw snapshots older than 24h (should already be compacted at 6h)
   db.run(`DELETE FROM price_snapshots WHERE recorded_at < ?`, [now - 24 * 60 * 60 * 1000]);
+
+  // Prune spread_stats rows older than 14 days to prevent unbounded table growth (OOM risk)
+  const fourteenDaysAgo = now - 14 * 24 * 60 * 60 * 1000;
+  db.run(`DELETE FROM spread_stats WHERE updated_at < ?`, [fourteenDaysAgo], (err) => {
+    if (!err) console.log('[Compaction] Pruned spread_stats rows older than 14 days');
+  });
 
   // Clean up old contributions (keep 60 days)
   const sixtyDaysAgo = now - 60 * 24 * 60 * 60 * 1000;
