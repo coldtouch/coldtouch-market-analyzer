@@ -2,6 +2,13 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-04-04 — Fix Discord OAuth "Server is not responding" (event loop saturation)
+
+- **Root cause diagnosed:** Node.js was running at 98% CPU with 520 CLOSE-WAIT sockets. The TLS handshake for new connections (including OAuth login) was never completing because the event loop was never idle. Users saw "Server is not responding. Please try again." after 12 seconds.
+- **Root cause:** All `fetch()` calls in `doServerScan` and `backfillHistoricalData` had **no timeout**. When the Albion Online Data API was slow, hundreds of pending fetch requests accumulated across overlapping scan cycles, saturating the event loop.
+- **Fix:** Added `AbortSignal.timeout()` to 5 previously-uncovered fetch calls: items.json (15s), price chunk fetches (30s), Discord slash command live scan (10s), charts backfill chunks (30s), history backfill chunks (30s).
+- Redeployed. OAuth `/auth/discord` now responds in <1s, CLOSE-WAIT count dropped from 520 → 1.
+
 ### 2026-04-03 — Discord OAuth rewrite + VPS responsiveness fix
 
 - Replaced `passport-discord` with manual OAuth2 implementation — adds 8-second timeouts on Discord API calls (token exchange + profile fetch). Passport-discord had no timeouts, causing the login to hang indefinitely.
