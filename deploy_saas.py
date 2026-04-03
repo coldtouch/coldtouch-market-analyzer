@@ -107,8 +107,8 @@ const API_BASE = `https://${GAME_SERVER}.albion-online-data.com/api/v2/stats/pri
 const CHARTS_BASE = `https://${GAME_SERVER}.albion-online-data.com/api/v2/stats/charts`;
 const HISTORY_BASE = `https://${GAME_SERVER}.albion-online-data.com/api/v2/stats/history`;
 const ITEMS_URL = 'https://coldtouch.github.io/coldtouch-market-analyzer/items.json';
-const CHUNK_SIZE = 40;  // Reduced from 100 to lower memory spikes on 1GB VPS
-const SCAN_INTERVAL_MS = 10 * 60 * 1000; // 10 minutes (was 5) to give more breathing room
+const CHUNK_SIZE = 25;  // Small chunks to keep event loop responsive on 1GB VPS
+const SCAN_INTERVAL_MS = 10 * 60 * 1000; // 10 minutes
 const SITE_URL = 'https://coldtouch.github.io/coldtouch-market-analyzer';
 
 // Item name cache (loaded from items.json)
@@ -279,9 +279,9 @@ async function doServerScan() {
         }
       } catch (e) { console.error(`[Cache] Chunk ${i} failed:`, e.message); }
 
-      // Slow down the scan: 500ms pause between chunks to give GC time to work
+      // Yield between chunks so the event loop can serve HTTP requests
       if (i + CHUNK_SIZE < itemIds.length) {
-        await new Promise(r => setTimeout(r, 500));
+        await new Promise(r => setTimeout(r, 200));
       }
     }
 
@@ -291,16 +291,8 @@ async function doServerScan() {
     cacheTimestamp = new Date().toISOString();
     cacheItemCount = allPrices.length;
 
-    // Seed alerter with scan data
-    seedAlerterFromScan(allPrices);
-
-    // Record snapshots only every SNAPSHOT_INTERVAL (15 min) to reduce DB pressure
-    const now = Date.now();
-    if (now - lastSnapshotTime >= SNAPSHOT_INTERVAL) {
-      recordSnapshots(allPrices);
-      lastSnapshotTime = now;
-    }
-
+    // Stagger post-scan work to keep event loop responsive
+    // 1) Compress cache immediately (needed for serving)
     const json = JSON.stringify({ timestamp: cacheTimestamp, count: cacheItemCount, data: allPrices });
     zlib.gzip(json, (err, buffer) => {
         if (!err) {
@@ -310,6 +302,15 @@ async function doServerScan() {
         }
         scanInProgress = false;
     });
+
+    // 2) Seed alerter after a short delay
+    setTimeout(() => seedAlerterFromScan(allPrices), 2000);
+
+    // 3) Record snapshots after alerter has had time to finish
+    const now = Date.now();
+    if (now - lastSnapshotTime >= SNAPSHOT_INTERVAL) {
+      setTimeout(() => { recordSnapshots(allPrices); lastSnapshotTime = now; }, 8000);
+    }
   } catch (err) {
     console.error('[Cache] Scan failed:', err.message);
     scanInProgress = false;
@@ -1054,41 +1055,50 @@ const MIN_SAMPLE_THRESHOLD = 3; // Minimum historical samples required before al
 // Seed alerter from the periodic server scan so it starts with full market coverage
 function seedAlerterFromScan(allPrices) {
   const now = Date.now();
-  let seeded = 0;
-  for (const entry of allPrices) {
-    const id = entry.item_id, q = entry.quality || 1, city = entry.city;
-    if (!id || !city) continue;
-    if (!alertMarketDb[id]) alertMarketDb[id] = {};
-    if (!alertMarketDb[id][q]) alertMarketDb[id][q] = {};
+  let seeded = 0, i = 0;
+  const BATCH = 5000;
 
-    // Parse the date from the API to track freshness
-    const sellDate = entry.sell_price_min_date && !entry.sell_price_min_date.startsWith('0001') ? new Date(entry.sell_price_min_date).getTime() : 0;
-    const buyDate = entry.buy_price_max_date && !entry.buy_price_max_date.startsWith('0001') ? new Date(entry.buy_price_max_date).getTime() : 0;
+  function processBatch() {
+    const end = Math.min(i + BATCH, allPrices.length);
+    for (; i < end; i++) {
+      const entry = allPrices[i];
+      const id = entry.item_id, q = entry.quality || 1, city = entry.city;
+      if (!id || !city) continue;
+      if (!alertMarketDb[id]) alertMarketDb[id] = {};
+      if (!alertMarketDb[id][q]) alertMarketDb[id][q] = {};
 
-    const existing = alertMarketDb[id][q][city];
-    if (!existing) {
-      alertMarketDb[id][q][city] = {
-        sellMin: entry.sell_price_min || Infinity,
-        sellDate: sellDate,
-        buyMax: entry.buy_price_max || 0,
-        buyDate: buyDate,
-        lastSeen: now
-      };
-      seeded++;
+      const sellDate = entry.sell_price_min_date && !entry.sell_price_min_date.startsWith('0001') ? new Date(entry.sell_price_min_date).getTime() : 0;
+      const buyDate = entry.buy_price_max_date && !entry.buy_price_max_date.startsWith('0001') ? new Date(entry.buy_price_max_date).getTime() : 0;
+
+      const existing = alertMarketDb[id][q][city];
+      if (!existing) {
+        alertMarketDb[id][q][city] = {
+          sellMin: entry.sell_price_min || Infinity,
+          sellDate: sellDate,
+          buyMax: entry.buy_price_max || 0,
+          buyDate: buyDate,
+          lastSeen: now
+        };
+        seeded++;
+      } else {
+        if (entry.sell_price_min > 0 && (existing.sellMin === Infinity || entry.sell_price_min < existing.sellMin || sellDate > existing.sellDate)) {
+          existing.sellMin = entry.sell_price_min;
+          existing.sellDate = sellDate;
+        }
+        if (entry.buy_price_max > 0 && (entry.buy_price_max > existing.buyMax || buyDate > existing.buyDate)) {
+          existing.buyMax = entry.buy_price_max;
+          existing.buyDate = buyDate;
+        }
+        existing.lastSeen = now;
+      }
+    }
+    if (i < allPrices.length) {
+      setTimeout(processBatch, 10);
     } else {
-      // Update if better price or newer date
-      if (entry.sell_price_min > 0 && (existing.sellMin === Infinity || entry.sell_price_min < existing.sellMin || sellDate > existing.sellDate)) {
-        existing.sellMin = entry.sell_price_min;
-        existing.sellDate = sellDate;
-      }
-      if (entry.buy_price_max > 0 && (entry.buy_price_max > existing.buyMax || buyDate > existing.buyDate)) {
-        existing.buyMax = entry.buy_price_max;
-        existing.buyDate = buyDate;
-      }
-      existing.lastSeen = now;
+      console.log(`[Alerter] Seeded with ${seeded} new price points from server scan`);
     }
   }
-  console.log(`[Alerter] Seeded with ${seeded} new price points from server scan`);
+  processBatch();
 }
 
 // Evict stale entries every 30 minutes
@@ -1250,21 +1260,32 @@ let dbBusy = false; // Prevents concurrent transaction collisions
 function recordSnapshots(allPrices) {
   if (dbBusy) { console.log('[Snapshots] DB busy, skipping'); return; }
   const now = Date.now();
-  let count = 0;
-  db.serialize(() => {
-    db.run('BEGIN TRANSACTION');
-    const stmt = db.prepare(`INSERT INTO price_snapshots (item_id, quality, city, sell_price_min, buy_price_max, sell_date, buy_date, recorded_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`);
-    for (const entry of allPrices) {
-      if (!entry.item_id || !entry.city) continue;
-      if (entry.sell_price_min <= 0 && entry.buy_price_max <= 0) continue;
-      stmt.run(entry.item_id, entry.quality || 1, entry.city, entry.sell_price_min || 0, entry.buy_price_max || 0, entry.sell_price_min_date || '', entry.buy_price_max_date || '', now);
-      count++;
-    }
-    stmt.finalize();
-    db.run('COMMIT', () => {
-      console.log(`[Snapshots] Recorded ${count} price snapshots`);
+  const BATCH = 5000;
+  let i = 0, count = 0;
+
+  function writeBatch() {
+    const end = Math.min(i + BATCH, allPrices.length);
+    db.serialize(() => {
+      db.run('BEGIN TRANSACTION');
+      const stmt = db.prepare(`INSERT INTO price_snapshots (item_id, quality, city, sell_price_min, buy_price_max, sell_date, buy_date, recorded_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`);
+      for (; i < end; i++) {
+        const entry = allPrices[i];
+        if (!entry.item_id || !entry.city) continue;
+        if (entry.sell_price_min <= 0 && entry.buy_price_max <= 0) continue;
+        stmt.run(entry.item_id, entry.quality || 1, entry.city, entry.sell_price_min || 0, entry.buy_price_max || 0, entry.sell_price_min_date || '', entry.buy_price_max_date || '', now);
+        count++;
+      }
+      stmt.finalize();
+      db.run('COMMIT', () => {
+        if (i < allPrices.length) {
+          setTimeout(writeBatch, 10); // Yield to event loop between batches
+        } else {
+          console.log(`[Snapshots] Recorded ${count} price snapshots`);
+        }
+      });
     });
-  });
+  }
+  writeBatch();
 }
 
 // === SPREAD STATISTICS COMPUTATION (runs hourly) ===
@@ -1325,7 +1346,7 @@ function computeSpreadStats() {
       }
 
       function processBatch(startIdx) {
-        const endIdx = Math.min(startIdx + 500, itemKeys.length);
+        const endIdx = Math.min(startIdx + 100, itemKeys.length);
         if (startIdx >= itemKeys.length) {
           flushWrites();
           const mem2 = process.memoryUsage();
@@ -1383,7 +1404,7 @@ function computeSpreadStats() {
         }
 
         // Yield to event loop between batches so Express can still serve requests
-        setTimeout(() => processBatch(endIdx), 20);
+        setTimeout(() => processBatch(endIdx), 50);
       }
 
       processBatch(0);
