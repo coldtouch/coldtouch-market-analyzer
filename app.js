@@ -3390,7 +3390,7 @@ function initLiveSync() {
     }
 
     // Connect to the new VPS Proxy
-    wsLink = new WebSocket('wss://209-97-129-125.nip.io');
+    wsLink = new WebSocket('wss://albionaitool.xyz');
 
     wsLink.onopen = () => {
         console.log("🟢 Connected to Live NATS Stream at 209-97-129-125");
