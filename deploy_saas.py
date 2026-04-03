@@ -47,11 +47,7 @@ def main():
   "dependencies": {
     "discord.js": "^14.14.1",
     "express": "^4.18.2",
-    "express-session": "^1.18.0",
     "express-rate-limit": "^7.1.5",
-    "connect-sqlite3": "^0.9.15",
-    "passport": "^0.7.0",
-    "passport-discord": "^0.1.4",
     "sqlite3": "^5.1.7",
     "nats": "^2.19.0",
     "ws": "^8.16.0",
@@ -79,11 +75,7 @@ def main():
 
     backend_js = """
 const express = require('express');
-const session = require('express-session');
-const SQLiteStore = require('connect-sqlite3')(session);
 const rateLimit = require('express-rate-limit');
-const passport = require('passport');
-const DiscordStrategy = require('passport-discord').Strategy;
 const cors = require('cors');
 const https = require('https');
 const http = require('http');
@@ -641,67 +633,66 @@ app.use(helmet({ contentSecurityPolicy: false }));
 const apiLimiter = rateLimit({ windowMs: 60 * 1000, max: 60, standardHeaders: true, legacyHeaders: false });
 app.use('/api/', apiLimiter);
 
-app.use(session({
-  store: new SQLiteStore({
-    db: 'sessions.sqlite',
-    dir: '/opt/albion-saas',
-    cleanupInterval: 24 * 60 * 60 // prune expired sessions daily
-  }),
-  secret: SESSION_SECRET,
-  resave: false,
-  saveUninitialized: true,  // must be true so OAuth state is persisted before Discord redirect
-  cookie: {
-    secure: true,
-    sameSite: 'none',
-    maxAge: 30 * 24 * 60 * 60 * 1000 // 30 days
-  }
-}));
 
-passport.serializeUser((user, done) => done(null, user));
-passport.deserializeUser((obj, done) => done(null, obj));
+// Manual Discord OAuth2 flow (replaces passport-discord which has no HTTP timeouts)
+const DISCORD_AUTH_URL = `https://discord.com/api/oauth2/authorize?client_id=${CLIENT_ID}&redirect_uri=${encodeURIComponent(`https://${domain}/auth/discord/callback`)}&response_type=code&scope=identify`;
+const SITE = 'https://coldtouch.github.io/coldtouch-market-analyzer';
 
-passport.use(new DiscordStrategy({
-  clientID: CLIENT_ID,
-  clientSecret: CLIENT_SECRET,
-  callbackURL: `https://${domain}/auth/discord/callback`,
-  scope: ['identify']  // 'guilds' removed — caused passport-discord to make a secondary API call that hangs
-}, (accessToken, refreshToken, profile, done) => {
-  db.run(`INSERT OR REPLACE INTO users (id, username, avatar) VALUES (?, ?, ?)`, [profile.id, profile.username, profile.avatar]);
-  return done(null, profile);
-}));
+app.get('/auth/discord', (req, res) => res.redirect(DISCORD_AUTH_URL));
 
-app.use(passport.initialize());
-app.use(passport.session());
+app.get('/auth/discord/callback', async (req, res) => {
+  const code = req.query.code;
+  if (!code) return res.redirect(`${SITE}?login=failed`);
 
-// Explicit scope on the authenticate call; 'guilds' omitted intentionally (see strategy above)
-app.get('/auth/discord', passport.authenticate('discord', { scope: ['identify'] }));
-app.get('/auth/discord/callback', passport.authenticate('discord', { failureRedirect: 'https://coldtouch.github.io/coldtouch-market-analyzer?login=failed' }), (req, res) => {
-  const user = req.user;
-  // Regenerate session ID to prevent session fixation — an attacker who obtained
-  // the pre-auth session cookie cannot use it after successful login.
-  req.session.regenerate((err) => {
-    if (err) return res.redirect('https://coldtouch.github.io/coldtouch-market-analyzer?login=failed');
-    req.session.passport = { user };
-    // Issue a signed JWT for the frontend to store in localStorage.
-    // This bypasses cross-origin third-party cookie restrictions (Safari ITP, Chrome
-    // Privacy Sandbox) that silently drop session cookies from nip.io when called
-    // from github.io — the root cause of the OAuth "login always fails" bug.
+  try {
+    // Exchange code for access token (8s timeout)
+    const tokenController = new AbortController();
+    const tokenTimer = setTimeout(() => tokenController.abort(), 8000);
+    const tokenRes = await fetch('https://discord.com/api/oauth2/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        client_id: CLIENT_ID,
+        client_secret: CLIENT_SECRET,
+        grant_type: 'authorization_code',
+        code,
+        redirect_uri: `https://${domain}/auth/discord/callback`
+      }),
+      signal: tokenController.signal
+    });
+    clearTimeout(tokenTimer);
+    if (!tokenRes.ok) { console.error('[OAuth] Token exchange failed:', tokenRes.status); return res.redirect(`${SITE}?login=failed`); }
+    const tokenData = await tokenRes.json();
+
+    // Fetch user profile (8s timeout)
+    const profileController = new AbortController();
+    const profileTimer = setTimeout(() => profileController.abort(), 8000);
+    const profileRes = await fetch('https://discord.com/api/users/@me', {
+      headers: { Authorization: `Bearer ${tokenData.access_token}` },
+      signal: profileController.signal
+    });
+    clearTimeout(profileTimer);
+    if (!profileRes.ok) { console.error('[OAuth] Profile fetch failed:', profileRes.status); return res.redirect(`${SITE}?login=failed`); }
+    const profile = await profileRes.json();
+
+    // Save user to DB
+    db.run(`INSERT OR REPLACE INTO users (id, username, avatar) VALUES (?, ?, ?)`, [profile.id, profile.username, profile.avatar]);
+
+    // Issue JWT (bypasses cross-origin cookie issues)
     const token = jwt.sign(
-      { id: user.id, username: user.username, avatar: user.avatar },
+      { id: profile.id, username: profile.username, avatar: profile.avatar },
       SESSION_SECRET,
       { expiresIn: '30d' }
     );
-    req.session.save(() => {
-      res.redirect(`https://coldtouch.github.io/coldtouch-market-analyzer?login=success&token=${encodeURIComponent(token)}`);
-    });
-  });
+    res.redirect(`${SITE}?login=success&token=${encodeURIComponent(token)}`);
+  } catch (err) {
+    console.error('[OAuth] Discord auth error:', err.message);
+    res.redirect(`${SITE}?login=failed`);
+  }
 });
 
 // JWT auth middleware — runs before all /api routes.
-// Accepts token via Authorization: Bearer header (frontend localStorage approach)
-// OR falls back to passport session cookie (browsers that still allow it).
 function resolveUser(req, res, next) {
-  if (req.user) return next(); // passport session already set user
   const auth = req.headers['authorization'];
   if (auth && auth.startsWith('Bearer ')) {
     try {
