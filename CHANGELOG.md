@@ -2,6 +2,15 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-04-03 — Discord OAuth rewrite + VPS responsiveness fix
+
+- Replaced `passport-discord` with manual OAuth2 implementation — adds 8-second timeouts on Discord API calls (token exchange + profile fetch). Passport-discord had no timeouts, causing the login to hang indefinitely.
+- Removed 4 dependencies: `passport`, `passport-discord`, `express-session`, `connect-sqlite3`. Auth is now fully stateless via JWT.
+- Added client-side 12-second timeout on Discord login button — shows "Server is not responding" error instead of spinning forever.
+- Batched `recordSnapshots` (5000-row transactions), `seedAlerterFromScan` (5000-entry chunks), and `computeSpreadStats` (100-item batches) with `setTimeout` yields to prevent event loop starvation during market scans.
+- Staggered post-scan work: gzip immediately, alerter seeding after 2s, snapshot recording after 8s.
+- VPS now stays responsive to HTTP requests throughout the entire scan cycle.
+
 ### 2026-04-03 — Custom domain: albionaitool.xyz
 
 - Replaced slow nip.io wildcard DNS (`209-97-129-125.nip.io`) with real domain `albionaitool.xyz` across frontend (`app.js`, `index.html`) and backend (`deploy_saas.py`).
