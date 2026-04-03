@@ -224,7 +224,7 @@ async function doServerScan() {
   console.log('[Cache] Starting full market scan...');
 
   try {
-    const itemsRes = await fetch(ITEMS_URL);
+    const itemsRes = await fetch(ITEMS_URL, { signal: AbortSignal.timeout(15000) });
     if (!itemsRes.ok) throw new Error('Failed to fetch items.json: HTTP ' + itemsRes.status);
     itemNames = await itemsRes.json();
     const itemIds = Object.keys(itemNames).filter(k => k && itemNames[k]);
@@ -236,7 +236,7 @@ async function doServerScan() {
       const chunk = itemIds.slice(i, i + CHUNK_SIZE);
       try {
         const url = `${API_BASE}/${chunk.join(',')}.json`;
-        const res = await fetch(url);
+        const res = await fetch(url, { signal: AbortSignal.timeout(30000) });
         if (res.ok) {
           const data = await res.json();
           for (const entry of data) {
@@ -509,7 +509,7 @@ client.on('interactionCreate', async interaction => {
 
     try {
       const url = `${API_BASE}/${matchedId}.json`;
-      const res = await fetch(url);
+      const res = await fetch(url, { signal: AbortSignal.timeout(10000) });
       if (!res.ok) throw new Error('API error');
       const data = await res.json();
 
@@ -1548,7 +1548,7 @@ async function backfillHistoricalData() {
     const chunk = itemIds.slice(i, i + CHUNK_SIZE);
     try {
       const url = `${CHARTS_BASE}/${chunk.join(',')}.json?time-scale=24`;
-      const res = await fetch(url);
+      const res = await fetch(url, { signal: AbortSignal.timeout(30000) });
       if (!res.ok) continue;
       const data = await res.json();
 
@@ -1581,7 +1581,7 @@ async function backfillHistoricalData() {
     const chunk = itemIds.slice(i, i + CHUNK_SIZE);
     try {
       const url = `${HISTORY_BASE}/${chunk.join(',')}.json?time-scale=6`;
-      const res = await fetch(url);
+      const res = await fetch(url, { signal: AbortSignal.timeout(30000) });
       if (!res.ok) continue;
       const data = await res.json();
 
