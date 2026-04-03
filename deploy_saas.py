@@ -711,6 +711,9 @@ function resolveUser(req, res, next) {
 }
 app.use('/api/', resolveUser);
 
+// Redirect root to GitHub Pages frontend
+app.get('/', (req, res) => res.redirect('https://coldtouch.github.io/coldtouch-market-analyzer/'));
+
 app.get('/api/me', (req, res) => {
   if(req.user) {
     db.get(`SELECT scans_30d, scans_total, tier FROM user_stats WHERE user_id = ?`, [req.user.id], (err, stats) => {
