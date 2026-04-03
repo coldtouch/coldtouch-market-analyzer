@@ -2,6 +2,13 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-04-03 — Custom domain: albionaitool.xyz
+
+- Replaced slow nip.io wildcard DNS (`209-97-129-125.nip.io`) with real domain `albionaitool.xyz` across frontend (`app.js`, `index.html`) and backend (`deploy_saas.py`).
+- Set up Let's Encrypt SSL certificate on VPS for the new domain.
+- Opened port 80 in UFW for certbot HTTP-01 challenge renewals.
+- Discord OAuth login should now be significantly faster (no more nip.io DNS latency).
+
 ### 2026-04-01 — XSS hardening pass 2 (security reviewer findings)
 
 - Applied `esc()` to all remaining `getFriendlyName()` calls in `innerHTML` contexts: crafting material names, compare tab headers/city columns, haul plan items, autocomplete dropdown, repair calculator, top-traded table, item power table, favorites chips and table.
