@@ -2158,7 +2158,7 @@ function setupAutocomplete(inputId, listId, onSelect) {
 // ============================================================
 // ALERT MANAGEMENT
 // ============================================================
-const VPS_BASE = 'https://209-97-129-125.nip.io';
+const VPS_BASE = 'https://albionaitool.xyz';
 
 // Returns Authorization header for authenticated API calls.
 // Uses a JWT stored in localStorage — avoids cross-origin third-party cookie

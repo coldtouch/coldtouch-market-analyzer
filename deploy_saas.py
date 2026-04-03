@@ -19,7 +19,7 @@ load_env()
 ip = os.environ.get('VPS_IP', '209.97.129.125')
 password = os.environ['VPS_PASSWORD']
 usr = os.environ.get('VPS_USER', 'root')
-domain = os.environ.get('VPS_DOMAIN', '209-97-129-125.nip.io')
+domain = os.environ.get('VPS_DOMAIN', 'albionaitool.xyz')
 
 CLIENT_ID = os.environ['DISCORD_CLIENT_ID']
 CLIENT_SECRET = os.environ['DISCORD_CLIENT_SECRET']
