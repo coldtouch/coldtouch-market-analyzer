@@ -49,3 +49,11 @@ Thumbs.db
 # Utility scripts
 check_vps_logs.py
 check_logs.py
+diagnose_vps.py
+quick_deploy.py
+aggressive_deploy.py
+
+# Accidental files
+New Text Document.*
+*.bak
+*.tmp
