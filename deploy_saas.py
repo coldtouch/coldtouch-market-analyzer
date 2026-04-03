@@ -1734,6 +1734,12 @@ setInterval(() => {
 }, 10 * 60 * 1000);
 
 server.listen(443, () => console.log('SaaS Backend (Express + Discord + WSS + Market Cache) listening on 443!'));
+
+// HTTP → HTTPS redirect on port 80
+require('http').createServer((req, res) => {
+  res.writeHead(301, { Location: `https://${domain}${req.url}` });
+  res.end();
+}).listen(80, () => console.log('HTTP redirect listening on 80'));
 """
     b64_server = base64.b64encode(backend_js.encode()).decode()
     run_wait(f"echo '{b64_server}' | base64 -d > /opt/albion-saas/backend.js")
