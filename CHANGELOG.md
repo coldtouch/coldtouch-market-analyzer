@@ -2,6 +2,15 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-04-04 — Fix Discord OAuth root cause: DB bloat → 100% CPU → event loop death
+
+- **Root cause chain:** NATS market orders built up 22M rows in `price_snapshots` (high-volume feed × 24h retention). `computeSpreadStats` queried ALL rows with no LIMIT, loading 22M rows into Node.js RAM. Stuck running for 12+ hours at 100% CPU. Event loop starved → OAuth fetch to Discord's API timed out at 8s → "Server is not responding".
+- **computeSpreadStats:** now queries `price_averages` (3.1M rows, pre-aggregated) instead of `price_snapshots` (22M rows). Added `LIMIT 1000000` safety cap. Added 20-minute `statsStartTime` watchdog so it auto-resets if stuck again.
+- **compactOldData:** dropped the aggregation SELECT+INSERT step (which itself OOMed on 22M rows). Now just DELETEs `price_snapshots` older than 6h directly — `price_averages` already holds historical data from backfill.
+- **OAuth timeouts:** increased 8s → 30s to survive event loop backpressure.
+- **Emergency recovery:** 4GB SQLite DB was corrupted during manual cleanup (SSH died mid-transaction). Deleted old DB, rebuilt clean 360KB DB preserving users/alerts. NATS + backfill will rebuild market history automatically.
+- Disk freed: 4GB → 54% usage (was 99%). CPU: 100% → 11%.
+
 ### 2026-04-04 — Fix Discord OAuth "Server is not responding" (event loop saturation)
 
 - **Root cause diagnosed:** Node.js was running at 98% CPU with 520 CLOSE-WAIT sockets. The TLS handshake for new connections (including OAuth login) was never completing because the event loop was never idle. Users saw "Server is not responding. Please try again." after 12 seconds.
