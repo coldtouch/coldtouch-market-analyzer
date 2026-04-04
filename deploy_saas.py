@@ -645,9 +645,9 @@ app.get('/auth/discord/callback', async (req, res) => {
   if (!code) return res.redirect(`${SITE}?login=failed`);
 
   try {
-    // Exchange code for access token (8s timeout)
+    // Exchange code for access token (30s timeout)
     const tokenController = new AbortController();
-    const tokenTimer = setTimeout(() => tokenController.abort(), 8000);
+    const tokenTimer = setTimeout(() => tokenController.abort(), 30000);
     const tokenRes = await fetch('https://discord.com/api/oauth2/token', {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -664,9 +664,9 @@ app.get('/auth/discord/callback', async (req, res) => {
     if (!tokenRes.ok) { console.error('[OAuth] Token exchange failed:', tokenRes.status); return res.redirect(`${SITE}?login=failed`); }
     const tokenData = await tokenRes.json();
 
-    // Fetch user profile (8s timeout)
+    // Fetch user profile (30s timeout)
     const profileController = new AbortController();
-    const profileTimer = setTimeout(() => profileController.abort(), 8000);
+    const profileTimer = setTimeout(() => profileController.abort(), 30000);
     const profileRes = await fetch('https://discord.com/api/users/@me', {
       headers: { Authorization: `Bearer ${tokenData.access_token}` },
       signal: profileController.signal
@@ -1280,11 +1280,24 @@ function recordSnapshots(allPrices) {
 }
 
 // === SPREAD STATISTICS COMPUTATION (runs hourly) ===
-// OPTIMIZED: Single bulk query instead of N+1 pattern (was 34K individual queries)
+// Queries price_averages (pre-aggregated, ~3M rows) rather than price_snapshots
+// (which can grow to 20M+ rows from NATS and OOM the process).
 let statsRunning = false;
+let statsStartTime = 0;
 function computeSpreadStats() {
-  if (dbBusy || statsRunning) { console.log('[SpreadStats] Busy, skipping this cycle'); return; }
+  // Watchdog: if statsRunning has been true for >20 min, force-reset it
+  if (statsRunning) {
+    if (Date.now() - statsStartTime > 20 * 60 * 1000) {
+      console.error('[SpreadStats] Resetting stuck statsRunning flag after 20min');
+      statsRunning = false;
+    } else {
+      console.log('[SpreadStats] Busy, skipping this cycle');
+      return;
+    }
+  }
+  if (dbBusy) { console.log('[SpreadStats] Busy, skipping this cycle'); return; }
   statsRunning = true;
+  statsStartTime = Date.now();
 
   const now = Date.now();
   const windowMs = 7 * 24 * 60 * 60 * 1000; // 7 days
@@ -1293,9 +1306,10 @@ function computeSpreadStats() {
   const mem = process.memoryUsage();
   console.log(`[SpreadStats] Starting computation... RSS: ${Math.round(mem.rss/1024/1024)}MB Heap: ${Math.round(mem.heapUsed/1024/1024)}MB`);
 
-  // SINGLE bulk query — fetches ALL recent snapshots at once, grouped for processing
+  // Query price_averages (pre-aggregated hourly/daily) — far smaller than raw price_snapshots.
+  // Capped at 1M rows to prevent OOM on large deployments.
   db.all(
-    `SELECT item_id, quality, city, sell_price_min, buy_price_max, recorded_at FROM price_snapshots WHERE recorded_at > ? ORDER BY item_id, quality, recorded_at`,
+    `SELECT item_id, quality, city, avg_sell, avg_buy, period_start FROM price_averages WHERE period_start > ? AND (avg_sell > 0 OR avg_buy > 0) LIMIT 1000000`,
     [cutoff],
     (err, allRows) => {
       if (err || !allRows || allRows.length === 0) {
@@ -1304,15 +1318,15 @@ function computeSpreadStats() {
         return;
       }
 
-      console.log(`[SpreadStats] Processing ${allRows.length} snapshot rows in memory...`);
+      console.log(`[SpreadStats] Processing ${allRows.length} rows in memory...`);
 
       // Group rows by item_id + quality
-      const itemMap = {};  // "itemId_quality" -> { recorded_at -> { city -> {sell, buy} } }
+      const itemMap = {};  // "itemId_quality" -> { period_start -> { city -> {sell, buy} } }
       for (const r of allRows) {
         const key = r.item_id + '_' + r.quality;
         if (!itemMap[key]) itemMap[key] = { item_id: r.item_id, quality: r.quality, cycles: {} };
-        if (!itemMap[key].cycles[r.recorded_at]) itemMap[key].cycles[r.recorded_at] = {};
-        itemMap[key].cycles[r.recorded_at][r.city] = { sell: r.sell_price_min, buy: r.buy_price_max };
+        if (!itemMap[key].cycles[r.period_start]) itemMap[key].cycles[r.period_start] = {};
+        itemMap[key].cycles[r.period_start][r.city] = { sell: r.avg_sell, buy: r.avg_buy };
       }
       // Release the raw rows array to free memory
       allRows.length = 0;
@@ -1407,7 +1421,7 @@ function computeSpreadStats() {
 setTimeout(computeSpreadStats, 10 * 60 * 1000);
 setInterval(computeSpreadStats, 60 * 60 * 1000);
 
-// === DATA COMPACTION (runs every 6 hours) ===
+// === DATA COMPACTION (runs every 2 hours) ===
 function compactOldData() {
   const now = Date.now();
   const sixHoursAgo = now - 6 * 60 * 60 * 1000;
@@ -1415,37 +1429,16 @@ function compactOldData() {
 
   console.log('[Compaction] Starting...');
 
-  // Compact >6h old raw snapshots into hourly averages
-  db.all(
-    `SELECT item_id, quality, city,
-      CAST(recorded_at / 3600000 AS INTEGER) * 3600000 as hour_start,
-      AVG(sell_price_min) as avg_sell,
-      AVG(buy_price_max) as avg_buy,
-      COUNT(*) as cnt
-    FROM price_snapshots
-    WHERE recorded_at < ?
-    GROUP BY item_id, quality, city, hour_start`,
-    [sixHoursAgo],
-    (err, rows) => {
-      if (err || !rows || rows.length === 0) {
-        console.log('[Compaction] No raw snapshots older than 6h to compact');
-        return;
-      }
-
-      const stmt = db.prepare(`INSERT OR REPLACE INTO price_averages (item_id, quality, city, avg_sell, avg_buy, sample_count, period_type, period_start) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`);
-      db.run('BEGIN TRANSACTION');
-      for (const r of rows) {
-        stmt.run(r.item_id, r.quality, r.city, Math.round(r.avg_sell), Math.round(r.avg_buy), r.cnt, 'hourly', r.hour_start);
-      }
-      db.run('COMMIT', () => {
-        stmt.finalize();
-        // Delete all compacted raw snapshots (older than 6h)
-        db.run(`DELETE FROM price_snapshots WHERE recorded_at < ?`, [sixHoursAgo], (err2) => {
-          if (!err2) console.log(`[Compaction] Compacted ${rows.length} hourly averages, deleted raw snapshots older than 6h`);
-        });
+  // Delete raw price_snapshots older than 6h directly — no aggregation step.
+  // Aggregation via SELECT+INSERT on a 20M-row table OOMs; price_averages already
+  // has historical data from the backfill and NATS snapshots written at flush time.
+  db.run(`DELETE FROM price_snapshots WHERE recorded_at < ?`, [sixHoursAgo], (err) => {
+    if (!err) {
+      db.get(`SELECT COUNT(*) AS cnt FROM price_snapshots`, [], (e, row) => {
+        console.log(`[Compaction] Deleted raw snapshots older than 6h. Remaining: ${row ? row.cnt : '?'}`);
       });
     }
-  );
+  });
 
   // Compact >30 day old hourly averages into daily
   db.all(
@@ -1475,8 +1468,8 @@ function compactOldData() {
     }
   );
 
-  // Safety net: delete any raw snapshots older than 24h (should already be compacted at 6h)
-  db.run(`DELETE FROM price_snapshots WHERE recorded_at < ?`, [now - 24 * 60 * 60 * 1000]);
+  // Safety net: hard-delete any snapshots older than 8h (catches any missed by the 6h window above)
+  db.run(`DELETE FROM price_snapshots WHERE recorded_at < ?`, [now - 8 * 60 * 60 * 1000]);
 
   // Prune spread_stats rows older than 14 days to prevent unbounded table growth (OOM risk)
   const fourteenDaysAgo = now - 14 * 24 * 60 * 60 * 1000;
