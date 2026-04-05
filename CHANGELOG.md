@@ -2,6 +2,14 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-04-05 — User Registration, Live Flips, and Discord Alert Gating
+
+- **Email/password registration:** New `/api/register` and `/api/login` endpoints with bcrypt password hashing (12 rounds). Users table extended with email, password_hash, auth_type, role, and timestamps. Registration form on the landing page alongside Discord login.
+- **Live Flip Detection:** Real-time flip detection from NATS market stream. Backend `detectFlip()` finds cross-city spreads (10k+ profit, 3%+ ROI) and broadcasts to authenticated WebSocket clients. In-memory circular buffer of 100 recent flips. New "Live Flips" tab in the frontend with filterable feed and slide-in animations.
+- **Registration-gated features:** Live flips API requires authentication. Discord bot `/setup_alerts` command now checks if the user has a registered website account. Unregistered users get a friendly setup guide.
+- **Discord account linking:** Email users can link their Discord account via OAuth flow. Backend handles `state` parameter to distinguish login vs. linking.
+- **Haul plan collapse fix:** Three bugs fixed — removed `data-action="refresh"` double-handler from haul plan buttons, added `freeSlots` param to generic refresh handler, and improved expanded state tracking with `data-route-key` DOM snapshot before re-render.
+
 ### 2026-04-05 — Transport refresh buttons + In-website changelog update
 
 - **Per-item refresh buttons:** Every item row in a haul plan now has a small refresh icon that fetches live prices for that specific item and re-renders the transport results.
