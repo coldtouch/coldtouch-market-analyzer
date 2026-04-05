@@ -798,13 +798,13 @@
                     <div class="control-group">
                         <label for="transport-fresh-mode">Freshness</label>
                         <select id="transport-fresh-mode">
-                            <option value="off">Off</option>
+                            <option value="off" selected>Off</option>
                             <option value="buy">Buy Side Fresh</option>
                             <option value="sell">Sell Side Fresh</option>
-                            <option value="both" selected>Both Fresh</option>
+                            <option value="both">Both Fresh</option>
                         </select>
                     </div>
-                    <div class="control-group" id="transport-fresh-threshold-group">
+                    <div class="control-group" id="transport-fresh-threshold-group" style="display:none;">
                         <label for="transport-fresh-threshold">Max Age</label>
                         <select id="transport-fresh-threshold">
                             <option value="30">30 min</option>
