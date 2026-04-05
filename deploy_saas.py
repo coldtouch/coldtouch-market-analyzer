@@ -1291,6 +1291,90 @@ app.get('/api/transport-routes', (req, res) => {
   });
 });
 
+// === LIVE TRANSPORT ROUTES (computed from alertMarketDb real-time data) ===
+app.get('/api/transport-routes-live', (req, res) => {
+  const buyCity = req.query.buy_city || '';
+  const sellCity = req.query.sell_city || '';
+  const sellStrategy = req.query.sell_strategy || 'market'; // 'market' or 'instant'
+  const minProfit = parseInt(req.query.min_profit) || 1000;
+  const maxAge = parseInt(req.query.max_age) || 60; // minutes
+  const limit = Math.min(parseInt(req.query.limit) || 200, 500);
+  const excludeCities = (req.query.exclude || '').split(',').filter(Boolean);
+
+  const now = Date.now();
+  const maxAgeMs = maxAge * 60 * 1000;
+  const routes = [];
+
+  for (const [itemId, qualities] of Object.entries(alertMarketDb)) {
+    for (const [qStr, cities] of Object.entries(qualities)) {
+      const q = parseInt(qStr);
+      const cityEntries = Object.entries(cities);
+
+      for (let i = 0; i < cityEntries.length; i++) {
+        const [srcCity, srcData] = cityEntries[i];
+        // Source: must have a sell offer (what we'd buy)
+        if (!srcData.sellMin || srcData.sellMin === Infinity || srcData.sellMin <= 0) continue;
+        if (srcData.sellDate && (now - srcData.sellDate) > maxAgeMs) continue;
+        if (buyCity && srcCity !== buyCity) continue;
+        if (excludeCities.includes(srcCity)) continue;
+
+        for (let j = 0; j < cityEntries.length; j++) {
+          if (i === j) continue;
+          const [dstCity, dstData] = cityEntries[j];
+          if (sellCity && dstCity !== sellCity) continue;
+          if (excludeCities.includes(dstCity)) continue;
+
+          let dstPrice = 0, dstDate = 0;
+          if (sellStrategy === 'instant') {
+            // Instant sell: use buy order price in destination
+            if (!dstData.buyMax || dstData.buyMax <= 0) continue;
+            if (dstData.buyDate && (now - dstData.buyDate) > maxAgeMs) continue;
+            dstPrice = dstData.buyMax;
+            dstDate = dstData.buyDate || dstData.lastSeen || 0;
+          } else {
+            // List on market: use sell offer price in destination (what items go for there)
+            if (!dstData.sellMin || dstData.sellMin === Infinity || dstData.sellMin <= 0) continue;
+            if (dstData.sellDate && (now - dstData.sellDate) > maxAgeMs) continue;
+            dstPrice = dstData.sellMin;
+            dstDate = dstData.sellDate || dstData.lastSeen || 0;
+          }
+
+          // Skip outliers: if destination price is >5x source, it's likely a joke listing
+          if (sellStrategy === 'market' && dstPrice > srcData.sellMin * 5) continue;
+          // Skip if destination is cheaper than source (no profit hauling there)
+          if (dstPrice <= srcData.sellMin) continue;
+
+          const profit = dstPrice - srcData.sellMin - (dstPrice * TAX_RATE);
+          if (profit < minProfit) continue;
+          const roi = (profit / srcData.sellMin) * 100;
+          if (roi < 2 || roi > 500) continue; // skip noise and outliers
+
+          routes.push({
+            item_id: itemId,
+            quality: q,
+            name: getFriendlyName(itemId),
+            buy_city: srcCity,
+            sell_city: dstCity,
+            buy_price: srcData.sellMin,
+            sell_price: dstPrice,
+            profit: Math.floor(profit),
+            roi: parseFloat(roi.toFixed(1)),
+            buy_age: Math.round((now - (srcData.sellDate || srcData.lastSeen || now)) / 60000),
+            sell_age: Math.round((now - (dstDate || now)) / 60000),
+            sell_strategy: sellStrategy
+          });
+        }
+      }
+    }
+  }
+
+  // Sort by profit descending
+  routes.sort((a, b) => b.profit - a.profit);
+  const result = routes.slice(0, limit);
+  console.log(`[Transport-Live] Found ${routes.length} routes, returning ${result.length} (strategy=${sellStrategy}, maxAge=${maxAge}m)`);
+  res.json({ routes: result, total: routes.length, dataPoints: Object.keys(alertMarketDb).length });
+});
+
 app.get('/api/price-history', (req, res) => {
   const { item_id, city, days } = req.query;
   if (!item_id) return res.status(400).json({ error: 'item_id required' });
