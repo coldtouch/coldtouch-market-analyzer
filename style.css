@@ -3335,6 +3335,30 @@ footer a:hover {
 .profile-msg.success { color: var(--profit-green); }
 .profile-msg.error { color: var(--loss-red); }
 
+/* Transport mode toggle */
+.transport-mode-btn {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.5rem 1rem;
+    border: none;
+    background: var(--bg-dark);
+    color: var(--text-muted);
+    font-size: 0.8rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.transport-mode-btn:hover { color: var(--text-secondary); background: var(--bg-elevated); }
+
+.transport-mode-btn.active {
+    background: var(--accent);
+    color: #000;
+}
+
+.transport-mode-btn.active svg { stroke: #000; }
+
 /* Flip type badge */
 .flip-type-badge {
     display: inline-block;

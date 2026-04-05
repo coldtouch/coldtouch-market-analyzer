@@ -3181,6 +3181,22 @@ async function init() {
 
     // Transport tab
     document.getElementById('transport-scan-btn').addEventListener('click', doTransportScan);
+
+    // Transport mode toggle (Live vs Historical)
+    document.querySelectorAll('.transport-mode-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            document.querySelectorAll('.transport-mode-btn').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            // Re-render with current data if we have it
+            if (lastTransportRoutes) {
+                const budget = parseInt(document.getElementById('transport-budget').value) || 500000;
+                const sortBy = document.getElementById('transport-sort').value;
+                const mountCapacity = parseInt(document.getElementById('transport-mount').value) || 0;
+                const freeSlots = Math.max(1, Math.min(48, parseInt(document.getElementById('transport-free-slots').value) || 30));
+                enrichAndRenderTransport(lastTransportRoutes, budget, sortBy, mountCapacity, freeSlots);
+            }
+        });
+    });
     document.getElementById('transport-exclude-caerleon').addEventListener('change', function () {
         const sellSelect = document.getElementById('transport-sell-city');
         const exclude = this.checked;
@@ -4020,6 +4036,7 @@ async function doTransportScan() {
 
 async function enrichAndRenderTransport(routes, budget, sortBy, mountCapacity, freeSlots) {
     const availableSlots = freeSlots || 30;
+    const transportMode = document.querySelector('.transport-mode-btn.active')?.dataset.mode || 'live';
 
     // Enrich with current live prices from IndexedDB
     const cachedData = await MarketDB.getAllPrices();
@@ -4046,15 +4063,43 @@ async function enrichAndRenderTransport(routes, budget, sortBy, mountCapacity, f
         const buyData = priceMap[buyKey];
         const sellData = priceMap[sellKey];
 
-        if (!buyData || buyData.sellMin <= 0) continue;
-        if (!sellData || sellData.buyMax <= 0) continue;
+        let buyPrice, sellPrice, profitPerUnit, dateBuy, dateSell, isHistorical;
 
-        const buyPrice = buyData.sellMin;
-        const sellPrice = sellData.buyMax;
+        if (transportMode === 'historical') {
+            // Historical mode: use spread_stats avg_spread directly
+            // No IndexedDB dependency — always has data if spread_stats has it
+            const spread = r.avg_spread || 0;
+            if (spread <= 0) continue;
+
+            // If we have live data, use it for price display. Otherwise estimate.
+            if (buyData && buyData.sellMin > 0) {
+                buyPrice = buyData.sellMin;
+                sellPrice = buyPrice + spread + (buyPrice * TAX_RATE * (spread / (spread + buyPrice)));
+            } else {
+                // Estimate: assume buy price such that spread = profit after tax
+                // spread = sellPrice - buyPrice - tax, and tax = sellPrice * 0.065
+                // Rough estimate: buyPrice ≈ spread * 3 (typical for mid-tier items)
+                buyPrice = Math.round(spread * 3);
+                sellPrice = Math.round(buyPrice + spread + (buyPrice + spread) * TAX_RATE);
+            }
+            profitPerUnit = Math.round(spread);
+            dateBuy = buyData ? buyData.sellDate : '';
+            dateSell = sellData ? sellData.buyDate : '';
+            isHistorical = true;
+        } else {
+            // Live mode: require real prices from IndexedDB
+            if (!buyData || buyData.sellMin <= 0) continue;
+            if (!sellData || sellData.buyMax <= 0) continue;
+            buyPrice = buyData.sellMin;
+            sellPrice = sellData.buyMax;
+            profitPerUnit = sellPrice - buyPrice - (sellPrice * TAX_RATE);
+            if (profitPerUnit <= 0) continue;
+            dateBuy = buyData.sellDate;
+            dateSell = sellData.buyDate;
+            isHistorical = false;
+        }
+
         const tax = sellPrice * TAX_RATE;
-        const profitPerUnit = sellPrice - buyPrice - tax;
-        if (profitPerUnit <= 0) continue;
-
         const roi = (profitPerUnit / buyPrice) * 100;
         const sellVolume = r.sell_volume || 0;
         const buyVolume = r.buy_volume || 0;
@@ -4115,9 +4160,10 @@ async function enrichAndRenderTransport(routes, budget, sortBy, mountCapacity, f
             confidence: r.confidence_score,
             consistencyPct: r.consistency_pct,
             avgSpread: r.avg_spread,
+            medianSpread: r.median_spread,
             sampleCount: r.sample_count,
-            dateBuy: buyData.sellDate,
-            dateSell: sellData.buyDate
+            dateBuy, dateSell,
+            isHistorical
         });
     }
 
@@ -4265,7 +4311,8 @@ async function enrichAndRenderTransport(routes, budget, sortBy, mountCapacity, f
                 totalWeight,
                 totalSlots,
                 budgetUsed: ((totalCost / budget) * 100).toFixed(0),
-                avgConfidence: Math.round(planItems.reduce((s, i) => s + (i.confidence || 0), 0) / planItems.length)
+                avgConfidence: Math.round(planItems.reduce((s, i) => s + (i.confidence || 0), 0) / planItems.length),
+                isHistorical: planItems.some(i => i.isHistorical)
             });
         }
     }
@@ -4323,6 +4370,7 @@ function renderTransportResults(routes, budget, mountCapacity, haulPlans, availa
             const weightPct = mountCapacity > 0 && mountCapacity < 999999 ? ((plan.totalWeight / mountCapacity) * 100).toFixed(0) : null;
             const roiPct = plan.totalCost > 0 ? ((plan.totalProfit / plan.totalCost) * 100).toFixed(1) : 0;
             const confBadge = plan.avgConfidence >= 70 ? '<span style="color:#22c55e; font-size:0.7rem;">HIGH</span>' : plan.avgConfidence >= 40 ? '<span style="color:#f59e0b; font-size:0.7rem;">MED</span>' : '<span style="color:#ef4444; font-size:0.7rem;">LOW</span>';
+            const histBadge = plan.isHistorical ? ' <span style="background:rgba(167,139,250,0.15); color:#a78bfa; border:1px solid rgba(167,139,250,0.3); padding:0 4px; border-radius:4px; font-size:0.6rem; font-weight:700;">HISTORICAL</span>' : '';
 
             // Find oldest price date among all items to show worst-case freshness
             const allDates = plan.items.flatMap(i => [i.dateBuy, i.dateSell]).filter(d => d);
@@ -4343,7 +4391,7 @@ function renderTransportResults(routes, budget, mountCapacity, haulPlans, availa
                         </div>
                         <div style="min-width:0;">
                             <div style="font-weight:600; font-size:0.9rem; color:var(--text-primary);">${plan.buyCity} ➔ ${plan.sellCity}</div>
-                            <div style="font-size:0.72rem; color:var(--text-muted);">${plan.items.length} item${plan.items.length > 1 ? 's' : ''} &bull; ${plan.totalSlots}/${availableSlots} slots &bull; ${plan.budgetUsed}% budget &bull; ${freshnessHtml} ${confBadge}</div>
+                            <div style="font-size:0.72rem; color:var(--text-muted);">${plan.items.length} item${plan.items.length > 1 ? 's' : ''} &bull; ${plan.totalSlots}/${availableSlots} slots &bull; ${plan.budgetUsed}% budget &bull; ${freshnessHtml} ${confBadge}${histBadge}</div>
                         </div>
                     </div>
                     <div style="display:flex; align-items:center; gap:1.2rem; flex-shrink:0;">
@@ -4382,8 +4430,11 @@ function renderTransportResults(routes, budget, mountCapacity, haulPlans, availa
                         </div>
                         <div style="font-size:0.7rem; color:var(--text-muted);">
                             ${getTierEnchLabel(item.itemId)} ${getQualityName(item.quality)}
-                            &nbsp;${getFreshnessIndicator(item.dateBuy)} Buy @ ${Math.floor(item.buyPrice).toLocaleString()} <span style="opacity:0.7">${timeAgo(item.dateBuy)}</span>
-                            &nbsp;${getFreshnessIndicator(item.dateSell)} Sell @ ${Math.floor(item.sellPrice).toLocaleString()} <span style="opacity:0.7">${timeAgo(item.dateSell)}</span>
+                            ${item.isHistorical
+                                ? `&nbsp;<span style="color:#a78bfa;" title="Prices based on 7-day historical average spread">📊 Avg Spread: +${Math.floor(item.profitPerUnit).toLocaleString()}/unit</span> <span style="opacity:0.7">(${item.consistencyPct ? item.consistencyPct.toFixed(0) + '% consistent' : 'no data'})</span>`
+                                : `&nbsp;${getFreshnessIndicator(item.dateBuy)} Buy @ ${Math.floor(item.buyPrice).toLocaleString()} <span style="opacity:0.7">${timeAgo(item.dateBuy)}</span>
+                                   &nbsp;${getFreshnessIndicator(item.dateSell)} Sell @ ${Math.floor(item.sellPrice).toLocaleString()} <span style="opacity:0.7">${timeAgo(item.dateSell)}</span>`
+                            }
                             ${!item.hasVolumeData ? ' <span style="color:#f59e0b;" title="No volume data available — verify market availability in-game before buying">⚠ No vol data</span>' : item.realisticVolume > 0 && item.planUnits > item.realisticVolume ? ` <span style="color:#f59e0b;" title="Suggested quantity (${item.planUnits}) exceeds estimated daily volume (~${Math.round(item.realisticVolume)}). You may not find enough sell orders at this price.">⚠ ~${Math.round(item.realisticVolume)}/day</span>` : item.realisticVolume > 0 ? ` <span style="color:var(--text-muted);" title="Estimated daily volume">~${Math.round(item.realisticVolume)}/day</span>` : ''}
                         </div>
                     </div>
