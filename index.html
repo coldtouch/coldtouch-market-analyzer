@@ -714,7 +714,17 @@
         <section class="tab-pane hidden" id="pane-transport">
             <div class="controls-panel">
                 <h2 style="color:var(--accent); margin:0 0 0.5rem 0; font-size:1.2rem;">🐘 Bulk Transport Profits</h2>
-                <p style="color:var(--text-secondary); font-size:0.85rem; margin:0 0 1rem 0;">Find profitable transport routes with realistic haul planning. Accounts for carry weight, inventory slots, and daily sell volume. Click any haul plan to expand the full item list.</p>
+                <p style="color:var(--text-secondary); font-size:0.85rem; margin:0 0 0.75rem 0;">Find profitable transport routes with realistic haul planning. Accounts for carry weight, inventory slots, and daily sell volume. Click any haul plan to expand the full item list.</p>
+                <div class="transport-mode-toggle" style="display:flex; gap:0; margin-bottom:1rem; border-radius:var(--radius); overflow:hidden; border:1px solid var(--border-color); width:fit-content;">
+                    <button class="transport-mode-btn active" data-mode="live" title="Uses real-time prices from the market. Most accurate when data is fresh.">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>
+                        Live Prices
+                    </button>
+                    <button class="transport-mode-btn" data-mode="historical" title="Uses 7-day historical spread analytics. Always has data, great for route discovery and planning.">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+                        Historical Analytics
+                    </button>
+                </div>
                 <div style="display:flex; gap:1rem; align-items:flex-end; flex-wrap:wrap;">
                     <div class="control-group">
                         <label for="transport-buy-city">Buy From</label>
