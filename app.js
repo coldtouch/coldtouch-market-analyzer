@@ -3810,9 +3810,9 @@ function renderTransportResults(routes, budget, mountCapacity, haulPlans, availa
                         <div style="display:flex; align-items:center; gap:0.4rem;">
                             <span style="font-size:0.82rem; font-weight:600; color:var(--text-primary); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${esc(getFriendlyName(item.itemId))}</span>
                             <button class="btn-haul-refresh" data-action="refresh" data-item="${item.itemId}" title="Refresh live prices for this item" style="
-                                background:none; border:1px solid var(--border-dim); color:var(--text-muted); border-radius:4px;
-                                padding:1px 4px; cursor:pointer; display:inline-flex; align-items:center; font-size:0.65rem; line-height:1; transition:all 0.15s;">
-                                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M23 4v6h-6"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+                                background:var(--surface-3, #2a2a3a); border:1px solid var(--accent, #d4a843); color:var(--accent, #d4a843); border-radius:4px;
+                                padding:2px 6px; cursor:pointer; display:inline-flex; align-items:center; gap:3px; font-size:0.65rem; line-height:1; transition:all 0.15s;">
+                                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M23 4v6h-6"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
                             </button>
                         </div>
                         <div style="font-size:0.7rem; color:var(--text-muted);">
@@ -3854,9 +3854,9 @@ function renderTransportResults(routes, budget, mountCapacity, haulPlans, availa
                 <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:0.5rem;">
                     <span style="font-size:0.72rem; color:var(--text-muted);">Items in this haul</span>
                     <button class="btn-haul-refresh-all" title="Refresh live prices for all items in this haul plan" style="
-                        background:none; border:1px solid var(--border-dim); color:var(--text-muted); border-radius:5px;
-                        padding:3px 8px; cursor:pointer; display:inline-flex; align-items:center; gap:0.3rem; font-size:0.7rem; transition:all 0.15s;">
-                        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M23 4v6h-6"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+                        background:var(--surface-3, #2a2a3a); border:1px solid var(--accent, #d4a843); color:var(--accent, #d4a843); border-radius:5px;
+                        padding:4px 10px; cursor:pointer; display:inline-flex; align-items:center; gap:0.3rem; font-size:0.75rem; font-weight:600; transition:all 0.15s;">
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M23 4v6h-6"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
                         Refresh All
                     </button>
                 </div>
