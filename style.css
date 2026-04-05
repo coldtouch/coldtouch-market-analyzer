@@ -821,6 +821,12 @@ select:focus {
     background: var(--accent-dim);
 }
 
+.btn-copy-shopping-list:hover {
+    border-color: var(--accent) !important;
+    color: var(--accent) !important;
+    background: var(--accent-dim);
+}
+
 /* ====== TRADE CARD (ARBITRAGE) ====== */
 .trade-card {
     background: var(--bg-card);
