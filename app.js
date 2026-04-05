@@ -300,6 +300,7 @@ function initTabs() {
 
             if (currentTab === 'browser') renderBrowser();
             if (currentTab === 'live-flips') initLiveFlipsTab();
+            if (currentTab === 'profile') initProfileTab();
 
             // Close dropdown after selection
             closeAllDropdowns();
@@ -2973,6 +2974,22 @@ function dismissLandingOverlay() {
     }
 }
 
+function updateHeaderProfile(user) {
+    document.getElementById('login-discord-btn').classList.add('hidden');
+    const profile = document.getElementById('discord-user-profile');
+    profile.classList.remove('hidden');
+    profile.style.display = 'flex';
+    const avatarEl = document.getElementById('discord-avatar');
+    if (user.avatar && user.authType !== 'email') {
+        avatarEl.src = `https://cdn.discordapp.com/avatars/${user.id}/${user.avatar}.png`;
+    } else {
+        avatarEl.src = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="%23888" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>');
+    }
+    document.getElementById('discord-username').textContent = user.username;
+    const profileTab = document.getElementById('nav-profile-tab');
+    if (profileTab) profileTab.style.display = '';
+}
+
 async function checkDiscordAuth() {
     const overlay = document.getElementById('landing-overlay');
     const authChecking = document.getElementById('landing-auth-checking');
@@ -2985,9 +3002,14 @@ async function checkDiscordAuth() {
     const loginParam = urlParams.get('login');
     const tokenParam = urlParams.get('token');
     const linkParam = urlParams.get('link');
+    const verifyParam = urlParams.get('verify');
     if (linkParam === 'success') {
         history.replaceState(null, '', window.location.pathname);
         // Discord account linked — just continue with existing session
+    }
+    if (verifyParam) {
+        history.replaceState(null, '', window.location.pathname);
+        // Will be handled after login check completes
     }
     if (loginParam || tokenParam) {
         // Store JWT from OAuth redirect — used as Authorization: Bearer header
@@ -3044,18 +3066,7 @@ async function checkDiscordAuth() {
             dismissLandingOverlay();
 
             // Update header — hide login button, show profile
-            document.getElementById('login-discord-btn').classList.add('hidden');
-            const profile = document.getElementById('discord-user-profile');
-            profile.classList.remove('hidden');
-            profile.style.display = 'flex';
-            const avatarEl = document.getElementById('discord-avatar');
-            if (data.user.avatar && data.user.authType !== 'email') {
-                avatarEl.src = `https://cdn.discordapp.com/avatars/${data.user.id}/${data.user.avatar}.png`;
-            } else {
-                // Email users or users without avatar: show a placeholder
-                avatarEl.src = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="%23888" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>');
-            }
-            document.getElementById('discord-username').textContent = data.user.username;
+            updateHeaderProfile(data.user);
 
             // Show tier badge in header (tier is nested under data.stats)
             const tier = data.stats && data.stats.tier;
@@ -3064,6 +3075,19 @@ async function checkDiscordAuth() {
                 tierBadge.textContent = tier.charAt(0).toUpperCase() + tier.slice(1);
                 tierBadge.className = `tier-badge tier-${tier}`;
                 tierBadge.style.display = 'inline-block';
+            }
+
+            // Show profile nav tab when logged in
+            const profileTab = document.getElementById('nav-profile-tab');
+            if (profileTab) profileTab.style.display = '';
+
+            // Store full user data for profile page
+            window._userData = data;
+
+            // Handle email verification redirect
+            if (verifyParam === 'success') {
+                const succDiv = document.getElementById('landing-auth-success');
+                if (succDiv) { succDiv.style.display = 'flex'; succDiv.querySelector('span').textContent = 'Email verified successfully!'; }
             }
         } else {
             // Not logged in — show login/guest options
@@ -3357,18 +3381,7 @@ async function init() {
                     localStorage.setItem('albion_auth_token', data.token);
                     discordUser = data.user;
                     dismissLandingOverlay();
-                    // Update header profile
-                    document.getElementById('login-discord-btn').classList.add('hidden');
-                    const profile = document.getElementById('discord-user-profile');
-                    profile.classList.remove('hidden');
-                    profile.style.display = 'flex';
-                    const avatarEl = document.getElementById('discord-avatar');
-                    if (data.user.avatar) {
-                        avatarEl.src = `https://cdn.discordapp.com/avatars/${data.user.id}/${data.user.avatar}.png`;
-                    } else {
-                        avatarEl.src = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="%23888" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>');
-                    }
-                    document.getElementById('discord-username').textContent = data.user.username;
+                    updateHeaderProfile(data.user);
                 } else {
                     if (errDiv && errText) { errText.textContent = data.error || 'Login failed.'; errDiv.style.display = 'flex'; }
                 }
@@ -3408,14 +3421,7 @@ async function init() {
                     localStorage.setItem('albion_auth_token', data.token);
                     discordUser = data.user;
                     dismissLandingOverlay();
-                    // Update header profile
-                    document.getElementById('login-discord-btn').classList.add('hidden');
-                    const profile = document.getElementById('discord-user-profile');
-                    profile.classList.remove('hidden');
-                    profile.style.display = 'flex';
-                    const avatarEl = document.getElementById('discord-avatar');
-                    avatarEl.src = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="%23888" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>');
-                    document.getElementById('discord-username').textContent = data.user.username;
+                    updateHeaderProfile(data.user);
                 } else {
                     if (errDiv && errText) { errText.textContent = data.error || 'Registration failed.'; errDiv.style.display = 'flex'; }
                 }
@@ -3439,10 +3445,20 @@ async function init() {
     initLiveSync();
 
     // Live Flips filter handlers
-    const flipsMinProfit = document.getElementById('flips-min-profit');
-    const flipsMinRoi = document.getElementById('flips-min-roi');
-    if (flipsMinProfit) flipsMinProfit.addEventListener('change', () => renderLiveFlips());
-    if (flipsMinRoi) flipsMinRoi.addEventListener('change', () => renderLiveFlips());
+    ['flips-min-profit', 'flips-min-roi', 'flips-city-filter', 'flips-type-filter'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.addEventListener('change', () => renderLiveFlips());
+    });
+
+    // Live Flips notification toggles
+    const desktopNotifyToggle = document.getElementById('flips-desktop-notify-toggle');
+    if (desktopNotifyToggle) {
+        desktopNotifyToggle.addEventListener('change', () => {
+            if (desktopNotifyToggle.checked && Notification.permission === 'default') {
+                Notification.requestPermission();
+            }
+        });
+    }
 
     // === ASYNC: load data and update UI in background ===
     // Run checkDiscordAuth concurrently with loadData — do NOT await it first.
@@ -3578,7 +3594,7 @@ function initLiveSync() {
                 // Single new flip detected
                 if (data.data) {
                     liveFlipsCache.unshift(data.data);
-                    if (liveFlipsCache.length > 100) liveFlipsCache.pop();
+                    if (liveFlipsCache.length > 200) liveFlipsCache.pop();
                     renderLiveFlips(true);
                     // Flash the tab if not active
                     const tab = document.querySelector('[data-tab="live-flips"]');
@@ -3673,26 +3689,69 @@ function renderLiveFlips(isNewFlip = false) {
 
     const minProfit = parseInt(document.getElementById('flips-min-profit')?.value) || 50000;
     const minRoi = parseFloat(document.getElementById('flips-min-roi')?.value) || 3;
+    const cityFilter = document.getElementById('flips-city-filter')?.value || 'all';
+    const typeFilter = document.getElementById('flips-type-filter')?.value || 'all';
 
-    const filtered = liveFlipsCache.filter(f => f.profit >= minProfit && f.roi >= minRoi);
+    const filtered = liveFlipsCache.filter(f => {
+        if (f.profit < minProfit || f.roi < minRoi) return false;
+        if (cityFilter !== 'all' && f.buyCity !== cityFilter && f.sellCity !== cityFilter) return false;
+        if (typeFilter !== 'all' && (f.type || 'cross-city') !== typeFilter) return false;
+        return true;
+    });
+
+    // Update stats
+    const statsEl = document.getElementById('flips-stats');
+    if (statsEl) {
+        const totalProfit = filtered.reduce((s, f) => s + f.profit, 0);
+        statsEl.textContent = `${filtered.length} flips | ${(totalProfit / 1000).toFixed(0)}k potential silver`;
+    }
 
     if (filtered.length === 0) {
         container.innerHTML = '<div class="empty-state"><p>No flips matching your filters yet.</p><p class="hint">Profitable opportunities will appear here in real-time. Try lowering the minimum profit or ROI.</p></div>';
         return;
     }
 
+    // Sound + desktop notification for new flips
+    if (isNewFlip && filtered.length > 0) {
+        const flip = filtered[0];
+        if (document.getElementById('flips-sound-toggle')?.checked) {
+            try {
+                const ctx = new (window.AudioContext || window.webkitAudioContext)();
+                const osc = ctx.createOscillator();
+                const gain = ctx.createGain();
+                osc.connect(gain); gain.connect(ctx.destination);
+                osc.frequency.value = 880; gain.gain.value = 0.08;
+                osc.start(); osc.stop(ctx.currentTime + 0.12);
+            } catch {}
+        }
+        if (document.getElementById('flips-desktop-notify-toggle')?.checked && Notification.permission === 'granted') {
+            new Notification(`Flip: ${flip.name}`, {
+                body: `${flip.buyCity} -> ${flip.sellCity} | +${flip.profit.toLocaleString()} silver (${flip.roi}% ROI)`,
+                icon: `https://render.albiononline.com/v1/item/${flip.itemId}.png?quality=${flip.quality}`,
+                tag: flip.id
+            });
+        }
+    }
+
     container.innerHTML = filtered.map((flip, i) => {
         const ago = timeAgo(new Date(flip.detectedAt).toISOString());
         const isNew = isNewFlip && i === 0;
         const qualName = flip.quality > 1 ? ` q${flip.quality}` : '';
+        const flipType = flip.type || 'cross-city';
+        const typeBadge = flipType === 'instant'
+            ? '<span class="flip-type-badge instant">Instant</span>'
+            : '<span class="flip-type-badge cross-city">Transport</span>';
+        const routeArrow = flipType === 'instant'
+            ? '<span style="margin:0 4px; color:var(--purple);">&#8634;</span>'
+            : '<span style="margin:0 4px; color:var(--text-muted);">&#10142;</span>';
         return `<div class="flip-card${isNew ? ' new' : ''}">
             <img class="flip-icon" src="https://render.albiononline.com/v1/item/${flip.itemId}.png?quality=${flip.quality}" alt="" loading="lazy">
             <div style="min-width:0;">
-                <div style="font-weight:600; font-size:0.88rem; color:var(--text-primary); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${esc(flip.name)}${qualName}</div>
+                <div style="display:flex; align-items:center; gap:0.4rem; font-weight:600; font-size:0.88rem; color:var(--text-primary); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${esc(flip.name)}${qualName} ${typeBadge}</div>
                 <div class="flip-route">
                     <span style="color:var(--text-secondary);">${esc(flip.buyCity)}</span>
                     <span style="color:var(--text-muted);"> @ ${Math.floor(flip.buyPrice).toLocaleString()}</span>
-                    <span style="margin:0 4px; color:var(--text-muted);">&#10142;</span>
+                    ${routeArrow}
                     <span style="color:var(--text-secondary);">${esc(flip.sellCity)}</span>
                     <span style="color:var(--text-muted);"> @ ${Math.floor(flip.sellPrice).toLocaleString()}</span>
                     <span style="margin-left:6px; opacity:0.6;">${ago}</span>
@@ -3712,6 +3771,187 @@ function renderLiveFlips(isNewFlip = false) {
             if (newCard) newCard.classList.remove('new');
         }, 3000);
     }
+}
+
+// ====== PROFILE TAB ======
+function initProfileTab() {
+    if (!discordUser || !window._userData) {
+        // Fetch fresh data
+        fetch(`${VPS_BASE}/api/me`, { headers: authHeaders() })
+            .then(r => r.json())
+            .then(data => {
+                if (data.loggedIn) {
+                    window._userData = data;
+                    renderProfile(data);
+                }
+            }).catch(() => {});
+        return;
+    }
+    renderProfile(window._userData);
+}
+
+function renderProfile(data) {
+    const user = data.user;
+    const stats = data.stats || {};
+
+    // Avatar
+    const avatarEl = document.getElementById('profile-avatar');
+    if (avatarEl) {
+        if (user.avatar && user.authType !== 'email') {
+            avatarEl.src = `https://cdn.discordapp.com/avatars/${user.id}/${user.avatar}.png`;
+        } else {
+            avatarEl.src = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="%23888" stroke-width="1.5"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>');
+        }
+    }
+
+    // Display name & email
+    const nameEl = document.getElementById('profile-display-name');
+    if (nameEl) nameEl.textContent = user.username;
+    const emailEl = document.getElementById('profile-email-display');
+    if (emailEl) emailEl.textContent = user.email || '';
+    const currentUsernameEl = document.getElementById('profile-current-username');
+    if (currentUsernameEl) currentUsernameEl.textContent = user.username;
+
+    // Member since
+    const sinceEl = document.getElementById('profile-member-since');
+    if (sinceEl && user.createdAt) {
+        sinceEl.textContent = 'Member since ' + new Date(user.createdAt).toLocaleDateString('en-US', { month: 'short', year: 'numeric' });
+    }
+
+    // Auth type badge
+    const authBadge = document.getElementById('profile-auth-type');
+    if (authBadge) {
+        authBadge.textContent = user.authType === 'discord' ? 'Discord' : 'Email';
+    }
+
+    // Tier
+    const tierEl = document.getElementById('profile-tier-display');
+    if (tierEl && stats.tier) {
+        tierEl.textContent = stats.tier.charAt(0).toUpperCase() + stats.tier.slice(1);
+        tierEl.className = `tier-badge tier-${stats.tier}`;
+    }
+
+    // Verified badge
+    const verifiedBadge = document.getElementById('profile-verified-badge');
+    if (verifiedBadge) {
+        verifiedBadge.style.display = user.emailVerified ? 'inline-block' : 'none';
+    }
+
+    // Verification banner
+    const verifyBanner = document.getElementById('profile-verify-banner');
+    if (verifyBanner) {
+        verifyBanner.style.display = (user.authType === 'email' && !user.emailVerified) ? 'flex' : 'none';
+    }
+
+    // Stats
+    const s30d = document.getElementById('profile-scans-30d');
+    if (s30d) s30d.textContent = (stats.scans_30d || 0).toLocaleString();
+    const sTotal = document.getElementById('profile-scans-total');
+    if (sTotal) sTotal.textContent = (stats.scans_total || 0).toLocaleString();
+    const tierText = document.getElementById('profile-tier-text');
+    if (tierText && stats.tier) tierText.textContent = stats.tier.charAt(0).toUpperCase() + stats.tier.slice(1);
+
+    // Password section visibility (email accounts only)
+    const pwSection = document.getElementById('profile-password-section');
+    if (pwSection) pwSection.style.display = user.authType === 'email' ? 'block' : 'none';
+
+    // Discord link/unlink
+    const linkBtn = document.getElementById('profile-discord-link-btn');
+    const unlinkBtn = document.getElementById('profile-discord-unlink-btn');
+    const discordStatus = document.getElementById('profile-discord-status');
+    if (user.hasDiscordLinked) {
+        if (discordStatus) discordStatus.textContent = 'Linked';
+        if (linkBtn) linkBtn.style.display = 'none';
+        if (unlinkBtn) unlinkBtn.style.display = '';
+    } else {
+        if (discordStatus) discordStatus.textContent = 'Not linked';
+        if (linkBtn) linkBtn.style.display = '';
+        if (unlinkBtn) unlinkBtn.style.display = 'none';
+    }
+
+    // Wire up event handlers (use onclick to avoid duplicate listeners)
+    const resendBtn = document.getElementById('profile-resend-btn');
+    if (resendBtn) resendBtn.onclick = async () => {
+        resendBtn.disabled = true; resendBtn.textContent = 'Sending...';
+        try {
+            const res = await fetch(`${VPS_BASE}/api/resend-verification`, { method: 'POST', headers: authHeaders() });
+            const d = await res.json();
+            resendBtn.textContent = d.success ? 'Sent!' : (d.error || 'Failed');
+        } catch { resendBtn.textContent = 'Failed'; }
+        setTimeout(() => { resendBtn.disabled = false; resendBtn.textContent = 'Resend Email'; }, 3000);
+    };
+
+    const saveUsernameBtn = document.getElementById('profile-save-username-btn');
+    if (saveUsernameBtn) saveUsernameBtn.onclick = async () => {
+        const newName = document.getElementById('profile-new-username')?.value.trim();
+        const msgEl = document.getElementById('profile-username-msg');
+        if (!newName || newName.length < 2) { if (msgEl) { msgEl.textContent = 'Min 2 characters'; msgEl.className = 'profile-msg error'; } return; }
+        try {
+            const res = await fetch(`${VPS_BASE}/api/change-username`, {
+                method: 'POST', headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+                body: JSON.stringify({ username: newName })
+            });
+            const d = await res.json();
+            if (d.success) {
+                if (d.token) localStorage.setItem('albion_auth_token', d.token);
+                discordUser.username = d.username;
+                if (nameEl) nameEl.textContent = d.username;
+                if (currentUsernameEl) currentUsernameEl.textContent = d.username;
+                document.getElementById('discord-username').textContent = d.username;
+                if (msgEl) { msgEl.textContent = 'Updated!'; msgEl.className = 'profile-msg success'; }
+                document.getElementById('profile-username-form').classList.add('hidden');
+            } else {
+                if (msgEl) { msgEl.textContent = d.error || 'Failed'; msgEl.className = 'profile-msg error'; }
+            }
+        } catch { if (msgEl) { msgEl.textContent = 'Network error'; msgEl.className = 'profile-msg error'; } }
+    };
+
+    const savePasswordBtn = document.getElementById('profile-save-password-btn');
+    if (savePasswordBtn) savePasswordBtn.onclick = async () => {
+        const curPw = document.getElementById('profile-current-password')?.value;
+        const newPw = document.getElementById('profile-new-password')?.value;
+        const msgEl = document.getElementById('profile-password-msg');
+        if (!curPw || !newPw) { if (msgEl) { msgEl.textContent = 'Both fields required'; msgEl.className = 'profile-msg error'; } return; }
+        if (newPw.length < 8) { if (msgEl) { msgEl.textContent = 'Min 8 characters'; msgEl.className = 'profile-msg error'; } return; }
+        try {
+            const res = await fetch(`${VPS_BASE}/api/change-password`, {
+                method: 'POST', headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+                body: JSON.stringify({ currentPassword: curPw, newPassword: newPw })
+            });
+            const d = await res.json();
+            if (d.success) {
+                if (msgEl) { msgEl.textContent = 'Password updated!'; msgEl.className = 'profile-msg success'; }
+                document.getElementById('profile-password-form').classList.add('hidden');
+                document.getElementById('profile-current-password').value = '';
+                document.getElementById('profile-new-password').value = '';
+            } else {
+                if (msgEl) { msgEl.textContent = d.error || 'Failed'; msgEl.className = 'profile-msg error'; }
+            }
+        } catch { if (msgEl) { msgEl.textContent = 'Network error'; msgEl.className = 'profile-msg error'; } }
+    };
+
+    if (linkBtn) linkBtn.onclick = async () => {
+        try {
+            const res = await fetch(`${VPS_BASE}/api/link-discord`, { method: 'POST', headers: authHeaders() });
+            const d = await res.json();
+            if (d.url) window.location.href = d.url;
+        } catch { alert('Failed to start Discord linking.'); }
+    };
+
+    if (unlinkBtn) unlinkBtn.onclick = async () => {
+        if (!confirm('Unlink your Discord account?')) return;
+        try {
+            const res = await fetch(`${VPS_BASE}/api/unlink-discord`, { method: 'POST', headers: authHeaders() });
+            const d = await res.json();
+            if (d.success) {
+                if (discordStatus) discordStatus.textContent = 'Not linked';
+                unlinkBtn.style.display = 'none';
+                linkBtn.style.display = '';
+            } else {
+                alert(d.error || 'Failed to unlink.');
+            }
+        } catch { alert('Network error.'); }
+    };
 }
 
 // ====== TRANSPORT TAB ======

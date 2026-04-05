@@ -293,6 +293,10 @@
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg>
                 Community
             </button>
+            <button class="nav-tab" data-tab="profile" id="nav-profile-tab" style="display:none;">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>
+                Profile
+            </button>
         </div>
     </nav>
 
@@ -1272,10 +1276,10 @@
                     </span>
                 </h2>
                 <p style="color:var(--text-secondary); font-size:0.85rem; margin:0 0 1rem 0;">
-                    Real-time profitable flip opportunities detected from the live market stream. Buy low in one city, sell high in another.
+                    Real-time profitable flip opportunities detected from the live market stream. Includes cross-city transports and same-city instant flips.
                     <strong>Requires a free account.</strong>
                 </p>
-                <div style="display:flex; gap:0.75rem; align-items:center; flex-wrap:wrap; margin-bottom:1rem;">
+                <div style="display:flex; gap:0.75rem; align-items:center; flex-wrap:wrap; margin-bottom:0.75rem;">
                     <div class="control-group" style="min-width:100px;">
                         <label for="flips-min-profit">Min Profit</label>
                         <select id="flips-min-profit">
@@ -1294,7 +1298,38 @@
                             <option value="20">20%+</option>
                         </select>
                     </div>
-                    <div id="flips-connection-status" style="font-size:0.75rem; color:var(--text-muted); margin-left:auto;">
+                    <div class="control-group" style="min-width:100px;">
+                        <label for="flips-city-filter">City</label>
+                        <select id="flips-city-filter">
+                            <option value="all" selected>All Cities</option>
+                            <option value="Thetford">Thetford</option>
+                            <option value="Lymhurst">Lymhurst</option>
+                            <option value="Bridgewatch">Bridgewatch</option>
+                            <option value="Fort Sterling">Fort Sterling</option>
+                            <option value="Martlock">Martlock</option>
+                            <option value="Caerleon">Caerleon</option>
+                            <option value="Brecilien">Brecilien</option>
+                            <option value="Black Market">Black Market</option>
+                        </select>
+                    </div>
+                    <div class="control-group" style="min-width:100px;">
+                        <label for="flips-type-filter">Type</label>
+                        <select id="flips-type-filter">
+                            <option value="all" selected>All Types</option>
+                            <option value="cross-city">Cross-City</option>
+                            <option value="instant">Same-City Instant</option>
+                        </select>
+                    </div>
+                </div>
+                <div style="display:flex; gap:0.75rem; align-items:center; flex-wrap:wrap; margin-bottom:1rem;">
+                    <label class="flips-toggle-label" style="display:flex; align-items:center; gap:0.4rem; cursor:pointer; font-size:0.8rem; color:var(--text-secondary);">
+                        <input type="checkbox" id="flips-sound-toggle" style="accent-color:var(--accent);"> Sound alerts
+                    </label>
+                    <label class="flips-toggle-label" style="display:flex; align-items:center; gap:0.4rem; cursor:pointer; font-size:0.8rem; color:var(--text-secondary);">
+                        <input type="checkbox" id="flips-desktop-notify-toggle" style="accent-color:var(--accent);"> Desktop notifications
+                    </label>
+                    <span id="flips-stats" style="font-size:0.75rem; color:var(--text-muted); margin-left:auto;"></span>
+                    <div id="flips-connection-status" style="font-size:0.75rem; color:var(--text-muted);">
                         Connecting...
                     </div>
                 </div>
@@ -1605,6 +1640,18 @@
                     <div class="changelog-list">
                         <div class="changelog-entry">
                             <div class="changelog-date">April 5, 2026</div>
+                            <div class="changelog-title">Email Verification, User Profile, and Live Flip Enhancements</div>
+                            <ul>
+                                <li>Email verification system &mdash; verification emails with branded template, auto-verify when SMTP not configured</li>
+                                <li>User Profile page &mdash; view stats, change username, change password, link/unlink Discord</li>
+                                <li>Same-city instant flips &mdash; detect profitable buy order > sell offer spreads within the same city</li>
+                                <li>Enhanced Live Flips filters &mdash; city filter, flip type filter (Transport vs Instant), sound alerts, desktop notifications</li>
+                                <li>Flip stats bar showing count and total potential silver</li>
+                                <li>Flip buffer doubled to 200 for richer history</li>
+                            </ul>
+                        </div>
+                        <div class="changelog-entry">
+                            <div class="changelog-date">April 5, 2026</div>
                             <div class="changelog-title">User Registration, Live Flips, and Premium Features</div>
                             <ul>
                                 <li>New email/password registration &mdash; create an account without Discord to unlock premium features</li>
@@ -1844,6 +1891,100 @@
                     <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle></svg>
                     <p>No scanning activity yet</p>
                     <p class="hint">Be the first to contribute by refreshing item prices!</p>
+                </div>
+            </div>
+        </section>
+
+        <!-- ====== TAB: PROFILE ====== -->
+        <section class="tab-pane hidden" id="pane-profile">
+            <div class="profile-page">
+                <!-- Email verification banner -->
+                <div id="profile-verify-banner" class="profile-verify-banner" style="display:none;">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>
+                    <span id="profile-verify-text">Please verify your email address. Check your inbox for a verification link.</span>
+                    <button id="profile-resend-btn" class="btn-small-accent">Resend Email</button>
+                </div>
+
+                <!-- Profile header card -->
+                <div class="profile-card profile-header-card">
+                    <div class="profile-avatar-section">
+                        <img id="profile-avatar" src="" class="profile-avatar-lg">
+                        <div class="profile-identity">
+                            <h2 id="profile-display-name" style="color:var(--text-primary); margin:0;"></h2>
+                            <div style="display:flex; align-items:center; gap:0.5rem; margin-top:0.25rem;">
+                                <span id="profile-auth-type" class="profile-badge"></span>
+                                <span id="profile-tier-display" class="tier-badge"></span>
+                                <span id="profile-verified-badge" class="profile-badge profile-badge-green" style="display:none;">Verified</span>
+                            </div>
+                            <p id="profile-email-display" style="color:var(--text-muted); font-size:0.8rem; margin:0.25rem 0 0 0;"></p>
+                            <p id="profile-member-since" style="color:var(--text-muted); font-size:0.75rem; margin:0.15rem 0 0 0;"></p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Stats card -->
+                <div class="profile-card">
+                    <h3 class="profile-card-title">Contribution Stats</h3>
+                    <div class="profile-stats-grid">
+                        <div class="profile-stat-item">
+                            <span class="profile-stat-value" id="profile-scans-30d">0</span>
+                            <span class="profile-stat-label">Scans (30d)</span>
+                        </div>
+                        <div class="profile-stat-item">
+                            <span class="profile-stat-value" id="profile-scans-total">0</span>
+                            <span class="profile-stat-label">All-Time Scans</span>
+                        </div>
+                        <div class="profile-stat-item">
+                            <span class="profile-stat-value" id="profile-tier-text">Bronze</span>
+                            <span class="profile-stat-label">Current Tier</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Account settings -->
+                <div class="profile-card">
+                    <h3 class="profile-card-title">Account Settings</h3>
+
+                    <!-- Change username -->
+                    <div class="profile-setting-row">
+                        <div class="profile-setting-info">
+                            <span class="profile-setting-label">Username</span>
+                            <span class="profile-setting-value" id="profile-current-username"></span>
+                        </div>
+                        <button class="btn-small-accent" onclick="document.getElementById('profile-username-form').classList.toggle('hidden')">Change</button>
+                    </div>
+                    <div id="profile-username-form" class="profile-inline-form hidden">
+                        <input type="text" id="profile-new-username" placeholder="New username" class="profile-input" maxlength="32">
+                        <button class="btn-small-accent" id="profile-save-username-btn">Save</button>
+                        <span id="profile-username-msg" class="profile-msg"></span>
+                    </div>
+
+                    <!-- Change password (email accounts only) -->
+                    <div id="profile-password-section" style="display:none;">
+                        <div class="profile-setting-row">
+                            <div class="profile-setting-info">
+                                <span class="profile-setting-label">Password</span>
+                                <span class="profile-setting-value">********</span>
+                            </div>
+                            <button class="btn-small-accent" onclick="document.getElementById('profile-password-form').classList.toggle('hidden')">Change</button>
+                        </div>
+                        <div id="profile-password-form" class="profile-inline-form hidden">
+                            <input type="password" id="profile-current-password" placeholder="Current password" class="profile-input">
+                            <input type="password" id="profile-new-password" placeholder="New password (8+ chars)" class="profile-input">
+                            <button class="btn-small-accent" id="profile-save-password-btn">Update Password</button>
+                            <span id="profile-password-msg" class="profile-msg"></span>
+                        </div>
+                    </div>
+
+                    <!-- Discord linking -->
+                    <div class="profile-setting-row">
+                        <div class="profile-setting-info">
+                            <span class="profile-setting-label">Discord</span>
+                            <span class="profile-setting-value" id="profile-discord-status">Not linked</span>
+                        </div>
+                        <button class="btn-small-accent" id="profile-discord-link-btn">Link Discord</button>
+                        <button class="btn-small-danger" id="profile-discord-unlink-btn" style="display:none;">Unlink</button>
+                    </div>
                 </div>
             </div>
         </section>

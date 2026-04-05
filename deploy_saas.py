@@ -54,7 +54,8 @@ def main():
     "cors": "^2.8.5",
     "jsonwebtoken": "^9.0.2",
     "helmet": "^7.1.0",
-    "bcryptjs": "^2.4.3"
+    "bcryptjs": "^2.4.3",
+    "nodemailer": "^6.9.8"
   }
 }"""
     b64_pkg = base64.b64encode(pkg_json.encode()).decode()
@@ -89,6 +90,7 @@ const { Client, GatewayIntentBits, REST, Routes } = require('discord.js');
 const jwt = require('jsonwebtoken');
 const helmet = require('helmet');
 const bcrypt = require('bcryptjs');
+const nodemailer = require('nodemailer');
 
 const domain = process.env.DOMAIN;
 const CLIENT_ID = process.env.DISCORD_CLIENT_ID;
@@ -104,6 +106,27 @@ const ITEMS_URL = 'https://coldtouch.github.io/coldtouch-market-analyzer/items.j
 const CHUNK_SIZE = 50;  // Larger chunks OK with 6 vCPU / 12GB RAM
 const SCAN_INTERVAL_MS = 10 * 60 * 1000; // 10 minutes
 const SITE_URL = 'https://coldtouch.github.io/coldtouch-market-analyzer';
+
+// === SMTP EMAIL CONFIG ===
+const SMTP_HOST = process.env.SMTP_HOST || '';
+const SMTP_PORT = parseInt(process.env.SMTP_PORT || '587');
+const SMTP_USER = process.env.SMTP_USER || '';
+const SMTP_PASS = process.env.SMTP_PASS || '';
+const SMTP_FROM = process.env.SMTP_FROM || 'noreply@albionaitool.xyz';
+
+let mailTransporter = null;
+if (SMTP_HOST && SMTP_USER) {
+  mailTransporter = nodemailer.createTransport({
+    host: SMTP_HOST, port: SMTP_PORT, secure: SMTP_PORT === 465,
+    auth: { user: SMTP_USER, pass: SMTP_PASS }
+  });
+  mailTransporter.verify().then(() => console.log('[SMTP] Mail transporter ready')).catch(e => {
+    console.error('[SMTP] Mail transporter failed:', e.message);
+    mailTransporter = null;
+  });
+} else {
+  console.log('[SMTP] No SMTP config — email verification disabled, accounts auto-verified');
+}
 
 // Item name cache (loaded from items.json)
 let itemNames = {};
@@ -128,6 +151,9 @@ db.serialize(() => {
   db.run(`ALTER TABLE users ADD COLUMN created_at INTEGER`, () => {});
   db.run(`ALTER TABLE users ADD COLUMN last_login INTEGER`, () => {});
   db.run(`ALTER TABLE users ADD COLUMN linked_discord_id TEXT`, () => {});
+  db.run(`ALTER TABLE users ADD COLUMN email_verified INTEGER DEFAULT 0`, () => {});
+  db.run(`ALTER TABLE users ADD COLUMN verification_token TEXT`, () => {});
+  db.run(`ALTER TABLE users ADD COLUMN verification_expires INTEGER`, () => {});
   db.run(`CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email ON users(email) WHERE email IS NOT NULL`);
 
   db.run(`CREATE TABLE IF NOT EXISTS alerts (guild_id TEXT, channel_id TEXT, min_profit INTEGER, cooldown_ms INTEGER DEFAULT 600000, PRIMARY KEY(guild_id, channel_id))`);
@@ -772,7 +798,7 @@ app.get('/', (req, res) => res.redirect('https://coldtouch.github.io/coldtouch-m
 
 app.get('/api/me', (req, res) => {
   if(req.user) {
-    db.get(`SELECT u.auth_type, u.role, u.email, u.linked_discord_id, s.scans_30d, s.scans_total, s.tier
+    db.get(`SELECT u.auth_type, u.role, u.email, u.linked_discord_id, u.email_verified, u.created_at, s.scans_30d, s.scans_total, s.tier
       FROM users u LEFT JOIN user_stats s ON u.id = s.user_id WHERE u.id = ?`, [req.user.id], (err, row) => {
       const stats = row ? { scans_30d: row.scans_30d || 0, scans_total: row.scans_total || 0, tier: row.tier || 'bronze' } : { scans_30d: 0, scans_total: 0, tier: 'bronze' };
       res.json({
@@ -784,7 +810,9 @@ app.get('/api/me', (req, res) => {
           authType: (row && row.auth_type) || 'discord',
           role: (row && row.role) || 'free',
           email: row && row.email ? row.email.replace(/(.{2})(.*)(@.*)/, '$1***$3') : null,
-          hasDiscordLinked: !!(row && (row.auth_type === 'discord' || row.linked_discord_id))
+          emailVerified: !!(row && row.email_verified),
+          hasDiscordLinked: !!(row && (row.auth_type === 'discord' || row.linked_discord_id)),
+          createdAt: row && row.created_at ? row.created_at : null
         },
         stats
       });
@@ -828,17 +856,31 @@ app.post('/api/register', registerLimiter, async (req, res) => {
       const userId = 'e_' + randomUUID();
       const now = Date.now();
 
-      db.run(`INSERT INTO users (id, username, email, password_hash, auth_type, role, created_at, last_login) VALUES (?, ?, ?, ?, 'email', 'free', ?, ?)`,
-        [userId, trimUser, emailLower, hash, now, now], (err) => {
+      const verifyToken = randomUUID();
+      const verifyExpires = now + 24 * 60 * 60 * 1000; // 24 hours
+      const autoVerified = !mailTransporter ? 1 : 0;
+
+      db.run(`INSERT INTO users (id, username, email, password_hash, auth_type, role, created_at, last_login, email_verified, verification_token, verification_expires) VALUES (?, ?, ?, ?, 'email', 'free', ?, ?, ?, ?, ?)`,
+        [userId, trimUser, emailLower, hash, now, now, autoVerified, autoVerified ? null : verifyToken, autoVerified ? null : verifyExpires], (err) => {
         if (err) {
           console.error('[Register] DB insert error:', err.message);
           if (err.message.includes('UNIQUE constraint')) return res.status(409).json({ error: 'An account with this email already exists.' });
           return res.status(500).json({ error: 'Registration failed.' });
         }
 
+        // Send verification email if SMTP configured
+        if (mailTransporter && !autoVerified) {
+          const verifyUrl = `https://${domain}/api/verify-email?token=${verifyToken}`;
+          mailTransporter.sendMail({
+            from: SMTP_FROM, to: emailLower,
+            subject: 'Verify your Coldtouch Market Analyzer account',
+            html: `<div style="font-family:sans-serif;max-width:500px;margin:0 auto;padding:20px;background:#1a1a26;color:#e8e8f0;border-radius:8px"><h2 style="color:#d4af37">Welcome, ${trimUser}!</h2><p>Click below to verify your email address:</p><a href="${verifyUrl}" style="display:inline-block;padding:12px 24px;background:#d4af37;color:#000;text-decoration:none;border-radius:6px;font-weight:bold">Verify Email</a><p style="color:#8888a0;font-size:12px;margin-top:20px">This link expires in 24 hours. If you didn't create this account, ignore this email.</p></div>`
+          }).catch(e => console.error('[SMTP] Verification email failed:', e.message));
+        }
+
         const token = jwt.sign({ id: userId, username: trimUser, avatar: null }, SESSION_SECRET, { expiresIn: '30d' });
-        console.log(`[Register] New user: ${trimUser} (${emailLower})`);
-        res.json({ success: true, token, user: { id: userId, username: trimUser, authType: 'email', role: 'free' } });
+        console.log(`[Register] New user: ${trimUser} (${emailLower}) verified=${autoVerified}`);
+        res.json({ success: true, token, user: { id: userId, username: trimUser, authType: 'email', role: 'free', emailVerified: !!autoVerified } });
       });
     } catch (hashErr) {
       console.error('[Register] Hash error:', hashErr);
@@ -884,6 +926,115 @@ app.post('/api/link-discord', (req, res) => {
   const state = Buffer.from(JSON.stringify({ link: true, userId: req.user.id })).toString('base64url');
   const linkUrl = `https://discord.com/api/oauth2/authorize?client_id=${CLIENT_ID}&redirect_uri=${encodeURIComponent('https://' + domain + '/auth/discord/callback')}&response_type=code&scope=identify&state=${state}`;
   res.json({ url: linkUrl });
+});
+
+// === EMAIL VERIFICATION ===
+app.get('/api/verify-email', (req, res) => {
+  const { token } = req.query;
+  if (!token) return res.status(400).send('Missing verification token.');
+
+  db.get(`SELECT id, email_verified FROM users WHERE verification_token = ?`, [token], (err, user) => {
+    if (err || !user) return res.redirect(`${SITE_URL}?verify=invalid`);
+    if (user.email_verified) return res.redirect(`${SITE_URL}?verify=already`);
+
+    db.get(`SELECT verification_expires FROM users WHERE id = ?`, [user.id], (err2, row) => {
+      if (row && row.verification_expires && Date.now() > row.verification_expires) {
+        return res.redirect(`${SITE_URL}?verify=expired`);
+      }
+      db.run(`UPDATE users SET email_verified = 1, verification_token = NULL, verification_expires = NULL WHERE id = ?`, [user.id]);
+      console.log(`[Verify] Email verified for user ${user.id}`);
+      res.redirect(`${SITE_URL}?verify=success`);
+    });
+  });
+});
+
+app.post('/api/resend-verification', registerLimiter, (req, res) => {
+  if (!req.user) return res.status(401).json({ error: 'Login required.' });
+  if (!mailTransporter) return res.status(400).json({ error: 'Email verification is not configured on this server.' });
+
+  db.get(`SELECT email, email_verified, username FROM users WHERE id = ?`, [req.user.id], (err, user) => {
+    if (err || !user) return res.status(500).json({ error: 'Database error.' });
+    if (!user.email) return res.status(400).json({ error: 'No email on this account.' });
+    if (user.email_verified) return res.json({ success: true, message: 'Email already verified.' });
+
+    const newToken = randomUUID();
+    const newExpires = Date.now() + 24 * 60 * 60 * 1000;
+    db.run(`UPDATE users SET verification_token = ?, verification_expires = ? WHERE id = ?`, [newToken, newExpires, req.user.id]);
+
+    const verifyUrl = `https://${domain}/api/verify-email?token=${newToken}`;
+    mailTransporter.sendMail({
+      from: SMTP_FROM, to: user.email,
+      subject: 'Verify your Coldtouch Market Analyzer account',
+      html: `<div style="font-family:sans-serif;max-width:500px;margin:0 auto;padding:20px;background:#1a1a26;color:#e8e8f0;border-radius:8px"><h2 style="color:#d4af37">Hi ${user.username}!</h2><p>Click below to verify your email address:</p><a href="${verifyUrl}" style="display:inline-block;padding:12px 24px;background:#d4af37;color:#000;text-decoration:none;border-radius:6px;font-weight:bold">Verify Email</a><p style="color:#8888a0;font-size:12px;margin-top:20px">This link expires in 24 hours.</p></div>`
+    }).then(() => res.json({ success: true, message: 'Verification email sent.' }))
+      .catch(e => { console.error('[SMTP] Resend failed:', e.message); res.status(500).json({ error: 'Failed to send email.' }); });
+  });
+});
+
+// === USER PROFILE MANAGEMENT ===
+app.post('/api/change-password', loginLimiter, async (req, res) => {
+  if (!req.user) return res.status(401).json({ error: 'Login required.' });
+  const { currentPassword, newPassword } = req.body;
+  if (!currentPassword || !newPassword) return res.status(400).json({ error: 'Current and new password required.' });
+  if (newPassword.length < 8) return res.status(400).json({ error: 'New password must be at least 8 characters.' });
+  if (newPassword.length > 128) return res.status(400).json({ error: 'Password too long.' });
+
+  db.get(`SELECT password_hash, auth_type FROM users WHERE id = ?`, [req.user.id], async (err, user) => {
+    if (err || !user) return res.status(500).json({ error: 'Database error.' });
+    if (!user.password_hash) return res.status(400).json({ error: 'This account uses Discord login and has no password to change.' });
+
+    try {
+      const valid = await bcrypt.compare(currentPassword, user.password_hash);
+      if (!valid) return res.status(401).json({ error: 'Current password is incorrect.' });
+
+      const hash = await bcrypt.hash(newPassword, 12);
+      db.run(`UPDATE users SET password_hash = ? WHERE id = ?`, [hash, req.user.id], (err2) => {
+        if (err2) return res.status(500).json({ error: 'Failed to update password.' });
+        console.log(`[Profile] Password changed for user ${req.user.id}`);
+        res.json({ success: true });
+      });
+    } catch (e) {
+      res.status(500).json({ error: 'Password change failed.' });
+    }
+  });
+});
+
+app.post('/api/change-username', (req, res) => {
+  if (!req.user) return res.status(401).json({ error: 'Login required.' });
+  const { username } = req.body;
+  if (!username) return res.status(400).json({ error: 'Username required.' });
+  const trimUser = username.trim();
+  if (trimUser.length < 2 || trimUser.length > 32) return res.status(400).json({ error: 'Username must be 2-32 characters.' });
+
+  db.run(`UPDATE users SET username = ? WHERE id = ?`, [trimUser, req.user.id], function(err) {
+    if (err) return res.status(500).json({ error: 'Failed to update username.' });
+    // Update user_stats too if it exists
+    db.run(`UPDATE user_stats SET username = ? WHERE user_id = ?`, [trimUser, req.user.id]);
+    // Issue new JWT with updated username
+    const token = jwt.sign({ id: req.user.id, username: trimUser, avatar: req.user.avatar }, SESSION_SECRET, { expiresIn: '30d' });
+    console.log(`[Profile] Username changed for user ${req.user.id} to ${trimUser}`);
+    res.json({ success: true, token, username: trimUser });
+  });
+});
+
+app.post('/api/unlink-discord', (req, res) => {
+  if (!req.user) return res.status(401).json({ error: 'Login required.' });
+
+  db.get(`SELECT auth_type, password_hash, linked_discord_id FROM users WHERE id = ?`, [req.user.id], (err, user) => {
+    if (err || !user) return res.status(500).json({ error: 'Database error.' });
+    if (user.auth_type === 'discord' && !user.password_hash) {
+      return res.status(400).json({ error: 'Cannot unlink Discord — it is your only login method. Set a password first.' });
+    }
+    if (!user.linked_discord_id && user.auth_type !== 'discord') {
+      return res.status(400).json({ error: 'No Discord account linked.' });
+    }
+
+    db.run(`UPDATE users SET linked_discord_id = NULL WHERE id = ?`, [req.user.id], (err2) => {
+      if (err2) return res.status(500).json({ error: 'Failed to unlink Discord.' });
+      console.log(`[Profile] Discord unlinked for user ${req.user.id}`);
+      res.json({ success: true });
+    });
+  });
 });
 
 // === LIVE FLIPS API (registration-gated) ===
@@ -1179,7 +1330,7 @@ wss.on('connection', ws => {
 
 // === LIVE FLIP DETECTION ===
 const liveFlips = [];
-const MAX_FLIPS = 100;
+const MAX_FLIPS = 200;
 const FLIP_MIN_PROFIT = 10000; // 10k silver minimum to show in live feed
 const FLIP_COOLDOWN_MS = 120000; // 2 min cooldown per route to prevent spam
 const flipCooldowns = {};
@@ -1191,6 +1342,17 @@ setInterval(() => {
     if (now - flipCooldowns[key] > 600000) delete flipCooldowns[key];
   }
 }, 600000);
+
+function broadcastFlip(flip) {
+  liveFlips.unshift(flip);
+  if (liveFlips.length > MAX_FLIPS) liveFlips.pop();
+  const msg = JSON.stringify({ type: 'flip', data: flip });
+  for (const wc of wsClients) {
+    if (wc.readyState === WebSocket.OPEN && wc.isAuthenticated) {
+      wc.send(msg);
+    }
+  }
+}
 
 function detectFlip(id, q) {
   const data = alertMarketDb[id] && alertMarketDb[id][q];
@@ -1209,44 +1371,52 @@ function detectFlip(id, q) {
     }
   }
 
-  if (!bestSell.city || !bestBuy.city || bestSell.city === bestBuy.city) return;
-
-  // Both sides must be reasonably fresh (5 min)
-  if ((now - bestSell.date) > 300000 || (now - bestBuy.date) > 300000) return;
-
-  const profit = bestBuy.price - bestSell.price - (bestBuy.price * TAX_RATE);
-  if (profit < FLIP_MIN_PROFIT) return;
-
-  const roi = ((profit / bestSell.price) * 100).toFixed(1);
-  if (parseFloat(roi) < 3) return; // Skip low-ROI noise
-
-  const flipKey = id + '_' + q + '_' + bestSell.city + '_' + bestBuy.city;
-  if (flipCooldowns[flipKey] && now - flipCooldowns[flipKey] < FLIP_COOLDOWN_MS) return;
-  flipCooldowns[flipKey] = now;
-
-  const flip = {
-    id: flipKey,
-    itemId: id,
-    quality: q,
-    name: getFriendlyName(id),
-    buyCity: bestSell.city,
-    sellCity: bestBuy.city,
-    buyPrice: bestSell.price,
-    sellPrice: bestBuy.price,
-    profit: Math.floor(profit),
-    roi: parseFloat(roi),
-    detectedAt: now
-  };
-
-  liveFlips.unshift(flip);
-  if (liveFlips.length > MAX_FLIPS) liveFlips.pop();
-
-  // Broadcast to authenticated WebSocket clients only
-  const msg = JSON.stringify({ type: 'flip', data: flip });
-  for (const wc of wsClients) {
-    if (wc.readyState === WebSocket.OPEN && wc.isAuthenticated) {
-      wc.send(msg);
+  // === Cross-city flips ===
+  if (bestSell.city && bestBuy.city && bestSell.city !== bestBuy.city) {
+    if ((now - bestSell.date) <= 300000 && (now - bestBuy.date) <= 300000) {
+      const profit = bestBuy.price - bestSell.price - (bestBuy.price * TAX_RATE);
+      if (profit >= FLIP_MIN_PROFIT) {
+        const roi = ((profit / bestSell.price) * 100).toFixed(1);
+        if (parseFloat(roi) >= 3) {
+          const flipKey = id + '_' + q + '_' + bestSell.city + '_' + bestBuy.city;
+          if (!flipCooldowns[flipKey] || now - flipCooldowns[flipKey] >= FLIP_COOLDOWN_MS) {
+            flipCooldowns[flipKey] = now;
+            broadcastFlip({
+              id: flipKey, itemId: id, quality: q, name: getFriendlyName(id),
+              buyCity: bestSell.city, sellCity: bestBuy.city,
+              buyPrice: bestSell.price, sellPrice: bestBuy.price,
+              profit: Math.floor(profit), roi: parseFloat(roi),
+              type: 'cross-city', detectedAt: now
+            });
+          }
+        }
+      }
     }
+  }
+
+  // === Same-city instant flips (buy order > sell offer in same city) ===
+  for (const [city, cd] of Object.entries(data)) {
+    if (!cd.sellMin || cd.sellMin === Infinity || !cd.buyMax || cd.buyMax <= 0) continue;
+    if (cd.buyMax <= cd.sellMin) continue; // no margin
+    if ((now - (cd.sellDate || 0)) > 300000 || (now - (cd.buyDate || 0)) > 300000) continue;
+
+    const profit = cd.buyMax - cd.sellMin - (cd.buyMax * TAX_RATE);
+    if (profit < FLIP_MIN_PROFIT) continue;
+
+    const roi = ((profit / cd.sellMin) * 100).toFixed(1);
+    if (parseFloat(roi) < 3) continue;
+
+    const flipKey = id + '_' + q + '_' + city + '_' + city + '_instant';
+    if (flipCooldowns[flipKey] && now - flipCooldowns[flipKey] < FLIP_COOLDOWN_MS) continue;
+    flipCooldowns[flipKey] = now;
+
+    broadcastFlip({
+      id: flipKey, itemId: id, quality: q, name: getFriendlyName(id),
+      buyCity: city, sellCity: city,
+      buyPrice: cd.sellMin, sellPrice: cd.buyMax,
+      profit: Math.floor(profit), roi: parseFloat(roi),
+      type: 'instant', detectedAt: now
+    });
   }
 }
 
@@ -2066,12 +2236,22 @@ require('http').createServer((req, res) => {
 
     # Write env file with restricted permissions
     game_server = os.environ.get('GAME_SERVER', 'europe')
+    smtp_host = os.environ.get('SMTP_HOST', '')
+    smtp_port = os.environ.get('SMTP_PORT', '587')
+    smtp_user = os.environ.get('SMTP_USER', '')
+    smtp_pass = os.environ.get('SMTP_PASS', '')
+    smtp_from = os.environ.get('SMTP_FROM', 'noreply@albionaitool.xyz')
     env_content = f"""DOMAIN={domain}
 DISCORD_CLIENT_ID={CLIENT_ID}
 DISCORD_CLIENT_SECRET={CLIENT_SECRET}
 DISCORD_BOT_TOKEN={BOT_TOKEN}
 SESSION_SECRET={session_secret}
 GAME_SERVER={game_server}
+SMTP_HOST={smtp_host}
+SMTP_PORT={smtp_port}
+SMTP_USER={smtp_user}
+SMTP_PASS={smtp_pass}
+SMTP_FROM={smtp_from}
 """
     b64_env = base64.b64encode(env_content.encode()).decode()
     run_wait(f"echo '{b64_env}' | base64 -d > /opt/albion-saas/.env")
