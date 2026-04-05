@@ -595,8 +595,10 @@ client.on('interactionCreate', async interaction => {
         if (!alertMarketDb[id2][q2][city2]) alertMarketDb[id2][q2][city2] = { sellMin: Infinity, buyMax: 0, sellDate: 0, buyDate: 0 };
         const now2 = Date.now();
         alertMarketDb[id2][q2][city2].lastSeen = now2;
-        if (entry.sell_price_min > 0) { alertMarketDb[id2][q2][city2].sellMin = entry.sell_price_min; alertMarketDb[id2][q2][city2].sellDate = now2; }
-        if (entry.buy_price_max > 0) { alertMarketDb[id2][q2][city2].buyMax = entry.buy_price_max; alertMarketDb[id2][q2][city2].buyDate = now2; }
+        const sd2 = entry.sell_price_min_date && !entry.sell_price_min_date.startsWith('0001') ? new Date(entry.sell_price_min_date).getTime() : now2;
+        const bd2 = entry.buy_price_max_date && !entry.buy_price_max_date.startsWith('0001') ? new Date(entry.buy_price_max_date).getTime() : now2;
+        if (entry.sell_price_min > 0) { alertMarketDb[id2][q2][city2].sellMin = entry.sell_price_min; alertMarketDb[id2][q2][city2].sellDate = sd2; }
+        if (entry.buy_price_max > 0) { alertMarketDb[id2][q2][city2].buyMax = entry.buy_price_max; alertMarketDb[id2][q2][city2].buyDate = bd2; }
       }
 
       // Record contribution
@@ -1366,10 +1368,11 @@ app.get('/api/transport-routes-live', (req, res) => {
       for (let i = 0; i < cityEntries.length; i++) {
         const [srcCity, srcData] = cityEntries[i];
         if (!srcData.sellMin || srcData.sellMin === Infinity || srcData.sellMin <= 0) continue;
-        if (srcData.sellDate && (now - srcData.sellDate) > maxAgeMs) continue;
+        // Use lastSeen for freshness (= when API last returned this item, proves it exists)
+        // sellDate = when price last changed (for display only)
+        if (srcData.lastSeen && (now - srcData.lastSeen) > maxAgeMs) continue;
         if (buyCity && srcCity !== buyCity) continue;
         if (excludeCities.includes(srcCity)) continue;
-        // Buy price must be near baseline (within 2x) — reject manipulated listings
         if (srcData.sellMin > baseline * 2) continue;
 
         for (let j = 0; j < cityEntries.length; j++) {
@@ -1382,7 +1385,7 @@ app.get('/api/transport-routes-live', (req, res) => {
 
           if (sellStrategy === 'instant') {
             if (!dstData.buyMax || dstData.buyMax <= 0) continue;
-            if (dstData.buyDate && (now - dstData.buyDate) > maxAgeMs) continue;
+            if (dstData.lastSeen && (now - dstData.lastSeen) > maxAgeMs) continue;
             dstPrice = dstData.buyMax;
             dstDate = dstData.buyDate || dstData.lastSeen || 0;
             // Buy order must also be reasonable
@@ -1728,15 +1731,14 @@ function seedAlerterFromScan(allPrices) {
       if (!alertMarketDb[id]) alertMarketDb[id] = {};
       if (!alertMarketDb[id][q]) alertMarketDb[id][q] = {};
 
-      // Use `now` as the freshness timestamp because we JUST fetched these prices from the API.
-      // The API's own dates (sell_price_min_date) reflect when the price last *changed*, not when
-      // it was last verified — an item unchanged for 2h is still live at that price.
-      // Only skip truly stale API dates (>24h old = likely delisted)
+      // Use the API's own timestamps for price age display.
+      // BUT keep lastSeen = now since the API did return this item (it exists in the order book).
+      // sellDate = when the price last changed (honest age for display)
+      // lastSeen = when we last verified the listing exists (for filtering)
       const apiSellDate = entry.sell_price_min_date && !entry.sell_price_min_date.startsWith('0001') ? new Date(entry.sell_price_min_date).getTime() : 0;
       const apiBuyDate = entry.buy_price_max_date && !entry.buy_price_max_date.startsWith('0001') ? new Date(entry.buy_price_max_date).getTime() : 0;
-      const staleThreshold = 24 * 60 * 60 * 1000; // 24h
-      const sellDate = (apiSellDate > 0 && (now - apiSellDate) < staleThreshold) ? now : apiSellDate;
-      const buyDate = (apiBuyDate > 0 && (now - apiBuyDate) < staleThreshold) ? now : apiBuyDate;
+      const sellDate = apiSellDate || 0;
+      const buyDate = apiBuyDate || 0;
 
       const existing = alertMarketDb[id][q][city];
       if (!existing) {
