@@ -1332,7 +1332,7 @@ app.get('/api/transport-routes-live', (req, res) => {
   const buyCity = req.query.buy_city || '';
   const sellCity = req.query.sell_city || '';
   const sellStrategy = req.query.sell_strategy || 'market';
-  const minProfit = parseInt(req.query.min_profit) || 1000;
+  const minProfit = parseInt(req.query.min_profit) || 100; // Low default: resources have tiny per-unit margins but huge bulk volume
   const maxAge = parseInt(req.query.max_age) || 120;
   const limit = Math.min(parseInt(req.query.limit) || 200, 500);
   const excludeCities = (req.query.exclude || '').split(',').filter(Boolean);
@@ -1388,16 +1388,23 @@ app.get('/api/transport-routes-live', (req, res) => {
             if (dstData.lastSeen && (now - dstData.lastSeen) > maxAgeMs) continue;
             dstPrice = dstData.buyMax;
             dstDate = dstData.buyDate || dstData.lastSeen || 0;
-            // Buy order must also be reasonable
             if (dstPrice > baseline * 3) continue;
           } else {
-            // "List on Market": use historical average for destination city
-            const dstAvg = cityPriceRef[itemId + '_' + q + '_' + dstCity];
-            if (!dstAvg || dstAvg <= 0) continue;
-            dstPrice = dstAvg;
-            dstDate = dstData ? (dstData.sellDate || dstData.lastSeen || 0) : 0;
-            // Destination avg must be reasonable (within 3x baseline)
-            if (dstPrice > baseline * 3) continue;
+            // "List on Market": use LIVE sell_price_min in destination city
+            // This is what items actually cost there — you'd undercut to sell.
+            // Double validation: must be reasonable vs both baseline AND historical avg
+            if (!dstData || !dstData.sellMin || dstData.sellMin === Infinity || dstData.sellMin <= 0) continue;
+            if (dstData.lastSeen && (now - dstData.lastSeen) > maxAgeMs) continue;
+            dstPrice = dstData.sellMin;
+            dstDate = dstData.sellDate || dstData.lastSeen || 0;
+            // Must be within 2x baseline (catches junk listings)
+            if (dstPrice > baseline * 2) continue;
+            // Must be within 2x of city historical avg (catches data anomalies)
+            const dstAvg = cityPriceRef[itemId + '_' + q + '_' + dstCity] || 0;
+            if (dstAvg > 0 && dstPrice > dstAvg * 2) continue;
+            // Source must also be near its own city average
+            const srcAvg = cityPriceRef[itemId + '_' + q + '_' + srcCity] || 0;
+            if (srcAvg > 0 && srcData.sellMin > srcAvg * 2) continue;
           }
 
           if (dstPrice <= srcData.sellMin) continue;
@@ -1405,7 +1412,24 @@ app.get('/api/transport-routes-live', (req, res) => {
           const profit = dstPrice - srcData.sellMin - (dstPrice * TAX_RATE);
           if (profit < minProfit) continue;
           const roi = (profit / srcData.sellMin) * 100;
-          if (roi < 2 || roi > 150) continue;
+          if (roi > 150) continue; // Skip extreme outliers but allow low-margin bulk routes
+
+          // Detect stackable items by ID pattern.
+          // Gear IDs contain: HEAD_, ARMOR_, SHOES_, MAIN_, 2H_, OFF_, CAPEITEM_, BAG_, CAPE_
+          // Resource/material IDs are like: T5_CLOTH, T5_PLANKS, T5_ROCK (no gear prefix)
+          const isGear = /_(HEAD|ARMOR|SHOES|MAIN|2H|OFF|CAPEITEM|BAG|CAPE|MOUNT)_/.test(itemId) || itemId.startsWith('MOUNT_');
+          const isStackable = !isGear && (
+            /^T\d_(ROCK|STONE|STONEBLOCK|WOOD|PLANKS|ORE|METALBAR|HIDE|LEATHER|FIBER|CLOTH|FISH)/.test(itemId) ||
+            itemId.includes('POTION') || itemId.includes('MEAL') || itemId.startsWith('JOURNAL') ||
+            /^T\d_(RUNE|SOUL|RELIC|SHARD|ARTEFACT)/.test(itemId) || itemId.includes('SKILLBOOK') ||
+            itemId.includes('MOB_') || itemId.includes('TREASURE') || itemId.includes('TOKEN')
+          );
+          const stackSize = isStackable ? 999 : 1;
+          // Rough trip profit: profit × (budget / buyPrice) capped by 48 slots
+          const maxByBudget = Math.floor(30000000 / srcData.sellMin); // assume 30M budget
+          const maxBySlots = isStackable ? 48 * stackSize : 48;
+          const estQuantity = Math.min(maxByBudget, maxBySlots);
+          const estTripProfit = Math.floor(profit * estQuantity);
 
           routes.push({
             item_id: itemId,
@@ -1417,6 +1441,9 @@ app.get('/api/transport-routes-live', (req, res) => {
             sell_price: Math.round(dstPrice),
             profit: Math.floor(profit),
             roi: parseFloat(roi.toFixed(1)),
+            est_trip_profit: estTripProfit,
+            est_quantity: estQuantity,
+            is_stackable: isStackable,
             buy_age: Math.round((now - (srcData.sellDate || srcData.lastSeen || now)) / 60000),
             sell_age: sellStrategy === 'instant' ? Math.round((now - (dstDate || now)) / 60000) : -1,
             sell_strategy: sellStrategy,
@@ -1427,7 +1454,7 @@ app.get('/api/transport-routes-live', (req, res) => {
     }
   }
 
-  routes.sort((a, b) => b.profit - a.profit);
+  routes.sort((a, b) => b.est_trip_profit - a.est_trip_profit);
   const result = routes.slice(0, limit);
   // Also count how many have buy orders (instant sell) available for the same route
   let instantAvailable = 0;
