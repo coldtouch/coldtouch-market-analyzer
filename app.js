@@ -531,7 +531,7 @@ async function renderBrowser() {
                     <div class="pc-value" style="font-size:0.85rem; color:#a89c8a;">${avg24h > 0 ? avg24h.toLocaleString() + ' 💰' : 'N/A'}</div>
                 </div>
                 <div class="price-cell">
-                    <div class="pc-label" style="font-size:0.7rem; color:var(--text-muted);">24h Vol Sold</div>
+                    <div class="pc-label" style="font-size:0.7rem; color:var(--text-muted);" title="Number of price data points recorded in the last 24 hours — higher means more market activity">24h Activity</div>
                     <div class="pc-value" style="font-size:0.85rem; color:#a89c8a;">${vol24h > 0 ? vol24h.toLocaleString() : 'N/A'}</div>
                 </div>
             </div>
@@ -3536,7 +3536,9 @@ async function enrichAndRenderTransport(routes, budget, sortBy, mountCapacity, f
 
         // Use AVAILABLE slots (player's actual free slots), not hardcoded 48
         let maxByBudget = Math.floor(budget / buyPrice);
-        let maxByVolume = realisticVolume > 0 ? Math.ceil(realisticVolume) : maxByBudget;
+        // Volume safety cap: if no volume data, use conservative fallback
+        const volumeCap = stackable ? 100 : 10;
+        let maxByVolume = realisticVolume > 0 ? Math.ceil(realisticVolume) : volumeCap;
         let maxBySlots = stackable ? availableSlots * stackSize : availableSlots;
         let maxByWeight = (mountCapacity > 0 && itemWeight > 0) ? Math.floor(mountCapacity / itemWeight) : maxByBudget;
 
@@ -3620,7 +3622,8 @@ async function enrichAndRenderTransport(routes, budget, sortBy, mountCapacity, f
         // For stackable (999 per slot): profitPerSlot = profitPerUnit * min(budget/price, volume, 999)
         const scored = items.map(item => {
             const maxAffordable = Math.floor(budget / item.buyPrice);
-            const maxVol = item.realisticVolume > 0 ? Math.ceil(item.realisticVolume) : maxAffordable;
+            const volCap = item.stackable ? 100 : 10;
+            const maxVol = item.realisticVolume > 0 ? Math.ceil(item.realisticVolume) : volCap;
             const maxWt = (item.itemWeight > 0 && mountCapacity > 0) ? Math.floor(mountCapacity / item.itemWeight) : maxAffordable;
             const unitsPerSlot = item.stackable ? Math.min(item.stackSize, maxAffordable, maxVol) : 1;
             return { ...item, slotScore: item.profitPerUnit * unitsPerSlot };
@@ -3638,7 +3641,8 @@ async function enrichAndRenderTransport(routes, budget, sortBy, mountCapacity, f
 
             let maxAfford = Math.floor(remainingBudget / item.buyPrice);
             if (maxAfford <= 0) continue;
-            let maxVolume = item.realisticVolume > 0 ? Math.ceil(item.realisticVolume) : maxAfford;
+            const volFallback = item.stackable ? 100 : 10;
+            let maxVolume = item.realisticVolume > 0 ? Math.ceil(item.realisticVolume) : volFallback;
             let maxSlots = item.stackable ? remainingSlots * item.stackSize : remainingSlots;
             let maxWeight = (item.itemWeight > 0 && mountCapacity > 0) ? Math.floor(remainingWeight / item.itemWeight) : maxAfford;
 
@@ -3797,7 +3801,52 @@ function renderTransportResults(routes, budget, mountCapacity, haulPlans, availa
                     </div>
                 </div>
                 <div class="haul-items-list">${itemsHtml}</div>
+                <div style="margin-top:0.75rem; text-align:right;">
+                    <button class="btn-copy-shopping-list" style="
+                        background:var(--surface-3, #2a2a3a); border:1px solid var(--border-dim); color:var(--text-secondary);
+                        padding:0.4rem 0.8rem; border-radius:6px; cursor:pointer; font-size:0.76rem;
+                        display:inline-flex; align-items:center; gap:0.35rem; transition: all 0.15s;"
+                        title="Copy shopping list to clipboard">
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                        Copy Shopping List
+                    </button>
+                </div>
             `;
+
+            // Copy shopping list handler
+            const copyBtn = detailDiv.querySelector('.btn-copy-shopping-list');
+            copyBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const lines = [`Shopping List: ${plan.buyCity} → ${plan.sellCity}`, '─'.repeat(40)];
+                for (const item of plan.items) {
+                    const name = getFriendlyName(item.itemId);
+                    lines.push(`Buy ${item.planUnits}x ${name} @ ${Math.floor(item.buyPrice).toLocaleString()} ea = ${item.planCost.toLocaleString()} silver`);
+                }
+                lines.push('─'.repeat(40));
+                lines.push(`Total cost: ${plan.totalCost.toLocaleString()} silver | Expected profit: +${plan.totalProfit.toLocaleString()} silver`);
+                lines.push(`Slots: ${plan.totalSlots}/${availableSlots} | ROI: ${plan.totalCost > 0 ? ((plan.totalProfit / plan.totalCost) * 100).toFixed(1) : 0}%`);
+                const text = lines.join('\n');
+                navigator.clipboard.writeText(text).then(() => {
+                    copyBtn.innerHTML = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg> Copied!`;
+                    copyBtn.style.borderColor = 'var(--profit-green)';
+                    copyBtn.style.color = 'var(--profit-green)';
+                    setTimeout(() => {
+                        copyBtn.innerHTML = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg> Copy Shopping List`;
+                        copyBtn.style.borderColor = '';
+                        copyBtn.style.color = '';
+                    }, 2000);
+                }).catch(() => {
+                    // Fallback for non-HTTPS or older browsers
+                    const ta = document.createElement('textarea');
+                    ta.value = text;
+                    document.body.appendChild(ta);
+                    ta.select();
+                    document.execCommand('copy');
+                    document.body.removeChild(ta);
+                    copyBtn.textContent = '✓ Copied!';
+                    setTimeout(() => { copyBtn.textContent = '📋 Copy Shopping List'; }, 2000);
+                });
+            });
 
             // Toggle expand/collapse
             summaryDiv.addEventListener('click', () => {
