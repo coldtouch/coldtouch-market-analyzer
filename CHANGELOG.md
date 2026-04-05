@@ -2,6 +2,14 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-04-05 — Fix Discord bot alerts + Transport routes overhaul v2
+
+- **Discord bot alerts fixed:** Alerts were not firing because the alerter's 30-minute freshness check rejected all seeded data. The API's `sell_price_min_date` reflects when a price last *changed*, not when we verified it. Items with unchanged prices for >30 min were treated as stale even though they're still live. Fix: treat recently-fetched API prices (<24h old) as fresh.
+- **Alert threshold lowered:** 500k → 50k. Only 5 items in the entire market had spreads above 500k — now 500+ routes qualify.
+- **Alerter diagnostic logging:** Every 10 minutes, the alerter logs a stats summary (checked/stale/noProfit/belowThreshold/sent) for easy debugging.
+- **Live validation spam fix:** When a listing disappears, NATS keeps triggering `checkAndAlert` on every update for that item. Added a 2-minute cooldown on failed live validations to prevent API spam.
+- **Transport haul plans v2:** Two-pass packing algorithm — Pass 1 caps each item at 40% budget/slots to guarantee 3+ items per haul, Pass 2 fills remaining capacity. Removed fake volume caps (sample_count is poll frequency, not trade volume). Added freshness indicators + "No vol data" warnings to haul plan items and summary bar.
+
 ### 2026-04-05 — Transport routes: shopping list, query optimization, volume safety
 
 - **Copy Shopping List button:** Each haul plan card now has a clipboard button that formats the trip's items into a readable shopping list (item names, quantities, prices, total cost, expected profit, ROI). Click to copy, then paste in-game or to friends.
