@@ -263,6 +263,7 @@
                 </button>
                 <div class="nav-dropdown">
                     <button class="nav-tab" data-tab="transport">Transport Routes</button>
+                    <button class="nav-tab" data-tab="live-flips">Live Flips</button>
                     <button class="nav-tab" data-tab="portfolio">Portfolio Tracker</button>
                 </div>
             </div>
@@ -1258,6 +1259,66 @@
             </div>
             <div id="top-results">
                 <div class="empty-state"><p>Click "Load Top Items" to see the most actively traded items.</p><p class="hint">Ranked by 7-day trading volume from the Charts API.</p></div>
+            </div>
+        </section>
+
+        <!-- ====== TAB: LIVE FLIPS ====== -->
+        <section class="tab-pane hidden" id="pane-live-flips">
+            <div class="controls-panel">
+                <h2 style="color:var(--accent); margin:0 0 0.5rem 0; font-size:1.2rem;">
+                    <span style="display:inline-flex; align-items:center; gap:0.5rem;">
+                        <span id="live-flips-dot" class="live-dot"></span>
+                        Live Flips
+                    </span>
+                </h2>
+                <p style="color:var(--text-secondary); font-size:0.85rem; margin:0 0 1rem 0;">
+                    Real-time profitable flip opportunities detected from the live market stream. Buy low in one city, sell high in another.
+                    <strong>Requires a free account.</strong>
+                </p>
+                <div style="display:flex; gap:0.75rem; align-items:center; flex-wrap:wrap; margin-bottom:1rem;">
+                    <div class="control-group" style="min-width:100px;">
+                        <label for="flips-min-profit">Min Profit</label>
+                        <select id="flips-min-profit">
+                            <option value="10000">10k+</option>
+                            <option value="50000" selected>50k+</option>
+                            <option value="100000">100k+</option>
+                            <option value="500000">500k+</option>
+                        </select>
+                    </div>
+                    <div class="control-group" style="min-width:100px;">
+                        <label for="flips-min-roi">Min ROI</label>
+                        <select id="flips-min-roi">
+                            <option value="3" selected>3%+</option>
+                            <option value="5">5%+</option>
+                            <option value="10">10%+</option>
+                            <option value="20">20%+</option>
+                        </select>
+                    </div>
+                    <div id="flips-connection-status" style="font-size:0.75rem; color:var(--text-muted); margin-left:auto;">
+                        Connecting...
+                    </div>
+                </div>
+            </div>
+
+            <!-- Auth gate overlay -->
+            <div id="flips-auth-gate" style="display:none; text-align:center; padding:3rem 1rem;">
+                <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" stroke-width="1.5" style="margin-bottom:1rem;">
+                    <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+                </svg>
+                <h3 style="color:var(--text-primary); margin:0 0 0.5rem 0;">Account Required</h3>
+                <p style="color:var(--text-secondary); font-size:0.9rem; margin:0 0 1.5rem 0;">
+                    Create a free account to access live flip detection. It only takes a few seconds.
+                </p>
+                <button class="btn-auth-submit" style="max-width:200px; margin:0 auto;" onclick="document.getElementById('landing-overlay').style.display='flex';">
+                    Sign Up / Login
+                </button>
+            </div>
+
+            <!-- Flip feed (shown when authenticated) -->
+            <div id="flips-feed" style="display:none;">
+                <div id="flips-list" class="flips-feed-container">
+                    <div class="empty-state"><p>Waiting for flips...</p><p class="hint">Profitable opportunities will appear here in real-time as they're detected from the market stream.</p></div>
+                </div>
             </div>
         </section>
 

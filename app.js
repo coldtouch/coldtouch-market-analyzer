@@ -299,6 +299,7 @@ function initTabs() {
             document.getElementById(`pane-${currentTab}`).classList.remove('hidden');
 
             if (currentTab === 'browser') renderBrowser();
+            if (currentTab === 'live-flips') initLiveFlipsTab();
 
             // Close dropdown after selection
             closeAllDropdowns();
@@ -3437,6 +3438,12 @@ async function init() {
     // Connect live sync immediately — doesn't need data
     initLiveSync();
 
+    // Live Flips filter handlers
+    const flipsMinProfit = document.getElementById('flips-min-profit');
+    const flipsMinRoi = document.getElementById('flips-min-roi');
+    if (flipsMinProfit) flipsMinProfit.addEventListener('change', () => renderLiveFlips());
+    if (flipsMinRoi) flipsMinRoi.addEventListener('change', () => renderLiveFlips());
+
     // === ASYNC: load data and update UI in background ===
     // Run checkDiscordAuth concurrently with loadData — do NOT await it first.
     // Awaiting it blocks the entire init chain for up to 10s if the VPS is slow,
@@ -3523,6 +3530,11 @@ function initLiveSync() {
             syncDot.style.background = '#00ff00';
             syncDot.style.boxShadow = '0 0 8px #00ff00';
         }
+        // Authenticate WebSocket for live flips if user is logged in
+        const token = localStorage.getItem('albion_auth_token');
+        if (token) {
+            wsLink.send(JSON.stringify({ type: 'auth', token }));
+        }
     };
 
     wsLink.onclose = () => {
@@ -3538,23 +3550,63 @@ function initLiveSync() {
     wsLink.onmessage = async (e) => {
         try {
             const data = JSON.parse(e.data);
-            
+
+            // Handle server messages (auth response, flip data)
+            if (data.type === 'auth') {
+                const statusEl = document.getElementById('flips-connection-status');
+                const dot = document.getElementById('live-flips-dot');
+                if (data.success) {
+                    if (statusEl) statusEl.innerHTML = '<span style="color:#22c55e;">Connected</span>';
+                    if (dot) dot.classList.add('connected');
+                    wsFlipsAuthenticated = true;
+                } else {
+                    if (statusEl) statusEl.innerHTML = '<span style="color:#ef4444;">Auth failed</span>';
+                }
+                return;
+            }
+
+            if (data.type === 'flip-history') {
+                // Initial batch of recent flips
+                if (data.data && Array.isArray(data.data)) {
+                    liveFlipsCache = data.data;
+                    renderLiveFlips();
+                }
+                return;
+            }
+
+            if (data.type === 'flip') {
+                // Single new flip detected
+                if (data.data) {
+                    liveFlipsCache.unshift(data.data);
+                    if (liveFlipsCache.length > 100) liveFlipsCache.pop();
+                    renderLiveFlips(true);
+                    // Flash the tab if not active
+                    const tab = document.querySelector('[data-tab="live-flips"]');
+                    if (tab && currentTab !== 'live-flips') {
+                        tab.classList.add('has-new');
+                        setTimeout(() => tab.classList.remove('has-new'), 3000);
+                    }
+                }
+                return;
+            }
+
+            // Standard NATS market data
             // Format incoming NATS string arrays back to the standardized MarketDB schema
             // IMPORTANT: NATS packets are individual orders, NOT authoritative market summaries.
             // We use a low-priority date so db.js merge will only accept them if the price is BETTER
             // (lower sell_price_min or higher buy_price_max), not just because the date is "newer".
             const formattedUpdates = [];
             const natsDate = ''; // Empty date = lowest priority → only wins via better price path
-            
+
             for (const payload of data) {
                  if (!payload.LocationId || !API_LOCALE_MAP[payload.LocationId]) continue;
                  if (!payload.UnitPriceSilver || payload.UnitPriceSilver <= 0) continue;
-                 
+
                  formattedUpdates.push({
                      item_id: payload.ItemTypeId,
                      city: API_LOCALE_MAP[payload.LocationId],
                      quality: payload.QualityLevel,
-                     sell_price_min: payload.AuctionType === 'offer' ? payload.UnitPriceSilver : 0, 
+                     sell_price_min: payload.AuctionType === 'offer' ? payload.UnitPriceSilver : 0,
                      sell_price_min_date: natsDate,
                      buy_price_max: payload.AuctionType === 'request' ? payload.UnitPriceSilver : 0,
                      buy_price_max_date: natsDate
@@ -3566,11 +3618,100 @@ function initLiveSync() {
                  // With empty dates, these only overwrite cached prices if the new price is strictly better
                  MarketDB.saveMarketData(formattedUpdates);
             }
-            
+
         } catch(err) {
             // Silently drop unparseable packets to avoid console spam
         }
     };
+}
+
+// ====== LIVE FLIPS TAB ======
+let liveFlipsCache = [];
+let wsFlipsAuthenticated = false;
+
+function initLiveFlipsTab() {
+    const authGate = document.getElementById('flips-auth-gate');
+    const feed = document.getElementById('flips-feed');
+    const token = localStorage.getItem('albion_auth_token');
+
+    if (!token || !discordUser) {
+        // Not logged in — show auth gate
+        if (authGate) authGate.style.display = 'block';
+        if (feed) feed.style.display = 'none';
+        return;
+    }
+
+    // Logged in — show feed
+    if (authGate) authGate.style.display = 'none';
+    if (feed) feed.style.display = 'block';
+
+    // If WS is connected but not authenticated for flips, authenticate now
+    if (wsLink && wsLink.readyState === WebSocket.OPEN && !wsFlipsAuthenticated) {
+        wsLink.send(JSON.stringify({ type: 'auth', token }));
+    }
+
+    // If we already have cached flips from a previous auth, render them
+    if (liveFlipsCache.length > 0) renderLiveFlips();
+
+    // Also fetch initial batch via REST API as backup
+    if (liveFlipsCache.length === 0) {
+        fetch(`${VPS_BASE}/api/live-flips`, { headers: authHeaders() })
+            .then(r => r.json())
+            .then(data => {
+                if (data.flips && data.flips.length > 0) {
+                    liveFlipsCache = data.flips;
+                    renderLiveFlips();
+                }
+            })
+            .catch(() => {});
+    }
+}
+
+function renderLiveFlips(isNewFlip = false) {
+    const container = document.getElementById('flips-list');
+    if (!container) return;
+
+    const minProfit = parseInt(document.getElementById('flips-min-profit')?.value) || 50000;
+    const minRoi = parseFloat(document.getElementById('flips-min-roi')?.value) || 3;
+
+    const filtered = liveFlipsCache.filter(f => f.profit >= minProfit && f.roi >= minRoi);
+
+    if (filtered.length === 0) {
+        container.innerHTML = '<div class="empty-state"><p>No flips matching your filters yet.</p><p class="hint">Profitable opportunities will appear here in real-time. Try lowering the minimum profit or ROI.</p></div>';
+        return;
+    }
+
+    container.innerHTML = filtered.map((flip, i) => {
+        const ago = timeAgo(new Date(flip.detectedAt).toISOString());
+        const isNew = isNewFlip && i === 0;
+        const qualName = flip.quality > 1 ? ` q${flip.quality}` : '';
+        return `<div class="flip-card${isNew ? ' new' : ''}">
+            <img class="flip-icon" src="https://render.albiononline.com/v1/item/${flip.itemId}.png?quality=${flip.quality}" alt="" loading="lazy">
+            <div style="min-width:0;">
+                <div style="font-weight:600; font-size:0.88rem; color:var(--text-primary); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${esc(flip.name)}${qualName}</div>
+                <div class="flip-route">
+                    <span style="color:var(--text-secondary);">${esc(flip.buyCity)}</span>
+                    <span style="color:var(--text-muted);"> @ ${Math.floor(flip.buyPrice).toLocaleString()}</span>
+                    <span style="margin:0 4px; color:var(--text-muted);">&#10142;</span>
+                    <span style="color:var(--text-secondary);">${esc(flip.sellCity)}</span>
+                    <span style="color:var(--text-muted);"> @ ${Math.floor(flip.sellPrice).toLocaleString()}</span>
+                    <span style="margin-left:6px; opacity:0.6;">${ago}</span>
+                </div>
+            </div>
+            <div class="flip-profit">
+                <div class="amount">+${flip.profit.toLocaleString()}</div>
+                <div class="roi">${flip.roi}% ROI</div>
+            </div>
+        </div>`;
+    }).join('');
+
+    // Remove 'new' class after animation
+    if (isNewFlip) {
+        setTimeout(() => {
+            const newCard = container.querySelector('.flip-card.new');
+            if (newCard) newCard.classList.remove('new');
+        }, 3000);
+    }
 }
 
 // ====== TRANSPORT TAB ======
