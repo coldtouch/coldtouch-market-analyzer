@@ -1292,6 +1292,26 @@ app.get('/api/transport-routes', (req, res) => {
 });
 
 // === LIVE TRANSPORT ROUTES (computed from alertMarketDb real-time data) ===
+// Build a historical price reference to filter outliers (refreshed every 10 min with the scan)
+let priceReference = {}; // { itemId_quality: avgPrice }
+function buildPriceReference() {
+  const cutoff = Date.now() - 7 * 24 * 60 * 60 * 1000;
+  db.all(`SELECT item_id, quality, AVG(avg_sell) as avg_price, COUNT(*) as samples
+    FROM price_averages WHERE period_type IN ('daily','hourly') AND period_start > ? AND avg_sell > 0
+    GROUP BY item_id, quality`, [cutoff], (err, rows) => {
+    if (err || !rows) return;
+    const ref = {};
+    for (const r of rows) {
+      if (r.samples >= 2 && r.avg_price > 0) ref[r.item_id + '_' + r.quality] = Math.round(r.avg_price);
+    }
+    priceReference = ref;
+    console.log(`[PriceRef] Built reference for ${Object.keys(ref).length} items`);
+  });
+}
+// Build on startup (after DB is ready) and refresh every 10 min
+setTimeout(buildPriceReference, 15000);
+setInterval(buildPriceReference, 10 * 60 * 1000);
+
 app.get('/api/transport-routes-live', (req, res) => {
   const buyCity = req.query.buy_city || '';
   const sellCity = req.query.sell_city || '';
@@ -1310,13 +1330,19 @@ app.get('/api/transport-routes-live', (req, res) => {
       const q = parseInt(qStr);
       const cityEntries = Object.entries(cities);
 
+      // Get historical average for outlier detection
+      const refKey = itemId + '_' + q;
+      const avgPrice = priceReference[refKey] || 0;
+
       for (let i = 0; i < cityEntries.length; i++) {
         const [srcCity, srcData] = cityEntries[i];
-        // Source: must have a sell offer (what we'd buy)
         if (!srcData.sellMin || srcData.sellMin === Infinity || srcData.sellMin <= 0) continue;
         if (srcData.sellDate && (now - srcData.sellDate) > maxAgeMs) continue;
         if (buyCity && srcCity !== buyCity) continue;
         if (excludeCities.includes(srcCity)) continue;
+
+        // Outlier check: if buy price is >5x the historical average, skip (manipulated listing)
+        if (avgPrice > 0 && srcData.sellMin > avgPrice * 5) continue;
 
         for (let j = 0; j < cityEntries.length; j++) {
           if (i === j) continue;
@@ -1326,28 +1352,32 @@ app.get('/api/transport-routes-live', (req, res) => {
 
           let dstPrice = 0, dstDate = 0;
           if (sellStrategy === 'instant') {
-            // Instant sell: use buy order price in destination
             if (!dstData.buyMax || dstData.buyMax <= 0) continue;
             if (dstData.buyDate && (now - dstData.buyDate) > maxAgeMs) continue;
             dstPrice = dstData.buyMax;
             dstDate = dstData.buyDate || dstData.lastSeen || 0;
           } else {
-            // List on market: use sell offer price in destination (what items go for there)
             if (!dstData.sellMin || dstData.sellMin === Infinity || dstData.sellMin <= 0) continue;
             if (dstData.sellDate && (now - dstData.sellDate) > maxAgeMs) continue;
             dstPrice = dstData.sellMin;
             dstDate = dstData.sellDate || dstData.lastSeen || 0;
           }
 
-          // Skip outliers: if destination price is >5x source, it's likely a joke listing
-          if (sellStrategy === 'market' && dstPrice > srcData.sellMin * 5) continue;
-          // Skip if destination is cheaper than source (no profit hauling there)
+          // Outlier detection using historical reference
+          if (avgPrice > 0) {
+            // Both prices must be within 5x of historical average
+            if (dstPrice > avgPrice * 5) continue;
+            // Source price shouldn't be suspiciously low (<10% of average = possible data error)
+            if (srcData.sellMin < avgPrice * 0.1) continue;
+          }
+          // Fallback ratio check when no historical data
+          if (sellStrategy === 'market' && dstPrice > srcData.sellMin * 3) continue;
           if (dstPrice <= srcData.sellMin) continue;
 
           const profit = dstPrice - srcData.sellMin - (dstPrice * TAX_RATE);
           if (profit < minProfit) continue;
           const roi = (profit / srcData.sellMin) * 100;
-          if (roi < 2 || roi > 500) continue; // skip noise and outliers
+          if (roi < 2 || roi > 200) continue;
 
           routes.push({
             item_id: itemId,
@@ -1361,17 +1391,17 @@ app.get('/api/transport-routes-live', (req, res) => {
             roi: parseFloat(roi.toFixed(1)),
             buy_age: Math.round((now - (srcData.sellDate || srcData.lastSeen || now)) / 60000),
             sell_age: Math.round((now - (dstDate || now)) / 60000),
-            sell_strategy: sellStrategy
+            sell_strategy: sellStrategy,
+            avg_price: avgPrice
           });
         }
       }
     }
   }
 
-  // Sort by profit descending
   routes.sort((a, b) => b.profit - a.profit);
   const result = routes.slice(0, limit);
-  console.log(`[Transport-Live] Found ${routes.length} routes, returning ${result.length} (strategy=${sellStrategy}, maxAge=${maxAge}m)`);
+  console.log(`[Transport-Live] Found ${routes.length} routes, returning ${result.length} (strategy=${sellStrategy}, maxAge=${maxAge}m, refItems=${Object.keys(priceReference).length})`);
   res.json({ routes: result, total: routes.length, dataPoints: Object.keys(alertMarketDb).length });
 });
 
