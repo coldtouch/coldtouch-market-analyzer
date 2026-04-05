@@ -2,6 +2,13 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-04-05 — Transport Freshness Filter, Live Flip Validation, Volume Awareness
+
+- **Transport freshness filter:** Added Buy/Sell/Both freshness filter with configurable max age (30m/1h/2h/6h). Stale routes are filtered out before haul plan packing — same pattern as Market Flipping.
+- **Live flip price validation:** `broadcastFlip()` now validates prices against the live API before broadcasting. Catches stale Black Market prices (listing gone, price moved >15%, profit vanished). Rate-limited to 1 API call/second.
+- **Transport volume awareness:** Daily volume shown on every haul plan item row (`~N/day`). Yellow warning when suggested quantity exceeds estimated daily volume. Volume cap tightened from 2x to 1x daily volume to give realistic packing.
+- **Freshness re-render:** Changing the freshness filter or threshold live-updates the transport results without re-scanning.
+
 ### 2026-04-05 — Email Verification, User Profile, and Live Flip Enhancements
 
 - **Email verification system:** Registration now generates a verification token (24h expiry). When SMTP is configured, verification email is sent with branded HTML template. Accounts are auto-verified when SMTP is not configured. New `/api/verify-email` and `/api/resend-verification` endpoints. Verification status shown in profile page with resend button.

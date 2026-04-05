@@ -796,6 +796,24 @@
                         </select>
                     </div>
                     <div class="control-group">
+                        <label for="transport-fresh-mode">Freshness</label>
+                        <select id="transport-fresh-mode">
+                            <option value="off">Off</option>
+                            <option value="buy">Buy Side Fresh</option>
+                            <option value="sell">Sell Side Fresh</option>
+                            <option value="both" selected>Both Fresh</option>
+                        </select>
+                    </div>
+                    <div class="control-group" id="transport-fresh-threshold-group">
+                        <label for="transport-fresh-threshold">Max Age</label>
+                        <select id="transport-fresh-threshold">
+                            <option value="30">30 min</option>
+                            <option value="60" selected>1 hour</option>
+                            <option value="120">2 hours</option>
+                            <option value="360">6 hours</option>
+                        </select>
+                    </div>
+                    <div class="control-group">
                         <label for="transport-sort">Sort By</label>
                         <select id="transport-sort">
                             <option value="trip_profit">Trip Profit</option>
