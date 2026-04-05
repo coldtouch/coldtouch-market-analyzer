@@ -662,7 +662,7 @@
         <section class="tab-pane hidden" id="pane-transport">
             <div class="controls-panel">
                 <h2 style="color:var(--accent); margin:0 0 0.5rem 0; font-size:1.2rem;">🐘 Bulk Transport Profits</h2>
-                <p style="color:var(--text-secondary); font-size:0.85rem; margin:0 0 1rem 0;">Find profitable transport routes with realistic haul planning. Accounts for carry weight, inventory slots (48), and daily sell volume — never suggests more than what actually sells. Groups multiple items per trip to maximize your budget.</p>
+                <p style="color:var(--text-secondary); font-size:0.85rem; margin:0 0 1rem 0;">Find profitable transport routes with realistic haul planning. Accounts for carry weight, inventory slots, and daily sell volume. Click any haul plan to expand the full item list.</p>
                 <div style="display:flex; gap:1rem; align-items:flex-end; flex-wrap:wrap;">
                     <div class="control-group">
                         <label for="transport-buy-city">Buy From</label>
@@ -712,6 +712,10 @@
                             <option value="2308">T8 Saddled Mammoth (2,308 kg)</option>
                             <option value="999999">Ignore Weight (∞)</option>
                         </select>
+                    </div>
+                    <div class="control-group">
+                        <label for="transport-free-slots" title="How many inventory slots are free after your gear, food, potions, etc.">Free Slots</label>
+                        <input type="number" id="transport-free-slots" value="30" min="1" max="48" step="1" style="width:70px;" title="Player inventory is 48 slots, but gear/food/potions take some. Set your actual free slots.">
                     </div>
                     <div class="control-group">
                         <label for="transport-item-type">Item Type</label>

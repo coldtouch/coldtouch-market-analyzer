@@ -2294,94 +2294,59 @@ footer a:hover {
     margin-top: 1rem;
 }
 
-/* ====== HAUL PLANS ====== */
+/* ====== HAUL PLANS (Collapsible cards) ====== */
 .haul-plan-card {
     background: var(--bg-card);
     border: 1px solid var(--border-color);
     border-radius: var(--radius-lg);
-    padding: 1.25rem;
-    margin-bottom: 1rem;
+    margin-bottom: 0.75rem;
     transition: border-color var(--transition), box-shadow var(--transition);
+    overflow: hidden;
 }
 .haul-plan-card:hover {
     border-color: var(--accent);
     box-shadow: 0 0 20px rgba(212, 175, 55, 0.1);
 }
-.haul-plan-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 0.75rem;
-    flex-wrap: wrap;
-    gap: 0.5rem;
+.haul-plan-card.expanded {
+    border-color: var(--accent);
+}
+.haul-plan-summary {
+    padding: 1rem 1.25rem;
+    user-select: none;
+}
+.haul-plan-summary:hover {
+    background: var(--bg-elevated);
+}
+.haul-plan-detail {
+    padding: 0 1.25rem 1.25rem;
+    border-top: 1px solid var(--border-color);
+    animation: slideDown 0.2s ease-out;
+}
+@keyframes slideDown {
+    from { opacity: 0; max-height: 0; }
+    to { opacity: 1; max-height: 2000px; }
 }
 .haul-plan-rank {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 32px;
-    height: 32px;
+    width: 28px;
+    height: 28px;
     border-radius: 50%;
     background: var(--accent);
     color: var(--bg-main);
     font-weight: 800;
-    font-size: 0.85rem;
+    font-size: 0.8rem;
     flex-shrink: 0;
 }
-.haul-plan-route {
-    font-size: 1rem;
-    font-weight: 700;
-    color: var(--text-primary);
-}
-.haul-plan-profit {
-    font-size: 1.3rem;
-    font-weight: 800;
-    color: var(--profit-green);
-}
-.haul-plan-stats {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
-    gap: 0.5rem;
-    margin-bottom: 0.75rem;
-}
-.haul-plan-stat {
-    background: var(--bg-elevated);
-    border-radius: var(--radius);
-    padding: 0.5rem 0.75rem;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    text-align: center;
-}
-.haul-stat-label {
-    font-size: 0.65rem;
-    color: var(--text-muted);
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-    margin-bottom: 0.15rem;
-}
-.haul-stat-value {
-    font-size: 0.9rem;
-    font-weight: 700;
-    color: var(--text-primary);
-}
 .haul-items-list {
-    border-top: 1px solid var(--border-color);
-    padding-top: 0.5rem;
-}
-.haul-item-row {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 0.4rem 0.25rem;
-    border-radius: var(--radius);
-    gap: 0.75rem;
+    padding-top: 0.25rem;
 }
 .haul-item-row:hover {
     background: var(--bg-elevated);
 }
-.haul-item-row + .haul-item-row {
-    border-top: 1px solid rgba(255,255,255,0.04);
+.haul-item-row:last-child {
+    border-bottom: none;
 }
 
 /* ====== NEW FEATURES: SHARED STYLES ====== */
