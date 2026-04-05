@@ -3807,12 +3807,19 @@ function renderTransportResults(routes, budget, mountCapacity, haulPlans, availa
                 return `<div class="haul-item-row" style="display:flex; align-items:center; gap:0.5rem; padding:0.4rem 0; border-bottom:1px solid var(--border-dim);">
                     <img src="https://render.albiononline.com/v1/item/${item.itemId}.png" alt="" loading="lazy" style="width:32px; height:32px; border-radius:4px;">
                     <div style="flex:1; min-width:0;">
-                        <div style="font-size:0.82rem; font-weight:600; color:var(--text-primary); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${esc(getFriendlyName(item.itemId))}</div>
+                        <div style="display:flex; align-items:center; gap:0.4rem;">
+                            <span style="font-size:0.82rem; font-weight:600; color:var(--text-primary); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${esc(getFriendlyName(item.itemId))}</span>
+                            <button class="btn-haul-refresh" data-action="refresh" data-item="${item.itemId}" title="Refresh live prices for this item" style="
+                                background:none; border:1px solid var(--border-dim); color:var(--text-muted); border-radius:4px;
+                                padding:1px 4px; cursor:pointer; display:inline-flex; align-items:center; font-size:0.65rem; line-height:1; transition:all 0.15s;">
+                                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M23 4v6h-6"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+                            </button>
+                        </div>
                         <div style="font-size:0.7rem; color:var(--text-muted);">
                             ${getTierEnchLabel(item.itemId)} ${getQualityName(item.quality)}
-                            &nbsp;${getFreshnessIndicator(item.dateBuy)} Buy ${timeAgo(item.dateBuy)}
-                            &nbsp;${getFreshnessIndicator(item.dateSell)} Sell ${timeAgo(item.dateSell)}
-                            ${!item.hasVolumeData ? ' <span style="color:#f59e0b;" title="No volume data available — verify market availability">⚠️ No vol data</span>' : ''}
+                            &nbsp;${getFreshnessIndicator(item.dateBuy)} Buy @ ${Math.floor(item.buyPrice).toLocaleString()} <span style="opacity:0.7">${timeAgo(item.dateBuy)}</span>
+                            &nbsp;${getFreshnessIndicator(item.dateSell)} Sell @ ${Math.floor(item.sellPrice).toLocaleString()} <span style="opacity:0.7">${timeAgo(item.dateSell)}</span>
+                            ${!item.hasVolumeData ? ' <span style="color:#f59e0b;" title="No volume data available — verify market availability">⚠ No vol</span>' : ''}
                         </div>
                     </div>
                     <div style="display:grid; grid-template-columns: repeat(5, auto); gap:0.6rem; align-items:center; font-size:0.76rem; flex-shrink:0; text-align:right;">
@@ -3843,6 +3850,15 @@ function renderTransportResults(routes, budget, mountCapacity, haulPlans, availa
                         <div style="font-size:0.68rem; color:var(--text-muted);">Items</div>
                         <div style="font-size:0.85rem; font-weight:600;">${plan.items.length}</div>
                     </div>
+                </div>
+                <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:0.5rem;">
+                    <span style="font-size:0.72rem; color:var(--text-muted);">Items in this haul</span>
+                    <button class="btn-haul-refresh-all" title="Refresh live prices for all items in this haul plan" style="
+                        background:none; border:1px solid var(--border-dim); color:var(--text-muted); border-radius:5px;
+                        padding:3px 8px; cursor:pointer; display:inline-flex; align-items:center; gap:0.3rem; font-size:0.7rem; transition:all 0.15s;">
+                        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M23 4v6h-6"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+                        Refresh All
+                    </button>
                 </div>
                 <div class="haul-items-list">${itemsHtml}</div>
                 <div style="margin-top:0.75rem; text-align:right;">
@@ -3890,6 +3906,54 @@ function renderTransportResults(routes, budget, mountCapacity, haulPlans, availa
                     copyBtn.textContent = '✓ Copied!';
                     setTimeout(() => { copyBtn.textContent = '📋 Copy Shopping List'; }, 2000);
                 });
+            });
+
+            // Per-item refresh buttons
+            detailDiv.querySelectorAll('.btn-haul-refresh').forEach(btn => {
+                btn.addEventListener('click', async (e) => {
+                    e.stopPropagation();
+                    const itemId = btn.dataset.item;
+                    btn.disabled = true;
+                    btn.innerHTML = '<div class="spinner" style="width:10px;height:10px;border-width:2px;margin:0;"></div>';
+                    try {
+                        const data = await fetchMarketChunk(getServer(), [itemId]);
+                        if (data.length > 0) await MarketDB.saveMarketData(data);
+                        trackContribution(1);
+                        await updateDbStatus();
+                        // Re-render transport with fresh prices
+                        if (lastTransportRoutes) {
+                            const b = parseInt(document.getElementById('transport-budget').value) || 500000;
+                            const s = document.getElementById('transport-sort').value;
+                            const mc = parseInt(document.getElementById('transport-mount').value) || 0;
+                            const fs = Math.max(1, Math.min(48, parseInt(document.getElementById('transport-free-slots').value) || 30));
+                            await enrichAndRenderTransport(lastTransportRoutes, b, s, mc, fs);
+                        }
+                    } catch (err) { console.error('Refresh failed:', err); }
+                    btn.disabled = false;
+                });
+            });
+
+            // Refresh All button for entire haul plan
+            const refreshAllBtn = detailDiv.querySelector('.btn-haul-refresh-all');
+            refreshAllBtn.addEventListener('click', async (e) => {
+                e.stopPropagation();
+                const itemIds = plan.items.map(i => i.itemId);
+                refreshAllBtn.disabled = true;
+                refreshAllBtn.innerHTML = '<div class="spinner" style="width:10px;height:10px;border-width:2px;margin:0;"></div> Refreshing...';
+                try {
+                    const data = await fetchMarketChunk(getServer(), itemIds);
+                    if (data.length > 0) await MarketDB.saveMarketData(data);
+                    trackContribution(itemIds.length);
+                    await updateDbStatus();
+                    if (lastTransportRoutes) {
+                        const b = parseInt(document.getElementById('transport-budget').value) || 500000;
+                        const s = document.getElementById('transport-sort').value;
+                        const mc = parseInt(document.getElementById('transport-mount').value) || 0;
+                        const fs = Math.max(1, Math.min(48, parseInt(document.getElementById('transport-free-slots').value) || 30));
+                        await enrichAndRenderTransport(lastTransportRoutes, b, s, mc, fs);
+                    }
+                } catch (err) { console.error('Refresh all failed:', err); }
+                refreshAllBtn.disabled = false;
             });
 
             // Toggle expand/collapse
