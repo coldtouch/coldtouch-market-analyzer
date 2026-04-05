@@ -873,6 +873,12 @@ app.post('/api/link-discord', (req, res) => {
   res.json({ url: linkUrl });
 });
 
+// === LIVE FLIPS API (registration-gated) ===
+app.get('/api/live-flips', (req, res) => {
+  if (!req.user) return res.status(401).json({ error: 'Login required. Create a free account to access live flips.' });
+  res.json({ flips: liveFlips, total: liveFlips.length });
+});
+
 // === SHARED MARKET CACHE ENDPOINTS ===
 app.get('/api/market-cache', (req, res) => {
   if (!cachedGzipBuffer) {
@@ -1136,7 +1142,100 @@ const server = https.createServer({
 
 const wss = new WebSocket.Server({ server });
 let wsClients = new Set();
-wss.on('connection', ws => { wsClients.add(ws); ws.on('close', () => wsClients.delete(ws)); });
+wss.on('connection', ws => {
+  wsClients.add(ws);
+  ws.isAuthenticated = false;
+  ws.on('message', data => {
+    try {
+      const msg = JSON.parse(data.toString());
+      if (msg.type === 'auth' && msg.token) {
+        try {
+          ws.user = jwt.verify(msg.token, SESSION_SECRET);
+          ws.isAuthenticated = true;
+          ws.send(JSON.stringify({ type: 'auth', success: true }));
+          // Send recent flip history on successful auth
+          ws.send(JSON.stringify({ type: 'flip-history', data: liveFlips }));
+        } catch(e) {
+          ws.send(JSON.stringify({ type: 'auth', success: false, error: 'Invalid token' }));
+        }
+      }
+    } catch(e) { /* ignore non-JSON messages */ }
+  });
+  ws.on('close', () => wsClients.delete(ws));
+});
+
+// === LIVE FLIP DETECTION ===
+const liveFlips = [];
+const MAX_FLIPS = 100;
+const FLIP_MIN_PROFIT = 10000; // 10k silver minimum to show in live feed
+const FLIP_COOLDOWN_MS = 120000; // 2 min cooldown per route to prevent spam
+const flipCooldowns = {};
+
+// Evict stale flip cooldowns every 10 min
+setInterval(() => {
+  const now = Date.now();
+  for (const key of Object.keys(flipCooldowns)) {
+    if (now - flipCooldowns[key] > 600000) delete flipCooldowns[key];
+  }
+}, 600000);
+
+function detectFlip(id, q) {
+  const data = alertMarketDb[id] && alertMarketDb[id][q];
+  if (!data) return;
+
+  const now = Date.now();
+  let bestSell = { price: Infinity, city: null, date: 0 };
+  let bestBuy = { price: 0, city: null, date: 0 };
+
+  for (const [city, cd] of Object.entries(data)) {
+    if (cd.sellMin > 0 && cd.sellMin < Infinity && cd.sellMin < bestSell.price) {
+      bestSell = { price: cd.sellMin, city, date: cd.sellDate || cd.lastSeen || 0 };
+    }
+    if (cd.buyMax > 0 && cd.buyMax > bestBuy.price) {
+      bestBuy = { price: cd.buyMax, city, date: cd.buyDate || cd.lastSeen || 0 };
+    }
+  }
+
+  if (!bestSell.city || !bestBuy.city || bestSell.city === bestBuy.city) return;
+
+  // Both sides must be reasonably fresh (5 min)
+  if ((now - bestSell.date) > 300000 || (now - bestBuy.date) > 300000) return;
+
+  const profit = bestBuy.price - bestSell.price - (bestBuy.price * TAX_RATE);
+  if (profit < FLIP_MIN_PROFIT) return;
+
+  const roi = ((profit / bestSell.price) * 100).toFixed(1);
+  if (parseFloat(roi) < 3) return; // Skip low-ROI noise
+
+  const flipKey = id + '_' + q + '_' + bestSell.city + '_' + bestBuy.city;
+  if (flipCooldowns[flipKey] && now - flipCooldowns[flipKey] < FLIP_COOLDOWN_MS) return;
+  flipCooldowns[flipKey] = now;
+
+  const flip = {
+    id: flipKey,
+    itemId: id,
+    quality: q,
+    name: getFriendlyName(id),
+    buyCity: bestSell.city,
+    sellCity: bestBuy.city,
+    buyPrice: bestSell.price,
+    sellPrice: bestBuy.price,
+    profit: Math.floor(profit),
+    roi: parseFloat(roi),
+    detectedAt: now
+  };
+
+  liveFlips.unshift(flip);
+  if (liveFlips.length > MAX_FLIPS) liveFlips.pop();
+
+  // Broadcast to authenticated WebSocket clients only
+  const msg = JSON.stringify({ type: 'flip', data: flip });
+  for (const wc of wsClients) {
+    if (wc.readyState === WebSocket.OPEN && wc.isAuthenticated) {
+      wc.send(msg);
+    }
+  }
+}
 
 // === ALERTER LOGIC ===
 const TAX_RATE = 0.065;
@@ -1895,8 +1994,9 @@ let natsConnection = null;
             natsSnapshotMap[snapKey].buy = price;
           }
 
-          // Check for alerts on this item
+          // Check for alerts and live flips on this item
           checkAndAlert(id, q);
+          detectFlip(id, q);
         }
       } catch(e) { console.error('[NATS] Parse error:', e.message); }
     }
