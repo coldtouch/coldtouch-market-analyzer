@@ -1302,7 +1302,7 @@ function buildPriceReference() {
     if (err || !rows) return;
     const ref = {};
     for (const r of rows) {
-      if (r.samples >= 2 && r.avg_price > 0) ref[r.item_id + '_' + r.quality] = Math.round(r.avg_price);
+      if (r.samples >= 5 && r.avg_price > 0) ref[r.item_id + '_' + r.quality] = Math.round(r.avg_price);
     }
     priceReference = ref;
     console.log(`[PriceRef] Built reference for ${Object.keys(ref).length} items`);
@@ -1330,9 +1330,11 @@ app.get('/api/transport-routes-live', (req, res) => {
       const q = parseInt(qStr);
       const cityEntries = Object.entries(cities);
 
-      // Get historical average for outlier detection
+      // Get historical average — REQUIRED for transport routes
+      // Items with no trade history are illiquid and produce fake spreads
       const refKey = itemId + '_' + q;
       const avgPrice = priceReference[refKey] || 0;
+      if (!avgPrice) continue; // Skip items with zero trade history
 
       for (let i = 0; i < cityEntries.length; i++) {
         const [srcCity, srcData] = cityEntries[i];
