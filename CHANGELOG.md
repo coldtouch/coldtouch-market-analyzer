@@ -2,6 +2,13 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-04-05 — Transport refresh buttons + In-website changelog update
+
+- **Per-item refresh buttons:** Every item row in a haul plan now has a small refresh icon that fetches live prices for that specific item and re-renders the transport results.
+- **"Refresh All" button:** Each haul plan's detail section has a "Refresh All" button that fetches prices for every item in the plan at once.
+- **Buy/sell prices inline:** Item rows now show `Buy @ 150,000` and `Sell @ 200,000` with freshness indicators, so you can see exactly what prices the plan is using.
+- **In-website changelog updated:** Added April 4-5 entries covering the server migration, DB architecture fix, Discord bot alerts, and transport overhaul.
+
 ### 2026-04-05 — Fix Discord bot alerts + Transport routes overhaul v2
 
 - **Discord bot alerts fixed:** Alerts were not firing because the alerter's 30-minute freshness check rejected all seeded data. The API's `sell_price_min_date` reflects when a price last *changed*, not when we verified it. Items with unchanged prices for >30 min were treated as stale even though they're still live. Fix: treat recently-fetched API prices (<24h old) as fresh.
