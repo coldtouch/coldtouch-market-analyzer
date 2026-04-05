@@ -2,6 +2,13 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-04-05 — Transport routes: shopping list, query optimization, volume safety
+
+- **Copy Shopping List button:** Each haul plan card now has a clipboard button that formats the trip's items into a readable shopping list (item names, quantities, prices, total cost, expected profit, ROI). Click to copy, then paste in-game or to friends.
+- **Backend CTE query optimization:** Replaced 3 correlated subqueries in `/api/transport-routes` with a single CTE that pre-aggregates volume data, then JOINs to spread_stats. Also queries both `daily` and `hourly` period types so volume data appears even before daily compaction runs. Expected 10-50x speedup on large databases.
+- **Volume safety cap:** Items with no volume data were previously uncapped in the packing algorithm (could suggest buying 999 of an item nobody trades). Now falls back to conservative limits: 10 units for gear, 100 for stackable items.
+- **Renamed "24h Vol Sold" → "24h Activity":** The metric is based on `sample_count` (number of price data points recorded), not actual trade volume. Added tooltip explaining it's data frequency, not sales count.
+
 ### 2026-04-04 — Fix Discord OAuth root cause: DB bloat → 100% CPU → event loop death
 
 - **Root cause chain:** NATS market orders built up 22M rows in `price_snapshots` (high-volume feed × 24h retention). `computeSpreadStats` queried ALL rows with no LIMIT, loading 22M rows into Node.js RAM. Stuck running for 12+ hours at 100% CPU. Event loop starved → OAuth fetch to Discord's API timed out at 8s → "Server is not responding".
