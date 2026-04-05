@@ -428,17 +428,22 @@ let lastAlertTime = null;
 client.on('interactionCreate', async interaction => {
   if (!interaction.isChatInputCommand()) return;
 
+  // Helper: safe reply that catches expired interaction errors
+  const safeReply = async (opts) => { try { await interaction.reply(opts); } catch(e) { if (e.code !== 10062) console.error('[Bot] Reply error:', e.message); } };
+  const safeEditReply = async (opts) => { try { await interaction.editReply(opts); } catch(e) { console.error('[Bot] EditReply error:', e.message); } };
+
   if (interaction.commandName === 'setup_alerts') {
+    await interaction.deferReply({ ephemeral: false });
     const discordUserId = interaction.user.id;
     // Gate: check if this Discord user has a registered website account (or linked Discord)
     db.get(`SELECT id FROM users WHERE id = ? OR linked_discord_id = ?`, [discordUserId, discordUserId], (err, userRow) => {
       if (!userRow) {
-        return interaction.reply({ embeds: [{
+        return safeEditReply({ embeds: [{
           title: 'Registration Required',
           color: 0xffa500,
           description: 'You need a registered account on the website to use alerts.\\n\\n**How to set up:**\\n1. Visit [albionaitool.xyz](https://coldtouch.github.io/coldtouch-market-analyzer/) and create an account\\n2. Either login with Discord or create an email account and link your Discord\\n3. Come back here and run `/setup_alerts` again',
           footer: { text: 'Coldtouch Market Analyzer • Free registration required' }
-        }], ephemeral: true });
+        }] });
       }
 
       const minP = interaction.options.getInteger('min_profit');
@@ -447,14 +452,14 @@ client.on('interactionCreate', async interaction => {
       const minConf = Math.max(0, Math.min(100, interaction.options.getInteger('min_confidence') || 0));
       db.run(`INSERT OR REPLACE INTO alerts (guild_id, channel_id, min_profit, cooldown_ms, min_confidence) VALUES (?, ?, ?, ?, ?)`,
         [interaction.guildId, interaction.channelId, minP, cooldownMs, minConf], (err2) => {
-        if(err2) return interaction.reply({content: 'DB Error :(', ephemeral: true});
+        if(err2) return safeEditReply({content: 'DB Error :('});
         const fields = [
           { name: 'Channel', value: `<#${interaction.channelId}>`, inline: true },
           { name: 'Min Profit', value: `${minP.toLocaleString()} silver`, inline: true },
           { name: 'Cooldown', value: `${cooldown} min per item`, inline: true }
         ];
         if (minConf > 0) fields.push({ name: 'Min Confidence', value: `${minConf}%+`, inline: true });
-        interaction.reply({ embeds: [{
+        safeEditReply({ embeds: [{
           title: 'Alerts Configured',
           color: 0x00ff00,
           fields,
@@ -465,8 +470,9 @@ client.on('interactionCreate', async interaction => {
   }
 
   if (interaction.commandName === 'stop_alerts') {
+    await interaction.deferReply();
     db.run(`DELETE FROM alerts WHERE guild_id = ? AND channel_id = ?`, [interaction.guildId, interaction.channelId], (err) => {
-      interaction.reply({ embeds: [{
+      safeEditReply({ embeds: [{
         title: 'Alerts Stopped',
         color: 0xff4444,
         description: `Alerts have been removed from <#${interaction.channelId}>.`,
@@ -476,39 +482,40 @@ client.on('interactionCreate', async interaction => {
   }
 
   if (interaction.commandName === 'my_alerts') {
+    await interaction.deferReply({ ephemeral: true });
     db.all(`SELECT channel_id, min_profit, cooldown_ms, min_confidence FROM alerts WHERE guild_id = ?`, [interaction.guildId], (err, rows) => {
       if (err || !rows || rows.length === 0) {
-        return interaction.reply({ embeds: [{
+        return safeEditReply({ embeds: [{
           title: 'No Active Alerts',
           color: 0x888888,
           description: 'Use `/setup_alerts` to configure alerts in a channel.',
           footer: { text: 'Coldtouch Market Analyzer' }
-        }], ephemeral: true });
+        }] });
       }
       const lines = rows.map(r => {
         const conf = r.min_confidence || 0;
         const confLabel = conf > 0 ? `, confidence **${conf}%+**` : '';
         return `<#${r.channel_id}> — min **${r.min_profit.toLocaleString()}** silver, cooldown **${Math.round((r.cooldown_ms || 600000) / 60000)}** min${confLabel}`;
       });
-      interaction.reply({ embeds: [{
+      safeEditReply({ embeds: [{
         title: `Active Alerts (${rows.length})`,
         color: 0xffd700,
         description: lines.join('\\n'),
         footer: { text: 'Coldtouch Market Analyzer • Use /set_confidence to filter by reliability' }
-      }], ephemeral: true });
+      }] });
     });
   }
 
   if (interaction.commandName === 'set_confidence') {
+    await interaction.deferReply();
     const minConf = Math.max(0, Math.min(100, interaction.options.getInteger('min_confidence')));
     db.run(`UPDATE alerts SET min_confidence = ? WHERE guild_id = ? AND channel_id = ?`,
       [minConf, interaction.guildId, interaction.channelId], (err) => {
       if (err) {
-        // Try to check if alert exists
-        return interaction.reply({ content: 'No alert configured in this channel. Use `/setup_alerts` first.', ephemeral: true });
+        return safeEditReply({ content: 'No alert configured in this channel. Use `/setup_alerts` first.' });
       }
       const label = minConf === 0 ? 'Any (all alerts)' : minConf >= 70 ? `${minConf}% (High confidence only)` : minConf >= 40 ? `${minConf}% (Medium+ confidence)` : `${minConf}%`;
-      interaction.reply({ embeds: [{
+      safeEditReply({ embeds: [{
         title: 'Confidence Threshold Updated',
         color: 0x5865F2,
         fields: [
@@ -522,6 +529,7 @@ client.on('interactionCreate', async interaction => {
   }
 
   if (interaction.commandName === 'status') {
+    await interaction.deferReply();
     let trackedItems = 0, trackedCities = 0;
     for (const id of Object.keys(alertMarketDb)) {
       for (const q of Object.keys(alertMarketDb[id])) {
@@ -531,7 +539,7 @@ client.on('interactionCreate', async interaction => {
     }
     db.all(`SELECT COUNT(*) as cnt FROM alerts`, [], (err, rows) => {
       const alertCount = (rows && rows[0]) ? rows[0].cnt : 0;
-      interaction.reply({ embeds: [{
+      safeEditReply({ embeds: [{
         title: 'Market Analyzer Bot Status',
         color: 0x5865F2,
         fields: [
@@ -626,9 +634,10 @@ client.on('interactionCreate', async interaction => {
   }
 
   if (interaction.commandName === 'leaderboard') {
+    await interaction.deferReply();
     db.all(`SELECT user_id, username, avatar, scans_30d, tier FROM user_stats WHERE scans_30d > 0 ORDER BY scans_30d DESC LIMIT 10`, [], (err, rows) => {
       if (err || !rows || rows.length === 0) {
-        return interaction.reply({ embeds: [{
+        return safeEditReply({ embeds: [{
           title: 'Leaderboard',
           color: 0xffd700,
           description: 'No contributions yet. Use `/scan` or refresh items on the website to start!',
@@ -640,7 +649,7 @@ client.on('interactionCreate', async interaction => {
         const emoji = tierEmoji[r.tier] || '🥉';
         return `**${i + 1}.** ${emoji} ${r.username || 'Unknown'} — **${r.scans_30d}** scans`;
       });
-      interaction.reply({ embeds: [{
+      safeEditReply({ embeds: [{
         title: '🏆 Top Scanners (30 days)',
         color: 0xffd700,
         description: lines.join('\\n'),
@@ -650,15 +659,16 @@ client.on('interactionCreate', async interaction => {
   }
 
   if (interaction.commandName === 'mystats') {
+    await interaction.deferReply({ ephemeral: true });
     const userId = interaction.user.id;
     db.get(`SELECT scans_30d, scans_total, tier FROM user_stats WHERE user_id = ?`, [userId], (err, row) => {
       if (err || !row) {
-        return interaction.reply({ embeds: [{
+        return safeEditReply({ embeds: [{
           title: 'Your Stats',
           color: 0x888888,
           description: 'No scanning activity yet. Use `/scan` or refresh items on the website to get started!',
           footer: { text: 'Coldtouch Market Analyzer' }
-        }], ephemeral: true });
+        }] });
       }
       const tierEmoji = { diamond: '💎', gold: '🥇', silver: '🥈', bronze: '🥉' };
       const nextTier = { bronze: { name: 'Silver', need: 50 }, silver: { name: 'Gold', need: 200 }, gold: { name: 'Diamond', need: 500 }, diamond: null };
@@ -668,7 +678,7 @@ client.on('interactionCreate', async interaction => {
       // Get rank
       db.get(`SELECT COUNT(*) + 1 as rank FROM user_stats WHERE scans_30d > ?`, [row.scans_30d], (err2, rankRow) => {
         const rank = rankRow ? rankRow.rank : '?';
-        interaction.reply({ embeds: [{
+        safeEditReply({ embeds: [{
           title: `${tierEmoji[row.tier] || '🥉'} ${interaction.user.username}'s Stats`,
           color: row.tier === 'diamond' ? 0xb9f2ff : row.tier === 'gold' ? 0xffd700 : row.tier === 'silver' ? 0xc0c0c0 : 0xcd7f32,
           fields: [
@@ -679,7 +689,7 @@ client.on('interactionCreate', async interaction => {
             { name: 'Progress', value: progressLine, inline: false }
           ],
           footer: { text: 'Coldtouch Market Analyzer' }
-        }], ephemeral: true });
+        }] });
       });
     });
   }
