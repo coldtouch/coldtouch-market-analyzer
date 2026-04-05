@@ -1344,7 +1344,18 @@ setInterval(() => {
   }
 }, 600000);
 
-function broadcastFlip(flip) {
+let lastFlipValidation = 0;
+async function broadcastFlip(flip) {
+  // Rate-limit validation: max 1 API call per second to avoid hammering the price API
+  const now = Date.now();
+  if (now - lastFlipValidation > 1000) {
+    lastFlipValidation = now;
+    try {
+      const valid = await validateFlipPrices(flip.itemId, flip.quality, flip.buyCity, flip.sellCity, flip.buyPrice, flip.sellPrice);
+      if (!valid) return;
+    } catch(e) { /* validation failed — broadcast anyway rather than silencing valid flips */ }
+  }
+
   liveFlips.unshift(flip);
   if (liveFlips.length > MAX_FLIPS) liveFlips.pop();
   const msg = JSON.stringify({ type: 'flip', data: flip });
@@ -1352,6 +1363,56 @@ function broadcastFlip(flip) {
     if (wc.readyState === WebSocket.OPEN && wc.isAuthenticated) {
       wc.send(msg);
     }
+  }
+}
+
+// Validate flip prices against the live API before broadcasting
+async function validateFlipPrices(id, q, buyCity, sellCity, expectedBuyPrice, expectedSellPrice) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 4000);
+  try {
+    const locs = buyCity === sellCity ? encodeURIComponent(buyCity) : [buyCity, sellCity].map(c => encodeURIComponent(c)).join(',');
+    const url = `${API_BASE}/${encodeURIComponent(id)}.json?locations=${locs}&qualities=${q}`;
+    const res = await fetch(url, { signal: controller.signal });
+    clearTimeout(timeoutId);
+    if (!res.ok) return true; // Can't verify — allow through
+
+    const data = await res.json();
+    let liveBuyPrice = 0, liveSellPrice = 0;
+    for (const entry of data) {
+      // Buy price = lowest sell offer in buy city (what you'd pay)
+      if (entry.city === buyCity && entry.quality === q && entry.sell_price_min > 0) {
+        if (liveBuyPrice === 0 || entry.sell_price_min < liveBuyPrice) liveBuyPrice = entry.sell_price_min;
+      }
+      // Sell price = highest buy order in sell city (what you'd receive)
+      if (entry.city === sellCity && entry.quality === q && entry.buy_price_max > 0) {
+        if (entry.buy_price_max > liveSellPrice) liveSellPrice = entry.buy_price_max;
+      }
+    }
+    // Listing is gone
+    if (liveBuyPrice <= 0 || liveSellPrice <= 0) {
+      console.log(`[FlipValidate] ${id} q${q}: listing gone (buy=${liveBuyPrice} sell=${liveSellPrice}), skipping`);
+      return false;
+    }
+    // Price moved significantly (>15% worse)
+    if (liveBuyPrice > expectedBuyPrice * 1.15) {
+      console.log(`[FlipValidate] ${id} q${q}: buy price moved up ${liveBuyPrice} vs ${expectedBuyPrice}, skipping`);
+      return false;
+    }
+    if (liveSellPrice < expectedSellPrice * 0.85) {
+      console.log(`[FlipValidate] ${id} q${q}: sell price moved down ${liveSellPrice} vs ${expectedSellPrice}, skipping`);
+      return false;
+    }
+    // Re-verify profitability with live prices
+    const liveProfit = liveSellPrice - liveBuyPrice - (liveSellPrice * TAX_RATE);
+    if (liveProfit < FLIP_MIN_PROFIT * 0.5) {
+      console.log(`[FlipValidate] ${id} q${q}: live profit only ${Math.floor(liveProfit)}, skipping`);
+      return false;
+    }
+    return true;
+  } catch (e) {
+    clearTimeout(timeoutId);
+    return true; // Allow through on timeout/error
   }
 }
 

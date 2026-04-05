@@ -3192,6 +3192,34 @@ async function init() {
         }
     });
 
+    // Transport freshness filter: show/hide threshold, re-render on change
+    const transportFreshMode = document.getElementById('transport-fresh-mode');
+    const transportFreshThreshold = document.getElementById('transport-fresh-threshold');
+    const transportFreshGroup = document.getElementById('transport-fresh-threshold-group');
+    if (transportFreshMode) {
+        transportFreshMode.addEventListener('change', () => {
+            if (transportFreshGroup) transportFreshGroup.style.display = transportFreshMode.value === 'off' ? 'none' : '';
+            if (lastTransportRoutes) {
+                const budget = parseInt(document.getElementById('transport-budget').value) || 500000;
+                const sortBy = document.getElementById('transport-sort').value;
+                const mountCapacity = parseInt(document.getElementById('transport-mount').value) || 0;
+                const freeSlots = Math.max(1, Math.min(48, parseInt(document.getElementById('transport-free-slots').value) || 30));
+                enrichAndRenderTransport(lastTransportRoutes, budget, sortBy, mountCapacity, freeSlots);
+            }
+        });
+    }
+    if (transportFreshThreshold) {
+        transportFreshThreshold.addEventListener('change', () => {
+            if (lastTransportRoutes && transportFreshMode?.value !== 'off') {
+                const budget = parseInt(document.getElementById('transport-budget').value) || 500000;
+                const sortBy = document.getElementById('transport-sort').value;
+                const mountCapacity = parseInt(document.getElementById('transport-mount').value) || 0;
+                const freeSlots = Math.max(1, Math.min(48, parseInt(document.getElementById('transport-free-slots').value) || 30));
+                enrichAndRenderTransport(lastTransportRoutes, budget, sortBy, mountCapacity, freeSlots);
+            }
+        });
+    }
+
     // Alerts tab
     document.getElementById('alert-create-btn').addEventListener('click', createAlert);
     // Load alerts/community when switching to those tabs
@@ -4044,7 +4072,7 @@ async function enrichAndRenderTransport(routes, budget, sortBy, mountCapacity, f
         // Volume: if real data exists, use it as soft guide (2x since sample_count is poll frequency, not trades).
         // If no data, don't cap — let budget/slots/weight be the natural limiters.
         const hasVolumeData = realisticVolume > 0;
-        let maxByVolume = hasVolumeData ? Math.ceil(realisticVolume * 2) : Infinity;
+        let maxByVolume = hasVolumeData ? Math.ceil(realisticVolume) : Infinity;
         let maxBySlots = stackable ? availableSlots * stackSize : availableSlots;
         let maxByWeight = (mountCapacity > 0 && itemWeight > 0) ? Math.floor(mountCapacity / itemWeight) : Infinity;
 
@@ -4110,6 +4138,21 @@ async function enrichAndRenderTransport(routes, budget, sortBy, mountCapacity, f
     else if (itemTypeFilter === 'stackable') filtered = filtered.filter(r => r.stackable);
     else if (itemTypeFilter !== 'all') filtered = filtered.filter(r => r.category === itemTypeFilter);
 
+    // Freshness filter (same pattern as arbitrage)
+    const freshMode = document.getElementById('transport-fresh-mode')?.value || 'off';
+    const freshThresholdMins = parseInt(document.getElementById('transport-fresh-threshold')?.value) || 60;
+    if (freshMode !== 'off') {
+        const now = new Date();
+        const thresholdMs = freshThresholdMins * 60 * 1000;
+        filtered = filtered.filter(r => {
+            const buyAge = r.dateBuy && !r.dateBuy.startsWith('0001') ? now - new Date(r.dateBuy.endsWith('Z') ? r.dateBuy : r.dateBuy + 'Z') : Infinity;
+            const sellAge = r.dateSell && !r.dateSell.startsWith('0001') ? now - new Date(r.dateSell.endsWith('Z') ? r.dateSell : r.dateSell + 'Z') : Infinity;
+            if (freshMode === 'buy') return buyAge < thresholdMs;
+            if (freshMode === 'sell') return sellAge < thresholdMs;
+            return buyAge < thresholdMs && sellAge < thresholdMs; // 'both'
+        });
+    }
+
     // === GROUP ITEMS INTO HAUL PLANS ===
     // Group by route (buyCity -> sellCity), then optimally pack each trip
     const routeGroups = {};
@@ -4129,7 +4172,7 @@ async function enrichAndRenderTransport(routes, budget, sortBy, mountCapacity, f
         // For stackable (999 per slot): profitPerSlot = profitPerUnit * min(budget/price, volume, 999)
         const scored = items.map(item => {
             const maxAffordable = Math.floor(budget / item.buyPrice);
-            const maxVol = item.realisticVolume > 0 ? Math.ceil(item.realisticVolume * 2) : maxAffordable;
+            const maxVol = item.realisticVolume > 0 ? Math.ceil(item.realisticVolume) : maxAffordable;
             const maxWt = (item.itemWeight > 0 && mountCapacity > 0) ? Math.floor(mountCapacity / item.itemWeight) : maxAffordable;
             const unitsPerSlot = item.stackable ? Math.min(item.stackSize, maxAffordable, maxVol) : 1;
             return { ...item, slotScore: item.profitPerUnit * unitsPerSlot };
@@ -4152,7 +4195,7 @@ async function enrichAndRenderTransport(routes, budget, sortBy, mountCapacity, f
 
             let maxAfford = Math.floor(Math.min(remainingBudget, maxBudgetPerItem) / item.buyPrice);
             if (maxAfford <= 0) continue;
-            let maxVolume = item.realisticVolume > 0 ? Math.ceil(item.realisticVolume * 2) : Infinity;
+            let maxVolume = item.realisticVolume > 0 ? Math.ceil(item.realisticVolume) : Infinity;
             const slotsAvail = Math.min(maxSlotsPerItem, remainingSlots);
             let maxSlots = item.stackable ? slotsAvail * item.stackSize : slotsAvail;
             let maxWeight = (item.itemWeight > 0 && mountCapacity > 0) ? Math.floor(remainingWeight / item.itemWeight) : Infinity;
@@ -4179,7 +4222,7 @@ async function enrichAndRenderTransport(routes, budget, sortBy, mountCapacity, f
                 if (remainingBudget <= pi.buyPrice * 0.5 || remainingSlots <= 0) break;
                 let extraAfford = Math.floor(remainingBudget / pi.buyPrice);
                 if (extraAfford <= 0) continue;
-                let extraVol = pi.realisticVolume > 0 ? Math.max(0, Math.ceil(pi.realisticVolume * 2) - pi.planUnits) : Infinity;
+                let extraVol = pi.realisticVolume > 0 ? Math.max(0, Math.ceil(pi.realisticVolume) - pi.planUnits) : Infinity;
                 let extraSlots = pi.stackable ? remainingSlots * pi.stackSize : remainingSlots;
                 let extraWeight = (pi.itemWeight > 0 && mountCapacity > 0) ? Math.floor(remainingWeight / pi.itemWeight) : Infinity;
                 const extra = Math.min(extraAfford, extraVol, extraSlots, extraWeight);
@@ -4335,7 +4378,7 @@ function renderTransportResults(routes, budget, mountCapacity, haulPlans, availa
                             ${getTierEnchLabel(item.itemId)} ${getQualityName(item.quality)}
                             &nbsp;${getFreshnessIndicator(item.dateBuy)} Buy @ ${Math.floor(item.buyPrice).toLocaleString()} <span style="opacity:0.7">${timeAgo(item.dateBuy)}</span>
                             &nbsp;${getFreshnessIndicator(item.dateSell)} Sell @ ${Math.floor(item.sellPrice).toLocaleString()} <span style="opacity:0.7">${timeAgo(item.dateSell)}</span>
-                            ${!item.hasVolumeData ? ' <span style="color:#f59e0b;" title="No volume data available — verify market availability">⚠ No vol</span>' : ''}
+                            ${!item.hasVolumeData ? ' <span style="color:#f59e0b;" title="No volume data available — verify market availability in-game before buying">⚠ No vol data</span>' : item.realisticVolume > 0 && item.planUnits > item.realisticVolume ? ` <span style="color:#f59e0b;" title="Suggested quantity (${item.planUnits}) exceeds estimated daily volume (~${Math.round(item.realisticVolume)}). You may not find enough sell orders at this price.">⚠ ~${Math.round(item.realisticVolume)}/day</span>` : item.realisticVolume > 0 ? ` <span style="color:var(--text-muted);" title="Estimated daily volume">~${Math.round(item.realisticVolume)}/day</span>` : ''}
                         </div>
                     </div>
                     <div style="display:grid; grid-template-columns: repeat(5, auto); gap:0.6rem; align-items:center; font-size:0.76rem; flex-shrink:0; text-align:right;">
