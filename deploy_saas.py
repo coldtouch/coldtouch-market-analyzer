@@ -99,7 +99,7 @@ const API_BASE = `https://${GAME_SERVER}.albion-online-data.com/api/v2/stats/pri
 const CHARTS_BASE = `https://${GAME_SERVER}.albion-online-data.com/api/v2/stats/charts`;
 const HISTORY_BASE = `https://${GAME_SERVER}.albion-online-data.com/api/v2/stats/history`;
 const ITEMS_URL = 'https://coldtouch.github.io/coldtouch-market-analyzer/items.json';
-const CHUNK_SIZE = 25;  // Small chunks to keep event loop responsive on 1GB VPS
+const CHUNK_SIZE = 50;  // Larger chunks OK with 6 vCPU / 12GB RAM
 const SCAN_INTERVAL_MS = 10 * 60 * 1000; // 10 minutes
 const SITE_URL = 'https://coldtouch.github.io/coldtouch-market-analyzer';
 
@@ -108,6 +108,14 @@ let itemNames = {};
 
 // === DATABASE ===
 const db = new sqlite3.Database('/opt/albion-saas/database.sqlite');
+
+// Performance PRAGMAs — WAL mode dramatically reduces read/write contention
+db.run('PRAGMA journal_mode = WAL');
+db.run('PRAGMA synchronous = NORMAL');
+db.run('PRAGMA cache_size = -128000');  // 128MB page cache
+db.run('PRAGMA busy_timeout = 5000');
+db.run('PRAGMA wal_autocheckpoint = 1000');
+
 db.serialize(() => {
   db.run(`CREATE TABLE IF NOT EXISTS users (id TEXT PRIMARY KEY, username TEXT, avatar TEXT)`);
   db.run(`CREATE TABLE IF NOT EXISTS alerts (guild_id TEXT, channel_id TEXT, min_profit INTEGER, cooldown_ms INTEGER DEFAULT 600000, PRIMARY KEY(guild_id, channel_id))`);
@@ -154,11 +162,16 @@ db.serialize(() => {
     city TEXT NOT NULL,
     avg_sell INTEGER DEFAULT 0,
     avg_buy INTEGER DEFAULT 0,
+    min_sell INTEGER DEFAULT 0,
+    max_buy INTEGER DEFAULT 0,
     sample_count INTEGER DEFAULT 0,
     period_type TEXT NOT NULL,
     period_start INTEGER NOT NULL,
     PRIMARY KEY(item_id, quality, city, period_type, period_start)
   )`);
+  // Migrate: add min_sell/max_buy columns if missing
+  db.run(`ALTER TABLE price_averages ADD COLUMN min_sell INTEGER DEFAULT 0`, () => {});
+  db.run(`ALTER TABLE price_averages ADD COLUMN max_buy INTEGER DEFAULT 0`, () => {});
 
   // === PHASE 3: Community Scanning Incentives ===
   db.run(`CREATE TABLE IF NOT EXISTS contributions (
@@ -958,14 +971,14 @@ app.get('/api/price-history', (req, res) => {
   const daysBack = Math.min(parseInt(days) || 7, 90);
   const cutoff = Date.now() - daysBack * 24 * 60 * 60 * 1000;
 
-  // Get raw snapshots for recent data
+  // Query price_averages (hourly/daily) instead of raw snapshots
   const query = city
-    ? `SELECT sell_price_min, buy_price_max, recorded_at FROM price_snapshots WHERE item_id = ? AND city = ? AND recorded_at > ? ORDER BY recorded_at`
-    : `SELECT city, sell_price_min, buy_price_max, recorded_at FROM price_snapshots WHERE item_id = ? AND recorded_at > ? ORDER BY recorded_at`;
+    ? `SELECT avg_sell as sell_price_min, avg_buy as buy_price_max, min_sell, max_buy, period_start as recorded_at FROM price_averages WHERE item_id = ? AND city = ? AND period_start > ? ORDER BY period_start`
+    : `SELECT city, avg_sell as sell_price_min, avg_buy as buy_price_max, min_sell, max_buy, period_start as recorded_at FROM price_averages WHERE item_id = ? AND period_start > ? ORDER BY period_start`;
 
   const params = city ? [item_id, city, cutoff] : [item_id, cutoff];
   db.all(query, params, (err, rows) => {
-    if (err) return res.status(500).json({ error: err.message });
+    if (err) return res.status(500).json({ error: 'An internal error occurred' });
     res.json(rows || []);
   });
 });
@@ -1248,9 +1261,12 @@ function checkAndAlert(id, q) {
 let dbBusy = false; // Prevents concurrent transaction collisions
 
 // === HISTORICAL SNAPSHOT RECORDING ===
+// Writes directly to price_averages (hourly buckets) instead of price_snapshots.
+// This eliminates the compaction pipeline and prevents unbounded table growth.
 function recordSnapshots(allPrices) {
   if (dbBusy) { console.log('[Snapshots] DB busy, skipping'); return; }
   const now = Date.now();
+  const hourStart = Math.floor(now / 3600000) * 3600000;
   const BATCH = 5000;
   let i = 0, count = 0;
 
@@ -1258,20 +1274,29 @@ function recordSnapshots(allPrices) {
     const end = Math.min(i + BATCH, allPrices.length);
     db.serialize(() => {
       db.run('BEGIN TRANSACTION');
-      const stmt = db.prepare(`INSERT INTO price_snapshots (item_id, quality, city, sell_price_min, buy_price_max, sell_date, buy_date, recorded_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`);
+      const stmt = db.prepare(`INSERT INTO price_averages (item_id, quality, city, avg_sell, avg_buy, min_sell, max_buy, sample_count, period_type, period_start)
+        VALUES (?, ?, ?, ?, ?, ?, ?, 1, 'hourly', ?)
+        ON CONFLICT(item_id, quality, city, period_type, period_start) DO UPDATE SET
+          avg_sell = CASE WHEN excluded.avg_sell > 0 THEN excluded.avg_sell ELSE avg_sell END,
+          avg_buy = CASE WHEN excluded.avg_buy > 0 THEN excluded.avg_buy ELSE avg_buy END,
+          min_sell = CASE WHEN excluded.min_sell > 0 AND (min_sell = 0 OR excluded.min_sell < min_sell) THEN excluded.min_sell ELSE min_sell END,
+          max_buy = CASE WHEN excluded.max_buy > max_buy THEN excluded.max_buy ELSE max_buy END,
+          sample_count = sample_count + 1`);
       for (; i < end; i++) {
         const entry = allPrices[i];
         if (!entry.item_id || !entry.city) continue;
-        if (entry.sell_price_min <= 0 && entry.buy_price_max <= 0) continue;
-        stmt.run(entry.item_id, entry.quality || 1, entry.city, entry.sell_price_min || 0, entry.buy_price_max || 0, entry.sell_price_min_date || '', entry.buy_price_max_date || '', now);
+        const sell = entry.sell_price_min || 0;
+        const buy = entry.buy_price_max || 0;
+        if (sell <= 0 && buy <= 0) continue;
+        stmt.run(entry.item_id, entry.quality || 1, entry.city, sell, buy, sell, buy, hourStart);
         count++;
       }
       stmt.finalize();
       db.run('COMMIT', () => {
         if (i < allPrices.length) {
-          setTimeout(writeBatch, 10); // Yield to event loop between batches
+          setTimeout(writeBatch, 10);
         } else {
-          console.log(`[Snapshots] Recorded ${count} price snapshots`);
+          console.log(`[Snapshots] Recorded ${count} prices into price_averages (hourly)`);
         }
       });
     });
@@ -1306,10 +1331,10 @@ function computeSpreadStats() {
   const mem = process.memoryUsage();
   console.log(`[SpreadStats] Starting computation... RSS: ${Math.round(mem.rss/1024/1024)}MB Heap: ${Math.round(mem.heapUsed/1024/1024)}MB`);
 
-  // Query price_averages (pre-aggregated hourly/daily) — far smaller than raw price_snapshots.
-  // Capped at 1M rows to prevent OOM on large deployments.
+  // Query price_averages with min_sell/max_buy for accurate spread calculations.
+  // Capped at 1M rows to prevent OOM.
   db.all(
-    `SELECT item_id, quality, city, avg_sell, avg_buy, period_start FROM price_averages WHERE period_start > ? AND (avg_sell > 0 OR avg_buy > 0) LIMIT 1000000`,
+    `SELECT item_id, quality, city, avg_sell, avg_buy, min_sell, max_buy, period_start FROM price_averages WHERE period_start > ? AND (avg_sell > 0 OR avg_buy > 0) LIMIT 1000000`,
     [cutoff],
     (err, allRows) => {
       if (err || !allRows || allRows.length === 0) {
@@ -1321,12 +1346,16 @@ function computeSpreadStats() {
       console.log(`[SpreadStats] Processing ${allRows.length} rows in memory...`);
 
       // Group rows by item_id + quality
-      const itemMap = {};  // "itemId_quality" -> { period_start -> { city -> {sell, buy} } }
+      const itemMap = {};  // "itemId_quality" -> { period_start -> { city -> {sell, buy, minSell, maxBuy} } }
       for (const r of allRows) {
         const key = r.item_id + '_' + r.quality;
         if (!itemMap[key]) itemMap[key] = { item_id: r.item_id, quality: r.quality, cycles: {} };
         if (!itemMap[key].cycles[r.period_start]) itemMap[key].cycles[r.period_start] = {};
-        itemMap[key].cycles[r.period_start][r.city] = { sell: r.avg_sell, buy: r.avg_buy };
+        itemMap[key].cycles[r.period_start][r.city] = {
+          sell: r.avg_sell, buy: r.avg_buy,
+          minSell: r.min_sell || r.avg_sell,
+          maxBuy: r.max_buy || r.avg_buy
+        };
       }
       // Release the raw rows array to free memory
       allRows.length = 0;
@@ -1383,8 +1412,11 @@ function computeSpreadStats() {
                 const buyData = cycle[buyCity];
                 const sellData = cycle[sellCity];
                 if (!buyData || !sellData) continue;
-                if (buyData.sell <= 0 || sellData.buy <= 0) continue;
-                spreads.push(sellData.buy - buyData.sell - (sellData.buy * TAX_RATE));
+                // Use min_sell (best buy price) and max_buy (best sell price) for accurate spreads
+                const buyCost = buyData.minSell || buyData.sell;
+                const sellRevenue = sellData.maxBuy || sellData.buy;
+                if (buyCost <= 0 || sellRevenue <= 0) continue;
+                spreads.push(sellRevenue - buyCost - (sellRevenue * TAX_RATE));
               }
 
               if (spreads.length < 3) continue;
@@ -1424,28 +1456,18 @@ setInterval(computeSpreadStats, 60 * 60 * 1000);
 // === DATA COMPACTION (runs every 2 hours) ===
 function compactOldData() {
   const now = Date.now();
-  const sixHoursAgo = now - 6 * 60 * 60 * 1000;
   const thirtyDaysAgo = now - 30 * 24 * 60 * 60 * 1000;
 
   console.log('[Compaction] Starting...');
 
-  // Delete raw price_snapshots older than 6h directly — no aggregation step.
-  // Aggregation via SELECT+INSERT on a 20M-row table OOMs; price_averages already
-  // has historical data from the backfill and NATS snapshots written at flush time.
-  db.run(`DELETE FROM price_snapshots WHERE recorded_at < ?`, [sixHoursAgo], (err) => {
-    if (!err) {
-      db.get(`SELECT COUNT(*) AS cnt FROM price_snapshots`, [], (e, row) => {
-        console.log(`[Compaction] Deleted raw snapshots older than 6h. Remaining: ${row ? row.cnt : '?'}`);
-      });
-    }
-  });
-
-  // Compact >30 day old hourly averages into daily
+  // Compact >30 day old hourly averages into daily (preserves min_sell/max_buy)
   db.all(
     `SELECT item_id, quality, city,
       CAST(period_start / 86400000 AS INTEGER) * 86400000 as day_start,
       AVG(avg_sell) as avg_sell,
       AVG(avg_buy) as avg_buy,
+      MIN(CASE WHEN min_sell > 0 THEN min_sell ELSE NULL END) as min_sell,
+      MAX(max_buy) as max_buy,
       SUM(sample_count) as cnt
     FROM price_averages
     WHERE period_type = 'hourly' AND period_start < ?
@@ -1454,10 +1476,10 @@ function compactOldData() {
     (err, rows) => {
       if (err || !rows || rows.length === 0) return;
 
-      const stmt = db.prepare(`INSERT OR REPLACE INTO price_averages (item_id, quality, city, avg_sell, avg_buy, sample_count, period_type, period_start) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`);
+      const stmt = db.prepare(`INSERT OR REPLACE INTO price_averages (item_id, quality, city, avg_sell, avg_buy, min_sell, max_buy, sample_count, period_type, period_start) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
       db.run('BEGIN TRANSACTION');
       for (const r of rows) {
-        stmt.run(r.item_id, r.quality, r.city, Math.round(r.avg_sell), Math.round(r.avg_buy), r.cnt, 'daily', r.day_start);
+        stmt.run(r.item_id, r.quality, r.city, Math.round(r.avg_sell), Math.round(r.avg_buy), r.min_sell || 0, r.max_buy || 0, r.cnt, 'daily', r.day_start);
       }
       db.run('COMMIT', () => {
         stmt.finalize();
@@ -1468,10 +1490,7 @@ function compactOldData() {
     }
   );
 
-  // Safety net: hard-delete any snapshots older than 8h (catches any missed by the 6h window above)
-  db.run(`DELETE FROM price_snapshots WHERE recorded_at < ?`, [now - 8 * 60 * 60 * 1000]);
-
-  // Prune spread_stats rows older than 14 days to prevent unbounded table growth (OOM risk)
+  // Prune spread_stats rows older than 14 days
   const fourteenDaysAgo = now - 14 * 24 * 60 * 60 * 1000;
   db.run(`DELETE FROM spread_stats WHERE updated_at < ?`, [fourteenDaysAgo], (err) => {
     if (!err) console.log('[Compaction] Pruned spread_stats rows older than 14 days');
@@ -1522,9 +1541,11 @@ async function backfillHistoricalData() {
       if (rows.length === 0) return resolve(0);
       db.run('BEGIN TRANSACTION', (err) => {
         if (err) return resolve(0);
-        const stmt = db.prepare(`INSERT OR IGNORE INTO price_averages (item_id, quality, city, avg_sell, avg_buy, sample_count, period_type, period_start) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`);
+        const stmt = db.prepare(`INSERT OR IGNORE INTO price_averages (item_id, quality, city, avg_sell, avg_buy, min_sell, max_buy, sample_count, period_type, period_start) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
         for (const r of rows) {
-          stmt.run(r.item_id, r.quality, r.city, r.avg_sell, 0, r.count, periodType, r.period_start);
+          // Charts/History API returns transaction averages — use for both sell and buy
+          const price = r.avg_sell;
+          stmt.run(r.item_id, r.quality, r.city, price, price, price, price, r.count, periodType, r.period_start);
         }
         stmt.finalize(() => {
           db.run('COMMIT', (err2) => {
@@ -1628,16 +1649,27 @@ function flushNatsBuffer() {
     delete natsSnapshotMap[key];
   }
   const now = Date.now();
+  const hourStart = Math.floor(now / 3600000) * 3600000;
 
   db.serialize(() => {
     db.run('BEGIN TRANSACTION');
-    const stmt = db.prepare('INSERT INTO price_snapshots (item_id, quality, city, sell_price_min, buy_price_max, sell_date, buy_date, recorded_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
+    const stmt = db.prepare(`INSERT INTO price_averages (item_id, quality, city, avg_sell, avg_buy, min_sell, max_buy, sample_count, period_type, period_start)
+      VALUES (?, ?, ?, ?, ?, ?, ?, 1, 'hourly', ?)
+      ON CONFLICT(item_id, quality, city, period_type, period_start) DO UPDATE SET
+        avg_sell = CASE WHEN excluded.avg_sell > 0 THEN excluded.avg_sell ELSE avg_sell END,
+        avg_buy = CASE WHEN excluded.avg_buy > 0 THEN excluded.avg_buy ELSE avg_buy END,
+        min_sell = CASE WHEN excluded.min_sell > 0 AND (min_sell = 0 OR excluded.min_sell < min_sell) THEN excluded.min_sell ELSE min_sell END,
+        max_buy = CASE WHEN excluded.max_buy > max_buy THEN excluded.max_buy ELSE max_buy END,
+        sample_count = sample_count + 1`);
     for (const e of batch) {
-      stmt.run(e.item_id, e.quality, e.city, e.sell || 0, e.buy || 0, '', '', now);
+      const sell = e.sell || 0;
+      const buy = e.buy || 0;
+      if (sell <= 0 && buy <= 0) continue;
+      stmt.run(e.item_id, e.quality, e.city, sell, buy, sell, buy, hourStart);
     }
     stmt.finalize();
     db.run('COMMIT', () => {
-      if (batch.length > 50) console.log('[NATS-Snap] Flushed ' + batch.length + ' deduped snapshots (was ' + keys.length + ' raw)');
+      if (batch.length > 50) console.log('[NATS] Flushed ' + batch.length + ' prices into price_averages');
     });
   });
 }
@@ -1769,7 +1801,7 @@ After=network.target
 
 [Service]
 EnvironmentFile=/opt/albion-saas/.env
-ExecStart=/usr/bin/node --max-old-space-size=400 /opt/albion-saas/backend.js
+ExecStart=/usr/bin/node --max-old-space-size=2048 /opt/albion-saas/backend.js
 WorkingDirectory=/opt/albion-saas
 Restart=always
 User=root
