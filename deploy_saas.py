@@ -1063,6 +1063,15 @@ const alertCooldowns = {};
 const FRESHNESS_THRESHOLD = 30 * 60 * 1000; // 30 min — data must be this fresh to trigger alerts
 const MIN_SAMPLE_THRESHOLD = 3; // Minimum historical samples required before alerting (blocks low-liquidity false positives)
 
+// Diagnostic counters — logged every 10 minutes so we can see what the alerter is doing
+let alertStats = { checked: 0, noData: 0, sameCity: 0, stale: 0, noProfit: 0, belowThreshold: 0, lowSamples: 0, liveRejected: 0, cooldown: 0, sent: 0 };
+setInterval(() => {
+  if (alertStats.checked > 0) {
+    console.log(`[Alerter Stats] checked=${alertStats.checked} noData=${alertStats.noData} sameCity=${alertStats.sameCity} stale=${alertStats.stale} noProfit=${alertStats.noProfit} belowThreshold=${alertStats.belowThreshold} lowSamples=${alertStats.lowSamples} liveRejected=${alertStats.liveRejected} cooldown=${alertStats.cooldown} sent=${alertStats.sent}`);
+    alertStats = { checked: 0, noData: 0, sameCity: 0, stale: 0, noProfit: 0, belowThreshold: 0, lowSamples: 0, liveRejected: 0, cooldown: 0, sent: 0 };
+  }
+}, 600000);
+
 // Seed alerter from the periodic server scan so it starts with full market coverage
 function seedAlerterFromScan(allPrices) {
   const now = Date.now();
@@ -1078,8 +1087,15 @@ function seedAlerterFromScan(allPrices) {
       if (!alertMarketDb[id]) alertMarketDb[id] = {};
       if (!alertMarketDb[id][q]) alertMarketDb[id][q] = {};
 
-      const sellDate = entry.sell_price_min_date && !entry.sell_price_min_date.startsWith('0001') ? new Date(entry.sell_price_min_date).getTime() : 0;
-      const buyDate = entry.buy_price_max_date && !entry.buy_price_max_date.startsWith('0001') ? new Date(entry.buy_price_max_date).getTime() : 0;
+      // Use `now` as the freshness timestamp because we JUST fetched these prices from the API.
+      // The API's own dates (sell_price_min_date) reflect when the price last *changed*, not when
+      // it was last verified — an item unchanged for 2h is still live at that price.
+      // Only skip truly stale API dates (>24h old = likely delisted)
+      const apiSellDate = entry.sell_price_min_date && !entry.sell_price_min_date.startsWith('0001') ? new Date(entry.sell_price_min_date).getTime() : 0;
+      const apiBuyDate = entry.buy_price_max_date && !entry.buy_price_max_date.startsWith('0001') ? new Date(entry.buy_price_max_date).getTime() : 0;
+      const staleThreshold = 24 * 60 * 60 * 1000; // 24h
+      const sellDate = (apiSellDate > 0 && (now - apiSellDate) < staleThreshold) ? now : apiSellDate;
+      const buyDate = (apiBuyDate > 0 && (now - apiBuyDate) < staleThreshold) ? now : apiBuyDate;
 
       const existing = alertMarketDb[id][q][city];
       if (!existing) {
@@ -1136,7 +1152,8 @@ setInterval(() => {
 }, 1800000);
 
 function checkAndAlert(id, q) {
-  if (!alertMarketDb[id] || !alertMarketDb[id][q]) return;
+  if (!alertMarketDb[id] || !alertMarketDb[id][q]) { alertStats.noData++; return; }
+  alertStats.checked++;
   const now = Date.now();
 
   let bestSell = { price: Infinity, loc: null, date: 0 };
@@ -1151,15 +1168,15 @@ function checkAndAlert(id, q) {
     }
   }
 
-  if (!bestSell.loc || !bestBuy.loc || bestSell.loc === bestBuy.loc) return;
+  if (!bestSell.loc || !bestBuy.loc || bestSell.loc === bestBuy.loc) { alertStats.sameCity++; return; }
 
   // Both sides must be fresh to ensure the spread is real
   const sellFresh = (now - bestSell.date) < FRESHNESS_THRESHOLD;
   const buyFresh = (now - bestBuy.date) < FRESHNESS_THRESHOLD;
-  if (!sellFresh || !buyFresh) return;
+  if (!sellFresh || !buyFresh) { alertStats.stale++; return; }
 
   const profit = bestBuy.price - bestSell.price - (bestBuy.price * TAX_RATE);
-  if (profit <= 0) return;
+  if (profit <= 0) { alertStats.noProfit++; return; }
   const roi = ((profit / bestSell.price) * 100).toFixed(1);
 
   const buyAge = Math.round((now - bestSell.date) / 60000);
@@ -1178,12 +1195,18 @@ function checkAndAlert(id, q) {
     const sampleCount = stats ? stats.sample_count : 0;
 
     db.all(`SELECT channel_id, cooldown_ms, min_confidence FROM alerts WHERE min_profit <= ?`, [profit], async (err, rows) => {
-      if (err || !rows || rows.length === 0) return;
+      if (err || !rows || rows.length === 0) { alertStats.belowThreshold++; return; }
+
+      // Short cooldown for live validation to prevent spamming the API on the same route
+      const validationKey = `validate_${id}_${q}_${buyCity}_${sellCity}`;
+      if (alertCooldowns[validationKey] && now - alertCooldowns[validationKey] < 120000) return; // 2 min cooldown on validation attempts
 
       // Live price validation — confirm the spread still exists before pinging any channel
       const priceValid = await validatePricesLive(id, q, buyCity, sellCity, bestSell.price, bestBuy.price);
       if (!priceValid) {
-        console.log(`[Alert] Live validation rejected ${id} q${q} route ${buyCity}→${sellCity}`);
+        alertStats.liveRejected++;
+        alertCooldowns[validationKey] = now; // Don't re-validate this route for 2 min
+        console.log(`[Alert] Live validation rejected ${id} q${q} ${buyCity}->${sellCity} (profit was ${Math.floor(profit)})`);
         return;
       }
 
@@ -1191,11 +1214,11 @@ function checkAndAlert(id, q) {
         const cacheKey = `${id}_${q}_${row.channel_id}`;
         const last = alertCooldowns[cacheKey] || 0;
         const cooldown = row.cooldown_ms || 600000;
-        if (now - last < cooldown) return;
+        if (now - last < cooldown) { alertStats.cooldown++; return; }
 
         // Minimum sample threshold — block alerts on near-zero-liquidity items even when min_confidence=0
         if (sampleCount < MIN_SAMPLE_THRESHOLD) {
-          console.log(`[Alert] Skipping ${id} q${q}: only ${sampleCount} samples (min ${MIN_SAMPLE_THRESHOLD} required)`);
+          alertStats.lowSamples++;
           return;
         }
 
@@ -1246,6 +1269,7 @@ function checkAndAlert(id, q) {
           });
         }
 
+        console.log(`[Alert] SENDING: ${friendlyName} q${q} ${buyCity}->${sellCity} profit=${Math.floor(profit)} ROI=${roi}%`);
         channel.send({
           embeds: [{
             title: `${friendlyName}`,
@@ -1258,6 +1282,7 @@ function checkAndAlert(id, q) {
           }]
         }).catch(e => console.error('[Alert] Failed to send:', e.message));
 
+        alertStats.sent++;
         totalAlertsSent++;
         lastAlertTime = now;
       });
