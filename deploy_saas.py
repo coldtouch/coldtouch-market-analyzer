@@ -112,7 +112,8 @@ const SMTP_HOST = process.env.SMTP_HOST || '';
 const SMTP_PORT = parseInt(process.env.SMTP_PORT || '587');
 const SMTP_USER = process.env.SMTP_USER || '';
 const SMTP_PASS = process.env.SMTP_PASS || '';
-const SMTP_FROM = process.env.SMTP_FROM || 'noreply@albionaitool.xyz';
+const SMTP_FROM_RAW = process.env.SMTP_FROM || 'noreply@albionaitool.xyz';
+const SMTP_FROM = SMTP_FROM_RAW.includes('<') ? SMTP_FROM_RAW : '"Coldtouch Market Analyzer" <' + SMTP_FROM_RAW + '>';
 
 let mailTransporter = null;
 if (SMTP_HOST && SMTP_USER) {
@@ -2231,8 +2232,12 @@ require('http').createServer((req, res) => {
   res.end();
 }).listen(80, () => console.log('HTTP redirect listening on 80'));
 """
-    b64_server = base64.b64encode(backend_js.encode()).decode()
-    run_wait(f"echo '{b64_server}' | base64 -d > /opt/albion-saas/backend.js")
+    # Use SFTP for backend.js — base64 via echo truncates at ~100KB
+    sftp = ssh.open_sftp()
+    with sftp.file('/opt/albion-saas/backend.js', 'w') as f:
+        f.write(backend_js)
+    sftp.close()
+    print(f"Uploaded backend.js ({len(backend_js)} bytes via SFTP)")
 
     # Write env file with restricted permissions
     game_server = os.environ.get('GAME_SERVER', 'europe')
