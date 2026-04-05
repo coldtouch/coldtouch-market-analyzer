@@ -3208,6 +3208,20 @@ async function init() {
         }
     });
 
+    // Transport sell strategy: re-render on change
+    const sellStrategyEl = document.getElementById('transport-sell-strategy');
+    if (sellStrategyEl) {
+        sellStrategyEl.addEventListener('change', () => {
+            if (lastTransportRoutes) {
+                const budget = parseInt(document.getElementById('transport-budget').value) || 500000;
+                const sortBy = document.getElementById('transport-sort').value;
+                const mountCapacity = parseInt(document.getElementById('transport-mount').value) || 0;
+                const freeSlots = Math.max(1, Math.min(48, parseInt(document.getElementById('transport-free-slots').value) || 30));
+                enrichAndRenderTransport(lastTransportRoutes, budget, sortBy, mountCapacity, freeSlots);
+            }
+        });
+    }
+
     // Transport freshness filter: show/hide threshold, re-render on change
     const transportFreshMode = document.getElementById('transport-fresh-mode');
     const transportFreshThreshold = document.getElementById('transport-fresh-threshold');
@@ -4056,6 +4070,8 @@ async function enrichAndRenderTransport(routes, budget, sortBy, mountCapacity, f
         }
     });
 
+    const sellStrategy = document.getElementById('transport-sell-strategy')?.value || 'market';
+
     const enriched = [];
     for (const r of routes) {
         const buyKey = `${r.item_id}_${r.quality}_${r.buy_city}`;
@@ -4063,22 +4079,17 @@ async function enrichAndRenderTransport(routes, budget, sortBy, mountCapacity, f
         const buyData = priceMap[buyKey];
         const sellData = priceMap[sellKey];
 
-        let buyPrice, sellPrice, profitPerUnit, dateBuy, dateSell, isHistorical;
+        let buyPrice, sellPrice, profitPerUnit, dateBuy, dateSell, isHistorical, sellMode;
 
         if (transportMode === 'historical') {
             // Historical mode: use spread_stats avg_spread directly
-            // No IndexedDB dependency — always has data if spread_stats has it
             const spread = r.avg_spread || 0;
             if (spread <= 0) continue;
 
-            // If we have live data, use it for price display. Otherwise estimate.
             if (buyData && buyData.sellMin > 0) {
                 buyPrice = buyData.sellMin;
                 sellPrice = buyPrice + spread + (buyPrice * TAX_RATE * (spread / (spread + buyPrice)));
             } else {
-                // Estimate: assume buy price such that spread = profit after tax
-                // spread = sellPrice - buyPrice - tax, and tax = sellPrice * 0.065
-                // Rough estimate: buyPrice ≈ spread * 3 (typical for mid-tier items)
                 buyPrice = Math.round(spread * 3);
                 sellPrice = Math.round(buyPrice + spread + (buyPrice + spread) * TAX_RATE);
             }
@@ -4086,16 +4097,30 @@ async function enrichAndRenderTransport(routes, budget, sortBy, mountCapacity, f
             dateBuy = buyData ? buyData.sellDate : '';
             dateSell = sellData ? sellData.buyDate : '';
             isHistorical = true;
+            sellMode = 'historical';
         } else {
-            // Live mode: require real prices from IndexedDB
+            // Live mode: require buy side price from IndexedDB
             if (!buyData || buyData.sellMin <= 0) continue;
-            if (!sellData || sellData.buyMax <= 0) continue;
             buyPrice = buyData.sellMin;
-            sellPrice = sellData.buyMax;
+
+            if (sellStrategy === 'market') {
+                // "List on Market" — compare sell offers in both cities
+                // Buy cheapest in source, list at market rate in destination
+                if (!sellData || sellData.sellMin <= 0) continue;
+                sellPrice = sellData.sellMin;
+                dateSell = sellData.sellDate;
+                sellMode = 'market';
+            } else {
+                // "Instant Sell" — fill buy orders in destination
+                if (!sellData || sellData.buyMax <= 0) continue;
+                sellPrice = sellData.buyMax;
+                dateSell = sellData.buyDate;
+                sellMode = 'instant';
+            }
+
             profitPerUnit = sellPrice - buyPrice - (sellPrice * TAX_RATE);
             if (profitPerUnit <= 0) continue;
             dateBuy = buyData.sellDate;
-            dateSell = sellData.buyDate;
             isHistorical = false;
         }
 
@@ -4163,7 +4188,7 @@ async function enrichAndRenderTransport(routes, budget, sortBy, mountCapacity, f
             medianSpread: r.median_spread,
             sampleCount: r.sample_count,
             dateBuy, dateSell,
-            isHistorical
+            isHistorical, sellMode
         });
     }
 
@@ -4433,7 +4458,7 @@ function renderTransportResults(routes, budget, mountCapacity, haulPlans, availa
                             ${item.isHistorical
                                 ? `&nbsp;<span style="color:#a78bfa;" title="Prices based on 7-day historical average spread">📊 Avg Spread: +${Math.floor(item.profitPerUnit).toLocaleString()}/unit</span> <span style="opacity:0.7">(${item.consistencyPct ? item.consistencyPct.toFixed(0) + '% consistent' : 'no data'})</span>`
                                 : `&nbsp;${getFreshnessIndicator(item.dateBuy)} Buy @ ${Math.floor(item.buyPrice).toLocaleString()} <span style="opacity:0.7">${timeAgo(item.dateBuy)}</span>
-                                   &nbsp;${getFreshnessIndicator(item.dateSell)} Sell @ ${Math.floor(item.sellPrice).toLocaleString()} <span style="opacity:0.7">${timeAgo(item.dateSell)}</span>`
+                                   &nbsp;${getFreshnessIndicator(item.dateSell)} ${item.sellMode === 'market' ? 'Market' : 'Sell'} @ ${Math.floor(item.sellPrice).toLocaleString()} <span style="opacity:0.7">${timeAgo(item.dateSell)}</span>`
                             }
                             ${!item.hasVolumeData ? ' <span style="color:#f59e0b;" title="No volume data available — verify market availability in-game before buying">⚠ No vol data</span>' : item.realisticVolume > 0 && item.planUnits > item.realisticVolume ? ` <span style="color:#f59e0b;" title="Suggested quantity (${item.planUnits}) exceeds estimated daily volume (~${Math.round(item.realisticVolume)}). You may not find enough sell orders at this price.">⚠ ~${Math.round(item.realisticVolume)}/day</span>` : item.realisticVolume > 0 ? ` <span style="color:var(--text-muted);" title="Estimated daily volume">~${Math.round(item.realisticVolume)}/day</span>` : ''}
                         </div>
