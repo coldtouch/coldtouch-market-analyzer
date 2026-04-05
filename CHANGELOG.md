@@ -2,6 +2,15 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-04-05 — Email Verification, User Profile, and Live Flip Enhancements
+
+- **Email verification system:** Registration now generates a verification token (24h expiry). When SMTP is configured, verification email is sent with branded HTML template. Accounts are auto-verified when SMTP is not configured. New `/api/verify-email` and `/api/resend-verification` endpoints. Verification status shown in profile page with resend button.
+- **User Profile page:** New Profile tab (visible when logged in) with avatar, username, email, auth type, verification status, tier badge, and member-since date. Contribution stats card showing 30-day scans, all-time scans, and current tier. Account settings: change username (issues new JWT), change password (email accounts), link/unlink Discord.
+- **Same-city instant flips:** `detectFlip()` now detects profitable instant flips within the same city (buy order price > sell offer price). Purple "Instant" badge distinguishes them from blue "Transport" cross-city flips.
+- **Live Flip enhanced filters:** City filter (filter by any city involved in the flip), flip type filter (cross-city vs instant), sound notification toggle (880Hz beep), desktop notification support with permission request. Stats bar showing flip count and total potential silver.
+- **Flip buffer doubled:** MAX_FLIPS increased from 100 to 200 for richer history.
+- **Refactored auth UI:** Extracted `updateHeaderProfile()` helper to deduplicate login/register/OAuth profile update code.
+
 ### 2026-04-05 — User Registration, Live Flips, and Discord Alert Gating
 
 - **Email/password registration:** New `/api/register` and `/api/login` endpoints with bcrypt password hashing (12 rounds). Users table extended with email, password_hash, auth_type, role, and timestamps. Registration form on the landing page alongside Discord login.
