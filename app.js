@@ -4124,13 +4124,12 @@ async function enrichAndRenderTransport(routes, budget, sortBy, mountCapacity, f
             buyPrice = ld.buy_price;
             sellPrice = ld.sell_price;
             profitPerUnit = ld.profit;
-            dateBuy = ''; // Ages shown as "Xm ago" from ld.buy_age
+            dateBuy = '';
             dateSell = '';
             isHistorical = false;
             sellMode = ld.sell_strategy || 'market';
-            // Synthesize date strings from age (minutes ago)
             if (ld.buy_age >= 0) dateBuy = new Date(Date.now() - ld.buy_age * 60000).toISOString();
-            if (ld.sell_age >= 0) dateSell = new Date(Date.now() - ld.sell_age * 60000).toISOString();
+            if (ld.sell_age >= 0 && ld.sell_age < 9999) dateSell = new Date(Date.now() - ld.sell_age * 60000).toISOString();
         } else if (transportMode === 'historical') {
             // Historical mode: use spread_stats avg_spread directly
             const spread = r.avg_spread || 0;
@@ -4236,7 +4235,9 @@ async function enrichAndRenderTransport(routes, budget, sortBy, mountCapacity, f
             medianSpread: r.median_spread,
             sampleCount: r.sample_count,
             dateBuy, dateSell,
-            isHistorical, sellMode
+            isHistorical, sellMode,
+            instantSellPrice: r._liveData?.instant_sell_price || 0,
+            instantProfit: r._liveData?.instant_profit || 0
         });
     }
 
@@ -4506,7 +4507,8 @@ function renderTransportResults(routes, budget, mountCapacity, haulPlans, availa
                             ${item.isHistorical
                                 ? `&nbsp;<span style="color:#a78bfa;" title="Prices based on 7-day historical average spread">📊 Avg Spread: +${Math.floor(item.profitPerUnit).toLocaleString()}/unit</span> <span style="opacity:0.7">(${item.consistencyPct ? item.consistencyPct.toFixed(0) + '% consistent' : 'no data'})</span>`
                                 : `&nbsp;${getFreshnessIndicator(item.dateBuy)} Buy @ ${Math.floor(item.buyPrice).toLocaleString()} <span style="opacity:0.7">${timeAgo(item.dateBuy)}</span>
-                                   &nbsp;${getFreshnessIndicator(item.dateSell)} ${item.sellMode === 'market' ? 'Market' : 'Sell'} @ ${Math.floor(item.sellPrice).toLocaleString()} <span style="opacity:0.7">${timeAgo(item.dateSell)}</span>`
+                                   &nbsp;${getFreshnessIndicator(item.dateSell)} ${item.sellMode === 'market' ? 'Avg' : 'Sell'} @ ${Math.floor(item.sellPrice).toLocaleString()} <span style="opacity:0.7">${item.sellMode === 'market' ? '7d avg' : timeAgo(item.dateSell)}</span>
+                                   ${item.instantSellPrice > 0 ? `&nbsp;<span style="color:var(--profit-green); font-size:0.65rem;" title="Active buy order — instant sell available">⚡ Instant: ${Math.floor(item.instantSellPrice).toLocaleString()}</span>` : ''}`
                             }
                             ${!item.hasVolumeData ? ' <span style="color:#f59e0b;" title="No volume data available — verify market availability in-game before buying">⚠ No vol data</span>' : item.realisticVolume > 0 && item.planUnits > item.realisticVolume ? ` <span style="color:#f59e0b;" title="Suggested quantity (${item.planUnits}) exceeds estimated daily volume (~${Math.round(item.realisticVolume)}). You may not find enough sell orders at this price.">⚠ ~${Math.round(item.realisticVolume)}/day</span>` : item.realisticVolume > 0 ? ` <span style="color:var(--text-muted);" title="Estimated daily volume">~${Math.round(item.realisticVolume)}/day</span>` : ''}
                         </div>

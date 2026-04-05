@@ -1344,7 +1344,24 @@ app.get('/api/transport-routes-live', (req, res) => {
       const q = parseInt(qStr);
       const cityEntries = Object.entries(cities);
       const globalAvg = globalPriceRef[itemId + '_' + q] || 0;
-      if (!globalAvg) continue; // No trade history at all = skip
+      if (!globalAvg) continue; // No trade history = skip
+
+      // === CROSS-CITY SANITY CHECK ===
+      // Find the MINIMUM sell price across ALL cities — this is the TRUE market value.
+      // Any city where sell_price_min is wildly above this baseline has a junk listing.
+      let minSellAcrossCities = Infinity;
+      let citiesWithSellData = 0;
+      for (const [, cd] of cityEntries) {
+        if (cd.sellMin > 0 && cd.sellMin < Infinity) {
+          if (cd.sellMin < minSellAcrossCities) minSellAcrossCities = cd.sellMin;
+          citiesWithSellData++;
+        }
+      }
+      if (minSellAcrossCities === Infinity || citiesWithSellData < 2) continue;
+
+      // Use the lower of (min across cities) and (global historical avg) as the baseline
+      // This catches both live manipulation AND historical pollution
+      const baseline = Math.min(minSellAcrossCities, globalAvg);
 
       for (let i = 0; i < cityEntries.length; i++) {
         const [srcCity, srcData] = cityEntries[i];
@@ -1352,8 +1369,8 @@ app.get('/api/transport-routes-live', (req, res) => {
         if (srcData.sellDate && (now - srcData.sellDate) > maxAgeMs) continue;
         if (buyCity && srcCity !== buyCity) continue;
         if (excludeCities.includes(srcCity)) continue;
-        // Buy price must be reasonable (within 3x of global average)
-        if (srcData.sellMin > globalAvg * 3) continue;
+        // Buy price must be near baseline (within 2x) — reject manipulated listings
+        if (srcData.sellMin > baseline * 2) continue;
 
         for (let j = 0; j < cityEntries.length; j++) {
           if (i === j) continue;
@@ -1364,18 +1381,20 @@ app.get('/api/transport-routes-live', (req, res) => {
           let dstPrice = 0, dstDate = 0;
 
           if (sellStrategy === 'instant') {
-            // Instant sell: use live buy orders
             if (!dstData.buyMax || dstData.buyMax <= 0) continue;
             if (dstData.buyDate && (now - dstData.buyDate) > maxAgeMs) continue;
             dstPrice = dstData.buyMax;
             dstDate = dstData.buyDate || dstData.lastSeen || 0;
+            // Buy order must also be reasonable
+            if (dstPrice > baseline * 3) continue;
           } else {
-            // "List on Market": use HISTORICAL AVERAGE for destination city
-            // This is what items actually sell for there — not one random listing
+            // "List on Market": use historical average for destination city
             const dstAvg = cityPriceRef[itemId + '_' + q + '_' + dstCity];
             if (!dstAvg || dstAvg <= 0) continue;
             dstPrice = dstAvg;
             dstDate = dstData ? (dstData.sellDate || dstData.lastSeen || 0) : 0;
+            // Destination avg must be reasonable (within 3x baseline)
+            if (dstPrice > baseline * 3) continue;
           }
 
           if (dstPrice <= srcData.sellMin) continue;
@@ -1383,7 +1402,7 @@ app.get('/api/transport-routes-live', (req, res) => {
           const profit = dstPrice - srcData.sellMin - (dstPrice * TAX_RATE);
           if (profit < minProfit) continue;
           const roi = (profit / srcData.sellMin) * 100;
-          if (roi < 2 || roi > 200) continue;
+          if (roi < 2 || roi > 150) continue;
 
           routes.push({
             item_id: itemId,
@@ -1407,7 +1426,17 @@ app.get('/api/transport-routes-live', (req, res) => {
 
   routes.sort((a, b) => b.profit - a.profit);
   const result = routes.slice(0, limit);
-  console.log(`[Transport-Live] ${routes.length} routes (strategy=${sellStrategy}, maxAge=${maxAge}m, cityRef=${Object.keys(cityPriceRef).length})`);
+  // Also count how many have buy orders (instant sell) available for the same route
+  let instantAvailable = 0;
+  for (const r of result) {
+    const dstData = alertMarketDb[r.item_id]?.[r.quality]?.[r.sell_city];
+    if (dstData?.buyMax > 0 && dstData.buyMax > r.buy_price) {
+      r.instant_sell_price = dstData.buyMax;
+      r.instant_profit = Math.floor(dstData.buyMax - r.buy_price - (dstData.buyMax * TAX_RATE));
+      if (r.instant_profit > 0) instantAvailable++;
+    }
+  }
+  console.log(`[Transport-Live] ${routes.length} routes (strategy=${sellStrategy}, maxAge=${maxAge}m, instant=${instantAvailable})`);
   res.json({ routes: result, total: routes.length, dataPoints: Object.keys(alertMarketDb).length });
 });
 
