@@ -3536,11 +3536,12 @@ async function enrichAndRenderTransport(routes, budget, sortBy, mountCapacity, f
 
         // Use AVAILABLE slots (player's actual free slots), not hardcoded 48
         let maxByBudget = Math.floor(budget / buyPrice);
-        // Volume safety cap: if no volume data, use conservative fallback
-        const volumeCap = stackable ? 100 : 10;
-        let maxByVolume = realisticVolume > 0 ? Math.ceil(realisticVolume) : volumeCap;
+        // Volume: if real data exists, use it as soft guide (2x since sample_count is poll frequency, not trades).
+        // If no data, don't cap — let budget/slots/weight be the natural limiters.
+        const hasVolumeData = realisticVolume > 0;
+        let maxByVolume = hasVolumeData ? Math.ceil(realisticVolume * 2) : Infinity;
         let maxBySlots = stackable ? availableSlots * stackSize : availableSlots;
-        let maxByWeight = (mountCapacity > 0 && itemWeight > 0) ? Math.floor(mountCapacity / itemWeight) : maxByBudget;
+        let maxByWeight = (mountCapacity > 0 && itemWeight > 0) ? Math.floor(mountCapacity / itemWeight) : Infinity;
 
         const unitsCanCarry = Math.max(1, Math.min(maxByBudget, maxByVolume, maxBySlots, maxByWeight));
         const silverUsed = unitsCanCarry * buyPrice;
@@ -3565,6 +3566,7 @@ async function enrichAndRenderTransport(routes, budget, sortBy, mountCapacity, f
             buyPrice, sellPrice, tax, profitPerUnit, roi,
             volume: Math.round(volume),
             realisticVolume: Math.round(realisticVolume),
+            hasVolumeData,
             unitsCanCarry,
             slotsUsed,
             silverUsed: Math.round(silverUsed),
@@ -3622,8 +3624,7 @@ async function enrichAndRenderTransport(routes, budget, sortBy, mountCapacity, f
         // For stackable (999 per slot): profitPerSlot = profitPerUnit * min(budget/price, volume, 999)
         const scored = items.map(item => {
             const maxAffordable = Math.floor(budget / item.buyPrice);
-            const volCap = item.stackable ? 100 : 10;
-            const maxVol = item.realisticVolume > 0 ? Math.ceil(item.realisticVolume) : volCap;
+            const maxVol = item.realisticVolume > 0 ? Math.ceil(item.realisticVolume * 2) : maxAffordable;
             const maxWt = (item.itemWeight > 0 && mountCapacity > 0) ? Math.floor(mountCapacity / item.itemWeight) : maxAffordable;
             const unitsPerSlot = item.stackable ? Math.min(item.stackSize, maxAffordable, maxVol) : 1;
             return { ...item, slotScore: item.profitPerUnit * unitsPerSlot };
@@ -3635,16 +3636,21 @@ async function enrichAndRenderTransport(routes, budget, sortBy, mountCapacity, f
         let remainingSlots = availableSlots;
         const planItems = [];
 
+        // Two-pass packing: Pass 1 caps each item at 40% of budget/slots to force variety.
+        // Pass 2 fills remaining capacity with top items that can still absorb more.
+        const maxBudgetPerItem = budget * 0.4;
+        const maxSlotsPerItem = Math.max(1, Math.ceil(availableSlots * 0.4));
+
         for (const item of scored) {
             if (remainingBudget <= item.buyPrice * 0.5 || remainingSlots <= 0) break;
             if (item.itemWeight > 0 && remainingWeight < item.itemWeight) continue;
 
-            let maxAfford = Math.floor(remainingBudget / item.buyPrice);
+            let maxAfford = Math.floor(Math.min(remainingBudget, maxBudgetPerItem) / item.buyPrice);
             if (maxAfford <= 0) continue;
-            const volFallback = item.stackable ? 100 : 10;
-            let maxVolume = item.realisticVolume > 0 ? Math.ceil(item.realisticVolume) : volFallback;
-            let maxSlots = item.stackable ? remainingSlots * item.stackSize : remainingSlots;
-            let maxWeight = (item.itemWeight > 0 && mountCapacity > 0) ? Math.floor(remainingWeight / item.itemWeight) : maxAfford;
+            let maxVolume = item.realisticVolume > 0 ? Math.ceil(item.realisticVolume * 2) : Infinity;
+            const slotsAvail = Math.min(maxSlotsPerItem, remainingSlots);
+            let maxSlots = item.stackable ? slotsAvail * item.stackSize : slotsAvail;
+            let maxWeight = (item.itemWeight > 0 && mountCapacity > 0) ? Math.floor(remainingWeight / item.itemWeight) : Infinity;
 
             const units = Math.min(maxAfford, maxVolume, maxSlots, maxWeight);
             if (units <= 0) continue;
@@ -3660,6 +3666,34 @@ async function enrichAndRenderTransport(routes, budget, sortBy, mountCapacity, f
             remainingBudget -= cost;
             remainingWeight -= weight;
             remainingSlots -= slots;
+        }
+
+        // Pass 2: Fill remaining budget/slots with more units of items already in plan
+        if (remainingBudget > 0 && remainingSlots > 0 && planItems.length > 0) {
+            for (const pi of planItems) {
+                if (remainingBudget <= pi.buyPrice * 0.5 || remainingSlots <= 0) break;
+                let extraAfford = Math.floor(remainingBudget / pi.buyPrice);
+                if (extraAfford <= 0) continue;
+                let extraVol = pi.realisticVolume > 0 ? Math.max(0, Math.ceil(pi.realisticVolume * 2) - pi.planUnits) : Infinity;
+                let extraSlots = pi.stackable ? remainingSlots * pi.stackSize : remainingSlots;
+                let extraWeight = (pi.itemWeight > 0 && mountCapacity > 0) ? Math.floor(remainingWeight / pi.itemWeight) : Infinity;
+                const extra = Math.min(extraAfford, extraVol, extraSlots, extraWeight);
+                if (extra <= 0) continue;
+                const extraCost = extra * pi.buyPrice;
+                const extraProfit = extra * pi.profitPerUnit;
+                const extraWt = extra * pi.itemWeight;
+                const newSlots = pi.stackable ? Math.ceil((pi.planUnits + extra) / pi.stackSize) : pi.planUnits + extra;
+                const slotsAdded = newSlots - pi.planSlots;
+                if (slotsAdded > remainingSlots) continue;
+                pi.planUnits += extra;
+                pi.planCost = Math.round(pi.planCost + extraCost);
+                pi.planProfit = Math.round(pi.planProfit + extraProfit);
+                pi.planWeight += extraWt;
+                pi.planSlots = newSlots;
+                remainingBudget -= extraCost;
+                remainingWeight -= extraWt;
+                remainingSlots -= slotsAdded;
+            }
         }
 
         if (planItems.length > 0) {
@@ -3725,6 +3759,11 @@ function renderTransportResults(routes, budget, mountCapacity, haulPlans, availa
             const roiPct = plan.totalCost > 0 ? ((plan.totalProfit / plan.totalCost) * 100).toFixed(1) : 0;
             const confBadge = plan.avgConfidence >= 70 ? '<span style="color:#22c55e; font-size:0.7rem;">HIGH</span>' : plan.avgConfidence >= 40 ? '<span style="color:#f59e0b; font-size:0.7rem;">MED</span>' : '<span style="color:#ef4444; font-size:0.7rem;">LOW</span>';
 
+            // Find oldest price date among all items to show worst-case freshness
+            const allDates = plan.items.flatMap(i => [i.dateBuy, i.dateSell]).filter(d => d);
+            const oldestDate = allDates.length > 0 ? allDates.reduce((oldest, d) => d < oldest ? d : oldest) : '';
+            const freshnessHtml = oldestDate ? `${getFreshnessIndicator(oldestDate)} ${timeAgo(oldestDate)}` : '<span style="color:#ef4444;">No data</span>';
+
             // --- Collapsed summary (always visible) ---
             const summaryDiv = document.createElement('div');
             summaryDiv.className = 'haul-plan-summary';
@@ -3739,7 +3778,7 @@ function renderTransportResults(routes, budget, mountCapacity, haulPlans, availa
                         </div>
                         <div style="min-width:0;">
                             <div style="font-weight:600; font-size:0.9rem; color:var(--text-primary);">${plan.buyCity} ➔ ${plan.sellCity}</div>
-                            <div style="font-size:0.72rem; color:var(--text-muted);">${plan.items.length} item${plan.items.length > 1 ? 's' : ''} &bull; ${plan.totalSlots}/${availableSlots} slots &bull; ${plan.budgetUsed}% budget ${confBadge}</div>
+                            <div style="font-size:0.72rem; color:var(--text-muted);">${plan.items.length} item${plan.items.length > 1 ? 's' : ''} &bull; ${plan.totalSlots}/${availableSlots} slots &bull; ${plan.budgetUsed}% budget &bull; ${freshnessHtml} ${confBadge}</div>
                         </div>
                     </div>
                     <div style="display:flex; align-items:center; gap:1.2rem; flex-shrink:0;">
@@ -3769,7 +3808,12 @@ function renderTransportResults(routes, budget, mountCapacity, haulPlans, availa
                     <img src="https://render.albiononline.com/v1/item/${item.itemId}.png" alt="" loading="lazy" style="width:32px; height:32px; border-radius:4px;">
                     <div style="flex:1; min-width:0;">
                         <div style="font-size:0.82rem; font-weight:600; color:var(--text-primary); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${esc(getFriendlyName(item.itemId))}</div>
-                        <div style="font-size:0.7rem; color:var(--text-muted);">${getTierEnchLabel(item.itemId)} ${getQualityName(item.quality)}</div>
+                        <div style="font-size:0.7rem; color:var(--text-muted);">
+                            ${getTierEnchLabel(item.itemId)} ${getQualityName(item.quality)}
+                            &nbsp;${getFreshnessIndicator(item.dateBuy)} Buy ${timeAgo(item.dateBuy)}
+                            &nbsp;${getFreshnessIndicator(item.dateSell)} Sell ${timeAgo(item.dateSell)}
+                            ${!item.hasVolumeData ? ' <span style="color:#f59e0b;" title="No volume data available — verify market availability">⚠️ No vol data</span>' : ''}
+                        </div>
                     </div>
                     <div style="display:grid; grid-template-columns: repeat(5, auto); gap:0.6rem; align-items:center; font-size:0.76rem; flex-shrink:0; text-align:right;">
                         <span title="Buy quantity">${limitIcon} <b>x${item.planUnits.toLocaleString()}</b></span>
