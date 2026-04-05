@@ -2983,6 +2983,11 @@ async function checkDiscordAuth() {
     const urlParams = new URLSearchParams(window.location.search);
     const loginParam = urlParams.get('login');
     const tokenParam = urlParams.get('token');
+    const linkParam = urlParams.get('link');
+    if (linkParam === 'success') {
+        history.replaceState(null, '', window.location.pathname);
+        // Discord account linked — just continue with existing session
+    }
     if (loginParam || tokenParam) {
         // Store JWT from OAuth redirect — used as Authorization: Bearer header
         // instead of session cookies (which are blocked as third-party by Safari/Chrome).
@@ -3042,7 +3047,13 @@ async function checkDiscordAuth() {
             const profile = document.getElementById('discord-user-profile');
             profile.classList.remove('hidden');
             profile.style.display = 'flex';
-            document.getElementById('discord-avatar').src = `https://cdn.discordapp.com/avatars/${data.user.id}/${data.user.avatar}.png`;
+            const avatarEl = document.getElementById('discord-avatar');
+            if (data.user.avatar && data.user.authType !== 'email') {
+                avatarEl.src = `https://cdn.discordapp.com/avatars/${data.user.id}/${data.user.avatar}.png`;
+            } else {
+                // Email users or users without avatar: show a placeholder
+                avatarEl.src = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="%23888" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>');
+            }
             document.getElementById('discord-username').textContent = data.user.username;
 
             // Show tier badge in header (tier is nested under data.stats)
@@ -3299,6 +3310,118 @@ async function init() {
     if (landingDiscordBtn) {
         landingDiscordBtn.addEventListener('click', () => {
             landingDiscordBtn.classList.add('loading');
+        });
+    }
+
+    // Auth tabs: switch between Login and Register forms
+    document.querySelectorAll('.auth-tab').forEach(tab => {
+        tab.addEventListener('click', () => {
+            document.querySelectorAll('.auth-tab').forEach(t => t.classList.remove('active'));
+            tab.classList.add('active');
+            const mode = tab.dataset.tab;
+            const loginForm = document.getElementById('auth-login-form');
+            const registerForm = document.getElementById('auth-register-form');
+            if (loginForm) loginForm.style.display = mode === 'login' ? 'flex' : 'none';
+            if (registerForm) registerForm.style.display = mode === 'register' ? 'flex' : 'none';
+            // Clear errors
+            const errDiv = document.getElementById('landing-auth-error');
+            if (errDiv) errDiv.style.display = 'none';
+            const succDiv = document.getElementById('landing-auth-success');
+            if (succDiv) succDiv.style.display = 'none';
+        });
+    });
+
+    // Email/password login form
+    const loginForm = document.getElementById('auth-login-form');
+    if (loginForm) {
+        loginForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const email = document.getElementById('login-email').value.trim();
+            const password = document.getElementById('login-password').value;
+            const submitBtn = loginForm.querySelector('.btn-auth-submit');
+            const errDiv = document.getElementById('landing-auth-error');
+            const errText = document.getElementById('landing-auth-error-text');
+
+            if (errDiv) errDiv.style.display = 'none';
+            if (submitBtn) { submitBtn.disabled = true; submitBtn.textContent = 'Signing in...'; }
+
+            try {
+                const res = await fetch(`${VPS_BASE}/api/login`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ email, password })
+                });
+                const data = await res.json();
+                if (data.success && data.token) {
+                    localStorage.setItem('albion_auth_token', data.token);
+                    discordUser = data.user;
+                    dismissLandingOverlay();
+                    // Update header profile
+                    document.getElementById('login-discord-btn').classList.add('hidden');
+                    const profile = document.getElementById('discord-user-profile');
+                    profile.classList.remove('hidden');
+                    profile.style.display = 'flex';
+                    const avatarEl = document.getElementById('discord-avatar');
+                    if (data.user.avatar) {
+                        avatarEl.src = `https://cdn.discordapp.com/avatars/${data.user.id}/${data.user.avatar}.png`;
+                    } else {
+                        avatarEl.src = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="%23888" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>');
+                    }
+                    document.getElementById('discord-username').textContent = data.user.username;
+                } else {
+                    if (errDiv && errText) { errText.textContent = data.error || 'Login failed.'; errDiv.style.display = 'flex'; }
+                }
+            } catch (err) {
+                if (errDiv && errText) { errText.textContent = 'Could not reach server. Please try again.'; errDiv.style.display = 'flex'; }
+            }
+            if (submitBtn) { submitBtn.disabled = false; submitBtn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><polyline points="10 17 15 12 10 7"/><line x1="15" y1="12" x2="3" y2="12"/></svg> Sign In'; }
+        });
+    }
+
+    // Email/password registration form
+    const registerForm = document.getElementById('auth-register-form');
+    if (registerForm) {
+        registerForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const username = document.getElementById('register-username').value.trim();
+            const email = document.getElementById('register-email').value.trim();
+            const password = document.getElementById('register-password').value;
+            const submitBtn = registerForm.querySelector('.btn-auth-submit');
+            const errDiv = document.getElementById('landing-auth-error');
+            const errText = document.getElementById('landing-auth-error-text');
+            const succDiv = document.getElementById('landing-auth-success');
+            const succText = document.getElementById('landing-auth-success-text');
+
+            if (errDiv) errDiv.style.display = 'none';
+            if (succDiv) succDiv.style.display = 'none';
+            if (submitBtn) { submitBtn.disabled = true; submitBtn.textContent = 'Creating account...'; }
+
+            try {
+                const res = await fetch(`${VPS_BASE}/api/register`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ username, email, password })
+                });
+                const data = await res.json();
+                if (data.success && data.token) {
+                    localStorage.setItem('albion_auth_token', data.token);
+                    discordUser = data.user;
+                    dismissLandingOverlay();
+                    // Update header profile
+                    document.getElementById('login-discord-btn').classList.add('hidden');
+                    const profile = document.getElementById('discord-user-profile');
+                    profile.classList.remove('hidden');
+                    profile.style.display = 'flex';
+                    const avatarEl = document.getElementById('discord-avatar');
+                    avatarEl.src = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="%23888" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>');
+                    document.getElementById('discord-username').textContent = data.user.username;
+                } else {
+                    if (errDiv && errText) { errText.textContent = data.error || 'Registration failed.'; errDiv.style.display = 'flex'; }
+                }
+            } catch (err) {
+                if (errDiv && errText) { errText.textContent = 'Could not reach server. Please try again.'; errDiv.style.display = 'flex'; }
+            }
+            if (submitBtn) { submitBtn.disabled = false; submitBtn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="8.5" cy="7" r="4"/><line x1="20" y1="8" x2="20" y2="14"/><line x1="23" y1="11" x2="17" y2="11"/></svg> Create Account'; }
         });
     }
 

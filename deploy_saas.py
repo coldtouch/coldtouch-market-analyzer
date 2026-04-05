@@ -53,7 +53,8 @@ def main():
     "ws": "^8.16.0",
     "cors": "^2.8.5",
     "jsonwebtoken": "^9.0.2",
-    "helmet": "^7.1.0"
+    "helmet": "^7.1.0",
+    "bcryptjs": "^2.4.3"
   }
 }"""
     b64_pkg = base64.b64encode(pkg_json.encode()).decode()
@@ -87,6 +88,7 @@ const { connect, StringCodec } = require('nats');
 const { Client, GatewayIntentBits, REST, Routes } = require('discord.js');
 const jwt = require('jsonwebtoken');
 const helmet = require('helmet');
+const bcrypt = require('bcryptjs');
 
 const domain = process.env.DOMAIN;
 const CLIENT_ID = process.env.DISCORD_CLIENT_ID;
@@ -118,6 +120,16 @@ db.run('PRAGMA wal_autocheckpoint = 1000');
 
 db.serialize(() => {
   db.run(`CREATE TABLE IF NOT EXISTS users (id TEXT PRIMARY KEY, username TEXT, avatar TEXT)`);
+  // Migrate users table: add columns for email/password registration
+  db.run(`ALTER TABLE users ADD COLUMN email TEXT`, () => {});
+  db.run(`ALTER TABLE users ADD COLUMN password_hash TEXT`, () => {});
+  db.run(`ALTER TABLE users ADD COLUMN auth_type TEXT DEFAULT 'discord'`, () => {});
+  db.run(`ALTER TABLE users ADD COLUMN role TEXT DEFAULT 'free'`, () => {});
+  db.run(`ALTER TABLE users ADD COLUMN created_at INTEGER`, () => {});
+  db.run(`ALTER TABLE users ADD COLUMN last_login INTEGER`, () => {});
+  db.run(`ALTER TABLE users ADD COLUMN linked_discord_id TEXT`, () => {});
+  db.run(`CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email ON users(email) WHERE email IS NOT NULL`);
+
   db.run(`CREATE TABLE IF NOT EXISTS alerts (guild_id TEXT, channel_id TEXT, min_profit INTEGER, cooldown_ms INTEGER DEFAULT 600000, PRIMARY KEY(guild_id, channel_id))`);
   // Migrate: add columns if missing
   db.run(`ALTER TABLE alerts ADD COLUMN cooldown_ms INTEGER DEFAULT 600000`, () => {});
@@ -642,6 +654,9 @@ app.use(cors({ origin: 'https://coldtouch.github.io', credentials: true }));
 // contentSecurityPolicy disabled — this is a JSON API, not an HTML server.
 app.use(helmet({ contentSecurityPolicy: false }));
 
+// JSON body parsing — must be before any route that reads req.body
+app.use(express.json());
+
 // Rate limiting
 const apiLimiter = rateLimit({ windowMs: 60 * 1000, max: 60, standardHeaders: true, legacyHeaders: false });
 app.use('/api/', apiLimiter);
@@ -688,8 +703,31 @@ app.get('/auth/discord/callback', async (req, res) => {
     if (!profileRes.ok) { console.error('[OAuth] Profile fetch failed:', profileRes.status); return res.redirect(`${SITE}?login=failed`); }
     const profile = await profileRes.json();
 
-    // Save user to DB
-    db.run(`INSERT OR REPLACE INTO users (id, username, avatar) VALUES (?, ?, ?)`, [profile.id, profile.username, profile.avatar]);
+    const now = Date.now();
+
+    // Check if this is a Discord-linking flow (email user linking their Discord)
+    const stateParam = req.query.state;
+    if (stateParam) {
+      try {
+        const state = JSON.parse(Buffer.from(stateParam, 'base64url').toString());
+        if (state.link && state.userId) {
+          // Link Discord to existing email account
+          db.run(`UPDATE users SET linked_discord_id = ?, avatar = ? WHERE id = ?`,
+            [profile.id, profile.avatar, state.userId]);
+          // Also create/update the Discord user row so contributions from Discord bot still work
+          db.run(`INSERT INTO users (id, username, avatar, auth_type, created_at, last_login) VALUES (?, ?, ?, 'discord', ?, ?)
+            ON CONFLICT(id) DO UPDATE SET username=excluded.username, avatar=excluded.avatar, last_login=?`,
+            [profile.id, profile.username, profile.avatar, now, now, now]);
+          console.log(`[Link] User ${state.userId} linked Discord: ${profile.username} (${profile.id})`);
+          return res.redirect(`${SITE}?link=success`);
+        }
+      } catch(e) { /* invalid state, fall through to normal login */ }
+    }
+
+    // Normal Discord login: save user to DB (upsert: preserve email/role columns for linked accounts)
+    db.run(`INSERT INTO users (id, username, avatar, auth_type, created_at, last_login) VALUES (?, ?, ?, 'discord', ?, ?)
+      ON CONFLICT(id) DO UPDATE SET username=excluded.username, avatar=excluded.avatar, last_login=?`,
+      [profile.id, profile.username, profile.avatar, now, now, now]);
 
     // Issue JWT (bypasses cross-origin cookie issues)
     const token = jwt.sign(
@@ -721,16 +759,118 @@ app.get('/', (req, res) => res.redirect('https://coldtouch.github.io/coldtouch-m
 
 app.get('/api/me', (req, res) => {
   if(req.user) {
-    db.get(`SELECT scans_30d, scans_total, tier FROM user_stats WHERE user_id = ?`, [req.user.id], (err, stats) => {
+    db.get(`SELECT u.auth_type, u.role, u.email, u.linked_discord_id, s.scans_30d, s.scans_total, s.tier
+      FROM users u LEFT JOIN user_stats s ON u.id = s.user_id WHERE u.id = ?`, [req.user.id], (err, row) => {
+      const stats = row ? { scans_30d: row.scans_30d || 0, scans_total: row.scans_total || 0, tier: row.tier || 'bronze' } : { scans_30d: 0, scans_total: 0, tier: 'bronze' };
       res.json({
         loggedIn: true,
-        user: { id: req.user.id, username: req.user.username, avatar: req.user.avatar },
-        stats: stats || { scans_30d: 0, scans_total: 0, tier: 'bronze' }
+        user: {
+          id: req.user.id,
+          username: req.user.username,
+          avatar: req.user.avatar,
+          authType: (row && row.auth_type) || 'discord',
+          role: (row && row.role) || 'free',
+          email: row && row.email ? row.email.replace(/(.{2})(.*)(@.*)/, '$1***$3') : null,
+          hasDiscordLinked: !!(row && (row.auth_type === 'discord' || row.linked_discord_id))
+        },
+        stats
       });
     });
   } else {
     res.json({ loggedIn: false });
   }
+});
+
+// === EMAIL/PASSWORD REGISTRATION & LOGIN ===
+const { randomUUID } = require('crypto');
+
+// Rate limit: 5 registration attempts per 15 minutes per IP
+const registerLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 5, message: { error: 'Too many registration attempts. Try again in 15 minutes.' } });
+
+app.post('/api/register', registerLimiter, async (req, res) => {
+  const { email, password, username } = req.body;
+  if (!email || !password || !username) return res.status(400).json({ error: 'Email, password, and username are required.' });
+
+  // Validate email format
+  const emailRegex = /^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/;
+  if (!emailRegex.test(email)) return res.status(400).json({ error: 'Invalid email format.' });
+
+  // Validate password strength
+  if (password.length < 8) return res.status(400).json({ error: 'Password must be at least 8 characters.' });
+  if (password.length > 128) return res.status(400).json({ error: 'Password too long.' });
+
+  // Validate username
+  const trimUser = username.trim();
+  if (trimUser.length < 2 || trimUser.length > 32) return res.status(400).json({ error: 'Username must be 2-32 characters.' });
+
+  const emailLower = email.toLowerCase().trim();
+
+  // Check if email already exists
+  db.get(`SELECT id FROM users WHERE email = ?`, [emailLower], async (err, existing) => {
+    if (err) return res.status(500).json({ error: 'Database error.' });
+    if (existing) return res.status(409).json({ error: 'An account with this email already exists.' });
+
+    try {
+      const hash = await bcrypt.hash(password, 12);
+      const userId = 'e_' + randomUUID();
+      const now = Date.now();
+
+      db.run(`INSERT INTO users (id, username, email, password_hash, auth_type, role, created_at, last_login) VALUES (?, ?, ?, ?, 'email', 'free', ?, ?)`,
+        [userId, trimUser, emailLower, hash, now, now], (err) => {
+        if (err) {
+          console.error('[Register] DB insert error:', err.message);
+          if (err.message.includes('UNIQUE constraint')) return res.status(409).json({ error: 'An account with this email already exists.' });
+          return res.status(500).json({ error: 'Registration failed.' });
+        }
+
+        const token = jwt.sign({ id: userId, username: trimUser, avatar: null }, SESSION_SECRET, { expiresIn: '30d' });
+        console.log(`[Register] New user: ${trimUser} (${emailLower})`);
+        res.json({ success: true, token, user: { id: userId, username: trimUser, authType: 'email', role: 'free' } });
+      });
+    } catch (hashErr) {
+      console.error('[Register] Hash error:', hashErr);
+      res.status(500).json({ error: 'Registration failed.' });
+    }
+  });
+});
+
+// Rate limit: 10 login attempts per 15 minutes per IP
+const loginLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 10, message: { error: 'Too many login attempts. Try again in 15 minutes.' } });
+
+app.post('/api/login', loginLimiter, async (req, res) => {
+  const { email, password } = req.body;
+  if (!email || !password) return res.status(400).json({ error: 'Email and password are required.' });
+
+  const emailLower = email.toLowerCase().trim();
+
+  db.get(`SELECT id, username, avatar, password_hash, auth_type, role FROM users WHERE email = ?`, [emailLower], async (err, user) => {
+    if (err) return res.status(500).json({ error: 'Database error.' });
+    if (!user) return res.status(401).json({ error: 'Invalid email or password.' });
+    if (!user.password_hash) return res.status(401).json({ error: 'This account uses Discord login. Please sign in with Discord.' });
+
+    try {
+      const valid = await bcrypt.compare(password, user.password_hash);
+      if (!valid) return res.status(401).json({ error: 'Invalid email or password.' });
+
+      db.run(`UPDATE users SET last_login = ? WHERE id = ?`, [Date.now(), user.id]);
+
+      const token = jwt.sign({ id: user.id, username: user.username, avatar: user.avatar }, SESSION_SECRET, { expiresIn: '30d' });
+      console.log(`[Login] User logged in: ${user.username} (${emailLower})`);
+      res.json({ success: true, token, user: { id: user.id, username: user.username, avatar: user.avatar, authType: user.auth_type, role: user.role } });
+    } catch (compareErr) {
+      console.error('[Login] Compare error:', compareErr);
+      res.status(500).json({ error: 'Login failed.' });
+    }
+  });
+});
+
+// Link Discord account to email account (requires auth)
+app.post('/api/link-discord', (req, res) => {
+  if (!req.user) return res.status(401).json({ error: 'Login required' });
+  // This initiates the linking flow — redirect to Discord OAuth with a special state param
+  const state = Buffer.from(JSON.stringify({ link: true, userId: req.user.id })).toString('base64url');
+  const linkUrl = `https://discord.com/api/oauth2/authorize?client_id=${CLIENT_ID}&redirect_uri=${encodeURIComponent('https://' + domain + '/auth/discord/callback')}&response_type=code&scope=identify&state=${state}`;
+  res.json({ url: linkUrl });
 });
 
 // === SHARED MARKET CACHE ENDPOINTS ===
@@ -756,8 +896,6 @@ app.get('/api/market-cache/status', (req, res) => {
 });
 
 // === ALERT CRUD ENDPOINTS (auth required) ===
-app.use(express.json());
-
 function requireAuth(req, res, next) {
   if (!req.user) return res.status(401).json({ error: 'Login required' });
   next();
