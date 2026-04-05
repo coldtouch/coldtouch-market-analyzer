@@ -3733,6 +3733,9 @@ async function enrichAndRenderTransport(routes, budget, sortBy, mountCapacity, f
     renderTransportResults(individualRoutes.slice(0, 40), budget, mountCapacity, haulPlans, availableSlots);
 }
 
+// Track which haul plans are expanded (persists across re-renders)
+const expandedHaulPlans = new Set();
+
 function renderTransportResults(routes, budget, mountCapacity, haulPlans, availableSlots) {
     const container = document.getElementById('transport-results');
     container.innerHTML = '';
@@ -3963,7 +3966,18 @@ function renderTransportResults(routes, budget, mountCapacity, haulPlans, availa
                 const arrow = summaryDiv.querySelector('.haul-expand-arrow');
                 if (arrow) arrow.style.transform = isOpen ? 'rotate(0deg)' : 'rotate(180deg)';
                 planCard.classList.toggle('expanded', !isOpen);
+                // Remember expanded state across re-renders
+                if (!isOpen) expandedHaulPlans.add(plan.routeKey);
+                else expandedHaulPlans.delete(plan.routeKey);
             });
+
+            // Restore expanded state from previous render
+            if (expandedHaulPlans.has(plan.routeKey)) {
+                detailDiv.style.display = 'block';
+                const arrow = summaryDiv.querySelector('.haul-expand-arrow');
+                if (arrow) arrow.style.transform = 'rotate(180deg)';
+                planCard.classList.add('expanded');
+            }
 
             planCard.appendChild(summaryDiv);
             planCard.appendChild(detailDiv);
