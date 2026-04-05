@@ -4138,18 +4138,24 @@ async function enrichAndRenderTransport(routes, budget, sortBy, mountCapacity, f
     else if (itemTypeFilter === 'stackable') filtered = filtered.filter(r => r.stackable);
     else if (itemTypeFilter !== 'all') filtered = filtered.filter(r => r.category === itemTypeFilter);
 
-    // Freshness filter (same pattern as arbitrage)
+    // Freshness filter — only filters items that HAVE date data.
+    // Items with unknown dates (empty/NATS-sourced) are kept, not penalized.
     const freshMode = document.getElementById('transport-fresh-mode')?.value || 'off';
     const freshThresholdMins = parseInt(document.getElementById('transport-fresh-threshold')?.value) || 60;
     if (freshMode !== 'off') {
         const now = new Date();
         const thresholdMs = freshThresholdMins * 60 * 1000;
         filtered = filtered.filter(r => {
-            const buyAge = r.dateBuy && !r.dateBuy.startsWith('0001') ? now - new Date(r.dateBuy.endsWith('Z') ? r.dateBuy : r.dateBuy + 'Z') : Infinity;
-            const sellAge = r.dateSell && !r.dateSell.startsWith('0001') ? now - new Date(r.dateSell.endsWith('Z') ? r.dateSell : r.dateSell + 'Z') : Infinity;
-            if (freshMode === 'buy') return buyAge < thresholdMs;
-            if (freshMode === 'sell') return sellAge < thresholdMs;
-            return buyAge < thresholdMs && sellAge < thresholdMs; // 'both'
+            const hasDateBuy = r.dateBuy && r.dateBuy.length > 4 && !r.dateBuy.startsWith('0001');
+            const hasDateSell = r.dateSell && r.dateSell.length > 4 && !r.dateSell.startsWith('0001');
+            const buyAge = hasDateBuy ? now - new Date(r.dateBuy.endsWith('Z') ? r.dateBuy : r.dateBuy + 'Z') : null;
+            const sellAge = hasDateSell ? now - new Date(r.dateSell.endsWith('Z') ? r.dateSell : r.dateSell + 'Z') : null;
+            // If we have date data, enforce freshness. If no date, allow through.
+            if (freshMode === 'buy') return buyAge === null || buyAge < thresholdMs;
+            if (freshMode === 'sell') return sellAge === null || sellAge < thresholdMs;
+            const buyOk = buyAge === null || buyAge < thresholdMs;
+            const sellOk = sellAge === null || sellAge < thresholdMs;
+            return buyOk && sellOk;
         });
     }
 
