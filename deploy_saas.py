@@ -1299,15 +1299,19 @@ app.get('/api/transport-routes', (req, res) => {
 let cityPriceRef = {};
 let globalPriceRef = {}; // { "itemId_quality": avgPrice } for outlier detection
 function buildPriceReference() {
-  const cutoff = Date.now() - 7 * 24 * 60 * 60 * 1000;
-  // Per-city averages (what items sell for in each specific city)
+  // Use last 2 days for city reference (recent transaction prices, not week-old inflated data)
+  // Use last 7 days for global reference (outlier detection needs broader sample)
+  const cutoff2d = Date.now() - 2 * 24 * 60 * 60 * 1000;
+  const cutoff7d = Date.now() - 7 * 24 * 60 * 60 * 1000;
+
+  // Per-city averages: RECENT (2 days) — what items actually sell for NOW in each city
   db.all(`SELECT item_id, quality, city, AVG(avg_sell) as avg_price, COUNT(*) as samples
     FROM price_averages WHERE period_type IN ('daily','hourly') AND period_start > ? AND avg_sell > 0
-    GROUP BY item_id, quality, city`, [cutoff], (err, rows) => {
+    GROUP BY item_id, quality, city`, [cutoff2d], (err, rows) => {
     if (err || !rows) return;
     const cityRef = {}, globalRef = {};
     for (const r of rows) {
-      if (r.samples >= 3 && r.avg_price > 0) {
+      if (r.samples >= 2 && r.avg_price > 0) {
         cityRef[r.item_id + '_' + r.quality + '_' + r.city] = Math.round(r.avg_price);
         // Also build global average (across all cities)
         const gk = r.item_id + '_' + r.quality;
@@ -1317,12 +1321,20 @@ function buildPriceReference() {
       }
     }
     cityPriceRef = cityRef;
-    const gRef = {};
-    for (const [k, v] of Object.entries(globalRef)) {
-      if (v.cnt >= 2) gRef[k] = Math.round(v.sum / v.cnt);
-    }
-    globalPriceRef = gRef;
-    console.log(`[PriceRef] Built: ${Object.keys(cityRef).length} city prices, ${Object.keys(gRef).length} global averages`);
+    console.log(`[PriceRef] City prices (2d): ${Object.keys(cityRef).length}`);
+
+    // Global averages use 7 days for broader outlier detection
+    db.all(`SELECT item_id, quality, AVG(avg_sell) as avg_price, COUNT(*) as samples
+      FROM price_averages WHERE period_type IN ('daily','hourly') AND period_start > ? AND avg_sell > 0
+      GROUP BY item_id, quality`, [cutoff7d], (err2, rows2) => {
+      if (err2 || !rows2) return;
+      const gRef = {};
+      for (const r of rows2) {
+        if (r.samples >= 5 && r.avg_price > 0) gRef[r.item_id + '_' + r.quality] = Math.round(r.avg_price);
+      }
+      globalPriceRef = gRef;
+      console.log(`[PriceRef] Global averages (7d): ${Object.keys(gRef).length}`);
+    });
   });
 }
 setTimeout(buildPriceReference, 15000);
