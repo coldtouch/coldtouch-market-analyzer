@@ -1496,6 +1496,32 @@
                     <h2 class="about-heading">Changelog</h2>
                     <div class="changelog-list">
                         <div class="changelog-entry">
+                            <div class="changelog-date">April 5, 2026</div>
+                            <div class="changelog-title">Discord Bot Alerts Fixed + Transport Routes Overhaul</div>
+                            <ul>
+                                <li>Discord bot alerts are now firing &mdash; fixed stale freshness dates that silently blocked all alerts</li>
+                                <li>Alert threshold lowered from 500k to 50k &mdash; 100x more routes now qualify for alerts</li>
+                                <li>Transport haul plans now pack 3+ items per trip (two-pass algorithm with 40% per-item budget cap)</li>
+                                <li>Collapsible haul plan cards with item thumbnails, profit, ROI, and freshness at a glance</li>
+                                <li>Copy Shopping List button &mdash; clipboard-friendly list for each haul plan</li>
+                                <li>Refresh buttons on every haul plan item + Refresh All for the entire plan</li>
+                                <li>Buy/sell prices shown with freshness dots and time ago on every item row</li>
+                                <li>Free Slots input &mdash; set your actual available inventory slots (not hardcoded 48)</li>
+                                <li>Backend query optimization: 10-50x faster transport route API via CTE</li>
+                            </ul>
+                        </div>
+                        <div class="changelog-entry">
+                            <div class="changelog-date">April 4, 2026</div>
+                            <div class="changelog-title">Server Migration + Database Architecture Fix</div>
+                            <ul>
+                                <li>Migrated to new high-performance VPS (6 CPU / 12 GB RAM) &mdash; was hitting 100% CPU on old server</li>
+                                <li>Eliminated price_snapshots table (22M rows) &mdash; NATS data writes directly to price_averages</li>
+                                <li>Accurate spread calculation using min_sell/max_buy instead of averaged prices</li>
+                                <li>SQLite WAL mode for better write concurrency</li>
+                                <li>Discord login fully working again after event loop starvation fix</li>
+                            </ul>
+                        </div>
+                        <div class="changelog-entry">
                             <div class="changelog-date">April 3, 2026</div>
                             <div class="changelog-title">Custom Domain &amp; Login Reliability</div>
                             <ul>
