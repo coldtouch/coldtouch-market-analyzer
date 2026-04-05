@@ -4026,22 +4026,59 @@ async function doTransportScan() {
     const sortBy = document.getElementById('transport-sort').value;
     const mountCapacity = parseInt(document.getElementById('transport-mount').value) || 0;
     const freeSlots = Math.max(1, Math.min(48, parseInt(document.getElementById('transport-free-slots').value) || 30));
+    const transportMode = document.querySelector('.transport-mode-btn.active')?.dataset.mode || 'live';
+    const sellStrategy = document.getElementById('transport-sell-strategy')?.value || 'market';
+    const excludeCaerleon = document.getElementById('transport-exclude-caerleon').checked;
 
     container.innerHTML = '';
     hideError(errorEl);
     spinner.classList.remove('hidden');
 
     try {
-        const params = new URLSearchParams({ min_confidence: minConfidence, limit: 150 });
-        if (buyCity) params.set('buy_city', buyCity);
-        if (sellCity) params.set('sell_city', sellCity);
-        const res = await fetch(`${VPS_BASE}/api/transport-routes?${params}`);
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const routes = await res.json();
-        lastTransportRoutes = routes;
+        let routes;
+
+        if (transportMode === 'live') {
+            // NEW: Use backend-computed routes from alertMarketDb (real-time NATS data)
+            const freshMode = document.getElementById('transport-fresh-mode')?.value || 'off';
+            const freshMins = parseInt(document.getElementById('transport-fresh-threshold')?.value) || 60;
+            const maxAge = freshMode !== 'off' ? freshMins : 120; // default 2h max age for live data
+
+            const params = new URLSearchParams({
+                sell_strategy: sellStrategy,
+                max_age: maxAge,
+                limit: 300
+            });
+            if (buyCity) params.set('buy_city', buyCity);
+            if (sellCity) params.set('sell_city', sellCity);
+            if (excludeCaerleon) params.set('exclude', 'Caerleon,Black Market');
+
+            const res = await fetch(`${VPS_BASE}/api/transport-routes-live?${params}`);
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            const data = await res.json();
+            routes = data.routes || [];
+
+            // Convert live routes to the format enrichAndRenderTransport expects
+            lastTransportRoutes = routes.map(r => ({
+                item_id: r.item_id, quality: r.quality,
+                buy_city: r.buy_city, sell_city: r.sell_city,
+                avg_spread: r.profit, confidence_score: 0, consistency_pct: 0,
+                sample_count: 0, buy_volume: 0, sell_volume: 0,
+                // Carry pre-computed prices so enrichment doesn't need IndexedDB
+                _liveData: r
+            }));
+        } else {
+            // Historical mode: use spread_stats (old endpoint)
+            const params = new URLSearchParams({ min_confidence: minConfidence, limit: 150 });
+            if (buyCity) params.set('buy_city', buyCity);
+            if (sellCity) params.set('sell_city', sellCity);
+            const res = await fetch(`${VPS_BASE}/api/transport-routes?${params}`);
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            routes = await res.json();
+            lastTransportRoutes = routes;
+        }
 
         spinner.classList.add('hidden');
-        await enrichAndRenderTransport(routes, budget, sortBy, mountCapacity, freeSlots);
+        await enrichAndRenderTransport(lastTransportRoutes, budget, sortBy, mountCapacity, freeSlots);
     } catch (e) {
         spinner.classList.add('hidden');
         showError(errorEl, 'Failed to load transport routes: ' + e.message);
@@ -4081,7 +4118,20 @@ async function enrichAndRenderTransport(routes, budget, sortBy, mountCapacity, f
 
         let buyPrice, sellPrice, profitPerUnit, dateBuy, dateSell, isHistorical, sellMode;
 
-        if (transportMode === 'historical') {
+        if (r._liveData) {
+            // Pre-computed from /api/transport-routes-live — no IndexedDB needed
+            const ld = r._liveData;
+            buyPrice = ld.buy_price;
+            sellPrice = ld.sell_price;
+            profitPerUnit = ld.profit;
+            dateBuy = ''; // Ages shown as "Xm ago" from ld.buy_age
+            dateSell = '';
+            isHistorical = false;
+            sellMode = ld.sell_strategy || 'market';
+            // Synthesize date strings from age (minutes ago)
+            if (ld.buy_age >= 0) dateBuy = new Date(Date.now() - ld.buy_age * 60000).toISOString();
+            if (ld.sell_age >= 0) dateSell = new Date(Date.now() - ld.sell_age * 60000).toISOString();
+        } else if (transportMode === 'historical') {
             // Historical mode: use spread_stats avg_spread directly
             const spread = r.avg_spread || 0;
             if (spread <= 0) continue;
@@ -4099,19 +4149,17 @@ async function enrichAndRenderTransport(routes, budget, sortBy, mountCapacity, f
             isHistorical = true;
             sellMode = 'historical';
         } else {
-            // Live mode: require buy side price from IndexedDB
+            // Fallback: Live mode IndexedDB enrichment
             if (!buyData || buyData.sellMin <= 0) continue;
             buyPrice = buyData.sellMin;
 
-            if (sellStrategy === 'market') {
-                // "List on Market" — compare sell offers in both cities
-                // Buy cheapest in source, list at market rate in destination
+            const sellStrategyVal = document.getElementById('transport-sell-strategy')?.value || 'market';
+            if (sellStrategyVal === 'market') {
                 if (!sellData || sellData.sellMin <= 0) continue;
                 sellPrice = sellData.sellMin;
                 dateSell = sellData.sellDate;
                 sellMode = 'market';
             } else {
-                // "Instant Sell" — fill buy orders in destination
                 if (!sellData || sellData.buyMax <= 0) continue;
                 sellPrice = sellData.buyMax;
                 dateSell = sellData.buyDate;
