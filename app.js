@@ -1874,7 +1874,8 @@ function setupCardButtons(container) {
                     const budget = parseInt(document.getElementById('transport-budget').value) || 500000;
                     const sortBy = document.getElementById('transport-sort').value;
                     const mountCapacity = parseInt(document.getElementById('transport-mount').value) || 0;
-                    await enrichAndRenderTransport(lastTransportRoutes, budget, sortBy, mountCapacity);
+                    const freeSlots = Math.max(1, Math.min(48, parseInt(document.getElementById('transport-free-slots').value) || 30));
+                    await enrichAndRenderTransport(lastTransportRoutes, budget, sortBy, mountCapacity, freeSlots);
                 }
             } catch (err) {
                 console.error('Refresh failed:', err);
@@ -3738,6 +3739,13 @@ const expandedHaulPlans = new Set();
 
 function renderTransportResults(routes, budget, mountCapacity, haulPlans, availableSlots) {
     const container = document.getElementById('transport-results');
+
+    // Snapshot which haul plans are currently expanded from the DOM BEFORE clearing
+    container.querySelectorAll('.haul-plan-card.expanded').forEach(card => {
+        const key = card.dataset.routeKey;
+        if (key) expandedHaulPlans.add(key);
+    });
+
     container.innerHTML = '';
 
     if (routes.length === 0 && (!haulPlans || haulPlans.length === 0)) {
@@ -3758,6 +3766,7 @@ function renderTransportResults(routes, budget, mountCapacity, haulPlans, availa
         topPlans.forEach((plan, idx) => {
             const planCard = document.createElement('div');
             planCard.className = 'haul-plan-card';
+            planCard.dataset.routeKey = plan.routeKey;
             const weightPct = mountCapacity > 0 && mountCapacity < 999999 ? ((plan.totalWeight / mountCapacity) * 100).toFixed(0) : null;
             const roiPct = plan.totalCost > 0 ? ((plan.totalProfit / plan.totalCost) * 100).toFixed(1) : 0;
             const confBadge = plan.avgConfidence >= 70 ? '<span style="color:#22c55e; font-size:0.7rem;">HIGH</span>' : plan.avgConfidence >= 40 ? '<span style="color:#f59e0b; font-size:0.7rem;">MED</span>' : '<span style="color:#ef4444; font-size:0.7rem;">LOW</span>';
@@ -3812,7 +3821,7 @@ function renderTransportResults(routes, budget, mountCapacity, haulPlans, availa
                     <div style="flex:1; min-width:0;">
                         <div style="display:flex; align-items:center; gap:0.4rem;">
                             <span style="font-size:0.82rem; font-weight:600; color:var(--text-primary); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${esc(getFriendlyName(item.itemId))}</span>
-                            <button class="btn-haul-refresh" data-action="refresh" data-item="${item.itemId}" title="Refresh live prices for this item" style="
+                            <button class="btn-haul-refresh" data-action="haul-refresh" data-item="${item.itemId}" title="Refresh live prices for this item" style="
                                 background:var(--surface-3, #2a2a3a); border:1px solid var(--accent, #d4a843); color:var(--accent, #d4a843); border-radius:4px;
                                 padding:2px 6px; cursor:pointer; display:inline-flex; align-items:center; gap:3px; font-size:0.65rem; line-height:1; transition:all 0.15s;">
                                 <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M23 4v6h-6"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
