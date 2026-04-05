@@ -402,25 +402,38 @@ client.on('interactionCreate', async interaction => {
   if (!interaction.isChatInputCommand()) return;
 
   if (interaction.commandName === 'setup_alerts') {
-    const minP = interaction.options.getInteger('min_profit');
-    const cooldown = interaction.options.getInteger('cooldown') || 10;
-    const cooldownMs = Math.max(1, Math.min(120, cooldown)) * 60 * 1000;
-    const minConf = Math.max(0, Math.min(100, interaction.options.getInteger('min_confidence') || 0));
-    db.run(`INSERT OR REPLACE INTO alerts (guild_id, channel_id, min_profit, cooldown_ms, min_confidence) VALUES (?, ?, ?, ?, ?)`,
-      [interaction.guildId, interaction.channelId, minP, cooldownMs, minConf], (err) => {
-      if(err) return interaction.reply({content: 'DB Error :(', ephemeral: true});
-      const fields = [
-        { name: 'Channel', value: `<#${interaction.channelId}>`, inline: true },
-        { name: 'Min Profit', value: `${minP.toLocaleString()} silver`, inline: true },
-        { name: 'Cooldown', value: `${cooldown} min per item`, inline: true }
-      ];
-      if (minConf > 0) fields.push({ name: 'Min Confidence', value: `${minConf}%+`, inline: true });
-      interaction.reply({ embeds: [{
-        title: 'Alerts Configured',
-        color: 0x00ff00,
-        fields,
-        footer: { text: 'Coldtouch Market Analyzer • Use /set_confidence to change threshold later' }
-      }]});
+    const discordUserId = interaction.user.id;
+    // Gate: check if this Discord user has a registered website account (or linked Discord)
+    db.get(`SELECT id FROM users WHERE id = ? OR linked_discord_id = ?`, [discordUserId, discordUserId], (err, userRow) => {
+      if (!userRow) {
+        return interaction.reply({ embeds: [{
+          title: 'Registration Required',
+          color: 0xffa500,
+          description: 'You need a registered account on the website to use alerts.\\n\\n**How to set up:**\\n1. Visit [albionaitool.xyz](https://coldtouch.github.io/coldtouch-market-analyzer/) and create an account\\n2. Either login with Discord or create an email account and link your Discord\\n3. Come back here and run `/setup_alerts` again',
+          footer: { text: 'Coldtouch Market Analyzer • Free registration required' }
+        }], ephemeral: true });
+      }
+
+      const minP = interaction.options.getInteger('min_profit');
+      const cooldown = interaction.options.getInteger('cooldown') || 10;
+      const cooldownMs = Math.max(1, Math.min(120, cooldown)) * 60 * 1000;
+      const minConf = Math.max(0, Math.min(100, interaction.options.getInteger('min_confidence') || 0));
+      db.run(`INSERT OR REPLACE INTO alerts (guild_id, channel_id, min_profit, cooldown_ms, min_confidence) VALUES (?, ?, ?, ?, ?)`,
+        [interaction.guildId, interaction.channelId, minP, cooldownMs, minConf], (err2) => {
+        if(err2) return interaction.reply({content: 'DB Error :(', ephemeral: true});
+        const fields = [
+          { name: 'Channel', value: `<#${interaction.channelId}>`, inline: true },
+          { name: 'Min Profit', value: `${minP.toLocaleString()} silver`, inline: true },
+          { name: 'Cooldown', value: `${cooldown} min per item`, inline: true }
+        ];
+        if (minConf > 0) fields.push({ name: 'Min Confidence', value: `${minConf}%+`, inline: true });
+        interaction.reply({ embeds: [{
+          title: 'Alerts Configured',
+          color: 0x00ff00,
+          fields,
+          footer: { text: 'Coldtouch Market Analyzer • Use /set_confidence to change threshold later' }
+        }]});
+      });
     });
   }
 
