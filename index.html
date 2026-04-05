@@ -72,12 +72,59 @@
                 <!-- Auth content (hidden while checking) -->
                 <div id="landing-auth-content" style="display:none;">
                     <h2>Sign in to Access</h2>
-                    <p>Login with your Discord account to unlock real-time price alerts and community leaderboards.</p>
+                    <p>Create an account or login to unlock premium features like live snipes and price alerts.</p>
 
                     <!-- Error message for failed login -->
                     <div id="landing-auth-error" class="landing-auth-error" style="display:none;">
                         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><line x1="15" y1="9" x2="9" y2="15"></line><line x1="9" y1="9" x2="15" y2="15"></line></svg>
                         <span id="landing-auth-error-text">Login failed. Please try again.</span>
+                    </div>
+
+                    <!-- Success message -->
+                    <div id="landing-auth-success" class="landing-auth-success" style="display:none;">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+                        <span id="landing-auth-success-text"></span>
+                    </div>
+
+                    <!-- Auth mode tabs -->
+                    <div class="auth-tabs">
+                        <button class="auth-tab active" data-tab="login">Login</button>
+                        <button class="auth-tab" data-tab="register">Register</button>
+                    </div>
+
+                    <!-- Login form -->
+                    <form id="auth-login-form" class="auth-form" autocomplete="on">
+                        <div class="auth-input-group">
+                            <input type="email" id="login-email" placeholder="Email" autocomplete="email" required>
+                        </div>
+                        <div class="auth-input-group">
+                            <input type="password" id="login-password" placeholder="Password" autocomplete="current-password" required>
+                        </div>
+                        <button type="submit" class="btn-auth-submit">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><polyline points="10 17 15 12 10 7"/><line x1="15" y1="12" x2="3" y2="12"/></svg>
+                            Sign In
+                        </button>
+                    </form>
+
+                    <!-- Register form -->
+                    <form id="auth-register-form" class="auth-form" style="display:none;" autocomplete="on">
+                        <div class="auth-input-group">
+                            <input type="text" id="register-username" placeholder="Username" autocomplete="username" minlength="2" maxlength="32" required>
+                        </div>
+                        <div class="auth-input-group">
+                            <input type="email" id="register-email" placeholder="Email" autocomplete="email" required>
+                        </div>
+                        <div class="auth-input-group">
+                            <input type="password" id="register-password" placeholder="Password (8+ characters)" autocomplete="new-password" minlength="8" required>
+                        </div>
+                        <button type="submit" class="btn-auth-submit btn-auth-register">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="8.5" cy="7" r="4"/><line x1="20" y1="8" x2="20" y2="14"/><line x1="23" y1="11" x2="17" y2="11"/></svg>
+                            Create Account
+                        </button>
+                    </form>
+
+                    <div class="landing-divider">
+                        <span>or</span>
                     </div>
 
                     <button id="landing-discord-btn" class="btn-discord-landing" onclick="
@@ -111,7 +158,7 @@
                         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"></polyline></svg>
                         Browse as Guest
                     </button>
-                    <p class="landing-why">Guest users get full access to all market tools. Sign in with Discord to enable price alerts and community leaderboards.</p>
+                    <p class="landing-why">Guest users get full access to all market tools. Create an account to unlock live snipes, price alerts, and community features.</p>
                 </div>
             </div>
 
