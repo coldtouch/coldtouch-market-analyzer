@@ -2975,6 +2975,69 @@ function dismissLandingOverlay() {
     }
 }
 
+function showDeviceAuthDialog(userCode) {
+    // Create a modal overlay for device authorization
+    const existing = document.getElementById('device-auth-modal');
+    if (existing) existing.remove();
+
+    const modal = document.createElement('div');
+    modal.id = 'device-auth-modal';
+    modal.style.cssText = 'position:fixed;inset:0;z-index:20000;background:rgba(0,0,0,0.8);display:flex;align-items:center;justify-content:center;';
+    modal.innerHTML = `
+        <div style="background:var(--bg-card);border:1px solid var(--border-color);border-radius:var(--radius-lg);padding:2rem;max-width:400px;width:90%;text-align:center;">
+            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="1.5" style="margin-bottom:1rem;">
+                <rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/>
+            </svg>
+            <h2 style="color:var(--text-primary);margin:0 0 0.5rem;">Authorize Data Client</h2>
+            <p style="color:var(--text-secondary);font-size:0.9rem;margin:0 0 1rem;">The Coldtouch Data Client is requesting access to your account.</p>
+            <div style="background:var(--bg-dark);border:1px solid var(--border-color);border-radius:var(--radius);padding:0.75rem;margin-bottom:1.5rem;">
+                <div style="font-size:0.75rem;color:var(--text-muted);margin-bottom:0.25rem;">Device Code</div>
+                <div style="font-size:1.5rem;font-weight:800;color:var(--accent);letter-spacing:0.2em;">${userCode}</div>
+            </div>
+            <p id="device-auth-status" style="color:var(--text-muted);font-size:0.8rem;margin:0 0 1rem;">Click Authorize to link this device to your account.</p>
+            <div style="display:flex;gap:0.75rem;justify-content:center;">
+                <button id="device-auth-approve" class="btn-primary" style="padding:0.6rem 2rem;">Authorize</button>
+                <button id="device-auth-cancel" class="btn-secondary" style="padding:0.6rem 1.5rem;" onclick="document.getElementById('device-auth-modal').remove();">Cancel</button>
+            </div>
+        </div>
+    `;
+    document.body.appendChild(modal);
+
+    document.getElementById('device-auth-approve').addEventListener('click', async () => {
+        const statusEl = document.getElementById('device-auth-status');
+        const btn = document.getElementById('device-auth-approve');
+        btn.disabled = true;
+        btn.textContent = 'Authorizing...';
+        statusEl.textContent = 'Connecting to server...';
+
+        try {
+            const res = await fetch(`${VPS_BASE}/api/device/authorize`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', ...authHeaders() },
+                body: JSON.stringify({ user_code: userCode })
+            });
+            const data = await res.json();
+            if (data.success) {
+                statusEl.style.color = 'var(--profit-green)';
+                statusEl.textContent = 'Authorized! The data client is now linked to your account. You can close this.';
+                btn.textContent = 'Done';
+                btn.onclick = () => modal.remove();
+                btn.disabled = false;
+            } else {
+                statusEl.style.color = 'var(--loss-red)';
+                statusEl.textContent = data.error || 'Authorization failed.';
+                btn.textContent = 'Retry';
+                btn.disabled = false;
+            }
+        } catch (e) {
+            statusEl.style.color = 'var(--loss-red)';
+            statusEl.textContent = 'Network error. Try again.';
+            btn.textContent = 'Retry';
+            btn.disabled = false;
+        }
+    });
+}
+
 function updateHeaderProfile(user) {
     document.getElementById('login-discord-btn').classList.add('hidden');
     const profile = document.getElementById('discord-user-profile');
@@ -3004,6 +3067,7 @@ async function checkDiscordAuth() {
     const tokenParam = urlParams.get('token');
     const linkParam = urlParams.get('link');
     const verifyParam = urlParams.get('verify');
+    const deviceParam = urlParams.get('device');
     if (linkParam === 'success') {
         history.replaceState(null, '', window.location.pathname);
         // Discord account linked — just continue with existing session
@@ -3089,6 +3153,12 @@ async function checkDiscordAuth() {
             if (verifyParam === 'success') {
                 const succDiv = document.getElementById('landing-auth-success');
                 if (succDiv) { succDiv.style.display = 'flex'; succDiv.querySelector('span').textContent = 'Email verified successfully!'; }
+            }
+
+            // Handle device authorization (OAuth Device Flow)
+            if (deviceParam) {
+                history.replaceState(null, '', window.location.pathname);
+                showDeviceAuthDialog(deviceParam);
             }
         } else {
             // Not logged in — show login/guest options

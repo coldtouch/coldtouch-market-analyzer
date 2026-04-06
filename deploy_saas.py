@@ -1051,6 +1051,93 @@ app.post('/api/unlink-discord', (req, res) => {
   });
 });
 
+// === DEVICE AUTHORIZATION (OAuth 2.0 Device Flow) ===
+const deviceCodes = {}; // { userCode: { deviceCode, userId, username, captureToken, expiresAt, authorized } }
+
+// Step 1: Client requests a device code
+app.post('/api/device/code', (req, res) => {
+  const userCode = require('crypto').randomBytes(3).toString('hex').toUpperCase().match(/.{3}/g).join('-'); // ABC-DEF
+  const deviceCode = require('crypto').randomBytes(32).toString('hex');
+  const expiresAt = Date.now() + 10 * 60 * 1000; // 10 min expiry
+
+  deviceCodes[userCode] = { deviceCode, userId: null, captureToken: null, expiresAt, authorized: false };
+
+  console.log(`[DeviceAuth] Code issued: ${userCode}`);
+  res.json({
+    user_code: userCode,
+    device_code: deviceCode,
+    verification_uri: SITE_URL + '?device=' + userCode,
+    expires_in: 600,
+    interval: 5
+  });
+});
+
+// Step 2: Client polls for authorization
+app.post('/api/device/token', (req, res) => {
+  const { device_code } = req.body;
+  if (!device_code) return res.status(400).json({ error: 'device_code required' });
+
+  // Find the matching entry
+  let found = null;
+  for (const [code, entry] of Object.entries(deviceCodes)) {
+    if (entry.deviceCode === device_code) { found = { code, entry }; break; }
+  }
+
+  if (!found) return res.status(404).json({ error: 'expired_token' });
+  if (Date.now() > found.entry.expiresAt) {
+    delete deviceCodes[found.code];
+    return res.status(410).json({ error: 'expired_token' });
+  }
+  if (!found.entry.authorized) {
+    return res.status(428).json({ error: 'authorization_pending' });
+  }
+
+  // Authorized — return the capture token
+  const result = {
+    capture_token: found.entry.captureToken,
+    username: found.entry.username
+  };
+  delete deviceCodes[found.code]; // One-time use
+  console.log(`[DeviceAuth] Token claimed by ${found.entry.username}`);
+  res.json(result);
+});
+
+// Step 3: User authorizes on website (browser, logged in)
+app.post('/api/device/authorize', (req, res) => {
+  if (!req.user) return res.status(401).json({ error: 'Login required' });
+  const { user_code } = req.body;
+  if (!user_code) return res.status(400).json({ error: 'user_code required' });
+
+  const entry = deviceCodes[user_code];
+  if (!entry) return res.status(404).json({ error: 'Invalid or expired code.' });
+  if (Date.now() > entry.expiresAt) {
+    delete deviceCodes[user_code];
+    return res.status(410).json({ error: 'Code expired. Request a new one from the client.' });
+  }
+
+  // Generate capture token for this user
+  const captureToken = require('crypto').randomBytes(24).toString('hex');
+  db.run(`UPDATE users SET capture_token = ? WHERE id = ?`, [captureToken, req.user.id], (err) => {
+    if (err) return res.status(500).json({ error: 'Failed to generate token.' });
+
+    entry.authorized = true;
+    entry.userId = req.user.id;
+    entry.username = req.user.username;
+    entry.captureToken = captureToken;
+
+    console.log(`[DeviceAuth] Code ${user_code} authorized by ${req.user.username}`);
+    res.json({ success: true, username: req.user.username });
+  });
+});
+
+// Evict expired device codes every 5 min
+setInterval(() => {
+  const now = Date.now();
+  for (const code of Object.keys(deviceCodes)) {
+    if (now > deviceCodes[code].expiresAt) delete deviceCodes[code];
+  }
+}, 5 * 60 * 1000);
+
 // === CAPTURE TOKEN + LOOT BUYER ===
 const clientCaptures = {}; // { userId: [{ items, capturedAt, ... }] } — auto-expire 1h
 
