@@ -4168,24 +4168,22 @@ function renderLootCaptures() {
         const hasDirectTabName = cap.tabName && cap.tabName.length > 0;
         const hasTabs = !hasDirectTabName && cap.vaultTabs && cap.vaultTabs.length > 0;
 
+        // Helper to build a compact card
+        const makeCard = (onclick, name, badge, itemCount, equipCount, stackCount, timeAgoStr) => {
+            return `<div class="loot-capture-card" onclick="${onclick}" style="cursor:pointer;">
+                <div style="display:flex; align-items:center; gap:0.4rem;">
+                    <span class="loot-card-title">${esc(name)}</span>
+                    ${badge ? `<span style="font-size:0.6rem; padding:0.1rem 0.35rem; background:var(--bg-elevated); border-radius:8px; color:var(--text-muted);">${badge}</span>` : ''}
+                </div>
+                <div class="loot-card-meta">${itemCount} items &bull; ${equipCount}⚔ ${stackCount}📦 &bull; ${timeAgoStr}</div>
+            </div>`;
+        };
+
         if (hasDirectTabName) {
-            // Direct tab name from GUID matching — show as single card with the matched name
             const equipCount = cap.items.filter(it => it.isEquipment).length;
             const stackCount = cap.items.length - equipCount;
-            const vaultType = cap.isGuild ? 'Guild' : 'Bank';
-            cards.push(`<div class="loot-capture-card" onclick="selectLootCapture(${capIdx})" style="cursor:pointer;">
-                <div style="display:flex; align-items:center; gap:0.75rem; flex:1; min-width:0;">
-                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2" style="flex-shrink:0;"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/></svg>
-                    <div style="min-width:0;">
-                        <div style="display:flex; align-items:center; gap:0.5rem;">
-                            <span style="font-weight:600; color:var(--text-primary);">${esc(cap.tabName)}</span>
-                            <span style="font-size:0.65rem; padding:0.1rem 0.4rem; background:var(--bg-elevated); border-radius:8px; color:var(--text-muted);">${vaultType}</span>
-                        </div>
-                        <div style="font-size:0.75rem; color:var(--text-muted);">${cap.items.length} items (${equipCount} gear, ${stackCount} stackable) &bull; ${ago}</div>
-                    </div>
-                </div>
-                <div style="color:var(--accent); font-size:0.8rem; flex-shrink:0;">Select &rarr;</div>
-            </div>`);
+            const badge = cap.isGuild ? 'Guild' : 'Bank';
+            cards.push(makeCard(`selectLootCapture(${capIdx})`, cap.tabName, badge, cap.items.length, equipCount, stackCount, ago));
         } else if (hasTabs) {
             // Split items by slot range — each tab gets ~30 slots (personal) or varies (guild)
             const tabCount = cap.vaultTabs.length;
@@ -4206,34 +4204,13 @@ function renderLootCaptures() {
                 const vaultType = cap.isGuild ? 'Guild' : 'Bank';
                 const displayName = cap.customName || tabName;
 
-                cards.push(`<div class="loot-capture-card" onclick="selectLootCaptureTab(${capIdx}, ${tabIdx}, ${slotsPerTab})" style="cursor:pointer;">
-                    <div style="display:flex; align-items:center; gap:0.75rem; flex:1; min-width:0;">
-                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2" style="flex-shrink:0;"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/></svg>
-                        <div style="min-width:0;">
-                            <div style="display:flex; align-items:center; gap:0.5rem;">
-                                <span style="font-weight:600; color:var(--text-primary);">${esc(displayName)}</span>
-                                <span style="font-size:0.65rem; padding:0.1rem 0.4rem; background:var(--bg-elevated); border-radius:8px; color:var(--text-muted);">${vaultType}</span>
-                            </div>
-                            <div style="font-size:0.75rem; color:var(--text-muted);">${tabItems.length} items (${equipCount} gear, ${stackCount} stackable) &bull; ${ago}</div>
-                        </div>
-                    </div>
-                    <div style="color:var(--accent); font-size:0.8rem; flex-shrink:0;">Select &rarr;</div>
-                </div>`);
+                cards.push(makeCard(`selectLootCaptureTab(${capIdx}, ${tabIdx}, ${slotsPerTab})`, displayName, vaultType, tabItems.length, equipCount, stackCount, ago));
             });
         } else {
             // No tab info — show as single capture
             const equipCount = cap.items.filter(it => it.isEquipment).length;
             const stackCount = cap.items.length - equipCount;
-            cards.push(`<div class="loot-capture-card" onclick="selectLootCapture(${capIdx})" style="cursor:pointer;">
-                <div style="display:flex; align-items:center; gap:0.75rem; flex:1; min-width:0;">
-                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2" style="flex-shrink:0;"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/></svg>
-                    <div style="min-width:0;">
-                        <div style="font-weight:600; color:var(--text-primary);">Chest Capture — ${cap.items.length} items</div>
-                        <div style="font-size:0.75rem; color:var(--text-muted);">${equipCount} gear, ${stackCount} stackable &bull; ${ago}</div>
-                    </div>
-                </div>
-                <div style="color:var(--accent); font-size:0.8rem; flex-shrink:0;">Select &rarr;</div>
-            </div>`);
+            cards.push(makeCard(`selectLootCapture(${capIdx})`, `Chest Capture`, '', cap.items.length, equipCount, stackCount, ago));
         }
     });
     list.innerHTML = cards.join('');

@@ -3359,22 +3359,66 @@ footer a:hover {
 
 .transport-mode-btn.active svg { stroke: #000; }
 
-/* Loot Buyer capture cards */
+/* Loot Buyer capture cards — compact grid */
+#loot-captures-list {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    gap: 0.5rem;
+}
+
 .loot-capture-card {
     display: flex;
-    justify-content: space-between;
-    align-items: center;
+    flex-direction: column;
+    gap: 0.4rem;
     background: var(--bg-card);
     border: 1px solid var(--border-color);
     border-radius: var(--radius);
-    padding: 0.75rem 1rem;
-    margin-bottom: 0.5rem;
+    padding: 0.65rem 0.85rem;
     transition: all 0.2s ease;
 }
 
 .loot-capture-card:hover {
     border-color: var(--accent);
     box-shadow: 0 0 12px rgba(212, 175, 55, 0.1);
+}
+
+.loot-capture-card .loot-card-title {
+    font-weight: 600;
+    font-size: 0.88rem;
+    color: var(--text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.loot-capture-card .loot-card-meta {
+    font-size: 0.72rem;
+    color: var(--text-muted);
+}
+
+/* Compact item list for loot buyer */
+#loot-selected-list .flip-card {
+    padding: 0.4rem 0.65rem;
+    gap: 0.5rem;
+}
+
+#loot-selected-list .flip-icon {
+    width: 28px;
+    height: 28px;
+}
+
+#loot-results .flip-card {
+    padding: 0.4rem 0.65rem;
+    gap: 0.5rem;
+}
+
+#loot-results .flip-icon {
+    width: 28px;
+    height: 28px;
+}
+
+@media (max-width: 768px) {
+    #loot-captures-list { grid-template-columns: 1fr; }
 }
 
 /* Flip type badge */
