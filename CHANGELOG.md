@@ -2,6 +2,14 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-04-07 — Phase 2: Sell Optimizer complete
+
+- **`buildSellPlan()` helper:** Per-item sell strategy decision using an 85% threshold — if instant sell is within 15% of the best market listing price, prefer instant (take the certainty). Otherwise recommend listing on market. Items with neither price go to a "No Market Data" bucket.
+- **`renderSellPlan()` fully rebuilt:** Summary bar (total trips, total silver, instant vs listed split, items with no data warning). One city trip card per destination, sorted by expected value descending. Per-item rows show icon, name×qty, Instant/Market badge, price/ea, and total silver.
+- **Safe copy buttons:** `copySellTrip()` uses `data-copytext` attribute on the card element (no inline string escaping). "Copy List" per trip and "Copy All Trips" master button. Clipboard text is human-readable with city, method (Instant sell / Market list), item names, quantities, and prices.
+- **CSS added:** `.sell-plan-summary`, `.sell-trip-header`, `.sell-plan-item` grid, `.sell-plan-icon`, `.sell-method-badge` (instant/market), `.loot-copy-all-btn`. Mobile breakpoint hides price/ea column below 600px.
+- **No-data edge case:** Items with no buy orders AND no market price shown at bottom in a dimmed card, flagged with `danger` risk badge.
+
 ### 2026-04-07 — Phase 1: Buy Decision Helper complete
 
 - **Loot-evaluate endpoint hardened:** Fixed `no_buy_orders` flag — previously fired when buy order AMOUNT was unknown (NATS hadn't filled it yet), even though a buy order existed. Now only fires when no buy orders exist anywhere (`bestBuyMax === 0`). Added `stale_data` flag for items where all price data is >6h old. Added daily volume proxy from `price_averages.sample_count` to the response (`dailyVol` per city). Added server-side `verdict` field (`buy`/`maybe`/`skip`) in the totals when `askingPrice` is sent.

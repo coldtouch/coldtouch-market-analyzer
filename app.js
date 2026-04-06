@@ -4369,44 +4369,194 @@ function renderWorthAnalysis(data, container) {
     `;
 }
 
-function renderSellPlan(data, container) {
-    // Group items by best instant sell city
-    const cityGroups = {};
-    for (const item of data.items) {
-        const city = item.bestInstantSell?.city || item.bestMarketSell?.city || 'Unknown';
-        if (!cityGroups[city]) cityGroups[city] = { items: [], total: 0 };
-        cityGroups[city].items.push(item);
-        const value = item.bestInstantSell ? item.bestInstantSell.netPerUnit * item.quantity :
-                      item.bestMarketSell ? item.bestMarketSell.netPerUnit * item.quantity : 0;
-        cityGroups[city].total += value;
+// Build the sell plan data structure from loot-evaluate items.
+// Per item: decides between instant sell and market listing using an 85% threshold
+// (if instant is within 15% of market price, prefer instant — not worth waiting).
+// Returns { trips: [[city, tripObj], ...sorted by value desc], noData: [...items] }
+function buildSellPlan(items) {
+    const trips = {};
+    const noData = [];
+
+    for (const item of items) {
+        const hasInstant = item.bestInstantSell && item.bestInstantSell.netPerUnit > 0;
+        const hasMarket  = item.bestMarketSell  && item.bestMarketSell.netPerUnit  > 0;
+
+        if (!hasInstant && !hasMarket) {
+            noData.push(item);
+            continue;
+        }
+
+        let sellMethod, city, netPerUnit, price;
+        if (hasInstant && hasMarket) {
+            const ratio = item.bestInstantSell.netPerUnit / item.bestMarketSell.netPerUnit;
+            if (ratio >= 0.85) {
+                // Instant is within 15% of best market — take the certainty
+                sellMethod = 'instant'; city = item.bestInstantSell.city;
+                netPerUnit = item.bestInstantSell.netPerUnit; price = item.bestInstantSell.price;
+            } else {
+                // Significantly better on market — worth listing
+                sellMethod = 'market'; city = item.bestMarketSell.city;
+                netPerUnit = item.bestMarketSell.netPerUnit; price = item.bestMarketSell.price;
+            }
+        } else if (hasInstant) {
+            sellMethod = 'instant'; city = item.bestInstantSell.city;
+            netPerUnit = item.bestInstantSell.netPerUnit; price = item.bestInstantSell.price;
+        } else {
+            sellMethod = 'market'; city = item.bestMarketSell.city;
+            netPerUnit = item.bestMarketSell.netPerUnit; price = item.bestMarketSell.price;
+        }
+
+        const totalValue = netPerUnit * item.quantity;
+        if (!trips[city]) trips[city] = { items: [], total: 0, instantTotal: 0, marketTotal: 0 };
+        trips[city].items.push({ ...item, sellMethod, city, netPerUnit, price, totalValue });
+        trips[city].total += totalValue;
+        if (sellMethod === 'instant') trips[city].instantTotal += totalValue;
+        else trips[city].marketTotal += totalValue;
     }
 
-    const sorted = Object.entries(cityGroups).sort((a, b) => b[1].total - a[1].total);
+    // Sort each city's items by value desc so most valuable go first
+    for (const t of Object.values(trips)) {
+        t.items.sort((a, b) => b.totalValue - a.totalValue);
+    }
+
+    const sortedTrips = Object.entries(trips).sort((a, b) => b[1].total - a[1].total);
+    return { trips: sortedTrips, noData };
+}
+
+// Copy text for a single trip (called from inline button via dataset id)
+function copySellTrip(tripId) {
+    const el = document.getElementById(tripId);
+    if (!el) return;
+    navigator.clipboard.writeText(el.dataset.copytext || '').then(() => {
+        const btn = el.querySelector('.loot-copy-btn');
+        if (btn) { btn.textContent = 'Copied!'; setTimeout(() => { btn.textContent = 'Copy List'; }, 2000); }
+    });
+}
+
+function renderSellPlan(data, container) {
+    const { trips, noData } = buildSellPlan(data.items);
+
+    if (trips.length === 0 && noData.length === 0) {
+        container.innerHTML = '<div class="empty-state"><p>No items to plan.</p></div>';
+        return;
+    }
+
+    const grandTotal   = trips.reduce((s, [, t]) => s + t.total, 0);
+    const instantTotal = trips.reduce((s, [, t]) => s + t.instantTotal, 0);
+    const marketTotal  = trips.reduce((s, [, t]) => s + t.marketTotal, 0);
+
+    // Build full plain-text summary for "Copy All" button
+    const allCopyLines = ['=== SELL PLAN ===', ''];
+    trips.forEach(([city, trip], i) => {
+        allCopyLines.push(`Trip ${i + 1}: ${city}  (${trip.items.length} items · ${trip.total.toLocaleString()}s)`);
+        trip.items.forEach(it => {
+            const method = it.sellMethod === 'instant' ? 'Instant sell' : 'Market list';
+            allCopyLines.push(`  ${method}: ${it.name}${it.quality > 1 ? ' q' + it.quality : ''} ×${it.quantity}  →  ${it.netPerUnit.toLocaleString()}/ea  =  ${it.totalValue.toLocaleString()}s`);
+        });
+        allCopyLines.push('');
+    });
+    if (noData.length > 0) {
+        allCopyLines.push('No market data (skip or check manually):');
+        noData.forEach(it => allCopyLines.push(`  ${it.name} ×${it.quantity}`));
+    }
+    const allCopyText = allCopyLines.join('\n');
+
+    const tripsHtml = trips.map(([city, trip], i) => {
+        const tripId = `sell-trip-${i}`;
+
+        // Per-trip clipboard text
+        const tripLines = [`${city}  (${trip.items.length} items · ${trip.total.toLocaleString()}s)`];
+        trip.items.forEach(it => {
+            const method = it.sellMethod === 'instant' ? 'Sell' : 'List';
+            tripLines.push(`  ${method}: ${it.name}${it.quality > 1 ? ' q' + it.quality : ''} ×${it.quantity}  →  ${it.price.toLocaleString()}/ea`);
+        });
+        const tripCopyText = tripLines.join('\n').replace(/"/g, '&quot;');
+
+        const itemsHtml = trip.items.map(item => {
+            const iconUrl  = `https://render.albiononline.com/v1/item/${item.itemId}.png?quality=${item.quality}`;
+            const qualLabel = item.quality > 1 ? ` <span style="color:var(--text-muted); font-size:0.7rem;">q${item.quality}</span>` : '';
+            const methodBadge = item.sellMethod === 'instant'
+                ? `<span class="sell-method-badge instant">Instant</span>`
+                : `<span class="sell-method-badge market">Market</span>`;
+            const priceStr   = item.price.toLocaleString();
+            const totalStr   = item.totalValue.toLocaleString();
+            return `<div class="sell-plan-item">
+                <img src="${iconUrl}" class="sell-plan-icon" loading="lazy" onerror="this.style.display='none'">
+                <div class="sell-plan-name">${esc(item.name)}${qualLabel}</div>
+                <div class="sell-plan-qty">×${item.quantity}</div>
+                ${methodBadge}
+                <div class="sell-plan-price">${priceStr}<span style="color:var(--text-muted); font-size:0.65rem;">/ea</span></div>
+                <div class="sell-plan-total">${totalStr}<span style="color:var(--text-muted); font-size:0.65rem;">s</span></div>
+            </div>`;
+        }).join('');
+
+        const instantNote = trip.instantTotal > 0 ? `<span style="color:var(--profit-green); font-size:0.72rem;">⚡ ${trip.instantTotal.toLocaleString()}s instant</span>` : '';
+        const marketNote  = trip.marketTotal > 0  ? `<span style="color:var(--blue); font-size:0.72rem;">📋 ${trip.marketTotal.toLocaleString()}s listed</span>` : '';
+
+        return `<div class="loot-city-group" id="${tripId}" data-copytext="${tripCopyText}">
+            <div class="sell-trip-header">
+                <div>
+                    <span class="sell-trip-title">Trip ${i + 1} — ${esc(city)}</span>
+                    <span class="sell-trip-count">${trip.items.length} item${trip.items.length > 1 ? 's' : ''}</span>
+                </div>
+                <div style="display:flex; align-items:center; gap:0.75rem; flex-wrap:wrap;">
+                    ${instantNote} ${marketNote}
+                    <span class="sell-trip-total">${trip.total.toLocaleString()}s</span>
+                    <button class="btn-small-accent loot-copy-btn" onclick="copySellTrip('${tripId}')">Copy List</button>
+                </div>
+            </div>
+            <div class="sell-plan-items">${itemsHtml}</div>
+        </div>`;
+    }).join('');
+
+    const noDataHtml = noData.length > 0 ? `
+        <div class="loot-city-group" style="opacity:0.7;">
+            <div class="sell-trip-header">
+                <span class="sell-trip-title" style="color:var(--text-muted);">No Market Data</span>
+                <span class="sell-trip-count" style="color:var(--loss-red);">${noData.length} item${noData.length > 1 ? 's' : ''} — check manually</span>
+            </div>
+            <div class="sell-plan-items">
+                ${noData.map(item => {
+                    const iconUrl = `https://render.albiononline.com/v1/item/${item.itemId}.png?quality=${item.quality}`;
+                    return `<div class="sell-plan-item">
+                        <img src="${iconUrl}" class="sell-plan-icon" loading="lazy" onerror="this.style.display='none'">
+                        <div class="sell-plan-name" style="color:var(--text-muted);">${esc(item.name)}</div>
+                        <div class="sell-plan-qty">×${item.quantity}</div>
+                        <span class="risk-badge danger">no data</span>
+                        <div class="sell-plan-price" style="color:var(--text-muted);">—</div>
+                        <div class="sell-plan-total" style="color:var(--text-muted);">—</div>
+                    </div>`;
+                }).join('')}
+            </div>
+        </div>` : '';
 
     container.innerHTML = `
-        <h3 style="color:var(--accent); margin:0 0 1rem 0;">Sell Plan — ${sorted.length} trip${sorted.length > 1 ? 's' : ''}, est. ${data.totals.quickSellTotal.toLocaleString()} silver</h3>
-        ${sorted.map(([city, group], i) => {
-            const itemsHtml = group.items.map(item => {
-                const iconUrl = `https://render.albiononline.com/v1/item/${item.itemId}.png?quality=${item.quality}`;
-                const sellInfo = item.bestInstantSell ? `sell @ ${item.bestInstantSell.price.toLocaleString()}` :
-                                 item.bestMarketSell ? `list @ ${item.bestMarketSell.price.toLocaleString()}` : 'no data';
-                return `<div style="display:flex; align-items:center; gap:0.5rem; padding:0.3rem 0; border-bottom:1px solid var(--border-color);">
-                    <img src="${iconUrl}" style="width:24px; height:24px; border-radius:4px;" loading="lazy" onerror="this.style.display='none'">
-                    <span style="flex:1; font-size:0.8rem; color:var(--text-primary);">${esc(item.name)} x${item.quantity}</span>
-                    <span style="font-size:0.75rem; color:var(--text-muted);">${sellInfo}</span>
-                </div>`;
-            }).join('');
-            const copyText = group.items.map(it => `${it.name} x${it.quantity}`).join('\\n');
-            return `<div class="loot-city-group">
-                <div style="display:flex; justify-content:space-between; align-items:center;">
-                    <h3>Trip ${i + 1}: ${esc(city)} (${group.items.length} items)</h3>
-                    <span style="color:var(--profit-green); font-weight:700;">${group.total.toLocaleString()}s</span>
-                </div>
-                ${itemsHtml}
-                <button class="btn-small-accent" style="margin-top:0.5rem;" onclick="navigator.clipboard.writeText('${copyText.replace(/'/g, "\\'")}'); this.textContent='Copied!'; setTimeout(()=>this.textContent='Copy List',2000);">Copy List</button>
-            </div>`;
-        }).join('')}
+        <div class="sell-plan-summary">
+            <div class="sell-plan-summary-row">
+                <span>${trips.length} trip${trips.length !== 1 ? 's' : ''} · ${data.items.length - noData.length} items</span>
+                <span style="font-weight:700; color:var(--profit-green);">${grandTotal.toLocaleString()} silver</span>
+            </div>
+            <div style="display:flex; gap:1rem; font-size:0.78rem; margin-top:0.25rem; flex-wrap:wrap;">
+                ${instantTotal > 0 ? `<span style="color:var(--profit-green);">⚡ ${instantTotal.toLocaleString()}s instant</span>` : ''}
+                ${marketTotal  > 0 ? `<span style="color:var(--blue);">📋 ${marketTotal.toLocaleString()}s listed</span>` : ''}
+                ${noData.length > 0 ? `<span style="color:var(--loss-red);">⚠ ${noData.length} item${noData.length > 1 ? 's' : ''} with no data</span>` : ''}
+            </div>
+            <button class="btn-small-accent loot-copy-all-btn" id="sell-copy-all-btn" style="margin-top:0.5rem;">Copy All Trips</button>
+        </div>
+        ${tripsHtml}
+        ${noDataHtml}
     `;
+
+    // Wire up Copy All button using safe JS (no inline string interpolation)
+    const copyAllBtn = document.getElementById('sell-copy-all-btn');
+    if (copyAllBtn) {
+        copyAllBtn.addEventListener('click', () => {
+            navigator.clipboard.writeText(allCopyText).then(() => {
+                copyAllBtn.textContent = 'Copied!';
+                setTimeout(() => { copyAllBtn.textContent = 'Copy All Trips'; }, 2000);
+            });
+        });
+    }
 }
 
 // ====== TRANSPORT TAB ======
