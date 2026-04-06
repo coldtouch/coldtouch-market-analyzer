@@ -3359,6 +3359,24 @@ footer a:hover {
 
 .transport-mode-btn.active svg { stroke: #000; }
 
+/* Loot Buyer capture cards */
+.loot-capture-card {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius);
+    padding: 0.75rem 1rem;
+    margin-bottom: 0.5rem;
+    transition: all 0.2s ease;
+}
+
+.loot-capture-card:hover {
+    border-color: var(--accent);
+    box-shadow: 0 0 12px rgba(212, 175, 55, 0.1);
+}
+
 /* Flip type badge */
 .flip-type-badge {
     display: inline-block;

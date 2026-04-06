@@ -301,6 +301,7 @@ function initTabs() {
             if (currentTab === 'browser') renderBrowser();
             if (currentTab === 'live-flips') initLiveFlipsTab();
             if (currentTab === 'profile') initProfileTab();
+            if (currentTab === 'loot-buyer') renderLootCaptures();
 
             // Close dropdown after selection
             closeAllDropdowns();
@@ -3208,6 +3209,19 @@ async function init() {
         }
     });
 
+    // Loot Buyer: mode toggle and analyze button
+    document.querySelectorAll('.loot-mode-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            document.querySelectorAll('.loot-mode-btn').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            lootAnalysisMode = btn.dataset.mode;
+            const askSection = document.getElementById('loot-asking-price-section');
+            if (askSection) askSection.style.display = lootAnalysisMode === 'worth' ? '' : 'none';
+        });
+    });
+    const lootAnalyzeBtn = document.getElementById('loot-analyze-btn');
+    if (lootAnalyzeBtn) lootAnalyzeBtn.addEventListener('click', analyzeLoot);
+
     // Transport sell strategy: re-render on change
     const sellStrategyEl = document.getElementById('transport-sell-strategy');
     if (sellStrategyEl) {
@@ -3664,6 +3678,25 @@ function initLiveSync() {
                 return;
             }
 
+            // Chest captures from game client
+            if (data.type === 'chest-capture' || data.type === 'chest-captures') {
+                const captures = data.type === 'chest-captures' ? data.data : [data.data];
+                if (captures && captures.length > 0) {
+                    for (const cap of captures) {
+                        if (cap && cap.items) lootBuyerCaptures.unshift(cap);
+                    }
+                    if (lootBuyerCaptures.length > 20) lootBuyerCaptures.length = 20;
+                    renderLootCaptures();
+                    // Flash the tab
+                    const tab = document.querySelector('[data-tab="loot-buyer"]');
+                    if (tab && currentTab !== 'loot-buyer') {
+                        tab.classList.add('has-new');
+                        setTimeout(() => tab.classList.remove('has-new'), 3000);
+                    }
+                }
+                return;
+            }
+
             // Standard NATS market data
             // Format incoming NATS string arrays back to the standardized MarketDB schema
             // IMPORTANT: NATS packets are individual orders, NOT authoritative market summaries.
@@ -4010,6 +4043,225 @@ function renderProfile(data) {
             }
         } catch { alert('Network error.'); }
     };
+
+    // Capture token
+    const genTokenBtn = document.getElementById('profile-generate-token-btn');
+    const tokenDisplay = document.getElementById('profile-capture-token-display');
+    const tokenValue = document.getElementById('profile-capture-token-value');
+    const tokenStatus = document.getElementById('profile-capture-token-status');
+
+    // Load existing token
+    fetch(`${VPS_BASE}/api/capture-token`, { headers: authHeaders() })
+        .then(r => r.json())
+        .then(d => {
+            if (d.token) {
+                if (tokenStatus) tokenStatus.textContent = 'Active';
+                if (tokenValue) tokenValue.textContent = d.token;
+                if (tokenDisplay) tokenDisplay.classList.remove('hidden');
+            }
+        }).catch(() => {});
+
+    if (genTokenBtn) genTokenBtn.onclick = async () => {
+        try {
+            const res = await fetch(`${VPS_BASE}/api/generate-capture-token`, { method: 'POST', headers: authHeaders() });
+            const d = await res.json();
+            if (d.success && d.token) {
+                if (tokenStatus) tokenStatus.textContent = 'Active';
+                if (tokenValue) tokenValue.textContent = d.token;
+                if (tokenDisplay) tokenDisplay.classList.remove('hidden');
+            }
+        } catch { alert('Failed to generate token.'); }
+    };
+}
+
+// ====== LOOT BUYER TAB ======
+let lootBuyerCaptures = [];
+let lootAnalysisMode = 'worth';
+let lootSelectedCapture = null;
+
+function renderLootCaptures() {
+    const list = document.getElementById('loot-captures-list');
+    const empty = document.getElementById('loot-no-captures');
+    if (!list) return;
+
+    if (lootBuyerCaptures.length === 0) {
+        list.innerHTML = '';
+        if (empty) empty.style.display = '';
+        return;
+    }
+    if (empty) empty.style.display = 'none';
+
+    list.innerHTML = lootBuyerCaptures.map((cap, i) => {
+        const equipCount = cap.items.filter(it => it.isEquipment).length;
+        const stackCount = cap.items.length - equipCount;
+        const ago = timeAgo(new Date(cap.capturedAt).toISOString());
+        return `<div class="loot-capture-card" onclick="selectLootCapture(${i})" style="cursor:pointer;">
+            <div style="display:flex; align-items:center; gap:0.75rem;">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/></svg>
+                <div>
+                    <div style="font-weight:600; color:var(--text-primary);">Chest Capture — ${cap.items.length} items</div>
+                    <div style="font-size:0.75rem; color:var(--text-muted);">${equipCount} gear, ${stackCount} stackable &bull; ${ago}</div>
+                </div>
+            </div>
+            <div style="color:var(--accent); font-size:0.8rem;">Select &rarr;</div>
+        </div>`;
+    }).join('');
+}
+
+function selectLootCapture(index) {
+    const cap = lootBuyerCaptures[index];
+    if (!cap) return;
+    lootSelectedCapture = cap;
+
+    const section = document.getElementById('loot-selected-items');
+    const title = document.getElementById('loot-selected-title');
+    const list = document.getElementById('loot-selected-list');
+    if (!section || !list) return;
+
+    section.style.display = 'block';
+    title.textContent = `Selected Items (${cap.items.length})`;
+
+    list.innerHTML = cap.items.map(item => {
+        const qualName = item.quality > 1 ? ` q${item.quality}` : '';
+        const iconUrl = `https://render.albiononline.com/v1/item/${item.itemId}.png?quality=${item.quality}`;
+        return `<div class="flip-card" style="animation:none;">
+            <img class="flip-icon" src="${iconUrl}" alt="" loading="lazy" onerror="this.style.display='none'">
+            <div style="min-width:0;">
+                <div style="font-weight:600; font-size:0.85rem; color:var(--text-primary); overflow:hidden; text-overflow:ellipsis;">${esc(item.itemId)}${qualName}</div>
+                <div style="font-size:0.7rem; color:var(--text-muted);">${item.isEquipment ? 'Equipment' : 'Stackable'} ${item.crafterName ? '• Crafted by ' + esc(item.crafterName) : ''}</div>
+            </div>
+            <div style="text-align:right; font-size:0.85rem; font-weight:600; color:var(--text-primary);">x${item.quantity}</div>
+        </div>`;
+    }).join('');
+}
+
+async function analyzeLoot() {
+    if (!lootSelectedCapture || !lootSelectedCapture.items.length) {
+        alert('Select a chest capture first.');
+        return;
+    }
+
+    const mode = lootAnalysisMode;
+    const resultsDiv = document.getElementById('loot-results');
+    if (!resultsDiv) return;
+    resultsDiv.style.display = 'block';
+    resultsDiv.innerHTML = '<div class="spinner"></div>';
+
+    try {
+        const res = await fetch(`${VPS_BASE}/api/loot-evaluate`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', ...authHeaders() },
+            body: JSON.stringify({ items: lootSelectedCapture.items })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Failed');
+
+        if (mode === 'worth') {
+            renderWorthAnalysis(data, resultsDiv);
+        } else {
+            renderSellPlan(data, resultsDiv);
+        }
+    } catch (e) {
+        resultsDiv.innerHTML = `<div class="empty-state"><p>Analysis failed: ${esc(e.message)}</p></div>`;
+    }
+}
+
+function renderWorthAnalysis(data, container) {
+    const askingPrice = parseInt(document.getElementById('loot-asking-price')?.value) || 0;
+    const qs = data.totals.quickSellTotal;
+    const ps = data.totals.patientSellTotal;
+
+    let verdict = '', verdictClass = '';
+    if (askingPrice > 0) {
+        if (askingPrice <= qs) { verdict = `BUY — ${((qs - askingPrice) / askingPrice * 100).toFixed(0)}% instant profit`; verdictClass = 'good'; }
+        else if (askingPrice <= ps) { verdict = 'MAYBE — profitable if you list on market, not instant'; verdictClass = 'caution'; }
+        else { verdict = 'SKIP — asking price exceeds market value'; verdictClass = 'bad'; }
+    }
+
+    container.innerHTML = `
+        <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(180px, 1fr)); gap:0.75rem; margin-bottom:1rem;">
+            <div class="profile-stat-item">
+                <span class="profile-stat-value" style="color:var(--profit-green);">${qs.toLocaleString()}</span>
+                <span class="profile-stat-label">Quick-Sell Value</span>
+            </div>
+            <div class="profile-stat-item">
+                <span class="profile-stat-value" style="color:var(--blue);">${ps.toLocaleString()}</span>
+                <span class="profile-stat-label">Patient-Sell Value</span>
+            </div>
+            ${askingPrice > 0 ? `<div class="profile-stat-item">
+                <span class="profile-stat-value">${askingPrice.toLocaleString()}</span>
+                <span class="profile-stat-label">Asking Price</span>
+            </div>` : ''}
+            <div class="profile-stat-item">
+                <span class="profile-stat-value">${data.totals.itemCount}</span>
+                <span class="profile-stat-label">Items (${data.totals.riskItemCount} risky)</span>
+            </div>
+        </div>
+        ${verdict ? `<div class="loot-verdict ${verdictClass}">${verdict}</div>` : '<div style="color:var(--text-muted); font-size:0.85rem; margin-bottom:1rem;">Enter an asking price above to get a buy/skip verdict.</div>'}
+        <div style="margin-top:1rem;">
+            <h3 style="color:var(--text-primary); font-size:0.95rem; margin:0 0 0.5rem 0;">Per-Item Breakdown</h3>
+            <div class="flips-feed-container">
+                ${data.items.map(item => {
+                    const iconUrl = `https://render.albiononline.com/v1/item/${item.itemId}.png?quality=${item.quality}`;
+                    const instant = item.bestInstantSell ? `${item.bestInstantSell.city}: ${item.bestInstantSell.netPerUnit.toLocaleString()}/ea` : 'No buyers';
+                    const market = item.bestMarketSell ? `${item.bestMarketSell.city}: ${item.bestMarketSell.netPerUnit.toLocaleString()}/ea` : 'No data';
+                    const risk = item.riskFlags.length > 0 ? item.riskFlags.map(f => `<span class="risk-badge ${f === 'no_data' || f === 'no_buy_orders' ? 'danger' : 'warning'}">${f.replace(/_/g,' ')}</span>`).join(' ') : '<span style="color:var(--profit-green); font-size:0.7rem;">OK</span>';
+                    const totalInstant = item.bestInstantSell ? (item.bestInstantSell.netPerUnit * item.quantity).toLocaleString() : '—';
+                    return `<div class="flip-card" style="animation:none;">
+                        <img class="flip-icon" src="${iconUrl}" alt="" loading="lazy" onerror="this.style.display='none'">
+                        <div style="min-width:0;">
+                            <div style="font-weight:600; font-size:0.82rem; color:var(--text-primary);">${esc(item.name)} x${item.quantity}</div>
+                            <div style="font-size:0.7rem; color:var(--text-muted);">Instant: ${instant} &bull; Market: ${market}</div>
+                        </div>
+                        <div style="text-align:right;">
+                            <div style="font-size:0.85rem; font-weight:600; color:var(--profit-green);">${totalInstant}</div>
+                            <div>${risk}</div>
+                        </div>
+                    </div>`;
+                }).join('')}
+            </div>
+        </div>
+    `;
+}
+
+function renderSellPlan(data, container) {
+    // Group items by best instant sell city
+    const cityGroups = {};
+    for (const item of data.items) {
+        const city = item.bestInstantSell?.city || item.bestMarketSell?.city || 'Unknown';
+        if (!cityGroups[city]) cityGroups[city] = { items: [], total: 0 };
+        cityGroups[city].items.push(item);
+        const value = item.bestInstantSell ? item.bestInstantSell.netPerUnit * item.quantity :
+                      item.bestMarketSell ? item.bestMarketSell.netPerUnit * item.quantity : 0;
+        cityGroups[city].total += value;
+    }
+
+    const sorted = Object.entries(cityGroups).sort((a, b) => b[1].total - a[1].total);
+
+    container.innerHTML = `
+        <h3 style="color:var(--accent); margin:0 0 1rem 0;">Sell Plan — ${sorted.length} trip${sorted.length > 1 ? 's' : ''}, est. ${data.totals.quickSellTotal.toLocaleString()} silver</h3>
+        ${sorted.map(([city, group], i) => {
+            const itemsHtml = group.items.map(item => {
+                const iconUrl = `https://render.albiononline.com/v1/item/${item.itemId}.png?quality=${item.quality}`;
+                const sellInfo = item.bestInstantSell ? `sell @ ${item.bestInstantSell.price.toLocaleString()}` :
+                                 item.bestMarketSell ? `list @ ${item.bestMarketSell.price.toLocaleString()}` : 'no data';
+                return `<div style="display:flex; align-items:center; gap:0.5rem; padding:0.3rem 0; border-bottom:1px solid var(--border-color);">
+                    <img src="${iconUrl}" style="width:24px; height:24px; border-radius:4px;" loading="lazy" onerror="this.style.display='none'">
+                    <span style="flex:1; font-size:0.8rem; color:var(--text-primary);">${esc(item.name)} x${item.quantity}</span>
+                    <span style="font-size:0.75rem; color:var(--text-muted);">${sellInfo}</span>
+                </div>`;
+            }).join('');
+            const copyText = group.items.map(it => `${it.name} x${it.quantity}`).join('\\n');
+            return `<div class="loot-city-group">
+                <div style="display:flex; justify-content:space-between; align-items:center;">
+                    <h3>Trip ${i + 1}: ${esc(city)} (${group.items.length} items)</h3>
+                    <span style="color:var(--profit-green); font-weight:700;">${group.total.toLocaleString()}s</span>
+                </div>
+                ${itemsHtml}
+                <button class="btn-small-accent" style="margin-top:0.5rem;" onclick="navigator.clipboard.writeText('${copyText.replace(/'/g, "\\'")}'); this.textContent='Copied!'; setTimeout(()=>this.textContent='Copy List',2000);">Copy List</button>
+            </div>`;
+        }).join('')}
+    `;
 }
 
 // ====== TRANSPORT TAB ======
