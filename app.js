@@ -301,7 +301,7 @@ function initTabs() {
             if (currentTab === 'browser') renderBrowser();
             if (currentTab === 'live-flips') initLiveFlipsTab();
             if (currentTab === 'profile') initProfileTab();
-            if (currentTab === 'loot-buyer') renderLootCaptures();
+            if (currentTab === 'loot-buyer') { renderLootCaptures(); loadTrackedTabs(); }
 
             // Close dropdown after selection
             closeAllDropdowns();
@@ -4148,6 +4148,7 @@ function renderProfile(data) {
 let lootBuyerCaptures = [];
 let lootAnalysisMode = 'worth';
 let lootSelectedCapture = null;
+let lastLootEvalData = null; // retained for "I Bought This" save action
 
 function renderLootCaptures() {
     const list = document.getElementById('loot-captures-list');
@@ -4287,13 +4288,55 @@ async function analyzeLoot() {
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || 'Failed');
 
+        lastLootEvalData = data;
         if (mode === 'worth') {
             renderWorthAnalysis(data, resultsDiv);
         } else {
             renderSellPlan(data, resultsDiv);
         }
+
+        // "I Bought This" button — appears after any analysis
+        const saveSection = document.createElement('div');
+        saveSection.id = 'loot-save-section';
+        saveSection.style.cssText = 'margin-top:1.25rem; padding-top:1rem; border-top:1px solid var(--border-color); display:flex; gap:0.75rem; align-items:center; flex-wrap:wrap;';
+        saveSection.innerHTML = `
+            <input type="text" id="loot-save-city" placeholder="City (e.g. Bridgewatch)" style="flex:1; min-width:140px; max-width:200px; padding:0.4rem 0.6rem; border-radius:var(--radius); border:1px solid var(--border-color); background:var(--bg-elevated); color:var(--text-primary); font-size:0.82rem;">
+            <button class="btn-accent" id="loot-save-btn" style="flex:1; min-width:160px;">I Bought This — Track Tab</button>
+        `;
+        resultsDiv.appendChild(saveSection);
+        document.getElementById('loot-save-btn').addEventListener('click', buyThisTab);
     } catch (e) {
         resultsDiv.innerHTML = `<div class="empty-state"><p>Analysis failed: ${esc(e.message)}</p></div>`;
+    }
+}
+
+async function buyThisTab() {
+    if (!lastLootEvalData || !lootSelectedCapture) return;
+    const btn = document.getElementById('loot-save-btn');
+    const cityInput = document.getElementById('loot-save-city');
+    const askingPrice = parseInt(document.getElementById('loot-asking-price')?.value) || 0;
+    const tabName = lootSelectedCapture.tabName || lootSelectedCapture.customName || 'Unnamed Tab';
+    const city = cityInput ? cityInput.value.trim() : '';
+
+    if (btn) { btn.disabled = true; btn.textContent = 'Saving...'; }
+    try {
+        const res = await fetch(`${VPS_BASE}/api/loot-tab/save`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', ...authHeaders() },
+            body: JSON.stringify({ tabName, city, purchasePrice: askingPrice, items: lootSelectedCapture.items })
+        });
+        const d = await res.json();
+        if (!res.ok) throw new Error(d.error || 'Failed');
+        if (btn) {
+            btn.textContent = 'Saved! See My Tracked Tabs below';
+            btn.style.background = 'var(--profit-green)';
+            btn.style.color = '#000';
+            btn.disabled = false;
+        }
+        loadTrackedTabs();
+    } catch(e) {
+        if (btn) { btn.disabled = false; btn.textContent = 'I Bought This — Track Tab'; }
+        alert('Failed to save: ' + e.message);
     }
 }
 
@@ -4556,6 +4599,179 @@ function renderSellPlan(data, container) {
                 setTimeout(() => { copyAllBtn.textContent = 'Copy All Trips'; }, 2000);
             });
         });
+    }
+}
+
+// ====== LOOT TAB LIFECYCLE TRACKER ======
+
+async function loadTrackedTabs() {
+    if (!currentUser) return;
+    const list = document.getElementById('loot-tracked-list');
+    const empty = document.getElementById('loot-tracked-empty');
+    if (!list) return;
+
+    list.innerHTML = '<div class="spinner" style="margin:1.5rem auto;"></div>';
+    if (empty) empty.style.display = 'none';
+
+    try {
+        const res = await fetch(`${VPS_BASE}/api/loot-tabs`, { headers: authHeaders() });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Failed');
+
+        if (!data.tabs || data.tabs.length === 0) {
+            list.innerHTML = '';
+            if (empty) empty.style.display = '';
+            return;
+        }
+        list.innerHTML = data.tabs.map(tab => renderTrackedTabCard(tab)).join('');
+    } catch(e) {
+        list.innerHTML = `<div class="empty-state"><p>Failed to load tracked tabs: ${esc(e.message)}</p></div>`;
+    }
+}
+
+function renderTrackedTabCard(tab) {
+    const net = tab.revenueSoFar - tab.purchasePrice;
+    const netColor = net >= 0 ? 'var(--profit-green)' : 'var(--loss-red)';
+    const netSign = net >= 0 ? '+' : '';
+    const progressPct = tab.purchasePrice > 0 ? Math.min(100, Math.round(tab.revenueSoFar / tab.purchasePrice * 100)) : 0;
+    const progressColor = progressPct >= 100 ? 'var(--profit-green)' : progressPct >= 50 ? '#fbbf24' : 'var(--accent)';
+    const statusClass = tab.status === 'sold' ? 'status-sold' : tab.status === 'partial' ? 'status-partial' : 'status-open';
+    const date = new Date(tab.purchasedAt).toLocaleDateString();
+
+    return `<div class="loot-tracked-card" onclick="toggleTrackedTabDetail(${tab.id}, this)">
+        <div class="loot-tracked-header">
+            <div style="display:flex; align-items:center; flex-wrap:wrap; gap:0.35rem;">
+                <span class="loot-card-title">${esc(tab.tabName)}</span>
+                ${tab.city ? `<span class="loot-tab-badge">${esc(tab.city)}</span>` : ''}
+                <span class="loot-tab-status ${statusClass}">${tab.status}</span>
+            </div>
+            <span style="font-size:0.72rem; color:var(--text-muted); flex-shrink:0;">${date}</span>
+        </div>
+        <div class="loot-tracked-stats">
+            <div class="loot-tracked-stat">
+                <span class="loot-tracked-stat-label">Paid</span>
+                <span class="loot-tracked-stat-value">${tab.purchasePrice.toLocaleString()}s</span>
+            </div>
+            <div class="loot-tracked-stat">
+                <span class="loot-tracked-stat-label">Revenue</span>
+                <span class="loot-tracked-stat-value" style="color:var(--profit-green);">${tab.revenueSoFar.toLocaleString()}s</span>
+            </div>
+            <div class="loot-tracked-stat">
+                <span class="loot-tracked-stat-label">Net Profit</span>
+                <span class="loot-tracked-stat-value" style="color:${netColor};">${netSign}${net.toLocaleString()}s</span>
+            </div>
+            <div class="loot-tracked-stat">
+                <span class="loot-tracked-stat-label">Progress</span>
+                <span class="loot-tracked-stat-value">${progressPct}%</span>
+            </div>
+        </div>
+        <div class="loot-tracked-progress-bar">
+            <div class="loot-tracked-progress-fill" style="width:${progressPct}%; background:${progressColor};"></div>
+        </div>
+        <div class="loot-tracked-detail" id="loot-tracked-detail-${tab.id}" style="display:none;"></div>
+    </div>`;
+}
+
+async function toggleTrackedTabDetail(tabId, cardEl) {
+    const detail = document.getElementById(`loot-tracked-detail-${tabId}`);
+    if (!detail) return;
+
+    if (detail.style.display !== 'none') {
+        detail.style.display = 'none';
+        return;
+    }
+
+    detail.style.display = 'block';
+    detail.innerHTML = '<div class="spinner" style="margin:0.75rem auto; width:20px; height:20px;"></div>';
+
+    try {
+        const res = await fetch(`${VPS_BASE}/api/loot-tab/${tabId}`, { headers: authHeaders() });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Failed');
+        detail.innerHTML = renderTrackedTabDetail(data);
+    } catch(e) {
+        detail.innerHTML = `<p style="color:var(--loss-red); font-size:0.8rem; margin:0.5rem 0;">${esc(e.message)}</p>`;
+    }
+}
+
+function renderTrackedTabDetail(tab) {
+    const salesHtml = tab.sales.length === 0
+        ? '<p style="color:var(--text-muted); font-size:0.8rem; margin:0.5rem 0;">No sales recorded yet.</p>'
+        : tab.sales.map(s => {
+            const name = (typeof itemNames !== 'undefined' && itemNames[s.item_id]) || s.item_id;
+            const qualLabel = s.quality > 1 ? ` q${s.quality}` : '';
+            const total = (s.sale_price * s.quantity).toLocaleString();
+            const date = new Date(s.sold_at).toLocaleDateString();
+            return `<div style="display:grid; grid-template-columns:1fr auto auto; align-items:center; gap:0.5rem; font-size:0.78rem; padding:0.3rem 0; border-bottom:1px solid var(--border-color);">
+                <span style="color:var(--text-primary);">${esc(name)}${qualLabel} ×${s.quantity}</span>
+                <span style="color:var(--profit-green); font-weight:600;">${total}s</span>
+                <span style="color:var(--text-muted);">${date}</span>
+            </div>`;
+        }).join('');
+
+    const totalRevLabel = tab.revenueSoFar.toLocaleString();
+    const netLabel = (tab.netProfit >= 0 ? '+' : '') + tab.netProfit.toLocaleString();
+    const netColor = tab.netProfit >= 0 ? 'var(--profit-green)' : 'var(--loss-red)';
+
+    return `<div style="margin-top:0.75rem; padding-top:0.75rem; border-top:1px solid var(--border-color);">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.5rem; flex-wrap:wrap; gap:0.4rem;">
+            <div style="display:flex; gap:1rem; font-size:0.78rem;">
+                <span>Revenue: <strong style="color:var(--profit-green);">${totalRevLabel}s</strong></span>
+                <span>Net: <strong style="color:${netColor};">${netLabel}s</strong></span>
+            </div>
+            <div style="display:flex; gap:0.5rem; align-items:center;" onclick="event.stopPropagation()">
+                <button class="btn-small-accent" onclick="recordSale(${tab.id})">+ Record Sale</button>
+                <select class="loot-status-select" onchange="updateTabStatus(${tab.id}, this.value)">
+                    <option value="open" ${tab.status === 'open' ? 'selected' : ''}>Open</option>
+                    <option value="partial" ${tab.status === 'partial' ? 'selected' : ''}>Partial</option>
+                    <option value="sold" ${tab.status === 'sold' ? 'selected' : ''}>Sold</option>
+                </select>
+            </div>
+        </div>
+        <div style="font-size:0.78rem; color:var(--text-muted); margin-bottom:0.35rem;">${tab.sales.length} sale record${tab.sales.length !== 1 ? 's' : ''}</div>
+        ${salesHtml}
+    </div>`;
+}
+
+async function recordSale(tabId) {
+    const itemId = prompt('Item ID (e.g. T5_BAG):');
+    if (!itemId || !itemId.trim()) return;
+    const qtyStr = prompt('Quantity:', '1');
+    if (qtyStr === null) return;
+    const qty = Math.max(1, parseInt(qtyStr) || 1);
+    const priceStr = prompt('Sale price per unit (silver):');
+    if (priceStr === null) return;
+    const price = parseInt(priceStr);
+    if (!price || price <= 0) { alert('Enter a valid sale price.'); return; }
+
+    try {
+        const res = await fetch(`${VPS_BASE}/api/loot-tab/${tabId}/sale`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', ...authHeaders() },
+            body: JSON.stringify({ itemId: itemId.trim(), quality: 1, quantity: qty, salePrice: price })
+        });
+        const d = await res.json();
+        if (!res.ok) throw new Error(d.error || 'Failed');
+        // Reload detail and card list
+        const detail = document.getElementById(`loot-tracked-detail-${tabId}`);
+        if (detail) detail.style.display = 'none'; // collapse so re-click reloads
+        loadTrackedTabs();
+    } catch(e) {
+        alert('Failed to record sale: ' + e.message);
+    }
+}
+
+async function updateTabStatus(tabId, status) {
+    try {
+        const res = await fetch(`${VPS_BASE}/api/loot-tab/${tabId}/status`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json', ...authHeaders() },
+            body: JSON.stringify({ status })
+        });
+        if (!res.ok) { const d = await res.json(); throw new Error(d.error || 'Failed'); }
+        loadTrackedTabs();
+    } catch(e) {
+        alert('Failed to update status: ' + e.message);
     }
 }
 

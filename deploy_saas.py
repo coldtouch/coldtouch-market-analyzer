@@ -233,6 +233,29 @@ db.serialize(() => {
     updated_at INTEGER NOT NULL
   )`);
 
+  // === PHASE 3: Loot Lifecycle Tracker ===
+  db.run(`CREATE TABLE IF NOT EXISTS loot_tabs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id TEXT NOT NULL,
+    tab_name TEXT NOT NULL,
+    city TEXT DEFAULT '',
+    purchase_price INTEGER DEFAULT 0,
+    items_json TEXT NOT NULL,
+    purchased_at INTEGER NOT NULL,
+    status TEXT DEFAULT 'open'
+  )`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_loot_tabs_user ON loot_tabs(user_id, purchased_at)`);
+
+  db.run(`CREATE TABLE IF NOT EXISTS loot_tab_sales (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    loot_tab_id INTEGER NOT NULL,
+    item_id TEXT NOT NULL,
+    quality INTEGER DEFAULT 1,
+    quantity INTEGER DEFAULT 1,
+    sale_price INTEGER NOT NULL,
+    sold_at INTEGER NOT NULL
+  )`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_loot_tab_sales_tab ON loot_tab_sales(loot_tab_id)`);
 
   // === SERVER MIGRATION: detect if data was collected from a different game server ===
   // Store which game server the data was collected from
@@ -1281,6 +1304,131 @@ setInterval(() => {
     if (clientCaptures[userId].length === 0) delete clientCaptures[userId];
   }
 }, 30 * 60 * 1000);
+
+// === LOOT TAB LIFECYCLE TRACKER ===
+
+// "I Bought This" — save a loot tab with purchase price to DB
+app.post('/api/loot-tab/save', requireAuth, (req, res) => {
+  const { tabName, city, purchasePrice, items } = req.body;
+  if (!tabName || !items || !Array.isArray(items) || items.length === 0 || items.length > 300) {
+    return res.status(400).json({ error: 'tabName and items array required (1-300 items).' });
+  }
+  const price = Math.max(0, parseInt(purchasePrice) || 0);
+  const now = Date.now();
+  const itemsJson = JSON.stringify(items);
+  db.run(
+    `INSERT INTO loot_tabs (user_id, tab_name, city, purchase_price, items_json, purchased_at, status) VALUES (?, ?, ?, ?, ?, ?, 'open')`,
+    [req.user.id, tabName.slice(0, 100), (city || '').slice(0, 50), price, itemsJson, now],
+    function(err) {
+      if (err) return res.status(500).json({ error: err.message });
+      res.json({ success: true, id: this.lastID });
+    }
+  );
+});
+
+// List user's tracked tabs with revenue summary
+app.get('/api/loot-tabs', requireAuth, (req, res) => {
+  db.all(
+    `SELECT lt.id, lt.tab_name, lt.city, lt.purchase_price, lt.items_json, lt.purchased_at, lt.status,
+      COALESCE(SUM(ls.sale_price * ls.quantity), 0) as revenue_so_far,
+      COUNT(ls.id) as sale_records
+     FROM loot_tabs lt
+     LEFT JOIN loot_tab_sales ls ON ls.loot_tab_id = lt.id
+     WHERE lt.user_id = ?
+     GROUP BY lt.id
+     ORDER BY lt.purchased_at DESC
+     LIMIT 50`,
+    [req.user.id],
+    (err, rows) => {
+      if (err) return res.status(500).json({ error: err.message });
+      const tabs = (rows || []).map(r => {
+        let items = [];
+        try { items = JSON.parse(r.items_json); } catch(e) {}
+        const totalQty = items.reduce((s, it) => s + (parseInt(it.quantity) || 1), 0);
+        return {
+          id: r.id,
+          tabName: r.tab_name,
+          city: r.city,
+          purchasePrice: r.purchase_price,
+          purchasedAt: r.purchased_at,
+          status: r.status,
+          itemCount: items.length,
+          totalQuantity: totalQty,
+          revenueSoFar: r.revenue_so_far,
+          saleRecords: r.sale_records
+        };
+      });
+      res.json({ tabs });
+    }
+  );
+});
+
+// Get a single tab with full item list and sales history
+app.get('/api/loot-tab/:id', requireAuth, (req, res) => {
+  const tabId = parseInt(req.params.id);
+  if (!tabId) return res.status(400).json({ error: 'Invalid tab id.' });
+  db.get(`SELECT * FROM loot_tabs WHERE id = ? AND user_id = ?`, [tabId, req.user.id], (err, tab) => {
+    if (err) return res.status(500).json({ error: err.message });
+    if (!tab) return res.status(404).json({ error: 'Tab not found.' });
+    let items = [];
+    try { items = JSON.parse(tab.items_json); } catch(e) {}
+    db.all(`SELECT * FROM loot_tab_sales WHERE loot_tab_id = ? ORDER BY sold_at DESC`, [tabId], (err2, sales) => {
+      if (err2) return res.status(500).json({ error: err2.message });
+      const revenue = (sales || []).reduce((s, r) => s + r.sale_price * r.quantity, 0);
+      res.json({
+        id: tab.id,
+        tabName: tab.tab_name,
+        city: tab.city,
+        purchasePrice: tab.purchase_price,
+        purchasedAt: tab.purchased_at,
+        status: tab.status,
+        items,
+        sales: sales || [],
+        revenueSoFar: revenue,
+        netProfit: revenue - tab.purchase_price
+      });
+    });
+  });
+});
+
+// Record a manual sale against a tracked tab
+app.post('/api/loot-tab/:id/sale', requireAuth, (req, res) => {
+  const tabId = parseInt(req.params.id);
+  if (!tabId) return res.status(400).json({ error: 'Invalid tab id.' });
+  const { itemId, quality, quantity, salePrice } = req.body;
+  if (!itemId || !salePrice) return res.status(400).json({ error: 'itemId and salePrice required.' });
+  const price = parseInt(salePrice);
+  if (isNaN(price) || price <= 0) return res.status(400).json({ error: 'salePrice must be positive.' });
+  db.get(`SELECT id FROM loot_tabs WHERE id = ? AND user_id = ?`, [tabId, req.user.id], (err, row) => {
+    if (err) return res.status(500).json({ error: err.message });
+    if (!row) return res.status(404).json({ error: 'Tab not found.' });
+    const qty = Math.max(1, parseInt(quantity) || 1);
+    const now = Date.now();
+    db.run(
+      `INSERT INTO loot_tab_sales (loot_tab_id, item_id, quality, quantity, sale_price, sold_at) VALUES (?, ?, ?, ?, ?, ?)`,
+      [tabId, itemId.slice(0, 100), parseInt(quality) || 1, qty, price, now],
+      function(err2) {
+        if (err2) return res.status(500).json({ error: err2.message });
+        res.json({ success: true, id: this.lastID });
+      }
+    );
+  });
+});
+
+// Update tab status (open / partial / sold)
+app.patch('/api/loot-tab/:id/status', requireAuth, (req, res) => {
+  const tabId = parseInt(req.params.id);
+  if (!tabId) return res.status(400).json({ error: 'Invalid tab id.' });
+  const { status } = req.body;
+  if (!['open', 'partial', 'sold'].includes(status)) {
+    return res.status(400).json({ error: 'status must be open, partial, or sold.' });
+  }
+  db.run(`UPDATE loot_tabs SET status = ? WHERE id = ? AND user_id = ?`, [status, tabId, req.user.id], function(err) {
+    if (err) return res.status(500).json({ error: err.message });
+    if (this.changes === 0) return res.status(404).json({ error: 'Tab not found.' });
+    res.json({ success: true });
+  });
+});
 
 // === LIVE FLIPS API (registration-gated) ===
 app.get('/api/live-flips', (req, res) => {
