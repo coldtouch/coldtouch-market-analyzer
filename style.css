@@ -3359,11 +3359,14 @@ footer a:hover {
 
 .transport-mode-btn.active svg { stroke: #000; }
 
-/* Loot Buyer capture cards — compact grid */
+/* Loot Buyer capture cards — compact grid with scroll */
 #loot-captures-list {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
     gap: 0.5rem;
+    max-height: 260px;
+    overflow-y: auto;
+    padding-right: 4px; /* prevent scrollbar overlap */
 }
 
 .loot-capture-card {

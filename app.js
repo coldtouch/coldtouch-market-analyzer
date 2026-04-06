@@ -4185,27 +4185,16 @@ function renderLootCaptures() {
             const badge = cap.isGuild ? 'Guild' : 'Bank';
             cards.push(makeCard(`selectLootCapture(${capIdx})`, cap.tabName, badge, cap.items.length, equipCount, stackCount, ago));
         } else if (hasTabs) {
-            // Split items by slot range — each tab gets ~30 slots (personal) or varies (guild)
-            const tabCount = cap.vaultTabs.length;
-            // Detect slot range per tab from the actual item slots
-            const slots = cap.items.map(it => it.slot).sort((a, b) => a - b);
-            const maxSlot = slots.length > 0 ? slots[slots.length - 1] : 0;
-            const slotsPerTab = Math.ceil((maxSlot + 1) / tabCount);
-
-            cap.vaultTabs.forEach((tab, tabIdx) => {
-                const tabMin = tabIdx * slotsPerTab;
-                const tabMax = (tabIdx + 1) * slotsPerTab;
-                const tabItems = cap.items.filter(it => it.slot >= tabMin && it.slot < tabMax);
-                if (tabItems.length === 0) return;
-
-                const equipCount = tabItems.filter(it => it.isEquipment).length;
-                const stackCount = tabItems.length - equipCount;
-                const tabName = tab.name || `Tab ${tabIdx + 1}`;
-                const vaultType = cap.isGuild ? 'Guild' : 'Bank';
-                const displayName = cap.customName || tabName;
-
-                cards.push(makeCard(`selectLootCaptureTab(${capIdx}, ${tabIdx}, ${slotsPerTab})`, displayName, vaultType, tabItems.length, equipCount, stackCount, ago));
-            });
+            // Each capture = one tab's items. Use tabIndex to look up the vault tab name.
+            const tabIdx = typeof cap.tabIndex === 'number' ? cap.tabIndex : -1;
+            const tabName = (tabIdx >= 0 && tabIdx < cap.vaultTabs.length && cap.vaultTabs[tabIdx].name)
+                ? cap.vaultTabs[tabIdx].name
+                : (tabIdx >= 0 ? `Tab ${tabIdx + 1}` : 'Chest Capture');
+            const equipCount = cap.items.filter(it => it.isEquipment).length;
+            const stackCount = cap.items.length - equipCount;
+            const vaultType = cap.isGuild ? 'Guild' : 'Bank';
+            const displayName = cap.customName || tabName;
+            cards.push(makeCard(`selectLootCapture(${capIdx})`, displayName, vaultType, cap.items.length, equipCount, stackCount, ago));
         } else {
             // No tab info — show as single capture
             const equipCount = cap.items.filter(it => it.isEquipment).length;

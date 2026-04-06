@@ -2,6 +2,14 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-04-06 — Loot Buyer tab fix + client tab index tracking
+
+- **Loot Buyer tab names fixed:** Each chest capture is now shown as one card with the correct vault tab name. The previous slot-range-splitting approach was wrong (each capture = one tab's items, not all tabs). The card now uses `tabIndex` from the client to look up the vault tab name from the captured vault structure.
+- **Captures area scrollable:** `#loot-captures-list` now has `max-height: 260px` with `overflow-y: auto`, preventing many cards from pushing analysis controls off-screen.
+- **Go client — tab index tracking:** `ContainerOpen` resets the tab counter to 0 (new chest open). `ContainerManageSubContainer` increments it before starting the next collection. Each capture now includes a `tabIndex` field so the website can map it to the correct vault tab name without relying on GUID matching.
+- **Go client — tab name resolution in finalize():** If GUID matching didn't provide a direct tab name, `finalize()` now looks up the tab name from the current vault info using `tabIndex`. This gives correct names even when GUID matching fails, as long as the player clicks tabs in order.
+- **Go client — matchContainerToVaultTab returns (name, index):** Updated to return both the matched tab name and its 0-based index, so `ContainerOpen` can set the exact tabIndex when a GUID match succeeds.
+
 ### 2026-04-05 — Transport Freshness Filter, Live Flip Validation, Volume Awareness
 
 - **Transport freshness filter:** Added Buy/Sell/Both freshness filter with configurable max age (30m/1h/2h/6h). Stale routes are filtered out before haul plan packing — same pattern as Market Flipping.
