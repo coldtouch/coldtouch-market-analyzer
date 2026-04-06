@@ -4165,17 +4165,32 @@ function renderLootCaptures() {
         const equipCount = cap.items.filter(it => it.isEquipment).length;
         const stackCount = cap.items.length - equipCount;
         const ago = timeAgo(new Date(cap.capturedAt).toISOString());
+        const name = cap.customName || `Chest Capture #${i + 1}`;
+        const shortId = cap.containerId ? cap.containerId.slice(0, 8) : '';
         return `<div class="loot-capture-card" onclick="selectLootCapture(${i})" style="cursor:pointer;">
-            <div style="display:flex; align-items:center; gap:0.75rem;">
-                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/></svg>
-                <div>
-                    <div style="font-weight:600; color:var(--text-primary);">Chest Capture — ${cap.items.length} items</div>
-                    <div style="font-size:0.75rem; color:var(--text-muted);">${equipCount} gear, ${stackCount} stackable &bull; ${ago}</div>
+            <div style="display:flex; align-items:center; gap:0.75rem; flex:1; min-width:0;">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2" style="flex-shrink:0;"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/></svg>
+                <div style="min-width:0;">
+                    <div style="display:flex; align-items:center; gap:0.5rem;">
+                        <span style="font-weight:600; color:var(--text-primary);">${esc(name)}</span>
+                        <button class="btn-small-accent" style="padding:0.15rem 0.4rem; font-size:0.65rem;" onclick="event.stopPropagation(); renameLootCapture(${i});">Rename</button>
+                    </div>
+                    <div style="font-size:0.75rem; color:var(--text-muted);">${cap.items.length} items (${equipCount} gear, ${stackCount} stackable) &bull; ${ago}${shortId ? ' &bull; ' + shortId : ''}</div>
                 </div>
             </div>
-            <div style="color:var(--accent); font-size:0.8rem;">Select &rarr;</div>
+            <div style="color:var(--accent); font-size:0.8rem; flex-shrink:0;">Select &rarr;</div>
         </div>`;
     }).join('');
+}
+
+function renameLootCapture(index) {
+    const cap = lootBuyerCaptures[index];
+    if (!cap) return;
+    const name = prompt('Name this capture:', cap.customName || '');
+    if (name !== null) {
+        cap.customName = name.trim() || null;
+        renderLootCaptures();
+    }
 }
 
 function selectLootCapture(index) {
