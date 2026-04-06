@@ -4130,6 +4130,8 @@ async function enrichAndRenderTransport(routes, budget, sortBy, mountCapacity, f
             sellMode = ld.sell_strategy || 'market';
             if (ld.buy_age >= 0) dateBuy = new Date(Date.now() - ld.buy_age * 60000).toISOString();
             if (ld.sell_age >= 0 && ld.sell_age < 9999) dateSell = new Date(Date.now() - ld.sell_age * 60000).toISOString();
+            // Carry through available amounts from NATS
+            r._buyAmount = ld.buy_amount || 0;
         } else if (transportMode === 'historical') {
             // Historical mode: use spread_stats avg_spread directly
             const spread = r.avg_spread || 0;
@@ -4186,14 +4188,15 @@ async function enrichAndRenderTransport(routes, budget, sortBy, mountCapacity, f
 
         // Use AVAILABLE slots (player's actual free slots), not hardcoded 48
         let maxByBudget = Math.floor(budget / buyPrice);
-        // Volume: if real data exists, use it as soft guide (2x since sample_count is poll frequency, not trades).
-        // If no data, don't cap — let budget/slots/weight be the natural limiters.
         const hasVolumeData = realisticVolume > 0;
         let maxByVolume = hasVolumeData ? Math.ceil(realisticVolume) : Infinity;
         let maxBySlots = stackable ? availableSlots * stackSize : availableSlots;
         let maxByWeight = (mountCapacity > 0 && itemWeight > 0) ? Math.floor(mountCapacity / itemWeight) : Infinity;
+        // Hard cap: available quantity at this price (from NATS order amounts)
+        const buyAmount = r._buyAmount || r.buyAmount || 0;
+        let maxByAmount = buyAmount > 0 ? buyAmount : Infinity;
 
-        const unitsCanCarry = Math.max(1, Math.min(maxByBudget, maxByVolume, maxBySlots, maxByWeight));
+        const unitsCanCarry = Math.max(1, Math.min(maxByBudget, maxByVolume, maxBySlots, maxByWeight, maxByAmount));
         const silverUsed = unitsCanCarry * buyPrice;
         const tripProfit = profitPerUnit * unitsCanCarry;
         const transportScore = profitPerUnit * volume;
@@ -4204,9 +4207,10 @@ async function enrichAndRenderTransport(routes, budget, sortBy, mountCapacity, f
 
         // Determine limiting factor
         let limitingFactor = 'budget';
-        if (unitsCanCarry === maxByVolume && maxByVolume < maxByBudget) limitingFactor = 'volume';
-        if (unitsCanCarry === maxBySlots && maxBySlots < maxByBudget && maxBySlots <= maxByVolume) limitingFactor = 'slots';
-        if (unitsCanCarry === maxByWeight && maxByWeight < maxByBudget && maxByWeight <= maxByVolume && maxByWeight <= maxBySlots) limitingFactor = 'weight';
+        if (unitsCanCarry === maxByAmount && maxByAmount < maxByBudget) limitingFactor = 'available';
+        if (unitsCanCarry === maxByVolume && maxByVolume < maxByBudget && maxByVolume <= maxByAmount) limitingFactor = 'volume';
+        if (unitsCanCarry === maxBySlots && maxBySlots < maxByBudget && maxBySlots <= maxByVolume && maxBySlots <= maxByAmount) limitingFactor = 'slots';
+        if (unitsCanCarry === maxByWeight && maxByWeight < maxByBudget && maxByWeight <= maxByVolume && maxByWeight <= maxBySlots && maxByWeight <= maxByAmount) limitingFactor = 'weight';
 
         enriched.push({
             itemId: r.item_id,
@@ -4236,6 +4240,7 @@ async function enrichAndRenderTransport(routes, budget, sortBy, mountCapacity, f
             sampleCount: r.sample_count,
             dateBuy, dateSell,
             isHistorical, sellMode,
+            buyAmount: r._buyAmount || 0,
             instantSellPrice: r._liveData?.instant_sell_price || 0,
             instantProfit: r._liveData?.instant_profit || 0
         });
@@ -4488,7 +4493,7 @@ function renderTransportResults(routes, budget, mountCapacity, haulPlans, availa
             detailDiv.style.display = 'none';
 
             let itemsHtml = plan.items.map(item => {
-                const limitIcon = item.limitingFactor === 'volume' ? '📊' : item.limitingFactor === 'weight' ? '⚖️' : item.limitingFactor === 'slots' ? '🎒' : '💰';
+                const limitIcon = item.limitingFactor === 'available' ? '📦' : item.limitingFactor === 'volume' ? '📊' : item.limitingFactor === 'weight' ? '⚖️' : item.limitingFactor === 'slots' ? '🎒' : '💰';
                 const weightStr = item.planWeight > 0 ? `${(item.planWeight).toFixed(1)} kg` : '—';
                 const slotsStr = item.stackable ? `${item.planSlots} slot${item.planSlots > 1 ? 's' : ''}` : `${item.planSlots} slot${item.planSlots > 1 ? 's' : ''}`;
                 return `<div class="haul-item-row" style="display:flex; align-items:center; gap:0.5rem; padding:0.4rem 0; border-bottom:1px solid var(--border-dim);">
@@ -4510,7 +4515,12 @@ function renderTransportResults(routes, budget, mountCapacity, haulPlans, availa
                                    &nbsp;${getFreshnessIndicator(item.dateSell)} ${item.sellMode === 'market' ? 'Avg' : 'Sell'} @ ${Math.floor(item.sellPrice).toLocaleString()} <span style="opacity:0.7">${item.sellMode === 'market' ? '7d avg' : timeAgo(item.dateSell)}</span>
                                    ${item.instantSellPrice > 0 ? `&nbsp;<span style="color:var(--profit-green); font-size:0.65rem;" title="Active buy order — instant sell available">⚡ Instant: ${Math.floor(item.instantSellPrice).toLocaleString()}</span>` : ''}`
                             }
-                            ${!item.hasVolumeData ? ' <span style="color:#f59e0b;" title="No volume data available — verify market availability in-game before buying">⚠ No vol data</span>' : item.realisticVolume > 0 && item.planUnits > item.realisticVolume ? ` <span style="color:#f59e0b;" title="Suggested quantity (${item.planUnits}) exceeds estimated daily volume (~${Math.round(item.realisticVolume)}). You may not find enough sell orders at this price.">⚠ ~${Math.round(item.realisticVolume)}/day</span>` : item.realisticVolume > 0 ? ` <span style="color:var(--text-muted);" title="Estimated daily volume">~${Math.round(item.realisticVolume)}/day</span>` : ''}
+                            ${item.buyAmount > 0
+                                ? item.planUnits > item.buyAmount
+                                    ? ` <span style="color:#f59e0b;" title="Only ${item.buyAmount} available at this price, but ${item.planUnits} suggested">⚠ ${item.buyAmount} avail</span>`
+                                    : ` <span style="color:var(--profit-green); font-size:0.65rem;" title="${item.buyAmount} units available at this price (from live orders)">✓ ${item.buyAmount} avail</span>`
+                                : !item.hasVolumeData ? ' <span style="color:#f59e0b;" title="No quantity data — verify availability in-game">⚠ qty unknown</span>'
+                                : item.realisticVolume > 0 ? ` <span style="color:var(--text-muted);" title="Estimated daily volume">~${Math.round(item.realisticVolume)}/day</span>` : ''}
                         </div>
                     </div>
                     <div style="display:grid; grid-template-columns: repeat(5, auto); gap:0.6rem; align-items:center; font-size:0.76rem; flex-shrink:0; text-align:right;">
