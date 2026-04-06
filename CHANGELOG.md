@@ -2,6 +2,15 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-04-07 — Phase 1: Buy Decision Helper complete
+
+- **Loot-evaluate endpoint hardened:** Fixed `no_buy_orders` flag — previously fired when buy order AMOUNT was unknown (NATS hadn't filled it yet), even though a buy order existed. Now only fires when no buy orders exist anywhere (`bestBuyMax === 0`). Added `stale_data` flag for items where all price data is >6h old. Added daily volume proxy from `price_averages.sample_count` to the response (`dailyVol` per city). Added server-side `verdict` field (`buy`/`maybe`/`skip`) in the totals when `askingPrice` is sent.
+- **Loot-evaluate volumeRef cache:** `buildPriceReference()` now builds `volumeRef` alongside `cityPriceRef`, querying `AVG(sample_count)` per item/quality/city. Used for future low-volume flags.
+- **Buy Decision UI complete:** `renderWorthAnalysis()` now shows margin % in the BUY verdict, passes `askingPrice` to the server. Risk badges styled with `.risk-badge` (danger/warning/ok). Verdict banner styled with `.loot-verdict` (good/caution/bad). Risky item count in stats bar.
+- **Auth-aware analyze:** If user isn't logged in, Analyze shows a login prompt instead of a 401 error.
+- **CSS for analysis UI:** Added `.loot-verdict`, `.risk-badge`, `.loot-city-group` classes that were referenced but unstyled.
+- **Go client tab ordering fix:** `ContainerManageSubContainer` now tries GUID matching first (exact tab regardless of click order); falls back to incrementing sequential counter only if GUID match fails. Captures `ContainerSlot`, `ContainerGUID`, and all remaining params for debugging.
+
 ### 2026-04-06 — Loot Buyer tab fix + client tab index tracking
 
 - **Loot Buyer tab names fixed:** Each chest capture is now shown as one card with the correct vault tab name. The previous slot-range-splitting approach was wrong (each capture = one tab's items, not all tabs). The card now uses `tabIndex` from the client to look up the vault tab name from the captured vault structure.

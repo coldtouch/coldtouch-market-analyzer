@@ -3424,6 +3424,54 @@ footer a:hover {
     #loot-captures-list { grid-template-columns: 1fr; }
 }
 
+/* ====== LOOT BUYER ANALYSIS ====== */
+
+/* Verdict banner */
+.loot-verdict {
+    padding: 0.8rem 1rem;
+    border-radius: var(--radius);
+    font-weight: 700;
+    font-size: 1rem;
+    text-align: center;
+    margin-bottom: 1rem;
+    letter-spacing: 0.02em;
+}
+.loot-verdict.good  { background: rgba(74, 222, 128, 0.12); color: var(--profit-green); border: 1px solid rgba(74, 222, 128, 0.3); }
+.loot-verdict.caution { background: rgba(251, 191, 36, 0.12); color: #fbbf24; border: 1px solid rgba(251, 191, 36, 0.3); }
+.loot-verdict.bad   { background: rgba(248, 113, 113, 0.12); color: var(--loss-red); border: 1px solid rgba(248, 113, 113, 0.3); }
+
+/* Risk/status badges on per-item rows */
+.risk-badge {
+    display: inline-block;
+    padding: 0.1rem 0.35rem;
+    border-radius: 4px;
+    font-size: 0.65rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    white-space: nowrap;
+}
+.risk-badge.danger  { background: rgba(248, 113, 113, 0.2); color: var(--loss-red); }
+.risk-badge.warning { background: rgba(251, 191, 36, 0.2); color: #fbbf24; }
+.risk-badge.ok      { background: rgba(74, 222, 128, 0.15); color: var(--profit-green); }
+
+/* City trip card (Where to Sell mode) */
+.loot-city-group {
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius);
+    padding: 1rem;
+    margin-bottom: 0.75rem;
+}
+.loot-city-group h3 {
+    margin: 0;
+    font-size: 0.9rem;
+    color: var(--text-primary);
+}
+.loot-city-group:hover {
+    border-color: var(--accent);
+}
+
 /* Flip type badge */
 .flip-type-badge {
     display: inline-block;

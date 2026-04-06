@@ -4261,6 +4261,14 @@ async function analyzeLoot() {
         alert('Select a chest capture first.');
         return;
     }
+    if (!currentUser) {
+        const resultsDiv = document.getElementById('loot-results');
+        if (resultsDiv) {
+            resultsDiv.style.display = 'block';
+            resultsDiv.innerHTML = `<div class="empty-state" style="padding:2rem;"><p>Login required to analyze items.</p><button class="btn-accent" onclick="document.getElementById('discord-login-btn')?.click()">Login with Discord</button></div>`;
+        }
+        return;
+    }
 
     const mode = lootAnalysisMode;
     const resultsDiv = document.getElementById('loot-results');
@@ -4268,11 +4276,13 @@ async function analyzeLoot() {
     resultsDiv.style.display = 'block';
     resultsDiv.innerHTML = '<div class="spinner"></div>';
 
+    const askingPrice = parseInt(document.getElementById('loot-asking-price')?.value) || 0;
+
     try {
         const res = await fetch(`${VPS_BASE}/api/loot-evaluate`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', ...authHeaders() },
-            body: JSON.stringify({ items: lootSelectedCapture.items })
+            body: JSON.stringify({ items: lootSelectedCapture.items, askingPrice })
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || 'Failed');
@@ -4294,13 +4304,18 @@ function renderWorthAnalysis(data, container) {
 
     let verdict = '', verdictClass = '';
     if (askingPrice > 0) {
-        if (askingPrice <= qs) { verdict = `BUY — ${((qs - askingPrice) / askingPrice * 100).toFixed(0)}% instant profit`; verdictClass = 'good'; }
-        else if (askingPrice <= ps) { verdict = 'MAYBE — profitable if you list on market, not instant'; verdictClass = 'caution'; }
-        else { verdict = 'SKIP — asking price exceeds market value'; verdictClass = 'bad'; }
+        const margin = ((qs - askingPrice) / askingPrice * 100).toFixed(0);
+        const pMargin = ((ps - askingPrice) / askingPrice * 100).toFixed(0);
+        if (askingPrice <= qs) { verdict = `BUY — ${margin}% instant margin (${qs.toLocaleString()} quick-sell)`; verdictClass = 'good'; }
+        else if (askingPrice <= ps) { verdict = `MAYBE — ${pMargin}% if listed on market, not instant`; verdictClass = 'caution'; }
+        else { verdict = `SKIP — asking ${askingPrice.toLocaleString()} exceeds market value ${ps.toLocaleString()}`; verdictClass = 'bad'; }
     }
 
+    const riskCount = data.totals.riskItemCount;
+    const riskNote = riskCount > 0 ? ` · <span style="color:var(--loss-red);">${riskCount} risky item${riskCount > 1 ? 's' : ''}</span>` : '';
+
     container.innerHTML = `
-        <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(180px, 1fr)); gap:0.75rem; margin-bottom:1rem;">
+        <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(160px, 1fr)); gap:0.75rem; margin-bottom:1rem;">
             <div class="profile-stat-item">
                 <span class="profile-stat-value" style="color:var(--profit-green);">${qs.toLocaleString()}</span>
                 <span class="profile-stat-label">Quick-Sell Value</span>
@@ -4314,8 +4329,8 @@ function renderWorthAnalysis(data, container) {
                 <span class="profile-stat-label">Asking Price</span>
             </div>` : ''}
             <div class="profile-stat-item">
-                <span class="profile-stat-value">${data.totals.itemCount}</span>
-                <span class="profile-stat-label">Items (${data.totals.riskItemCount} risky)</span>
+                <span class="profile-stat-value">${data.totals.itemCount}${riskNote}</span>
+                <span class="profile-stat-label">Items Analyzed</span>
             </div>
         </div>
         ${verdict ? `<div class="loot-verdict ${verdictClass}">${verdict}</div>` : '<div style="color:var(--text-muted); font-size:0.85rem; margin-bottom:1rem;">Enter an asking price above to get a buy/skip verdict.</div>'}
@@ -4324,19 +4339,28 @@ function renderWorthAnalysis(data, container) {
             <div class="flips-feed-container">
                 ${data.items.map(item => {
                     const iconUrl = `https://render.albiononline.com/v1/item/${item.itemId}.png?quality=${item.quality}`;
-                    const instant = item.bestInstantSell ? `${item.bestInstantSell.city}: ${item.bestInstantSell.netPerUnit.toLocaleString()}/ea` : 'No buyers';
-                    const market = item.bestMarketSell ? `${item.bestMarketSell.city}: ${item.bestMarketSell.netPerUnit.toLocaleString()}/ea` : 'No data';
-                    const risk = item.riskFlags.length > 0 ? item.riskFlags.map(f => `<span class="risk-badge ${f === 'no_data' || f === 'no_buy_orders' ? 'danger' : 'warning'}">${f.replace(/_/g,' ')}</span>`).join(' ') : '<span style="color:var(--profit-green); font-size:0.7rem;">OK</span>';
-                    const totalInstant = item.bestInstantSell ? (item.bestInstantSell.netPerUnit * item.quantity).toLocaleString() : '—';
+                    const instant = item.bestInstantSell
+                        ? `${item.bestInstantSell.city}: ${item.bestInstantSell.netPerUnit.toLocaleString()}/ea`
+                        : 'No buyers';
+                    const market = item.bestMarketSell
+                        ? `${item.bestMarketSell.city}: ${item.bestMarketSell.netPerUnit.toLocaleString()}/ea`
+                        : 'No data';
+                    const risk = item.riskFlags.length > 0
+                        ? item.riskFlags.map(f => `<span class="risk-badge ${f === 'no_data' || f === 'no_buy_orders' ? 'danger' : 'warning'}">${f.replace(/_/g,' ')}</span>`).join(' ')
+                        : '<span class="risk-badge ok">OK</span>';
+                    const totalInstant = item.bestInstantSell
+                        ? (item.bestInstantSell.netPerUnit * item.quantity).toLocaleString()
+                        : '—';
+                    const qualLabel = item.quality > 1 ? ` q${item.quality}` : '';
                     return `<div class="flip-card" style="animation:none;">
                         <img class="flip-icon" src="${iconUrl}" alt="" loading="lazy" onerror="this.style.display='none'">
                         <div style="min-width:0;">
-                            <div style="font-weight:600; font-size:0.82rem; color:var(--text-primary);">${esc(item.name)} x${item.quantity}</div>
-                            <div style="font-size:0.7rem; color:var(--text-muted);">Instant: ${instant} &bull; Market: ${market}</div>
+                            <div style="font-weight:600; font-size:0.82rem; color:var(--text-primary);">${esc(item.name)}${qualLabel} ×${item.quantity}</div>
+                            <div style="font-size:0.7rem; color:var(--text-muted);">Instant: ${instant} · Market: ${market}</div>
                         </div>
-                        <div style="text-align:right;">
+                        <div style="text-align:right; flex-shrink:0;">
                             <div style="font-size:0.85rem; font-weight:600; color:var(--profit-green);">${totalInstant}</div>
-                            <div>${risk}</div>
+                            <div style="margin-top:2px;">${risk}</div>
                         </div>
                     </div>`;
                 }).join('')}

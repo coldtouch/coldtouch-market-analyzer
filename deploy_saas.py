@@ -1164,11 +1164,13 @@ app.get('/api/capture-token', (req, res) => {
 // Evaluate loot tab items against market data
 app.post('/api/loot-evaluate', (req, res) => {
   if (!req.user) return res.status(401).json({ error: 'Login required.' });
-  const { items } = req.body;
+  const { items, askingPrice } = req.body;
   if (!items || !Array.isArray(items) || items.length === 0 || items.length > 300) {
     return res.status(400).json({ error: 'Items array required (1-300 items).' });
   }
 
+  const now = Date.now();
+  const STALE_MS = 6 * 60 * 60 * 1000; // 6 hours — data older than this is flagged stale
   const results = [];
   let totalQuickSell = 0, totalPatientSell = 0;
 
@@ -1197,24 +1199,27 @@ app.post('/api/loot-evaluate', (req, res) => {
 
     let bestBuyMax = 0, bestBuyCity = null, bestBuyAmount = 0;
     let bestCityAvg = 0, bestCityAvgCity = null;
-    let totalBuyAmount = 0;
+    let freshestSeen = 0;
 
     for (const [city, cd] of Object.entries(data)) {
       const cityAvg = cityPriceRef[itemId + '_' + q + '_' + city] || 0;
+      const cityVol = volumeRef[itemId + '_' + q + '_' + city] || 0;
+      const ageMin = Math.round((now - (cd.lastSeen || 0)) / 60000);
       result.cityBreakdown.push({
         city,
         sellMin: cd.sellMin === Infinity ? 0 : cd.sellMin,
         buyMax: cd.buyMax || 0,
         buyAmount: cd.buyAmount || 0,
         cityAvg,
-        age: Math.round((Date.now() - (cd.lastSeen || 0)) / 60000)
+        dailyVol: cityVol,
+        age: ageMin
       });
+      if ((cd.lastSeen || 0) > freshestSeen) freshestSeen = cd.lastSeen || 0;
       if (cd.buyMax > bestBuyMax) {
         bestBuyMax = cd.buyMax;
         bestBuyCity = city;
         bestBuyAmount = cd.buyAmount || 0;
       }
-      totalBuyAmount += cd.buyAmount || 0;
       if (cityAvg > bestCityAvg) {
         bestCityAvg = cityAvg;
         bestCityAvgCity = city;
@@ -1233,10 +1238,20 @@ app.post('/api/loot-evaluate', (req, res) => {
       totalPatientSell += net * qty;
     }
 
-    if (totalBuyAmount === 0) result.riskFlags.push('no_buy_orders');
-    if (bestBuyAmount > 0 && bestBuyAmount < qty) result.riskFlags.push('low_liquidity');
+    // Risk flags
+    if (bestBuyMax === 0) result.riskFlags.push('no_buy_orders');        // No buy orders anywhere
+    if (bestBuyAmount > 0 && bestBuyAmount < qty) result.riskFlags.push('low_liquidity'); // Fewer buyers than our qty
+    if (freshestSeen > 0 && now - freshestSeen > STALE_MS) result.riskFlags.push('stale_data');  // Data > 6h old
 
     results.push(result);
+  }
+
+  // Server-side verdict summary if askingPrice supplied
+  let verdict = null;
+  if (askingPrice > 0) {
+    if (askingPrice <= totalQuickSell) verdict = 'buy';
+    else if (askingPrice <= totalPatientSell) verdict = 'maybe';
+    else verdict = 'skip';
   }
 
   res.json({
@@ -1245,7 +1260,8 @@ app.post('/api/loot-evaluate', (req, res) => {
       quickSellTotal: totalQuickSell,
       patientSellTotal: totalPatientSell,
       itemCount: results.length,
-      riskItemCount: results.filter(r => r.riskFlags.length > 0).length
+      riskItemCount: results.filter(r => r.riskFlags.length > 0).length,
+      verdict
     }
   });
 });
@@ -1514,6 +1530,7 @@ app.get('/api/transport-routes', (req, res) => {
 // This tells us what an item ACTUALLY SELLS FOR in each city over 7 days
 let cityPriceRef = {};
 let globalPriceRef = {}; // { "itemId_quality": avgPrice } for outlier detection
+let volumeRef = {};     // { "itemId_quality_city": avg_sample_count } — activity proxy for liquidity flags
 function buildPriceReference() {
   // Use last 2 days for city reference (recent transaction prices, not week-old inflated data)
   // Use last 7 days for global reference (outlier detection needs broader sample)
@@ -1521,14 +1538,15 @@ function buildPriceReference() {
   const cutoff7d = Date.now() - 7 * 24 * 60 * 60 * 1000;
 
   // Per-city averages: RECENT (2 days) — what items actually sell for NOW in each city
-  db.all(`SELECT item_id, quality, city, AVG(avg_sell) as avg_price, COUNT(*) as samples
+  db.all(`SELECT item_id, quality, city, AVG(avg_sell) as avg_price, AVG(sample_count) as avg_vol, COUNT(*) as samples
     FROM price_averages WHERE period_type IN ('daily','hourly') AND period_start > ? AND avg_sell > 0
     GROUP BY item_id, quality, city`, [cutoff2d], (err, rows) => {
     if (err || !rows) return;
-    const cityRef = {}, globalRef = {};
+    const cityRef = {}, globalRef = {}, volRef = {};
     for (const r of rows) {
       if (r.samples >= 2 && r.avg_price > 0) {
         cityRef[r.item_id + '_' + r.quality + '_' + r.city] = Math.round(r.avg_price);
+        volRef[r.item_id + '_' + r.quality + '_' + r.city] = Math.round(r.avg_vol || 0);
         // Also build global average (across all cities)
         const gk = r.item_id + '_' + r.quality;
         if (!globalRef[gk]) globalRef[gk] = { sum: 0, cnt: 0 };
@@ -1537,7 +1555,8 @@ function buildPriceReference() {
       }
     }
     cityPriceRef = cityRef;
-    console.log(`[PriceRef] City prices (2d): ${Object.keys(cityRef).length}`);
+    volumeRef = volRef;
+    console.log(`[PriceRef] City prices (2d): ${Object.keys(cityRef).length}, volume entries: ${Object.keys(volRef).length}`);
 
     // Global averages use 7 days for broader outlier detection
     db.all(`SELECT item_id, quality, AVG(avg_sell) as avg_price, COUNT(*) as samples
