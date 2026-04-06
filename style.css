@@ -3472,6 +3472,121 @@ footer a:hover {
     border-color: var(--accent);
 }
 
+/* ====== SELL PLAN (Phase 2 Sell Optimizer) ====== */
+
+/* Summary bar at top of sell plan */
+.sell-plan-summary {
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius);
+    padding: 0.75rem 1rem;
+    margin-bottom: 0.75rem;
+}
+.sell-plan-summary-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 0.9rem;
+    color: var(--text-primary);
+}
+
+/* Trip card header */
+.sell-trip-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    margin-bottom: 0.5rem;
+}
+.sell-trip-title {
+    font-weight: 700;
+    font-size: 0.9rem;
+    color: var(--text-primary);
+    margin-right: 0.4rem;
+}
+.sell-trip-count {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+}
+.sell-trip-total {
+    font-weight: 700;
+    font-size: 0.95rem;
+    color: var(--profit-green);
+}
+
+/* Item rows inside a trip */
+.sell-plan-items {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+}
+.sell-plan-item {
+    display: grid;
+    grid-template-columns: 24px 1fr auto auto auto auto;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.3rem 0;
+    border-bottom: 1px solid var(--border-color);
+    font-size: 0.8rem;
+}
+.sell-plan-item:last-child { border-bottom: none; }
+.sell-plan-icon {
+    width: 24px;
+    height: 24px;
+    border-radius: 3px;
+    flex-shrink: 0;
+}
+.sell-plan-name {
+    color: var(--text-primary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+}
+.sell-plan-qty {
+    color: var(--text-muted);
+    font-size: 0.75rem;
+    white-space: nowrap;
+}
+.sell-plan-price {
+    text-align: right;
+    color: var(--text-secondary);
+    white-space: nowrap;
+}
+.sell-plan-total {
+    text-align: right;
+    font-weight: 600;
+    color: var(--profit-green);
+    white-space: nowrap;
+}
+
+/* Sell method badges (instant / market) */
+.sell-method-badge {
+    display: inline-block;
+    padding: 0.1rem 0.3rem;
+    border-radius: 4px;
+    font-size: 0.62rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    white-space: nowrap;
+}
+.sell-method-badge.instant { background: rgba(74, 222, 128, 0.15); color: var(--profit-green); }
+.sell-method-badge.market  { background: rgba(96, 165, 250, 0.15); color: var(--blue); }
+
+/* Copy All button */
+.loot-copy-all-btn {
+    font-size: 0.75rem;
+}
+
+@media (max-width: 600px) {
+    .sell-plan-item {
+        grid-template-columns: 24px 1fr auto auto;
+    }
+    .sell-plan-price { display: none; }
+}
+
 /* Flip type badge */
 .flip-type-badge {
     display: inline-block;
