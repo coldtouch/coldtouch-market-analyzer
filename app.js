@@ -4165,9 +4165,28 @@ function renderLootCaptures() {
     let cards = [];
     lootBuyerCaptures.forEach((cap, capIdx) => {
         const ago = timeAgo(new Date(cap.capturedAt).toISOString());
-        const hasTabs = cap.vaultTabs && cap.vaultTabs.length > 0;
+        const hasDirectTabName = cap.tabName && cap.tabName.length > 0;
+        const hasTabs = !hasDirectTabName && cap.vaultTabs && cap.vaultTabs.length > 0;
 
-        if (hasTabs) {
+        if (hasDirectTabName) {
+            // Direct tab name from GUID matching — show as single card with the matched name
+            const equipCount = cap.items.filter(it => it.isEquipment).length;
+            const stackCount = cap.items.length - equipCount;
+            const vaultType = cap.isGuild ? 'Guild' : 'Bank';
+            cards.push(`<div class="loot-capture-card" onclick="selectLootCapture(${capIdx})" style="cursor:pointer;">
+                <div style="display:flex; align-items:center; gap:0.75rem; flex:1; min-width:0;">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2" style="flex-shrink:0;"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/></svg>
+                    <div style="min-width:0;">
+                        <div style="display:flex; align-items:center; gap:0.5rem;">
+                            <span style="font-weight:600; color:var(--text-primary);">${esc(cap.tabName)}</span>
+                            <span style="font-size:0.65rem; padding:0.1rem 0.4rem; background:var(--bg-elevated); border-radius:8px; color:var(--text-muted);">${vaultType}</span>
+                        </div>
+                        <div style="font-size:0.75rem; color:var(--text-muted);">${cap.items.length} items (${equipCount} gear, ${stackCount} stackable) &bull; ${ago}</div>
+                    </div>
+                </div>
+                <div style="color:var(--accent); font-size:0.8rem; flex-shrink:0;">Select &rarr;</div>
+            </div>`);
+        } else if (hasTabs) {
             // Split items by slot range — each tab gets ~30 slots (personal) or varies (guild)
             const tabCount = cap.vaultTabs.length;
             // Detect slot range per tab from the actual item slots
