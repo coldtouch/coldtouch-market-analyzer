@@ -1451,6 +1451,8 @@ app.get('/api/transport-routes-live', (req, res) => {
             sell_city: dstCity,
             buy_price: srcData.sellMin,
             sell_price: Math.round(dstPrice),
+            buy_amount: srcData.sellAmount || 0, // Available qty at buy price (from NATS)
+            sell_amount: sellStrategy === 'instant' ? (dstData?.buyAmount || 0) : 0,
             profit: Math.floor(profit),
             roi: parseFloat(roi.toFixed(1)),
             est_trip_profit: estTripProfit,
@@ -1783,8 +1785,10 @@ function seedAlerterFromScan(allPrices) {
       if (!existing) {
         alertMarketDb[id][q][city] = {
           sellMin: entry.sell_price_min || Infinity,
+          sellAmount: 0, // API doesn't give per-order amounts; NATS will fill this
           sellDate: sellDate,
           buyMax: entry.buy_price_max || 0,
+          buyAmount: 0,
           buyDate: buyDate,
           lastSeen: now
         };
@@ -1792,6 +1796,7 @@ function seedAlerterFromScan(allPrices) {
       } else {
         if (entry.sell_price_min > 0 && (existing.sellMin === Infinity || entry.sell_price_min < existing.sellMin || sellDate > existing.sellDate)) {
           existing.sellMin = entry.sell_price_min;
+          existing.sellAmount = 0; // Reset — NATS will populate with real amounts
           existing.sellDate = sellDate;
         }
         if (entry.buy_price_max > 0 && (entry.buy_price_max > existing.buyMax || buyDate > existing.buyDate)) {
@@ -2417,17 +2422,30 @@ let natsConnection = null;
 
           if (!alertMarketDb[id]) alertMarketDb[id] = {};
           if (!alertMarketDb[id][q]) alertMarketDb[id][q] = {};
-          if (!alertMarketDb[id][q][city]) alertMarketDb[id][q][city] = { sellMin: Infinity, buyMax: 0, sellDate: 0, buyDate: 0 };
+          if (!alertMarketDb[id][q][city]) alertMarketDb[id][q][city] = { sellMin: Infinity, sellAmount: 0, buyMax: 0, buyAmount: 0, sellDate: 0, buyDate: 0 };
 
           const now = Date.now();
+          const amount = p.Amount || 1;
           alertMarketDb[id][q][city].lastSeen = now;
 
-          if (p.AuctionType === 'offer' && price < alertMarketDb[id][q][city].sellMin) {
-            alertMarketDb[id][q][city].sellMin = price;
-            alertMarketDb[id][q][city].sellDate = now;
-          } else if (p.AuctionType === 'request' && price > alertMarketDb[id][q][city].buyMax) {
-            alertMarketDb[id][q][city].buyMax = price;
-            alertMarketDb[id][q][city].buyDate = now;
+          if (p.AuctionType === 'offer') {
+            if (price < alertMarketDb[id][q][city].sellMin) {
+              // New best price — reset amount
+              alertMarketDb[id][q][city].sellMin = price;
+              alertMarketDb[id][q][city].sellAmount = amount;
+              alertMarketDb[id][q][city].sellDate = now;
+            } else if (price === alertMarketDb[id][q][city].sellMin) {
+              // Same price — accumulate amount (multiple orders at same price)
+              alertMarketDb[id][q][city].sellAmount += amount;
+            }
+          } else if (p.AuctionType === 'request') {
+            if (price > alertMarketDb[id][q][city].buyMax) {
+              alertMarketDb[id][q][city].buyMax = price;
+              alertMarketDb[id][q][city].buyAmount = amount;
+              alertMarketDb[id][q][city].buyDate = now;
+            } else if (price === alertMarketDb[id][q][city].buyMax) {
+              alertMarketDb[id][q][city].buyAmount += amount;
+            }
           }
 
           // Buffer for snapshot recording — deduplicated per item/quality/city
