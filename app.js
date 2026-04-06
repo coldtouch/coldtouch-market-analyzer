@@ -4161,29 +4161,63 @@ function renderLootCaptures() {
     }
     if (empty) empty.style.display = 'none';
 
-    list.innerHTML = lootBuyerCaptures.map((cap, i) => {
-        const equipCount = cap.items.filter(it => it.isEquipment).length;
-        const stackCount = cap.items.length - equipCount;
+    // If captures have vaultTabs, split items into per-tab groups
+    let cards = [];
+    lootBuyerCaptures.forEach((cap, capIdx) => {
         const ago = timeAgo(new Date(cap.capturedAt).toISOString());
-        const autoName = cap.vaultTabs && cap.vaultTabs.length > 0
-            ? (cap.isGuild ? 'Guild Vault' : 'Bank Vault') + ` (${cap.vaultTabs.map(t => t.name || '?').join(', ')})`
-            : `Chest Capture #${i + 1}`;
-        const name = cap.customName || autoName;
-        const shortId = cap.containerId ? cap.containerId.slice(0, 8) : '';
-        return `<div class="loot-capture-card" onclick="selectLootCapture(${i})" style="cursor:pointer;">
-            <div style="display:flex; align-items:center; gap:0.75rem; flex:1; min-width:0;">
-                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2" style="flex-shrink:0;"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/></svg>
-                <div style="min-width:0;">
-                    <div style="display:flex; align-items:center; gap:0.5rem;">
-                        <span style="font-weight:600; color:var(--text-primary);">${esc(name)}</span>
-                        <button class="btn-small-accent" style="padding:0.15rem 0.4rem; font-size:0.65rem;" onclick="event.stopPropagation(); renameLootCapture(${i});">Rename</button>
+        const hasTabs = cap.vaultTabs && cap.vaultTabs.length > 0;
+
+        if (hasTabs) {
+            // Split items by slot range — each tab gets ~30 slots (personal) or varies (guild)
+            const tabCount = cap.vaultTabs.length;
+            // Detect slot range per tab from the actual item slots
+            const slots = cap.items.map(it => it.slot).sort((a, b) => a - b);
+            const maxSlot = slots.length > 0 ? slots[slots.length - 1] : 0;
+            const slotsPerTab = Math.ceil((maxSlot + 1) / tabCount);
+
+            cap.vaultTabs.forEach((tab, tabIdx) => {
+                const tabMin = tabIdx * slotsPerTab;
+                const tabMax = (tabIdx + 1) * slotsPerTab;
+                const tabItems = cap.items.filter(it => it.slot >= tabMin && it.slot < tabMax);
+                if (tabItems.length === 0) return;
+
+                const equipCount = tabItems.filter(it => it.isEquipment).length;
+                const stackCount = tabItems.length - equipCount;
+                const tabName = tab.name || `Tab ${tabIdx + 1}`;
+                const vaultType = cap.isGuild ? 'Guild' : 'Bank';
+                const displayName = cap.customName || tabName;
+
+                cards.push(`<div class="loot-capture-card" onclick="selectLootCaptureTab(${capIdx}, ${tabIdx}, ${slotsPerTab})" style="cursor:pointer;">
+                    <div style="display:flex; align-items:center; gap:0.75rem; flex:1; min-width:0;">
+                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2" style="flex-shrink:0;"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/></svg>
+                        <div style="min-width:0;">
+                            <div style="display:flex; align-items:center; gap:0.5rem;">
+                                <span style="font-weight:600; color:var(--text-primary);">${esc(displayName)}</span>
+                                <span style="font-size:0.65rem; padding:0.1rem 0.4rem; background:var(--bg-elevated); border-radius:8px; color:var(--text-muted);">${vaultType}</span>
+                            </div>
+                            <div style="font-size:0.75rem; color:var(--text-muted);">${tabItems.length} items (${equipCount} gear, ${stackCount} stackable) &bull; ${ago}</div>
+                        </div>
                     </div>
-                    <div style="font-size:0.75rem; color:var(--text-muted);">${cap.items.length} items (${equipCount} gear, ${stackCount} stackable) &bull; ${ago}${shortId ? ' &bull; ' + shortId : ''}</div>
+                    <div style="color:var(--accent); font-size:0.8rem; flex-shrink:0;">Select &rarr;</div>
+                </div>`);
+            });
+        } else {
+            // No tab info — show as single capture
+            const equipCount = cap.items.filter(it => it.isEquipment).length;
+            const stackCount = cap.items.length - equipCount;
+            cards.push(`<div class="loot-capture-card" onclick="selectLootCapture(${capIdx})" style="cursor:pointer;">
+                <div style="display:flex; align-items:center; gap:0.75rem; flex:1; min-width:0;">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2" style="flex-shrink:0;"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/></svg>
+                    <div style="min-width:0;">
+                        <div style="font-weight:600; color:var(--text-primary);">Chest Capture — ${cap.items.length} items</div>
+                        <div style="font-size:0.75rem; color:var(--text-muted);">${equipCount} gear, ${stackCount} stackable &bull; ${ago}</div>
+                    </div>
                 </div>
-            </div>
-            <div style="color:var(--accent); font-size:0.8rem; flex-shrink:0;">Select &rarr;</div>
-        </div>`;
-    }).join('');
+                <div style="color:var(--accent); font-size:0.8rem; flex-shrink:0;">Select &rarr;</div>
+            </div>`);
+        }
+    });
+    list.innerHTML = cards.join('');
 }
 
 function renameLootCapture(index) {
@@ -4196,20 +4230,34 @@ function renameLootCapture(index) {
     }
 }
 
+function selectLootCaptureTab(capIndex, tabIndex, slotsPerTab) {
+    const cap = lootBuyerCaptures[capIndex];
+    if (!cap) return;
+    const tabMin = tabIndex * slotsPerTab;
+    const tabMax = (tabIndex + 1) * slotsPerTab;
+    const tabItems = cap.items.filter(it => it.slot >= tabMin && it.slot < tabMax);
+    const tabName = cap.vaultTabs?.[tabIndex]?.name || `Tab ${tabIndex + 1}`;
+    lootSelectedCapture = { ...cap, items: tabItems, itemCount: tabItems.length, tabName };
+    selectLootCaptureUI(tabName, tabItems);
+}
+
 function selectLootCapture(index) {
     const cap = lootBuyerCaptures[index];
     if (!cap) return;
     lootSelectedCapture = cap;
+    selectLootCaptureUI('All Items', cap.items);
+}
 
+function selectLootCaptureUI(titleText, items) {
     const section = document.getElementById('loot-selected-items');
-    const title = document.getElementById('loot-selected-title');
+    const titleEl = document.getElementById('loot-selected-title');
     const list = document.getElementById('loot-selected-list');
     if (!section || !list) return;
 
     section.style.display = 'block';
-    title.textContent = `Selected Items (${cap.items.length})`;
+    if (titleEl) titleEl.textContent = `${titleText} (${items.length} items)`;
 
-    list.innerHTML = cap.items.map(item => {
+    list.innerHTML = items.map(item => {
         const qualName = item.quality > 1 ? ` q${item.quality}` : '';
         const iconUrl = `https://render.albiononline.com/v1/item/${item.itemId}.png?quality=${item.quality}`;
         return `<div class="flip-card" style="animation:none;">
