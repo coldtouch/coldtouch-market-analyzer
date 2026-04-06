@@ -1675,6 +1675,37 @@
                     <h2 class="about-heading">Changelog</h2>
                     <div class="changelog-list">
                         <div class="changelog-entry">
+                            <div class="changelog-date">April 7, 2026</div>
+                            <div class="changelog-title">Phase 3: Loot Tab Lifecycle Tracker</div>
+                            <ul>
+                                <li>New <strong>My Tracked Tabs</strong> section — saved tabs show paid, revenue, net profit, and a progress bar</li>
+                                <li>"I Bought This" button appears after any loot analysis — saves tab + purchase price to your account</li>
+                                <li>Manual sale recording per tab — record each item sold with quantity and price per unit</li>
+                                <li>Per-tab status badges: Open / Partial / Sold — update manually from the expanded detail view</li>
+                                <li>DB tables: <code>loot_tabs</code> and <code>loot_tab_sales</code> — full purchase history per user</li>
+                            </ul>
+                        </div>
+                        <div class="changelog-entry">
+                            <div class="changelog-date">April 7, 2026</div>
+                            <div class="changelog-title">Phase 2: Sell Optimizer</div>
+                            <ul>
+                                <li>City trip grouping — items grouped by best sell destination, sorted by total value</li>
+                                <li>85% instant/market threshold — instant sell preferred unless listing earns &gt;15% more</li>
+                                <li>Per-item Instant/Market badges with price/ea and total silver columns</li>
+                                <li>Copy List per trip and Copy All Trips buttons with human-readable clipboard output</li>
+                            </ul>
+                        </div>
+                        <div class="changelog-entry">
+                            <div class="changelog-date">April 7, 2026</div>
+                            <div class="changelog-title">Phase 1: Loot Buyer — Buy Decision Helper</div>
+                            <ul>
+                                <li>Loot tab evaluation: instant vs patient-sell value across all cities</li>
+                                <li>BUY / MAYBE / SKIP verdict with margin % when asking price is set</li>
+                                <li>Risk badges per item: no data, no buy orders, stale data, low liquidity</li>
+                                <li>Auth-aware: shows login prompt instead of 401 error</li>
+                            </ul>
+                        </div>
+                        <div class="changelog-entry">
                             <div class="changelog-date">April 5, 2026</div>
                             <div class="changelog-title">Email Verification, User Profile, and Live Flip Enhancements</div>
                             <ul>
@@ -2094,6 +2125,18 @@
 
             <!-- Analysis results -->
             <div id="loot-results" style="display:none;"></div>
+
+            <!-- ====== MY TRACKED TABS ====== -->
+            <div id="loot-tracked-section" style="margin-top:2rem;">
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.75rem;">
+                    <h3 style="color:var(--text-primary); margin:0; font-size:1rem;">My Tracked Tabs</h3>
+                    <button class="btn-small-accent" onclick="loadTrackedTabs()">Refresh</button>
+                </div>
+                <div id="loot-tracked-list"></div>
+                <div id="loot-tracked-empty" class="empty-state" style="padding:1.5rem; display:none;">
+                    <p style="margin:0; color:var(--text-muted); font-size:0.85rem;">No tracked tabs yet. Analyze a loot tab then click <strong>I Bought This</strong> to start tracking.</p>
+                </div>
+            </div>
         </section>
     </main>
 

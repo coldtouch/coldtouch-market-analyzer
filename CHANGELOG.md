@@ -2,6 +2,16 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-04-07 — Phase 3: Loot Tab Lifecycle Tracker
+
+- **DB tables:** `loot_tabs (user_id, tab_name, city, purchase_price, items_json, purchased_at, status)` and `loot_tab_sales (loot_tab_id, item_id, quality, quantity, sale_price, sold_at)` added via SQLite `CREATE TABLE IF NOT EXISTS`.
+- **5 new API endpoints:** `POST /api/loot-tab/save` (I Bought This), `GET /api/loot-tabs` (list with revenue summary), `GET /api/loot-tab/:id` (detail + sales), `POST /api/loot-tab/:id/sale` (record a sale), `PATCH /api/loot-tab/:id/status` (update open/partial/sold). All JWT-auth gated via `requireAuth`.
+- **"I Bought This" button:** Appears after any loot analysis (both Worth Buying and Sell Optimizer modes). Includes a city input field. On save, turns green and triggers tracker refresh.
+- **My Tracked Tabs section:** Shown below loot results, auto-loads when switching to Loot Buyer tab. Each card shows tab name, city badge, status badge, paid/revenue/net profit/progress stats, and a fill-bar progress indicator (accent → yellow → green as revenue approaches purchase price).
+- **Expandable detail view:** Click any card to expand — shows all recorded sales (item, qty, total silver, date), revenue/net profit summary, "+ Record Sale" prompt, and a status dropdown.
+- **Manual sale recording:** `recordSale()` prompts for item ID, quantity, and price-per-unit. Collapses detail and reloads tracker on success.
+- **CSS:** `.loot-tracked-card`, `.loot-tracked-header`, `.loot-tracked-stats`, `.loot-tracked-progress-bar/fill`, `.loot-tab-badge`, `.loot-tab-status` (open/partial/sold variants), `.loot-status-select`.
+
 ### 2026-04-07 — Phase 2: Sell Optimizer complete
 
 - **`buildSellPlan()` helper:** Per-item sell strategy decision using an 85% threshold — if instant sell is within 15% of the best market listing price, prefer instant (take the certainty). Otherwise recommend listing on market. Items with neither price go to a "No Market Data" bucket.
