@@ -155,6 +155,7 @@ db.serialize(() => {
   db.run(`ALTER TABLE users ADD COLUMN email_verified INTEGER DEFAULT 0`, () => {});
   db.run(`ALTER TABLE users ADD COLUMN verification_token TEXT`, () => {});
   db.run(`ALTER TABLE users ADD COLUMN verification_expires INTEGER`, () => {});
+  db.run(`ALTER TABLE users ADD COLUMN capture_token TEXT`, () => {});
   db.run(`CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email ON users(email) WHERE email IS NOT NULL`);
 
   db.run(`CREATE TABLE IF NOT EXISTS alerts (guild_id TEXT, channel_id TEXT, min_profit INTEGER, cooldown_ms INTEGER DEFAULT 600000, PRIMARY KEY(guild_id, channel_id))`);
@@ -1050,6 +1051,134 @@ app.post('/api/unlink-discord', (req, res) => {
   });
 });
 
+// === CAPTURE TOKEN + LOOT BUYER ===
+const clientCaptures = {}; // { userId: [{ items, capturedAt, ... }] } — auto-expire 1h
+
+// Generate a capture token for the custom client
+app.post('/api/generate-capture-token', (req, res) => {
+  if (!req.user) return res.status(401).json({ error: 'Login required.' });
+  const token = require('crypto').randomBytes(24).toString('hex');
+  db.run(`UPDATE users SET capture_token = ? WHERE id = ?`, [token, req.user.id], (err) => {
+    if (err) return res.status(500).json({ error: 'Failed to generate token.' });
+    console.log(`[CaptureToken] Generated for user ${req.user.id}`);
+    res.json({ success: true, token });
+  });
+});
+
+// Get current capture token
+app.get('/api/capture-token', (req, res) => {
+  if (!req.user) return res.status(401).json({ error: 'Login required.' });
+  db.get(`SELECT capture_token FROM users WHERE id = ?`, [req.user.id], (err, row) => {
+    if (err) return res.status(500).json({ error: 'Database error.' });
+    res.json({ token: row?.capture_token || null });
+  });
+});
+
+// Evaluate loot tab items against market data
+app.post('/api/loot-evaluate', (req, res) => {
+  if (!req.user) return res.status(401).json({ error: 'Login required.' });
+  const { items } = req.body;
+  if (!items || !Array.isArray(items) || items.length === 0 || items.length > 300) {
+    return res.status(400).json({ error: 'Items array required (1-300 items).' });
+  }
+
+  const results = [];
+  let totalQuickSell = 0, totalPatientSell = 0;
+
+  for (const item of items) {
+    const { itemId, quality, quantity } = item;
+    if (!itemId) continue;
+    const q = parseInt(quality) || 1;
+    const qty = parseInt(quantity) || 1;
+    const data = alertMarketDb[itemId] && alertMarketDb[itemId][q];
+
+    const result = {
+      itemId, quality: q, quantity: qty,
+      name: getFriendlyName(itemId),
+      bestInstantSell: null,
+      bestMarketSell: null,
+      cityBreakdown: [],
+      globalAvg: globalPriceRef[itemId + '_' + q] || 0,
+      riskFlags: []
+    };
+
+    if (!data) {
+      result.riskFlags.push('no_data');
+      results.push(result);
+      continue;
+    }
+
+    let bestBuyMax = 0, bestBuyCity = null, bestBuyAmount = 0;
+    let bestCityAvg = 0, bestCityAvgCity = null;
+    let totalBuyAmount = 0;
+
+    for (const [city, cd] of Object.entries(data)) {
+      const cityAvg = cityPriceRef[itemId + '_' + q + '_' + city] || 0;
+      result.cityBreakdown.push({
+        city,
+        sellMin: cd.sellMin === Infinity ? 0 : cd.sellMin,
+        buyMax: cd.buyMax || 0,
+        buyAmount: cd.buyAmount || 0,
+        cityAvg,
+        age: Math.round((Date.now() - (cd.lastSeen || 0)) / 60000)
+      });
+      if (cd.buyMax > bestBuyMax) {
+        bestBuyMax = cd.buyMax;
+        bestBuyCity = city;
+        bestBuyAmount = cd.buyAmount || 0;
+      }
+      totalBuyAmount += cd.buyAmount || 0;
+      if (cityAvg > bestCityAvg) {
+        bestCityAvg = cityAvg;
+        bestCityAvgCity = city;
+      }
+    }
+
+    if (bestBuyMax > 0) {
+      const net = Math.floor(bestBuyMax * (1 - TAX_RATE));
+      result.bestInstantSell = { city: bestBuyCity, price: bestBuyMax, amount: bestBuyAmount, netPerUnit: net };
+      totalQuickSell += net * qty;
+    }
+
+    if (bestCityAvg > 0) {
+      const net = Math.floor(bestCityAvg * (1 - TAX_RATE));
+      result.bestMarketSell = { city: bestCityAvgCity, price: Math.round(bestCityAvg), netPerUnit: net };
+      totalPatientSell += net * qty;
+    }
+
+    if (totalBuyAmount === 0) result.riskFlags.push('no_buy_orders');
+    if (bestBuyAmount > 0 && bestBuyAmount < qty) result.riskFlags.push('low_liquidity');
+
+    results.push(result);
+  }
+
+  res.json({
+    items: results,
+    totals: {
+      quickSellTotal: totalQuickSell,
+      patientSellTotal: totalPatientSell,
+      itemCount: results.length,
+      riskItemCount: results.filter(r => r.riskFlags.length > 0).length
+    }
+  });
+});
+
+// Get pending chest captures for this user
+app.get('/api/chest-captures', (req, res) => {
+  if (!req.user) return res.status(401).json({ error: 'Login required.' });
+  const captures = clientCaptures[req.user.id] || [];
+  res.json({ captures });
+});
+
+// Evict stale captures every 30 min
+setInterval(() => {
+  const cutoff = Date.now() - 60 * 60 * 1000;
+  for (const userId of Object.keys(clientCaptures)) {
+    clientCaptures[userId] = clientCaptures[userId].filter(c => c.capturedAt > cutoff);
+    if (clientCaptures[userId].length === 0) delete clientCaptures[userId];
+  }
+}, 30 * 60 * 1000);
+
 // === LIVE FLIPS API (registration-gated) ===
 app.get('/api/live-flips', (req, res) => {
   if (!req.user) return res.status(401).json({ error: 'Login required. Create a free account to access live flips.' });
@@ -1516,15 +1645,61 @@ wss.on('connection', ws => {
   ws.on('message', data => {
     try {
       const msg = JSON.parse(data.toString());
+      // Browser auth (JWT token)
       if (msg.type === 'auth' && msg.token) {
         try {
           ws.user = jwt.verify(msg.token, SESSION_SECRET);
           ws.isAuthenticated = true;
+          ws.clientType = 'browser';
           ws.send(JSON.stringify({ type: 'auth', success: true }));
-          // Send recent flip history on successful auth
           ws.send(JSON.stringify({ type: 'flip-history', data: liveFlips }));
+          // Send any pending chest captures
+          const pending = clientCaptures[ws.user.id];
+          if (pending && pending.length > 0) {
+            ws.send(JSON.stringify({ type: 'chest-captures', data: pending }));
+          }
         } catch(e) {
           ws.send(JSON.stringify({ type: 'auth', success: false, error: 'Invalid token' }));
+        }
+      }
+
+      // Game client auth (capture token)
+      if (msg.type === 'client-auth' && msg.token) {
+        db.get(`SELECT id, username FROM users WHERE capture_token = ?`, [msg.token], (err, user) => {
+          if (err || !user) {
+            ws.send(JSON.stringify({ type: 'client-auth', success: false, error: 'Invalid capture token' }));
+            return;
+          }
+          ws.user = { id: user.id, username: user.username };
+          ws.isAuthenticated = true;
+          ws.clientType = 'game-client';
+          ws.send(JSON.stringify({ type: 'client-auth', success: true, username: user.username }));
+          console.log(`[ClientAuth] Game client authenticated for user ${user.username}`);
+        });
+      }
+
+      // Chest capture from game client
+      if (msg.type === 'chest-capture' && ws.clientType === 'game-client' && ws.user) {
+        const capture = msg.data;
+        if (!capture || !capture.items) return;
+
+        // Add player info
+        capture.playerName = ws.user.username;
+        capture.userId = ws.user.id;
+
+        // Store in memory
+        if (!clientCaptures[ws.user.id]) clientCaptures[ws.user.id] = [];
+        clientCaptures[ws.user.id].push(capture);
+        // Keep max 10 captures per user
+        if (clientCaptures[ws.user.id].length > 10) clientCaptures[ws.user.id].shift();
+
+        console.log(`[ChestCapture] Received ${capture.itemCount || capture.items.length} items from ${ws.user.username}`);
+
+        // Push to user's browser session(s) in real-time
+        for (const wc of wsClients) {
+          if (wc.clientType === 'browser' && wc.isAuthenticated && wc.user && wc.user.id === ws.user.id) {
+            wc.send(JSON.stringify({ type: 'chest-capture', data: capture }));
+          }
         }
       }
     } catch(e) { /* ignore non-JSON messages */ }
