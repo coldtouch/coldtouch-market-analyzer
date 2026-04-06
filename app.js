@@ -4165,7 +4165,10 @@ function renderLootCaptures() {
         const equipCount = cap.items.filter(it => it.isEquipment).length;
         const stackCount = cap.items.length - equipCount;
         const ago = timeAgo(new Date(cap.capturedAt).toISOString());
-        const name = cap.customName || `Chest Capture #${i + 1}`;
+        const autoName = cap.vaultTabs && cap.vaultTabs.length > 0
+            ? (cap.isGuild ? 'Guild Vault' : 'Bank Vault') + ` (${cap.vaultTabs.map(t => t.name || '?').join(', ')})`
+            : `Chest Capture #${i + 1}`;
+        const name = cap.customName || autoName;
         const shortId = cap.containerId ? cap.containerId.slice(0, 8) : '';
         return `<div class="loot-capture-card" onclick="selectLootCapture(${i})" style="cursor:pointer;">
             <div style="display:flex; align-items:center; gap:0.75rem; flex:1; min-width:0;">
