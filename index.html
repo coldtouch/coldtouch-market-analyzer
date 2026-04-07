@@ -1676,6 +1676,14 @@
                     <div class="changelog-list">
                         <div class="changelog-entry">
                             <div class="changelog-date">April 7, 2026</div>
+                            <div class="changelog-title">Feedback &amp; Bug Report</div>
+                            <ul>
+                                <li>New floating feedback button (bottom-right) opens a modal to submit bug reports or suggestions</li>
+                                <li>Submissions are delivered to Discord via webhook; rate-limited to 1 per minute per user/IP</li>
+                            </ul>
+                        </div>
+                        <div class="changelog-entry">
+                            <div class="changelog-date">April 7, 2026</div>
                             <div class="changelog-title">Fix: Market Flipper freshness Max Age input restored</div>
                             <ul>
                                 <li>Max Age dropdown was not visible on page load due to missing initial state sync &mdash; fixed</li>
@@ -2146,6 +2154,36 @@
             </div>
         </section>
     </main>
+
+    <!-- ====== FEEDBACK FAB ====== -->
+    <button id="feedback-fab" class="feedback-fab" onclick="openFeedbackModal()" title="Send feedback or report a bug">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>
+    </button>
+
+    <!-- ====== FEEDBACK MODAL ====== -->
+    <div id="feedback-modal" class="modal hidden">
+        <div class="modal-content feedback-modal-content">
+            <button class="close-btn" onclick="closeFeedbackModal()">&times;</button>
+            <h2 class="feedback-modal-title">Send Feedback</h2>
+            <p class="feedback-modal-sub">Found a bug or have a suggestion? Let us know.</p>
+            <div class="feedback-form">
+                <div class="control-group">
+                    <label for="feedback-type">Type</label>
+                    <select id="feedback-type" class="dropdown">
+                        <option value="bug">Bug Report</option>
+                        <option value="suggestion">Suggestion</option>
+                    </select>
+                </div>
+                <div class="control-group">
+                    <label for="feedback-message">Message</label>
+                    <textarea id="feedback-message" class="feedback-textarea" placeholder="Describe the bug or your suggestion..." rows="5" maxlength="1000"></textarea>
+                    <span id="feedback-char-count" class="feedback-char-count">0 / 1000</span>
+                </div>
+                <div id="feedback-status" class="feedback-status hidden"></div>
+                <button id="feedback-submit-btn" class="btn-primary" onclick="submitFeedback()">Submit</button>
+            </div>
+        </div>
+    </div>
 
     <footer>
         <p>Coldtouch Market Analyzer &copy; 2026 &mdash; Powered by

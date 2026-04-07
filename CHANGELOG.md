@@ -2,6 +2,14 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-04-07 — Feature: Feedback & Bug Report
+
+- **Floating feedback button:** Fixed bottom-right chat-bubble FAB opens a glassmorphism modal. Works on all tabs, no login required.
+- **Modal fields:** Type selector (Bug Report / Suggestion) + message textarea with live character counter (max 1000). ESC and click-outside dismiss.
+- **Backend endpoint:** `POST /api/feedback` in backend.js. Validates type and message (5–1000 chars), resolves user from JWT if logged in, posts a Discord embed to `DISCORD_FEEDBACK_WEBHOOK`. Rate-limited to 1 submission/minute per user ID (or IP for guests).
+- **Discord embed:** Colored by type (red = bug, blue = suggestion), shows message body, "Submitted by" field with username and user ID (or "Anonymous"). Includes ISO timestamp.
+- **Deploy:** `DISCORD_FEEDBACK_WEBHOOK` added to `.env` template in deploy_saas.py — set this env variable to activate. Endpoint returns 503 gracefully when webhook is not configured.
+
 ### 2026-04-07 — Fix: Market Flipper freshness Max Age input restored
 
 - **Root cause:** `fresh-threshold-group` had `style="display:none;"` in HTML but `init()` never ran the show/hide sync on load — so the Max Age dropdown was permanently hidden until the user manually changed the Fresh Filter mode dropdown.

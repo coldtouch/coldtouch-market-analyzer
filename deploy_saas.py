@@ -96,6 +96,7 @@ const domain = process.env.DOMAIN;
 const CLIENT_ID = process.env.DISCORD_CLIENT_ID;
 const CLIENT_SECRET = process.env.DISCORD_CLIENT_SECRET;
 const BOT_TOKEN = process.env.DISCORD_BOT_TOKEN;
+const DISCORD_FEEDBACK_WEBHOOK = process.env.DISCORD_FEEDBACK_WEBHOOK || '';
 const SESSION_SECRET = process.env.SESSION_SECRET;
 
 const GAME_SERVER = process.env.GAME_SERVER || 'europe';
@@ -1570,6 +1571,48 @@ app.post('/api/contributions', requireAuth, contribLimiter, (req, res) => {
   });
 });
 
+const feedbackLimiter = rateLimit({ windowMs: 60 * 1000, max: 1, standardHeaders: true, legacyHeaders: false, keyGenerator: (req) => (req.user ? req.user.id : req.ip) });
+
+app.post('/api/feedback', feedbackLimiter, (req, res) => {
+  const { type, message } = req.body;
+  const validTypes = ['bug', 'suggestion'];
+  if (!type || !validTypes.includes(type)) return res.status(400).json({ error: 'type must be bug or suggestion' });
+  if (!message || typeof message !== 'string' || message.trim().length < 5) return res.status(400).json({ error: 'message must be at least 5 characters' });
+  if (message.length > 1000) return res.status(400).json({ error: 'message must be 1000 characters or fewer' });
+
+  if (!DISCORD_FEEDBACK_WEBHOOK) return res.status(503).json({ error: 'Feedback not configured' });
+
+  const username = req.user ? req.user.username : 'Anonymous';
+  const userId = req.user ? req.user.id : null;
+  const color = type === 'bug' ? 0xf87171 : 0x60a5fa;
+  const label = type === 'bug' ? '\\uD83D\\uDC1B Bug Report' : '\\uD83D\\uDCA1 Suggestion';
+
+  const embed = {
+    title: label,
+    description: message.trim().substring(0, 1000),
+    color,
+    fields: [{ name: 'Submitted by', value: userId ? `${username} (${userId})` : 'Anonymous', inline: true }],
+    timestamp: new Date().toISOString()
+  };
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 10000);
+  fetch(DISCORD_FEEDBACK_WEBHOOK, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ embeds: [embed] }),
+    signal: controller.signal
+  }).then(r => {
+    clearTimeout(timer);
+    if (!r.ok) { console.error('[Feedback] Webhook failed:', r.status); return res.status(502).json({ error: 'Failed to deliver feedback' }); }
+    res.json({ success: true });
+  }).catch(err => {
+    clearTimeout(timer);
+    console.error('[Feedback] Webhook error:', err.message);
+    res.status(500).json({ error: 'Failed to deliver feedback' });
+  });
+});
+
 app.get('/api/my-stats', requireAuth, (req, res) => {
   const userId = req.user.id;
   db.get(`SELECT scans_30d, scans_total, tier FROM user_stats WHERE user_id = ?`, [userId], (err, row) => {
@@ -2954,10 +2997,12 @@ require('http').createServer((req, res) => {
     smtp_user = os.environ.get('SMTP_USER', '')
     smtp_pass = os.environ.get('SMTP_PASS', '')
     smtp_from = os.environ.get('SMTP_FROM', 'noreply@albionaitool.xyz')
+    feedback_webhook = os.environ.get('DISCORD_FEEDBACK_WEBHOOK', '')
     env_content = f"""DOMAIN={domain}
 DISCORD_CLIENT_ID={CLIENT_ID}
 DISCORD_CLIENT_SECRET={CLIENT_SECRET}
 DISCORD_BOT_TOKEN={BOT_TOKEN}
+DISCORD_FEEDBACK_WEBHOOK={feedback_webhook}
 SESSION_SECRET={session_secret}
 GAME_SERVER={game_server}
 SMTP_HOST={smtp_host}
