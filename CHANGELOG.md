@@ -2,6 +2,17 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-04-07 — Feature: Manual item entry on Loot Buyer
+
+- **"+ Add Items Manually" button:** Toggles an inline form on the Loot Buyer tab for adding items without the game client.
+- **Item search with autocomplete:** Reuses the existing `setupAutocomplete()` — searches 11k+ items by name, tier, or ID. Shows up to 8 matches.
+- **Quality selector + quantity input:** Pick Normal through Masterpiece quality and set stack count.
+- **Smart duplicate merging:** Adding the same item+quality again merges quantities instead of creating duplicates.
+- **Item list with remove buttons:** Each added item shows icon, name, quality, quantity, and an × remove button.
+- **"Use These Items" button:** Creates a manual capture that feeds into the same Buy Decision / Sell Optimizer analysis flow as real chest captures.
+- **"Clear All" button:** Resets the manual item list.
+- **CSS:** `.loot-manual-item`, `.loot-manual-item-name`, `.loot-manual-item-qty`, `.loot-manual-remove` classes.
+
 ### 2026-04-07 — Feature: Sell plan travel route suggestion
 
 - **Route heuristic:** When the sell optimizer groups items across multiple cities, a suggested travel route is shown based on Royal Continent geography (Caerleon → Martlock → Fort Sterling → Thetford → Lymhurst → Bridgewatch → Brecilien → Black Market).
