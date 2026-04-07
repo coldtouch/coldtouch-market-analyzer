@@ -2021,15 +2021,15 @@ setInterval(() => {
 
 let lastFlipValidation = 0;
 async function broadcastFlip(flip) {
-  // Rate-limit validation: max 1 API call per second to avoid hammering the price API
+  // Always validate before broadcasting — queue with rate-limited API calls
   const now = Date.now();
-  if (now - lastFlipValidation > 1000) {
-    lastFlipValidation = now;
-    try {
-      const valid = await validateFlipPrices(flip.itemId, flip.quality, flip.buyCity, flip.sellCity, flip.buyPrice, flip.sellPrice);
-      if (!valid) return;
-    } catch(e) { /* validation failed — broadcast anyway rather than silencing valid flips */ }
-  }
+  const waitMs = Math.max(0, 1000 - (now - lastFlipValidation));
+  if (waitMs > 0) await new Promise(r => setTimeout(r, waitMs));
+  lastFlipValidation = Date.now();
+  try {
+    const valid = await validateFlipPrices(flip.itemId, flip.quality, flip.buyCity, flip.sellCity, flip.buyPrice, flip.sellPrice);
+    if (!valid) return;
+  } catch(e) { /* validation failed — broadcast anyway rather than silencing valid flips */ }
 
   liveFlips.unshift(flip);
   if (liveFlips.length > MAX_FLIPS) liveFlips.pop();
@@ -2096,6 +2096,8 @@ function detectFlip(id, q) {
   if (!data) return;
 
   const now = Date.now();
+  const FRESH_MS = 300000; // 5 min general freshness
+  const BM_FRESH_MS = 180000; // 3 min for Black Market (orders fill fast, stale prices cause phantom flips)
   let bestSell = { price: Infinity, city: null, date: 0 };
   let bestBuy = { price: 0, city: null, date: 0 };
 
@@ -2108,9 +2110,15 @@ function detectFlip(id, q) {
     }
   }
 
+  // Outlier check: reject if sell price is suspiciously far from global average
+  const gAvg = globalPriceRef[id + '_' + q] || 0;
+  if (gAvg > 0 && bestBuy.price > gAvg * 4) return; // >4x global avg is almost certainly stale
+
   // === Cross-city flips ===
   if (bestSell.city && bestBuy.city && bestSell.city !== bestBuy.city) {
-    if ((now - bestSell.date) <= 300000 && (now - bestBuy.date) <= 300000) {
+    const sellFresh = bestSell.city === 'Black Market' ? BM_FRESH_MS : FRESH_MS;
+    const buyFresh = bestBuy.city === 'Black Market' ? BM_FRESH_MS : FRESH_MS;
+    if ((now - bestSell.date) <= sellFresh && (now - bestBuy.date) <= buyFresh) {
       const profit = bestBuy.price - bestSell.price - (bestBuy.price * TAX_RATE);
       if (profit >= FLIP_MIN_PROFIT) {
         const roi = ((profit / bestSell.price) * 100).toFixed(1);
@@ -2135,7 +2143,8 @@ function detectFlip(id, q) {
   for (const [city, cd] of Object.entries(data)) {
     if (!cd.sellMin || cd.sellMin === Infinity || !cd.buyMax || cd.buyMax <= 0) continue;
     if (cd.buyMax <= cd.sellMin) continue; // no margin
-    if ((now - (cd.sellDate || 0)) > 300000 || (now - (cd.buyDate || 0)) > 300000) continue;
+    const cityFresh = city === 'Black Market' ? BM_FRESH_MS : FRESH_MS;
+    if ((now - (cd.sellDate || 0)) > cityFresh || (now - (cd.buyDate || 0)) > cityFresh) continue;
 
     const profit = cd.buyMax - cd.sellMin - (cd.buyMax * TAX_RATE);
     if (profit < FLIP_MIN_PROFIT) continue;

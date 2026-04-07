@@ -6750,23 +6750,30 @@ function renderPortfolio() {
         const date = new Date(t.timestamp).toLocaleDateString();
         const typeColor = t.type === 'buy' ? 'var(--loss-red)' : 'var(--profit-green)';
         const typeLabel = t.type === 'buy' ? 'BUY' : 'SELL';
+        const safeItemId = encodeURIComponent(t.itemId);
+        const safeTradeId = esc(t.id);
         tableHTML += `<tr>
             <td>${date}</td>
             <td><span style="font-weight:700; color:${typeColor};">${typeLabel}</span></td>
             <td style="display:flex; align-items:center; gap:0.5rem;">
-                <img src="https://render.albiononline.com/v1/item/${t.itemId}.png" width="24" height="24" style="image-rendering:pixelated;" onerror="this.style.display='none'">
+                <img src="https://render.albiononline.com/v1/item/${safeItemId}.png" width="24" height="24" style="image-rendering:pixelated;" onerror="this.style.display='none'">
                 ${esc(name)}
             </td>
             <td>${t.quantity.toLocaleString()}</td>
             <td>${t.price.toLocaleString()}</td>
             <td style="font-weight:700;">${total.toLocaleString()}</td>
             <td>${esc(t.city)}</td>
-            <td><button onclick="deletePortfolioTrade('${t.id}')" style="background:none; border:none; color:var(--loss-red); cursor:pointer; font-size:1rem;" title="Delete trade">×</button></td>
+            <td><button data-trade-id="${safeTradeId}" class="portfolio-delete-btn" style="background:none; border:none; color:var(--loss-red); cursor:pointer; font-size:1rem;" title="Delete trade">×</button></td>
         </tr>`;
     });
 
     tableHTML += `</tbody></table></div>`;
     tradesEl.innerHTML = tableHTML;
+
+    // Wire up delete buttons via delegation (avoids inline onclick with user data)
+    tradesEl.querySelectorAll('.portfolio-delete-btn').forEach(btn => {
+        btn.addEventListener('click', () => deletePortfolioTrade(btn.dataset.tradeId));
+    });
 }
 
 // ============================================================

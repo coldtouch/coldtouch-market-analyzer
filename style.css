@@ -4016,6 +4016,23 @@ footer {
     margin-top: 0.25rem;
 }
 
+/* ====== MOBILE: NEWER FEATURES ====== */
+@media (max-width: 600px) {
+    .sale-inline-form { padding: 0.5rem; }
+    .sale-form-row { flex-wrap: wrap; }
+    .sale-form-label { min-width: 100%; margin-bottom: -0.25rem; }
+    .sale-form-select, .sale-form-input { font-size: 0.85rem; }
+
+    .loot-manual-item { font-size: 0.78rem; gap: 0.35rem; }
+
+    .sell-trip-total { font-size: 0.85rem; }
+    .sell-route-hint { font-size: 0.72rem; }
+
+    .loot-capture-card { padding: 0.5rem; }
+    .loot-card-title { font-size: 0.82rem; }
+    .loot-card-meta { font-size: 0.68rem; }
+}
+
 /* ====== FEEDBACK FAB & MODAL ====== */
 .feedback-fab {
     position: fixed;

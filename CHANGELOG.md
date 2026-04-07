@@ -2,6 +2,14 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-04-07 — Batch: Flip fix, XSS hardening, mobile, download page, capture toggle
+
+- **Live Flip false positives reduced:** Black Market prices now use a tighter 3-minute freshness window (vs 5 min for other cities). Added global price outlier check — flips where the sell price exceeds 4x the global average are rejected as stale. `broadcastFlip()` now always validates (waits for rate limit instead of skipping validation).
+- **Portfolio XSS hardened:** `t.itemId` in img src now uses `encodeURIComponent()`. Trade delete buttons use `data-trade-id` with `esc()` + event delegation instead of inline onclick with raw user data from localStorage.
+- **Mobile responsive:** Added `@media (max-width: 600px)` breakpoints for inline sale form, manual item entry, sell plan, and loot capture cards.
+- **Custom client download page:** New "Coldtouch Data Client" section in the About tab — what it does, how it works, 5-step setup guide, and comparison table vs AODP client.
+- **Capture mode toggle (Go client):** `--capture=false` CLI flag or `CaptureEnabled: false` in config.yaml disables chest scanning. Defaults to true.
+
 ### 2026-04-07 — Feature: Manual item entry on Loot Buyer
 
 - **"+ Add Items Manually" button:** Toggles an inline form on the Loot Buyer tab for adding items without the game client.

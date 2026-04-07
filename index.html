@@ -1670,10 +1670,82 @@
                     </div>
                 </div>
 
+                <!-- Data Client Section -->
+                <div class="about-section" id="data-client-section">
+                    <h2 class="about-heading">Coldtouch Data Client</h2>
+                    <p style="color:var(--text-secondary); margin-bottom:1.25rem; font-size:0.9rem;">
+                        A custom game data client that captures chest contents, vault tabs, and trade events in real time. Built on top of the
+                        <a href="https://www.albion-online-data.com/" target="_blank" style="color:var(--accent);">Albion Online Data Project</a> client.
+                    </p>
+
+                    <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(260px, 1fr)); gap:1rem; margin-bottom:1.5rem;">
+                        <div style="background:var(--bg-card); border:1px solid var(--border-color); border-radius:var(--radius); padding:1rem;">
+                            <h3 style="color:var(--accent); margin:0 0 0.5rem; font-size:0.95rem;">What It Does</h3>
+                            <ul style="color:var(--text-secondary); font-size:0.82rem; padding-left:1.2rem; margin:0; list-style:disc;">
+                                <li>Everything the standard AODP client does (market prices, gold rates)</li>
+                                <li>Captures chest and vault contents when you open them in-game</li>
+                                <li>Identifies vault tab names automatically (guild and personal banks)</li>
+                                <li>Sends captures to your account on this website via secure WebSocket</li>
+                                <li>Powers the Loot Buyer feature (evaluate tabs, plan where to sell)</li>
+                            </ul>
+                        </div>
+                        <div style="background:var(--bg-card); border:1px solid var(--border-color); border-radius:var(--radius); padding:1rem;">
+                            <h3 style="color:var(--accent); margin:0 0 0.5rem; font-size:0.95rem;">How It Works</h3>
+                            <ul style="color:var(--text-secondary); font-size:0.82rem; padding-left:1.2rem; margin:0; list-style:disc;">
+                                <li>Reads network packets from Albion Online (same method as AODP)</li>
+                                <li>Does NOT modify the game client or inject code — fully SBI-compliant</li>
+                                <li>Standard market data still goes to the public AODP NATS server</li>
+                                <li>Custom data (chests, tabs) goes only to your private account</li>
+                                <li>Links to your website account via Device Authorization (one-time setup)</li>
+                            </ul>
+                        </div>
+                    </div>
+
+                    <div style="background:var(--bg-card); border:1px solid var(--border-color); border-radius:var(--radius); padding:1rem; margin-bottom:1.5rem;">
+                        <h3 style="color:var(--accent); margin:0 0 0.75rem; font-size:0.95rem;">Setup Guide</h3>
+                        <ol style="color:var(--text-secondary); font-size:0.82rem; padding-left:1.5rem; margin:0;">
+                            <li style="margin-bottom:0.4rem;"><strong>Download</strong> the latest release from <a href="https://github.com/coldtouch/albiondata-client/releases" target="_blank" style="color:var(--accent);">GitHub Releases</a></li>
+                            <li style="margin-bottom:0.4rem;"><strong>Create an account</strong> on this website (or login if you already have one)</li>
+                            <li style="margin-bottom:0.4rem;"><strong>Run the client</strong> — it will show a device code and a link</li>
+                            <li style="margin-bottom:0.4rem;"><strong>Open the link</strong> in your browser and enter the code to link your account</li>
+                            <li style="margin-bottom:0.4rem;"><strong>Play Albion</strong> — open any chest and the contents appear on the Loot Buyer tab</li>
+                        </ol>
+                    </div>
+
+                    <div style="background:var(--bg-elevated); border:1px solid var(--border-color); border-radius:var(--radius); padding:1rem;">
+                        <h3 style="color:var(--text-primary); margin:0 0 0.5rem; font-size:0.95rem;">Comparison with AODP Client</h3>
+                        <div class="table-scroll-wrapper">
+                            <table class="compare-table" style="font-size:0.8rem;">
+                                <thead><tr><th>Feature</th><th>AODP Client</th><th>Coldtouch Client</th></tr></thead>
+                                <tbody>
+                                    <tr><td>Market prices</td><td>Yes</td><td>Yes</td></tr>
+                                    <tr><td>Gold prices</td><td>Yes</td><td>Yes</td></tr>
+                                    <tr><td>Contributes to public AODP</td><td>Yes</td><td>Yes</td></tr>
+                                    <tr><td>Chest/vault capture</td><td>No</td><td style="color:var(--profit-green); font-weight:600;">Yes</td></tr>
+                                    <tr><td>Vault tab identification</td><td>No</td><td style="color:var(--profit-green); font-weight:600;">Yes</td></tr>
+                                    <tr><td>Website account linking</td><td>No</td><td style="color:var(--profit-green); font-weight:600;">Yes</td></tr>
+                                    <tr><td>Loot Buyer integration</td><td>No</td><td style="color:var(--profit-green); font-weight:600;">Yes</td></tr>
+                                    <tr><td>SBI-compliant</td><td>Yes</td><td>Yes</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+
                 <!-- Changelog Section -->
                 <div class="about-section">
                     <h2 class="about-heading">Changelog</h2>
                     <div class="changelog-list">
+                        <div class="changelog-entry">
+                            <div class="changelog-date">April 7, 2026</div>
+                            <div class="changelog-title">Flip Fix, XSS Hardening, Mobile, Download Page</div>
+                            <ul>
+                                <li>Reduced live flip false positives — tighter Black Market freshness, global price outlier check</li>
+                                <li>Portfolio Tracker XSS hardened — safe rendering of localStorage data</li>
+                                <li>Mobile responsive fixes for Loot Buyer, sale form, and sell plan</li>
+                                <li>New Data Client section in About tab — setup guide and AODP comparison</li>
+                            </ul>
+                        </div>
                         <div class="changelog-entry">
                             <div class="changelog-date">April 7, 2026</div>
                             <div class="changelog-title">Manual Item Entry on Loot Buyer</div>
