@@ -2163,7 +2163,8 @@ const alertMarketDb = {};
 const CITY_NAMES = { 'Thetford': 'Thetford', 'Lymhurst': 'Lymhurst', 'Bridgewatch': 'Bridgewatch', 'Black Market': 'Black Market', 'Caerleon': 'Caerleon', 'Fort Sterling': 'Fort Sterling', 'Martlock': 'Martlock', 'Brecilien': 'Brecilien' };
 const API_LOCALE_MAP = { '0': 'Thetford', '7': 'Thetford', '3004': 'Thetford', '3': 'Lymhurst', '1002': 'Lymhurst', '4': 'Bridgewatch', '2004': 'Bridgewatch', '3003': 'Black Market', '3005': 'Caerleon', '3008': 'Fort Sterling', '4000': 'Martlock', '4300': 'Brecilien' };
 function getCity(id) { return API_LOCALE_MAP[id] || CITY_NAMES[id] || 'City-'+id; }
-function getFriendlyName(id) { return itemNames[id] || id; }
+const SPECIAL_ITEM_NAMES = { SILVER: 'Silver', GOLD: 'Gold', FAME_CREDIT: 'Fame Credit', FAME_CREDIT_PREMIUM: 'Premium Fame Credit', FACTION_TOKEN: 'Faction Token', SILVER_POUCH: 'Silver Pouch', GOLD_POUCH: 'Gold Pouch', TOME_OF_INSIGHT: 'Tome of Insight', SEASONAL_TOKEN: 'Seasonal Token' };
+function getFriendlyName(id) { return itemNames[id] || SPECIAL_ITEM_NAMES[id] || id; }
 function getQualityName(q) { return ['', 'Normal', 'Good', 'Outstanding', 'Excellent', 'Masterpiece'][q] || 'Normal'; }
 
 // Live price validation — fetches current prices from the API right before sending an alert
