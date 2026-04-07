@@ -3294,6 +3294,9 @@ async function init() {
     const lootAnalyzeBtn = document.getElementById('loot-analyze-btn');
     if (lootAnalyzeBtn) lootAnalyzeBtn.addEventListener('click', analyzeLoot);
 
+    // Loot Buyer: manual item entry
+    initLootManualEntry();
+
     // Transport sell strategy: re-render on change
     const sellStrategyEl = document.getElementById('transport-sell-strategy');
     if (sellStrategyEl) {
@@ -4151,6 +4154,94 @@ let lootBuyerCaptures = [];
 let lootAnalysisMode = 'worth';
 let lootSelectedCapture = null;
 let lastLootEvalData = null; // retained for "I Bought This" save action
+let lootManualItems = []; // manually added items for analysis
+
+function initLootManualEntry() {
+    const toggleBtn = document.getElementById('loot-manual-toggle');
+    const form = document.getElementById('loot-manual-form');
+    if (!toggleBtn || !form) return;
+
+    toggleBtn.addEventListener('click', () => {
+        form.style.display = form.style.display === 'none' ? '' : 'none';
+    });
+
+    let selectedItemId = null;
+    setupAutocomplete('loot-manual-search', 'loot-manual-autocomplete', (id) => {
+        selectedItemId = id;
+    });
+
+    const addBtn = document.getElementById('loot-manual-add-btn');
+    if (addBtn) addBtn.addEventListener('click', () => {
+        if (!selectedItemId) return;
+        const quality = parseInt(document.getElementById('loot-manual-quality').value) || 1;
+        const qty = Math.max(1, parseInt(document.getElementById('loot-manual-qty').value) || 1);
+
+        // Check if same item+quality already in list — merge quantities
+        const existing = lootManualItems.find(it => it.itemId === selectedItemId && it.quality === quality);
+        if (existing) {
+            existing.quantity += qty;
+        } else {
+            lootManualItems.push({ itemId: selectedItemId, quality, quantity: qty, isEquipment: false });
+        }
+
+        // Reset inputs
+        document.getElementById('loot-manual-search').value = '';
+        document.getElementById('loot-manual-qty').value = '1';
+        document.getElementById('loot-manual-quality').value = '1';
+        selectedItemId = null;
+
+        renderLootManualItems();
+    });
+
+    const useBtn = document.getElementById('loot-manual-use-btn');
+    if (useBtn) useBtn.addEventListener('click', () => {
+        if (lootManualItems.length === 0) return;
+        lootSelectedCapture = {
+            items: lootManualItems.map(it => ({ ...it })),
+            tabName: 'Manual Entry',
+            capturedAt: new Date().toISOString(),
+            isManual: true
+        };
+        selectLootCaptureUI(`Manual Entry`, lootSelectedCapture.items);
+    });
+
+    const clearBtn = document.getElementById('loot-manual-clear-btn');
+    if (clearBtn) clearBtn.addEventListener('click', () => {
+        lootManualItems = [];
+        renderLootManualItems();
+    });
+}
+
+function renderLootManualItems() {
+    const container = document.getElementById('loot-manual-items');
+    const actions = document.getElementById('loot-manual-actions');
+    if (!container) return;
+
+    if (lootManualItems.length === 0) {
+        container.innerHTML = '';
+        if (actions) actions.style.display = 'none';
+        return;
+    }
+
+    if (actions) actions.style.display = 'flex';
+
+    container.innerHTML = lootManualItems.map((item, i) => {
+        const name = getFriendlyName(item.itemId);
+        const qualLabel = item.quality > 1 ? ` q${item.quality}` : '';
+        const iconUrl = `https://render.albiononline.com/v1/item/${item.itemId}.png?quality=${item.quality}`;
+        return `<div class="loot-manual-item">
+            <img src="${iconUrl}" class="sell-plan-icon" loading="lazy" onerror="this.style.display='none'">
+            <span class="loot-manual-item-name">${esc(name)}${qualLabel}</span>
+            <span class="loot-manual-item-qty">x${item.quantity}</span>
+            <button class="loot-manual-remove" onclick="removeLootManualItem(${i})" title="Remove">&times;</button>
+        </div>`;
+    }).join('');
+}
+
+function removeLootManualItem(index) {
+    lootManualItems.splice(index, 1);
+    renderLootManualItems();
+}
 
 function renderLootCaptures() {
     const list = document.getElementById('loot-captures-list');

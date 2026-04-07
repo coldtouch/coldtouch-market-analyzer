@@ -3938,6 +3938,40 @@ footer {
     border-color: var(--accent);
 }
 
+/* ====== LOOT MANUAL ENTRY ====== */
+.loot-manual-item {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.35rem 0.5rem;
+    border-bottom: 1px solid var(--border-color);
+    font-size: 0.82rem;
+}
+.loot-manual-item-name {
+    flex: 1;
+    color: var(--text-primary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.loot-manual-item-qty {
+    color: var(--text-muted);
+    font-weight: 600;
+    flex-shrink: 0;
+}
+.loot-manual-remove {
+    background: none;
+    border: none;
+    color: var(--loss-red);
+    font-size: 1.1rem;
+    cursor: pointer;
+    padding: 0 0.25rem;
+    line-height: 1;
+    opacity: 0.6;
+    transition: opacity var(--transition);
+}
+.loot-manual-remove:hover { opacity: 1; }
+
 /* ====== INLINE SALE FORM ====== */
 .sale-inline-form {
     background: var(--bg-elevated);
