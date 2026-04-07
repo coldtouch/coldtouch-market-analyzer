@@ -4465,7 +4465,15 @@ function buildSellPlan(items) {
     }
 
     const sortedTrips = Object.entries(trips).sort((a, b) => b[1].total - a[1].total);
-    return { trips: sortedTrips, noData };
+
+    // Suggest a travel route based on Royal Continent geography
+    const routeOrder = ['Caerleon', 'Martlock', 'Fort Sterling', 'Thetford', 'Lymhurst', 'Bridgewatch', 'Brecilien', 'Black Market'];
+    const tripCities = sortedTrips.map(([city]) => city);
+    const orderedRoute = routeOrder.filter(c => tripCities.includes(c));
+    // Add any cities not in the predefined route (custom/unknown)
+    tripCities.forEach(c => { if (!orderedRoute.includes(c)) orderedRoute.push(c); });
+
+    return { trips: sortedTrips, noData, suggestedRoute: orderedRoute.length > 1 ? orderedRoute : null };
 }
 
 // Copy text for a single trip (called from inline button via dataset id)
@@ -4479,7 +4487,7 @@ function copySellTrip(tripId) {
 }
 
 function renderSellPlan(data, container) {
-    const { trips, noData } = buildSellPlan(data.items);
+    const { trips, noData, suggestedRoute } = buildSellPlan(data.items);
 
     if (trips.length === 0 && noData.length === 0) {
         container.innerHTML = '<div class="empty-state"><p>No items to plan.</p></div>';
@@ -4491,7 +4499,9 @@ function renderSellPlan(data, container) {
     const marketTotal  = trips.reduce((s, [, t]) => s + t.marketTotal, 0);
 
     // Build full plain-text summary for "Copy All" button
-    const allCopyLines = ['=== SELL PLAN ===', ''];
+    const allCopyLines = ['=== SELL PLAN ==='];
+    if (suggestedRoute) allCopyLines.push('Route: ' + suggestedRoute.join(' → '));
+    allCopyLines.push('');
     trips.forEach(([city, trip], i) => {
         allCopyLines.push(`Trip ${i + 1}: ${city}  (${trip.items.length} items · ${trip.total.toLocaleString()}s)`);
         trip.items.forEach(it => {
@@ -4587,6 +4597,7 @@ function renderSellPlan(data, container) {
                 ${noData.length > 0 ? `<span style="color:var(--loss-red);">⚠ ${noData.length} item${noData.length > 1 ? 's' : ''} with no data</span>` : ''}
             </div>
             <button class="btn-small-accent loot-copy-all-btn" id="sell-copy-all-btn" style="margin-top:0.5rem;">Copy All Trips</button>
+            ${suggestedRoute ? `<div class="sell-route-hint">Route: ${suggestedRoute.map(c => esc(c)).join(' → ')}</div>` : ''}
         </div>
         ${tripsHtml}
         ${noDataHtml}
