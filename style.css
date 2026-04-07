@@ -3489,6 +3489,12 @@ footer a:hover {
     font-size: 0.9rem;
     color: var(--text-primary);
 }
+.sell-route-hint {
+    margin-top: 0.5rem;
+    font-size: 0.78rem;
+    color: var(--text-muted);
+    letter-spacing: 0.02em;
+}
 
 /* Trip card header */
 .sell-trip-header {

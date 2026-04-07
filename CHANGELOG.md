@@ -2,6 +2,13 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-04-07 — Feature: Sell plan travel route suggestion
+
+- **Route heuristic:** When the sell optimizer groups items across multiple cities, a suggested travel route is shown based on Royal Continent geography (Caerleon → Martlock → Fort Sterling → Thetford → Lymhurst → Bridgewatch → Brecilien → Black Market).
+- **Route in summary:** Displayed as a subtle hint line below the sell plan summary bar.
+- **Route in clipboard:** "Copy All Trips" text now includes the suggested route at the top.
+- **Non-intrusive:** Only shows when 2+ cities are in the plan. Unknown cities are appended at the end.
+
 ### 2026-04-07 — Fix: Unknown items in chest captures + SMTP verified
 
 - **Special item mapping (Go client):** Negative numeric IDs (-1 through -9) now resolve to human-readable names: Silver, Gold, Fame Credit, Silver Pouch, Gold Pouch, Tome of Insight, Seasonal Token, etc.
