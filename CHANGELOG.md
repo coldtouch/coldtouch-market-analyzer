@@ -2,6 +2,14 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-04-07 — UX: Inline Sale Recording Form
+
+- **Replaced `prompt()` dialogs:** The "+ Record Sale" button on tracked loot tabs now opens an inline form instead of three sequential browser prompts.
+- **Item dropdown:** Populated from the tab's actual items (deduplicated by item+quality, showing name and quantity). Includes a "Custom item ID" fallback option for items not in the list.
+- **Auto-fill quantity:** Selecting an item pre-fills the quantity field with the item's count from the tab.
+- **Quality preserved:** Quality is carried from the selected item (no longer hardcoded to 1).
+- **CSS:** New `.sale-inline-form`, `.sale-form-row`, `.sale-form-select`, `.sale-form-input`, `.sale-form-actions` classes matching the glassmorphism theme.
+
 ### 2026-04-07 — Feature: Feedback & Bug Report
 
 - **Floating feedback button:** Fixed bottom-right chat-bubble FAB opens a glassmorphism modal. Works on all tabs, no login required.
