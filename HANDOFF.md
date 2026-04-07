@@ -348,58 +348,88 @@ go build -v ./...
 
 ### High Priority
 - **Client GUID matching untested in live game** -- ContainerManageSubContainer GUID matching was coded but never verified in a real game session. If it fails, try mixed-endian byte-swap (same pattern as Character IDs in decodeCharacterID). Logs show `[ContainerManageSubContainer] guid=... len=...` -- if len=0 then there's no GUID in the packet.
-- **Latest changes not deployed** -- Feedback system and Loot Tab Tracker Phase 3 need `python deploy_saas.py` to go live.
-- **SMTP not configured on VPS** -- Email verification auto-approves. Need real SMTP credentials for production verification flow.
+- **Negative item ID mappings are guesses** -- IDs -1 to -9 mapped to Silver, Gold, Fame Credit, Silver Pouch, etc. based on community knowledge. Need live verification.
 
 ### Medium Priority
-- **Sale recording UX** -- `recordSale()` uses `prompt()` dialogs. Should be inline forms.
-- **UNKNOWN items** -- Negative numeric IDs (-6, -8, -9, etc.) in captures are likely silver pouches, seasonal tokens. Not in ao-bin-dumps.
-- **Portfolio stored XSS** -- `t.city` from localStorage is escaped, but the whole Portfolio tab needs another audit.
-- **Live Flip false positives** -- Stale Black Market prices occasionally trigger phantom flips.
 - **Transport volume data** -- `sample_count` is data frequency, not actual trade volume.
 
 ### Low Priority
-- **app.js is 7,128 lines** -- Could benefit from modularization
-- **Mobile responsive gaps** -- Loot Buyer, Profile, newer features may need mobile breakpoint tweaks
+- **app.js is 7,128+ lines** -- Could benefit from modularization
 - **Go client build pipeline** -- Manual `go build`, no CI/CD
+
+### RESOLVED (April 7 Session 9-10)
+- ~~Latest changes not deployed~~ -- DEPLOYED (3 deploys this session)
+- ~~SMTP not configured~~ -- CONFIRMED WORKING (`[SMTP] Mail transporter ready` in logs)
+- ~~Sale recording UX~~ -- Replaced prompt() with inline form (item dropdown from tab, auto-fill qty, quality preserved)
+- ~~UNKNOWN items~~ -- Special item map (-1 to -9) in Go client, filtered from addItem(), backend SPECIAL_ITEM_NAMES fallback
+- ~~Portfolio XSS~~ -- encodeURIComponent on img src, data-attr + event delegation for delete buttons
+- ~~Live Flip false positives~~ -- BM 3-min freshness, 4x global avg outlier check, always-validate broadcastFlip
+- ~~Mobile responsive gaps~~ -- Breakpoints added for sale form, manual entry, sell plan, capture cards
 
 ---
 
 ## 13. Roadmap (Next Up)
 
-### Immediate
-1. **Deploy latest changes** to VPS (feedback + Phase 3 tracker)
-2. **Live game test** of chest capture + Device Auth end-to-end
-3. **SMTP setup** for real email verification
+### Immediate — In-Game Testing
+1. **Live game test of chest capture** -- Go client → WebSocket → VPS → frontend. Verify GUID matching, tab names, item accuracy
+2. **Device Auth end-to-end test** -- Device code flow from Go client to browser approval
 
 ### Short Term
-4. **ReadMail opcode handler** in Go client -- capture sale completion mails, auto-match to tracked loot tabs
-5. **Sell plan travel order heuristic** -- suggest Bridgewatch -> Fort Sterling -> Caerleon route
-6. **Manual item entry fallback** on Loot Buyer tab (search + add without game client)
-7. **Inline sale recording form** (replace prompt() dialogs)
+3. **ReadMail opcode handler** in Go client -- capture sale completion mails, auto-match to tracked loot tabs
+4. **Go client GitHub Releases** -- automated builds for Windows/Mac/Linux via GitHub Actions
 
-### Medium Term
-8. **Custom client download page** on website -- setup guide, FAQ, comparison with AODP client
-9. **Capture mode toggle** in game client -- only capture when user explicitly activates
-10. **Go client GitHub Releases** -- automated builds for Windows/Mac/Linux
+### Major New Feature — Loot Logger Viewer
+5. **Forked:** https://github.com/coldtouch/ao-loot-logger (GPL-3.0, cloned to `D:\Coding\ao-loot-logger\`)
+6. **Go client additions:** Port EvOtherGrabbedLoot (opcode 275), EvNewCharacter (29), EvCharacterStats (143), OpInventoryMoveItem (29) for loot capture
+7. **Website Loot Logger tab:** Upload .txt files OR receive live loot data from custom client. Per-player breakdown with market values.
+8. **Killer feature — Loot Accountability Check:** Cross-reference loot log vs chest deposit. Show who picked up items that weren't deposited (green = deposited, red = missing).
+
+### Testing Commands
+```bash
+# Build Go client
+export PATH="$PATH:/c/Go/bin"
+cd D:\Coding\albiondata-client-custom
+go build -v -o albiondata-client-custom.exe .
+
+# Run with debug logging
+./albiondata-client-custom.exe -debug
+
+# Key log lines to watch:
+# [GuildVault] N tabs detected: [...]        -- tab names captured
+# [BankVault] N tabs detected: [...]         -- personal bank tabs
+# [VaultInfo] extractGUIDArray: parsed N GUIDs -- GUIDs OK
+# [ContainerOpen] Matched to vault tab N: X  -- GUID match SUCCESS
+# [ContainerOpen] No vault tab GUID match    -- GUID match FAILED
+# [ContainerCapture] Captured N items        -- tab finalized
+# [VPSRelay] Authenticated as: ...           -- WS connected
+# [VPSRelay] Sent chest capture (N items)    -- sent to website
+```
 
 ---
 
 ## 14. Session History (Recent)
 
-### April 7, Session 8
-- Phase 3: Lifecycle Tracker -- DB tables (`loot_tabs`, `loot_tab_sales`), 5 API endpoints, "I Bought This" button, tracked tabs cards with progress bars, expandable detail, sale recording, status badges
+### April 7, Sessions 9-10 (Latest)
+- Deployed all pending changes (3 deploys)
+- Inline sale recording form (replaced prompt() dialogs with item dropdown from tab)
+- Unknown items mapped (negative IDs -1 to -9 in Go client, filtered from captures)
+- SMTP verified working on VPS
+- Sell plan travel route suggestion (geography-based route for multi-city sells)
+- Manual item entry on Loot Buyer (autocomplete search, quality/qty, duplicate merging)
+- Live flip false positives fix (BM 3-min freshness, 4x outlier, always-validate)
+- Portfolio XSS hardened (encodeURIComponent, data-attr delegation)
+- Mobile responsive breakpoints for newer features
+- Custom client download page in About tab (setup guide, AODP comparison table)
+- Capture mode toggle in Go client (--capture flag, config.yaml)
+- Feedback webhook moved to dedicated #website-feedback Discord channel
+- Forked ao-loot-logger to https://github.com/coldtouch/ao-loot-logger
+- Loot Logger Viewer feature spec saved to roadmap
 
-### April 7, Session 7
-- Phase 2: Sell Optimizer -- `buildSellPlan()`, `renderSellPlan()`, 85% instant/market threshold, city trip grouping, copy buttons
-
-### April 7, Session 6
-- Phase 1: Buy Decision Helper -- `loot-evaluate` hardened (stale_data, fixed no_buy_orders, volumeRef cache), verdict system, risk badges, auth-aware analyze
-
-### April 7, Session 5
-- Loot Buyer tab name fix (tabIndex field instead of slot-range splitting), captures scroll fix, Go client tab index tracking, matchContainerToVaultTab returns (name, index)
-
-### April 7, Latest
+### April 7, Sessions 5-8
+- Phase 3: Lifecycle Tracker -- DB tables, 5 API endpoints, tracked tabs, sale recording
+- Phase 2: Sell Optimizer -- buildSellPlan(), 85% threshold, trip grouping, copy buttons
+- Phase 1: Buy Decision Helper -- risk flags, verdict system, volume data
+- Loot Buyer tab name fix (tabIndex), Go client tab index tracking
 - Feedback & Bug Report system (floating FAB, Discord webhook)
 - Market Flipper freshness Max Age input fix
 

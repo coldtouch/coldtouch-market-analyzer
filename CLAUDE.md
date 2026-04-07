@@ -118,45 +118,49 @@
 
 ## Recent Session History
 
-### Cowork Session (April 7, 2026)
-- Created CLAUDE.md and HANDOFF.md for cross-session context continuity
-- Fixed .env VPS_IP to 5.189.189.71 (new Contabo VPS 20)
-- Preparing to deploy latest changes
+### Code Tab Sessions 9-10 (April 7, 2026 — Latest)
+- Deployed all pending changes (3 deploys). SMTP confirmed working.
+- Inline sale recording form (replaced prompt() with item dropdown)
+- Unknown items mapped (-1 to -9 in Go client, filtered from captures, backend fallback names)
+- Sell plan travel route suggestion (geography-based for multi-city sells)
+- Manual item entry on Loot Buyer (autocomplete, quality/qty, duplicate merging)
+- Live flip false positives fix (BM 3-min freshness, 4x outlier, always-validate)
+- Portfolio XSS hardened (encodeURIComponent, data-attr delegation)
+- Mobile responsive breakpoints for newer features
+- Custom client download page in About tab (setup guide, AODP comparison)
+- Capture mode toggle in Go client (--capture flag, config.yaml)
+- Feedback webhook → dedicated #website-feedback Discord channel
+- Forked ao-loot-logger → https://github.com/coldtouch/ao-loot-logger (D:\Coding\ao-loot-logger\)
+- Go client exe built and ready: D:\Coding\albiondata-client-custom\albiondata-client-custom.exe
 
-### Code Tab Sessions (April 7, 2026)
-- Feedback & Bug Report system (floating FAB, Discord webhook, rate-limited)
-- Fixed Market Flipper freshness Max Age input
-- Phase 3: Loot Tab Lifecycle Tracker — DB tables, 5 API endpoints, tracked tabs UI, sale recording
-- Phase 2: Sell Optimizer — buildSellPlan(), 85% threshold, trip grouping, copy buttons
-- Phase 1: Buy Decision Helper — risk flags, verdict system, volume data
+### Code Tab Sessions 5-8 (April 7, 2026)
+- Feedback & Bug Report system, Market Flipper freshness fix
+- Phase 3: Lifecycle Tracker, Phase 2: Sell Optimizer, Phase 1: Buy Decision Helper
 - Loot Buyer tab name fix (tabIndex), Go client tab index tracking
 
 ### Previous Sessions
-- April 6: Transport freshness filter, live flip validation, volume awareness, sell strategy toggle
+- April 6: Transport freshness, live flip validation, volume awareness, sell strategy, historical analytics
 - April 5: Email verification, user profile, live flips, user registration, Discord alert gating
-- April 4: Critical DB bloat fix (22M rows → 100% CPU), OAuth timeout fixes, compaction overhaul
-- April 3: Manual OAuth2 implementation, custom domain albionaitool.xyz, VPS responsiveness fixes
+- April 4: Critical DB bloat fix (22M rows → 100% CPU), compaction overhaul
+- April 3: Manual OAuth2, custom domain albionaitool.xyz
 
 ## TODO / Unfinished Work
 
-### High Priority
-- [ ] **Deploy latest changes** — Feedback system + Loot Tab Tracker Phase 3 need deploying. Also need `DISCORD_FEEDBACK_WEBHOOK` env var set.
-- [ ] **In-game testing of chest capture system** — Full flow: Go client → WebSocket → VPS → frontend. Test GUID matching, Device Auth, tab name resolution. If GUID matching fails, try mixed-endian byte-swap.
-- [ ] **ReadMail opcode handler** — Capture sale completion mail notifications in Go client, auto-match sold items to active loot tabs. Skipped because it requires in-game testing.
+### Immediate — In-Game Testing Required
+- [ ] **Live game test of chest capture** — Go client → WS → VPS → frontend. Test GUID matching, tab names, item accuracy. If GUID matching fails, try mixed-endian byte-swap. Exe ready at `albiondata-client-custom.exe -debug`
+- [ ] **Device Auth end-to-end test** — device code flow from Go client to browser approval
+- [ ] **Verify negative item ID mappings** — IDs -1 to -9 are guesses, need live verification
 
-### Medium Priority
-- [ ] **SMTP email verification on VPS** — Currently auto-verifies. SMTP is configured in .env but needs VPS env vars set.
-- [ ] **Loot Tab sale recording UX** — Replace `prompt()` dialogs with inline forms
-- [ ] **UNKNOWN items in captures** — Negative numeric IDs (-6, -8, -9) are likely silver pouches/seasonal tokens, not in ao-bin-dumps
-- [ ] **Live Flip false positives** — Stale BM prices occasionally trigger phantom flips
-- [ ] **Portfolio Tracker XSS audit** — t.city from localStorage escaped, but full tab needs another pass
+### Short Term
+- [ ] **ReadMail opcode handler** — capture sale mail notifications, auto-match to tracked loot tabs
+- [ ] **Go client GitHub Releases** — automated builds via GitHub Actions
 
-### Short-Term Roadmap
-- [ ] Sell plan travel order heuristic (suggest Bridgewatch → Fort Sterling → Caerleon route)
-- [ ] Manual item entry fallback on Loot Buyer (search + add without game client)
-- [ ] Custom client download page on website (setup guide, FAQ)
-- [ ] Capture mode toggle in game client (only capture when user activates)
-- [ ] Go client GitHub Releases (automated builds)
+### Major New Feature — Loot Logger Viewer
+- [ ] **Go client:** Port EvOtherGrabbedLoot (275), EvNewCharacter (29), EvCharacterStats (143), OpInventoryMoveItem (29)
+- [ ] **Website tab:** Upload .txt files OR live data. Per-player breakdown with market values.
+- [ ] **Loot Accountability Check:** Cross-reference loot log vs chest deposit → who picked up items that weren't deposited
+- [ ] **Source repo:** https://github.com/coldtouch/ao-loot-logger (GPL-3.0, local: D:\Coding\ao-loot-logger\)
+- [ ] **Txt format:** `timestamp_utc;looted_by__alliance;looted_by__guild;looted_by__name;item_id;item_name;quantity;looted_from__alliance;looted_from__guild;looted_from__name`
 
 ## Learned Patterns & Observations
 > Accumulated knowledge from working sessions. Add new observations here.
