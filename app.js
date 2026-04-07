@@ -4722,7 +4722,7 @@ function renderTrackedTabDetail(tab) {
                 <span>Net: <strong style="color:${netColor};">${netLabel}s</strong></span>
             </div>
             <div style="display:flex; gap:0.5rem; align-items:center;" onclick="event.stopPropagation()">
-                <button class="btn-small-accent" onclick="recordSale(${tab.id})">+ Record Sale</button>
+                <button class="btn-small-accent" onclick="showSaleForm(${tab.id})">+ Record Sale</button>
                 <select class="loot-status-select" onchange="updateTabStatus(${tab.id}, this.value)">
                     <option value="open" ${tab.status === 'open' ? 'selected' : ''}>Open</option>
                     <option value="partial" ${tab.status === 'partial' ? 'selected' : ''}>Partial</option>
@@ -4735,30 +4735,119 @@ function renderTrackedTabDetail(tab) {
     </div>`;
 }
 
-async function recordSale(tabId) {
-    const itemId = prompt('Item ID (e.g. T5_BAG):');
-    if (!itemId || !itemId.trim()) return;
-    const qtyStr = prompt('Quantity:', '1');
-    if (qtyStr === null) return;
-    const qty = Math.max(1, parseInt(qtyStr) || 1);
-    const priceStr = prompt('Sale price per unit (silver):');
-    if (priceStr === null) return;
-    const price = parseInt(priceStr);
-    if (!price || price <= 0) { alert('Enter a valid sale price.'); return; }
+function showSaleForm(tabId) {
+    const existing = document.getElementById(`sale-form-${tabId}`);
+    if (existing) { existing.remove(); return; } // toggle off
+
+    const detail = document.getElementById(`loot-tracked-detail-${tabId}`);
+    if (!detail || detail.style.display === 'none') return;
+
+    // Find tab data from the detail endpoint cache — re-fetch items
+    fetch(`${VPS_BASE}/api/loot-tab/${tabId}`, { headers: authHeaders() })
+        .then(r => r.json())
+        .then(tab => {
+            if (!tab.items || !tab.items.length) return;
+
+            // Build item options grouped — deduplicate by itemId+quality, sum quantities
+            const grouped = {};
+            for (const it of tab.items) {
+                const key = it.itemId + '_' + (it.quality || 1);
+                if (!grouped[key]) grouped[key] = { ...it, quantity: 0 };
+                grouped[key].quantity += (it.quantity || 1);
+            }
+            const opts = Object.values(grouped);
+
+            const form = document.createElement('div');
+            form.id = `sale-form-${tabId}`;
+            form.className = 'sale-inline-form';
+            form.onclick = e => e.stopPropagation();
+            form.innerHTML = `
+                <div class="sale-form-row">
+                    <label class="sale-form-label">Item</label>
+                    <select id="sale-item-${tabId}" class="sale-form-select">
+                        ${opts.map(o => {
+                            const name = (typeof itemNames !== 'undefined' && itemNames[o.itemId]) || o.itemId;
+                            const qLbl = (o.quality || 1) > 1 ? ` q${o.quality}` : '';
+                            return `<option value="${esc(o.itemId)}" data-quality="${o.quality || 1}" data-qty="${o.quantity}">${esc(name)}${qLbl} (×${o.quantity})</option>`;
+                        }).join('')}
+                        <option value="__custom__">— Custom item ID —</option>
+                    </select>
+                </div>
+                <div id="sale-custom-row-${tabId}" class="sale-form-row" style="display:none;">
+                    <label class="sale-form-label">Item ID</label>
+                    <input type="text" id="sale-custom-id-${tabId}" class="sale-form-input" placeholder="e.g. T5_BAG">
+                </div>
+                <div class="sale-form-row">
+                    <label class="sale-form-label">Qty</label>
+                    <input type="number" id="sale-qty-${tabId}" class="sale-form-input sale-form-qty" value="${opts[0]?.quantity || 1}" min="1">
+                </div>
+                <div class="sale-form-row">
+                    <label class="sale-form-label">Price/ea</label>
+                    <input type="number" id="sale-price-${tabId}" class="sale-form-input" placeholder="Silver per unit" min="1">
+                </div>
+                <div class="sale-form-actions">
+                    <button class="btn-small-accent" id="sale-submit-${tabId}">Save Sale</button>
+                    <button class="btn-small-danger" onclick="document.getElementById('sale-form-${tabId}').remove()">Cancel</button>
+                </div>
+            `;
+
+            // Insert form before sales list
+            detail.querySelector('.sale-inline-form')?.remove();
+            detail.insertBefore(form, detail.firstChild);
+
+            // Wire up item dropdown → auto-fill qty
+            const sel = document.getElementById(`sale-item-${tabId}`);
+            const customRow = document.getElementById(`sale-custom-row-${tabId}`);
+            sel.addEventListener('change', () => {
+                if (sel.value === '__custom__') {
+                    customRow.style.display = '';
+                    document.getElementById(`sale-qty-${tabId}`).value = 1;
+                } else {
+                    customRow.style.display = 'none';
+                    const opt = sel.selectedOptions[0];
+                    document.getElementById(`sale-qty-${tabId}`).value = opt.dataset.qty || 1;
+                }
+            });
+
+            // Submit
+            document.getElementById(`sale-submit-${tabId}`).addEventListener('click', () => submitSaleForm(tabId));
+        })
+        .catch(() => {});
+}
+
+async function submitSaleForm(tabId) {
+    const sel = document.getElementById(`sale-item-${tabId}`);
+    let itemId = sel.value;
+    let quality = parseInt(sel.selectedOptions[0]?.dataset?.quality) || 1;
+
+    if (itemId === '__custom__') {
+        itemId = document.getElementById(`sale-custom-id-${tabId}`)?.value?.trim();
+        quality = 1;
+        if (!itemId) return;
+    }
+
+    const qty = Math.max(1, parseInt(document.getElementById(`sale-qty-${tabId}`).value) || 1);
+    const price = parseInt(document.getElementById(`sale-price-${tabId}`).value);
+    if (!price || price <= 0) return;
+
+    const btn = document.getElementById(`sale-submit-${tabId}`);
+    if (btn) { btn.disabled = true; btn.textContent = 'Saving...'; }
 
     try {
         const res = await fetch(`${VPS_BASE}/api/loot-tab/${tabId}/sale`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', ...authHeaders() },
-            body: JSON.stringify({ itemId: itemId.trim(), quality: 1, quantity: qty, salePrice: price })
+            body: JSON.stringify({ itemId, quality, quantity: qty, salePrice: price })
         });
         const d = await res.json();
         if (!res.ok) throw new Error(d.error || 'Failed');
-        // Reload detail and card list
+        // Remove form and reload
+        document.getElementById(`sale-form-${tabId}`)?.remove();
         const detail = document.getElementById(`loot-tracked-detail-${tabId}`);
-        if (detail) detail.style.display = 'none'; // collapse so re-click reloads
+        if (detail) detail.style.display = 'none'; // collapse so re-click reloads fresh
         loadTrackedTabs();
     } catch(e) {
+        if (btn) { btn.disabled = false; btn.textContent = 'Save Sale'; }
         alert('Failed to record sale: ' + e.message);
     }
 }
