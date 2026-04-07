@@ -3207,9 +3207,11 @@ async function init() {
     // Fresh filter mode shows/hides threshold dropdown
     const freshMode = document.getElementById('fresh-mode');
     const freshThresholdGroup = document.getElementById('fresh-threshold-group');
-    freshMode.addEventListener('change', () => {
+    const syncFreshThreshold = () => {
         freshThresholdGroup.style.display = freshMode.value === 'off' ? 'none' : '';
-    });
+    };
+    freshMode.addEventListener('change', syncFreshThreshold);
+    syncFreshThreshold(); // sync on page load
 
     // Arbitrage tab
     document.getElementById('arb-scan-btn').addEventListener('click', () => doArbScan());

@@ -2,6 +2,11 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-04-07 — Fix: Market Flipper freshness Max Age input restored
+
+- **Root cause:** `fresh-threshold-group` had `style="display:none;"` in HTML but `init()` never ran the show/hide sync on load — so the Max Age dropdown was permanently hidden until the user manually changed the Fresh Filter mode dropdown.
+- **Fix:** Extracted `syncFreshThreshold()` from the `change` listener and called it immediately on load in `app.js`. Removed the redundant inline `display:none` from the HTML so CSS/JS state is the single source of truth.
+
 ### 2026-04-07 — Phase 3: Loot Tab Lifecycle Tracker
 
 - **DB tables:** `loot_tabs (user_id, tab_name, city, purchase_price, items_json, purchased_at, status)` and `loot_tab_sales (loot_tab_id, item_id, quality, quantity, sale_price, sold_at)` added via SQLite `CREATE TABLE IF NOT EXISTS`.
