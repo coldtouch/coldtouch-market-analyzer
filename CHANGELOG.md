@@ -2,6 +2,13 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-04-07 — Fix: Unknown items in chest captures + SMTP verified
+
+- **Special item mapping (Go client):** Negative numeric IDs (-1 through -9) now resolve to human-readable names: Silver, Gold, Fame Credit, Silver Pouch, Gold Pouch, Tome of Insight, Seasonal Token, etc.
+- **Special items filtered from captures:** `addItem()` in the Go client now skips internal/currency items (silver, gold, fame credits) since they aren't tradable on the market and would clutter loot analysis.
+- **Backend friendly names:** `getFriendlyName()` now has a `SPECIAL_ITEM_NAMES` fallback map so any special items that reach the backend display proper names instead of raw IDs.
+- **SMTP verified working:** Confirmed `[SMTP] Mail transporter ready` in VPS logs — email verification is live, no longer auto-approving accounts.
+
 ### 2026-04-07 — UX: Inline Sale Recording Form
 
 - **Replaced `prompt()` dialogs:** The "+ Record Sale" button on tracked loot tabs now opens an inline form instead of three sequential browser prompts.
