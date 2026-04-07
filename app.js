@@ -7053,4 +7053,76 @@ function generateShoppingList(recipe, itemId) {
     content.innerHTML = html;
 }
 
+// ===== FEEDBACK MODAL =====
+function openFeedbackModal() {
+    document.getElementById('feedback-modal').classList.remove('hidden');
+    document.getElementById('feedback-message').focus();
+}
+
+function closeFeedbackModal() {
+    document.getElementById('feedback-modal').classList.add('hidden');
+    const status = document.getElementById('feedback-status');
+    status.className = 'feedback-status hidden';
+    status.textContent = '';
+}
+
+document.getElementById('feedback-message').addEventListener('input', function() {
+    document.getElementById('feedback-char-count').textContent = `${this.value.length} / 1000`;
+});
+
+document.getElementById('feedback-modal').addEventListener('click', function(e) {
+    if (e.target === this) closeFeedbackModal();
+});
+
+document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape' && !document.getElementById('feedback-modal').classList.contains('hidden')) {
+        closeFeedbackModal();
+    }
+});
+
+async function submitFeedback() {
+    const type = document.getElementById('feedback-type').value;
+    const message = document.getElementById('feedback-message').value.trim();
+    const status = document.getElementById('feedback-status');
+    const btn = document.getElementById('feedback-submit-btn');
+
+    if (message.length < 5) {
+        status.textContent = 'Message must be at least 5 characters.';
+        status.className = 'feedback-status error';
+        return;
+    }
+
+    btn.disabled = true;
+    btn.textContent = 'Submitting...';
+    status.className = 'feedback-status hidden';
+
+    try {
+        const headers = { 'Content-Type': 'application/json' };
+        const token = localStorage.getItem('albion_auth_token');
+        if (token) headers['Authorization'] = 'Bearer ' + token;
+
+        const res = await fetch(VPS_BASE + '/api/feedback', {
+            method: 'POST',
+            headers,
+            body: JSON.stringify({ type, message })
+        });
+        const data = await res.json();
+        if (!res.ok) {
+            status.textContent = esc(data.error || 'Submission failed.');
+            status.className = 'feedback-status error';
+        } else {
+            status.textContent = 'Thanks! Your feedback was submitted.';
+            status.className = 'feedback-status success';
+            document.getElementById('feedback-message').value = '';
+            document.getElementById('feedback-char-count').textContent = '0 / 1000';
+        }
+    } catch(e) {
+        status.textContent = 'Network error. Please try again.';
+        status.className = 'feedback-status error';
+    } finally {
+        btn.disabled = false;
+        btn.textContent = 'Submit';
+    }
+}
+
 window.addEventListener('load', init);

@@ -3932,3 +3932,89 @@ footer {
     border-color: var(--accent);
 }
 
+/* ====== FEEDBACK FAB & MODAL ====== */
+.feedback-fab {
+    position: fixed;
+    bottom: 1.5rem;
+    right: 1.5rem;
+    width: 3rem;
+    height: 3rem;
+    border-radius: 50%;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-color);
+    color: var(--text-secondary);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 500;
+    transition: background var(--transition), color var(--transition), border-color var(--transition), transform var(--transition);
+    box-shadow: 0 2px 12px rgba(0, 0, 0, 0.4);
+}
+.feedback-fab:hover {
+    background: var(--bg-card);
+    border-color: var(--accent);
+    color: var(--accent);
+    transform: scale(1.08);
+}
+.feedback-modal-content {
+    max-width: 480px;
+}
+.feedback-modal-title {
+    font-size: 1.2rem;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin-bottom: 0.25rem;
+}
+.feedback-modal-sub {
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+    margin-bottom: 1.25rem;
+}
+.feedback-form {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+}
+.feedback-textarea {
+    width: 100%;
+    padding: 0.65rem 0.75rem;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius);
+    color: var(--text-primary);
+    font-family: inherit;
+    font-size: 0.9rem;
+    resize: vertical;
+    min-height: 110px;
+    transition: border-color var(--transition);
+}
+.feedback-textarea:focus {
+    outline: none;
+    border-color: var(--accent);
+}
+.feedback-char-count {
+    display: block;
+    text-align: right;
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    margin-top: 0.25rem;
+}
+.feedback-status {
+    padding: 0.65rem 0.9rem;
+    border-radius: var(--radius);
+    font-size: 0.875rem;
+    text-align: center;
+}
+.feedback-status.hidden { display: none; }
+.feedback-status.success {
+    background: var(--profit-green-dim);
+    color: var(--profit-green);
+    border: 1px solid rgba(74, 222, 128, 0.25);
+}
+.feedback-status.error {
+    background: var(--loss-red-dim);
+    color: var(--loss-red);
+    border: 1px solid rgba(248, 113, 113, 0.25);
+}
+
