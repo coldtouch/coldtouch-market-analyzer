@@ -486,7 +486,7 @@
                         <option value="both">Both Fresh</option>
                     </select>
                 </div>
-                <div class="control-group" id="fresh-threshold-group" style="display:none;">
+                <div class="control-group" id="fresh-threshold-group">
                     <label for="fresh-threshold">Max Age</label>
                     <select id="fresh-threshold">
                         <option value="15">15 min</option>
@@ -1674,6 +1674,13 @@
                 <div class="about-section">
                     <h2 class="about-heading">Changelog</h2>
                     <div class="changelog-list">
+                        <div class="changelog-entry">
+                            <div class="changelog-date">April 7, 2026</div>
+                            <div class="changelog-title">Fix: Market Flipper freshness Max Age input restored</div>
+                            <ul>
+                                <li>Max Age dropdown was not visible on page load due to missing initial state sync &mdash; fixed</li>
+                            </ul>
+                        </div>
                         <div class="changelog-entry">
                             <div class="changelog-date">April 7, 2026</div>
                             <div class="changelog-title">Phase 3: Loot Tab Lifecycle Tracker</div>
