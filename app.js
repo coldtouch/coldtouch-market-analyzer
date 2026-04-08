@@ -4383,16 +4383,76 @@ function selectLootCaptureUI(titleText, items) {
 }
 
 function renderLootItemRows(items) {
-    return items.map(item => {
+    return items.map((item, i) => {
         const qualName = item.quality > 1 ? ` q${item.quality}` : '';
         const iconUrl = `https://render.albiononline.com/v1/item/${encodeURIComponent(item.itemId)}.png?quality=${item.quality}`;
         const name = getFriendlyName(item.itemId) || item.itemId;
-        return `<div class="loot-item-row">
+        const safeId = esc(item.itemId);
+        return `<div class="loot-item-row" onclick="toggleLootItemDetail(this, '${safeId}', ${item.quality || 1})" style="cursor:pointer;">
             <img src="${iconUrl}" class="loot-item-icon" loading="lazy" onerror="this.style.display='none'">
             <span class="loot-item-name">${esc(name)}${qualName}</span>
             <span class="loot-item-qty">x${item.quantity}</span>
         </div>`;
     }).join('');
+}
+
+async function toggleLootItemDetail(rowEl, itemId, quality) {
+    // If already expanded, collapse
+    const existing = rowEl.nextElementSibling;
+    if (existing && existing.classList.contains('loot-item-detail')) {
+        existing.remove();
+        return;
+    }
+    // Remove any other open detail
+    rowEl.closest('.loot-items-grid')?.querySelectorAll('.loot-item-detail').forEach(d => d.remove());
+
+    const detail = document.createElement('div');
+    detail.className = 'loot-item-detail';
+    detail.innerHTML = '<div style="padding:0.4rem 0.85rem; font-size:0.72rem; color:var(--text-muted);">Loading...</div>';
+    rowEl.after(detail);
+
+    try {
+        const server = document.getElementById('server-select')?.value || 'europe';
+        const apiBase = { west: 'https://west.albion-online-data.com/api/v2/stats/prices', east: 'https://east.albion-online-data.com/api/v2/stats/prices', europe: 'https://europe.albion-online-data.com/api/v2/stats/prices' }[server] || 'https://europe.albion-online-data.com/api/v2/stats/prices';
+        const res = await fetch(`${apiBase}/${encodeURIComponent(itemId)}.json?qualities=${quality}`);
+        const data = await res.json();
+
+        if (!data || data.length === 0) {
+            detail.innerHTML = `<div class="loot-item-detail-inner">
+                <span style="color:var(--text-muted);">No market data available</span>
+                <a class="loot-detail-link" onclick="event.stopPropagation(); switchToCompare('${esc(itemId)}')">View in Market Browser →</a>
+            </div>`;
+            return;
+        }
+
+        // Find best sell (lowest sell_price_min) and best buy (highest buy_price_max)
+        let bestSell = null, bestBuy = null;
+        for (const entry of data) {
+            if (entry.sell_price_min > 0 && (!bestSell || entry.sell_price_min < bestSell.sell_price_min)) bestSell = entry;
+            if (entry.buy_price_max > 0 && (!bestBuy || entry.buy_price_max > bestBuy.buy_price_max)) bestBuy = entry;
+        }
+
+        const sellStr = bestSell ? `${bestSell.sell_price_min.toLocaleString()}s <span style="color:var(--text-muted);">(${bestSell.city})</span>` : '<span style="color:var(--text-muted);">—</span>';
+        const buyStr = bestBuy ? `${bestBuy.buy_price_max.toLocaleString()}s <span style="color:var(--text-muted);">(${bestBuy.city})</span>` : '<span style="color:var(--text-muted);">—</span>';
+
+        // Freshness
+        const freshDate = bestSell?.sell_price_min_date || bestBuy?.buy_price_max_date || '';
+        const freshStr = freshDate ? timeAgo(freshDate) : 'unknown';
+
+        detail.innerHTML = `<div class="loot-item-detail-inner">
+            <div class="loot-detail-prices">
+                <span>Sell: <strong style="color:var(--profit-green);">${sellStr}</strong></span>
+                <span>Buy: <strong style="color:var(--accent);">${buyStr}</strong></span>
+                <span style="color:var(--text-muted);">Fresh: ${freshStr}</span>
+            </div>
+            <a class="loot-detail-link" onclick="event.stopPropagation(); switchToCompare('${esc(itemId)}')">View in Market Browser →</a>
+        </div>`;
+    } catch (e) {
+        detail.innerHTML = `<div class="loot-item-detail-inner">
+            <span style="color:var(--loss-red);">Failed to load</span>
+            <a class="loot-detail-link" onclick="event.stopPropagation(); switchToCompare('${esc(itemId)}')">View in Market Browser →</a>
+        </div>`;
+    }
 }
 
 async function analyzeLoot() {
