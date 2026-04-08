@@ -15,7 +15,8 @@ const CHART_API_URLS = {
 };
 
 const CITIES = ['Martlock', 'Thetford', 'Fort Sterling', 'Lymhurst', 'Bridgewatch', 'Caerleon', 'Brecilien', 'Black Market'];
-const TAX_RATE = 0.065;
+const TAX_RATE = 0.03;      // 3% market transaction tax (insta-sell to buy orders)
+const SETUP_FEE = 0.025;    // 2.5% listing setup fee (sell orders only; combined = 5.5%)
 const ITEMS_PER_PAGE = 48;
 const MAX_INVENTORY_SLOTS = 48;
 
@@ -758,7 +759,7 @@ function processArbitrage(data, quality, tier, enchantment, includeBM, buyCityFi
                     let soTax = 0;
                     let soProfit = 0;
                     if (destSellOrder > 0) {
-                        soTax = destSellOrder * TAX_RATE;
+                        soTax = destSellOrder * (TAX_RATE + SETUP_FEE); // 5.5% for sell orders
                         soProfit = destSellOrder - priceBuy - soTax;
                     }
 
@@ -876,14 +877,14 @@ function buildArbitrageCardDOM(trade) {
         </div>
         <div class="profit-section">
             <div style="font-size:0.85rem; font-weight:bold; color:var(--text-muted); margin-bottom:0.3rem;">Instant Sell Profit</div>
-            <div class="profit-row"><span>Tax (6.5%):</span><span class="text-red">-${Math.floor(trade.tax).toLocaleString()} 💰</span></div>
+            <div class="profit-row"><span>Tax (3%):</span><span class="text-red">-${Math.floor(trade.tax).toLocaleString()} 💰</span></div>
             <div class="profit-row total"><span>Net Profit:</span><strong class="${trade.profit >= 0 ? 'text-green' : 'text-red'}">${Math.floor(trade.profit).toLocaleString()} 💰</strong></div>
             <div class="roi-row"><span>ROI:</span><strong class="${trade.roi >= 0 ? 'text-green' : 'text-red'}">${trade.roi.toFixed(1)}%</strong></div>
         </div>
         ${trade.destSellOrder > 0 ? `
         <div class="profit-section" style="border-top:1px solid var(--border); margin-top:0.5rem; padding-top:0.5rem;">
             <div style="font-size:0.85rem; font-weight:bold; color:var(--text-muted); margin-bottom:0.3rem;">Sell Order Profit</div>
-            <div class="profit-row"><span>Tax (6.5%):</span><span class="text-red">-${Math.floor(trade.soTax).toLocaleString()} 💰</span></div>
+            <div class="profit-row"><span>Tax+Setup (5.5%):</span><span class="text-red">-${Math.floor(trade.soTax).toLocaleString()} 💰</span></div>
             <div class="profit-row total"><span>Net Profit:</span><strong class="${trade.soProfit >= 0 ? 'text-green' : 'text-red'}">${Math.floor(trade.soProfit).toLocaleString()} 💰</strong></div>
             <div class="roi-row"><span>ROI:</span><strong class="${trade.soRoi >= 0 ? 'text-green' : 'text-red'}">${trade.soRoi.toFixed(1)}%</strong></div>
         </div>
@@ -1535,8 +1536,8 @@ function renderCraftDetail(itemId, recipe, data) {
             const sellPrice = p ? p.buyMax : 0;
             if (sellPrice > 0) {
                 const totalRevenue = sellPrice * outputQty;
-                const tax = totalRevenue * TAX_RATE;
-                const fee = cheapestTotal * (stationFee / 100);
+                const tax = totalRevenue * (TAX_RATE + SETUP_FEE); // 5.5% for sell orders
+                const fee = totalRevenue * (stationFee / 100);     // station fee on item value
                 const profit = totalRevenue - cheapestTotal - tax - fee;
                 const cls = profit >= 0 ? 'text-green' : 'text-red';
                 sellHTML += `<td class="${cls}"><strong>${Math.floor(profit).toLocaleString()}</strong></td>`;
@@ -1555,8 +1556,8 @@ function renderCraftDetail(itemId, recipe, data) {
         const p = finishedPrices[c];
         const sellPrice = p ? p.buyMax : 0;
         if (sellPrice > 0 && cheapestTotal !== Infinity) {
-            const tax = sellPrice * TAX_RATE;
-            const fee = cheapestTotal * (stationFee / 100);
+            const tax = sellPrice * (TAX_RATE + SETUP_FEE); // 5.5% for sell orders
+            const fee = sellPrice * (stationFee / 100);     // station fee on item value
             const profit = sellPrice - cheapestTotal - tax - fee;
             if (profit > bestProfit) {
                 bestProfit = profit;
@@ -1585,8 +1586,8 @@ function renderCraftDetail(itemId, recipe, data) {
         <div class="craft-summary-stats">
             <div class="stat-box"><div class="stat-label">Cheapest Materials</div><div class="stat-value">${cheapestTotal.toLocaleString()} 💰</div></div>
             <div class="stat-box"><div class="stat-label">Best Sell (${bestCity})</div><div class="stat-value text-accent">${bestSellPrice.toLocaleString()} 💰</div></div>
-            <div class="stat-box"><div class="stat-label">Tax (6.5%)</div><div class="stat-value text-red">-${Math.floor(bestSellPrice * TAX_RATE).toLocaleString()}</div></div>
-            ${stationFee > 0 ? `<div class="stat-box"><div class="stat-label">Station Fee (${stationFee}%)</div><div class="stat-value text-red">-${Math.floor(cheapestTotal * stationFee / 100).toLocaleString()}</div></div>` : ''}
+            <div class="stat-box"><div class="stat-label">Tax+Setup (5.5%)</div><div class="stat-value text-red">-${Math.floor(bestSellPrice * (TAX_RATE + SETUP_FEE)).toLocaleString()}</div></div>
+            ${stationFee > 0 ? `<div class="stat-box"><div class="stat-label">Station Fee (${stationFee}%)</div><div class="stat-value text-red">-${Math.floor(bestSellPrice * stationFee / 100).toLocaleString()}</div></div>` : ''}
             <div class="stat-box highlight"><div class="stat-label">Net Profit</div><div class="stat-value ${bestProfit >= 0 ? 'text-green' : 'text-red'}">${Math.floor(bestProfit).toLocaleString()} 💰</div></div>
             <div class="stat-box"><div class="stat-label">ROI</div><div class="stat-value ${bestProfit >= 0 ? 'text-green' : 'text-red'}">${roi}%</div></div>
         </div>
@@ -1673,8 +1674,8 @@ function processCrafting(data, tier, sortBy) {
             }
             if (missingMat) continue;
 
-            const tax = bestSellPrice * TAX_RATE;
-            const fee = totalMatCost * (stationFee / 100);
+            const tax = bestSellPrice * (TAX_RATE + SETUP_FEE); // 5.5% for sell orders
+            const fee = bestSellPrice * (stationFee / 100);     // station fee on item value
             const profit = bestSellPrice - totalMatCost - tax - fee;
             const roi = (profit / totalMatCost) * 100;
 
@@ -1759,7 +1760,7 @@ function renderCrafting(crafts) {
                 <span class="price text-accent">${Math.floor(craft.sellPrice).toLocaleString()} 💰</span>
             </div>
             <div class="profit-section">
-                <div class="profit-row"><span>Tax (6.5%):</span><span class="text-red">-${Math.floor(craft.tax).toLocaleString()} 💰</span></div>
+                <div class="profit-row"><span>Tax+Setup (5.5%):</span><span class="text-red">-${Math.floor(craft.tax).toLocaleString()} 💰</span></div>
                 ${craft.fee > 0 ? `<div class="profit-row"><span>Station Fee:</span><span class="text-red">-${Math.floor(craft.fee).toLocaleString()} 💰</span></div>` : ''}
                 <div class="profit-row total"><span>Net Profit:</span><strong class="${craft.profit >= 0 ? 'text-green' : 'text-red'}">${Math.floor(craft.profit).toLocaleString()} 💰</strong></div>
                 <div class="roi-row"><span>ROI:</span><strong class="${craft.roi >= 0 ? 'text-green' : 'text-red'}">${craft.roi.toFixed(1)}%</strong></div>
@@ -2376,7 +2377,7 @@ function renderBMFlips(trades) {
                 </div>
             </div>
             <div class="profit-section">
-                <div class="profit-row"><span>Tax (6.5%):</span><span class="text-red">-${Math.floor(trade.tax).toLocaleString()} silver</span></div>
+                <div class="profit-row"><span>Tax (3%):</span><span class="text-red">-${Math.floor(trade.tax).toLocaleString()} silver</span></div>
                 <div class="profit-row total"><span>Net Profit:</span><strong class="${trade.profit >= 0 ? 'text-green' : 'text-red'}">${Math.floor(trade.profit).toLocaleString()} silver</strong></div>
                 <div class="roi-row"><span>ROI:</span><strong class="${trade.roi >= 0 ? 'text-green' : 'text-red'}">${trade.roi.toFixed(1)}%</strong></div>
             </div>
@@ -2616,7 +2617,7 @@ async function calculateJournals() {
 
                 let soProfit = 0, soRoi = 0;
                 if (fullSellOrderPrice > 0 && emptyBuyPrice > 0) {
-                    const soTax = fullSellOrderPrice * TAX_RATE;
+                    const soTax = fullSellOrderPrice * (TAX_RATE + SETUP_FEE); // 5.5% for sell orders
                     soProfit = fullSellOrderPrice - emptyBuyPrice - soTax;
                     soRoi = (soProfit / emptyBuyPrice) * 100;
                 }
@@ -5228,13 +5229,15 @@ async function enrichAndRenderTransport(routes, budget, sortBy, mountCapacity, f
                 sellMode = 'instant';
             }
 
-            profitPerUnit = sellPrice - buyPrice - (sellPrice * TAX_RATE);
+            const effectiveTaxRate = sellMode === 'instant' ? TAX_RATE : (TAX_RATE + SETUP_FEE);
+            profitPerUnit = sellPrice - buyPrice - (sellPrice * effectiveTaxRate);
             if (profitPerUnit <= 0) continue;
             dateBuy = buyData.sellDate;
             isHistorical = false;
         }
 
-        const tax = sellPrice * TAX_RATE;
+        const effectiveTaxRate = sellMode === 'instant' ? TAX_RATE : (TAX_RATE + SETUP_FEE);
+        const tax = sellPrice * effectiveTaxRate;
         const roi = (profitPerUnit / buyPrice) * 100;
         const sellVolume = r.sell_volume || 0;
         const buyVolume = r.buy_volume || 0;
@@ -6814,7 +6817,7 @@ function renderPortfolio() {
         totalPL += stat.realizedPL;
         totalInvested += stat.totalSpent;
     }
-    const taxEstimate = Object.values(itemStats).reduce((sum, s) => sum + s.totalEarned * TAX_RATE, 0);
+    const taxEstimate = Object.values(itemStats).reduce((sum, s) => sum + s.totalEarned * (TAX_RATE + SETUP_FEE), 0);
     const netPL = totalPL - taxEstimate;
 
     summaryEl.innerHTML = `
@@ -6832,7 +6835,7 @@ function renderPortfolio() {
                 <div style="font-size:1.5rem; font-weight:800; color:${totalPL >= 0 ? 'var(--profit-green)' : 'var(--loss-red)'};">${totalPL >= 0 ? '+' : ''}${Math.floor(totalPL).toLocaleString()}</div>
             </div>
             <div style="background:var(--bg-card); border:1px solid var(--border-color); border-radius:var(--radius); padding:1rem; text-align:center;">
-                <div style="font-size:0.75rem; color:var(--text-secondary);">Net P/L (after ${(TAX_RATE*100).toFixed(1)}% tax)</div>
+                <div style="font-size:0.75rem; color:var(--text-secondary);">Net P/L (after ${((TAX_RATE+SETUP_FEE)*100).toFixed(1)}% tax+setup)</div>
                 <div style="font-size:1.5rem; font-weight:800; color:${netPL >= 0 ? 'var(--profit-green)' : 'var(--loss-red)'};">${netPL >= 0 ? '+' : ''}${Math.floor(netPL).toLocaleString()}</div>
             </div>
         </div>`;
