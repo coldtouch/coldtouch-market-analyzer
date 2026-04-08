@@ -4367,7 +4367,7 @@ async function analyzeLoot() {
         alert('Select a chest capture first.');
         return;
     }
-    if (!currentUser) {
+    if (!localStorage.getItem('albion_auth_token')) {
         const resultsDiv = document.getElementById('loot-results');
         if (resultsDiv) {
             resultsDiv.style.display = 'block';
@@ -4721,7 +4721,7 @@ function renderSellPlan(data, container) {
 // ====== LOOT TAB LIFECYCLE TRACKER ======
 
 async function loadTrackedTabs() {
-    if (!currentUser) return;
+    if (!localStorage.getItem('albion_auth_token')) return;
     const list = document.getElementById('loot-tracked-list');
     const empty = document.getElementById('loot-tracked-empty');
     if (!list) return;
