@@ -4255,35 +4255,46 @@ function renderLootCaptures() {
     }
     if (empty) empty.style.display = 'none';
 
-    // Build compact one-line rows for each capture — click to select + expand details below
-    let rows = [];
+    // If captures have vaultTabs, split items into per-tab groups
+    let cards = [];
     lootBuyerCaptures.forEach((cap, capIdx) => {
         const ago = timeAgo(new Date(cap.capturedAt).toISOString());
-        const equipCount = cap.items.filter(it => it.isEquipment).length;
-        const stackCount = cap.items.length - equipCount;
+        const hasDirectTabName = cap.tabName && cap.tabName.length > 0;
+        const hasTabs = !hasDirectTabName && cap.vaultTabs && cap.vaultTabs.length > 0;
 
-        // Resolve display name
-        let displayName = cap.customName || cap.tabName || '';
-        if (!displayName && cap.vaultTabs && cap.vaultTabs.length > 0) {
+        // Helper to build a compact card
+        const makeCard = (onclick, name, badge, itemCount, equipCount, stackCount, timeAgoStr) => {
+            return `<div class="loot-capture-card" onclick="${onclick}" style="cursor:pointer;">
+                <div style="display:flex; align-items:center; gap:0.4rem;">
+                    <span class="loot-card-title">${esc(name)}</span>
+                    ${badge ? `<span style="font-size:0.6rem; padding:0.1rem 0.35rem; background:var(--bg-elevated); border-radius:8px; color:var(--text-muted);">${badge}</span>` : ''}
+                </div>
+                <div class="loot-card-meta">${itemCount} items &bull; ${equipCount}⚔ ${stackCount}📦 &bull; ${timeAgoStr}</div>
+            </div>`;
+        };
+
+        if (hasDirectTabName) {
+            const equipCount = cap.items.filter(it => it.isEquipment).length;
+            const stackCount = cap.items.length - equipCount;
+            const badge = cap.isGuild ? 'Guild' : 'Bank';
+            cards.push(makeCard(`selectLootCapture(${capIdx})`, cap.tabName, badge, cap.items.length, equipCount, stackCount, ago));
+        } else if (hasTabs) {
             const tabIdx = typeof cap.tabIndex === 'number' ? cap.tabIndex : -1;
-            displayName = (tabIdx >= 0 && tabIdx < cap.vaultTabs.length && cap.vaultTabs[tabIdx].name)
+            const tabName = (tabIdx >= 0 && tabIdx < cap.vaultTabs.length && cap.vaultTabs[tabIdx].name)
                 ? cap.vaultTabs[tabIdx].name
                 : (tabIdx >= 0 ? `Tab ${tabIdx + 1}` : 'Chest Capture');
+            const equipCount = cap.items.filter(it => it.isEquipment).length;
+            const stackCount = cap.items.length - equipCount;
+            const vaultType = cap.isGuild ? 'Guild' : 'Bank';
+            const displayName = cap.customName || tabName;
+            cards.push(makeCard(`selectLootCapture(${capIdx})`, displayName, vaultType, cap.items.length, equipCount, stackCount, ago));
+        } else {
+            const equipCount = cap.items.filter(it => it.isEquipment).length;
+            const stackCount = cap.items.length - equipCount;
+            cards.push(makeCard(`selectLootCapture(${capIdx})`, `Chest Capture`, '', cap.items.length, equipCount, stackCount, ago));
         }
-        if (!displayName) displayName = 'Chest Capture';
-
-        const badge = cap.isGuild ? 'Guild' : (cap.vaultTabs ? 'Bank' : '');
-        const isSelected = lootSelectedCapture === cap;
-
-        rows.push(`<div class="loot-capture-row ${isSelected ? 'loot-capture-selected' : ''}" onclick="selectLootCapture(${capIdx})" style="cursor:pointer;">
-            <span class="loot-row-name">${esc(displayName)}</span>
-            ${badge ? `<span class="loot-row-badge">${badge}</span>` : ''}
-            <span class="loot-row-count">${cap.items.length} items</span>
-            <span class="loot-row-detail">${equipCount}⚔ ${stackCount}📦</span>
-            <span class="loot-row-time">${ago}</span>
-        </div>`);
     });
-    list.innerHTML = rows.join('');
+    list.innerHTML = cards.join('');
 }
 
 function renameLootCapture(index) {
