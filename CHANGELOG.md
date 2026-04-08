@@ -2,6 +2,17 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-04-09 — Workstream 1B: Analytics computation engine
+
+- **`price_analytics` table:** Stores pre-computed SMA 7d, SMA 30d, EMA 7d (α=0.25), VWAP 7d, price trend (%), and spread volatility per `(item_id, city, quality)`. Populated by `computeAnalytics()` which runs every 30 minutes.
+- **`price_hourly` OHLC table:** Stores open/high/low/close/avg/volume per hour for the 7–30 day window. Migrated from `price_averages hourly` during compaction.
+- **Three-tier retention (compactOldData rewrite):** Tier 1 = `price_averages hourly` (0–7 days, default). Tier 2 = `price_hourly` OHLC (7–30 days). Tier 3 = `price_averages daily` (30+ days, forever). Each tier explicitly deletes migrated rows after insertion.
+- **`computeAnalytics()` implementation:** SMA/VWAP/trend/spread volatility computed in a single SQL GROUP BY pass (memory-safe). EMA computed in JS batches of 100 combos with event-loop yields. Guard flag prevents concurrent runs.
+- **`checkDiskUsage()` disk safety:** Runs alongside compaction. Reads SQLite page size × page count to get exact DB size. Triggers aggressive compaction (3-day raw retention) at 10 GB; emergency compaction (1-day) at 20 GB.
+- **`GET /api/analytics/:itemId`:** Returns all pre-computed metrics. Optional `city` and `quality` query params. Without `city`, groups by city.
+- **`GET /api/price-history` upgraded:** Now returns `{ history, ohlc, analytics }` — the existing price series plus OHLC data from `price_hourly` and moving averages from `price_analytics`. Frontend updated for backward compatibility.
+- **`GET /api/admin/db-stats`** (JWT-protected): Returns DB size, row counts per table, oldest/newest timestamps, analytics running state.
+
 ### 2026-04-09 — Workstream 1A: VPS constraints lifted, analytics engine optimised
 
 - **Node heap raised:** `--max-old-space-size` increased from 2048 MB to 6144 MB to match new Contabo VPS 20 (11 GB RAM, 6 vCPUs).

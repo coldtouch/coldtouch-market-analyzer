@@ -671,40 +671,66 @@
             <div class="market-header">
                 <select id="chart-city-select" class="market-city-select dropdown"></select>
             </div>
-            
-            <div class="order-book-container">
-                <div class="order-column">
-                    <h3>Sell Orders</h3>
-                    <div class="order-table-header">
-                        <span>Price</span>
-                        <span>Amount</span>
+
+            <!-- Chart tab bar -->
+            <div class="chart-tab-bar">
+                <button class="chart-tab-btn active" data-chart-tab="live">Live Prices</button>
+                <button class="chart-tab-btn" data-chart-tab="analytics">Analytics</button>
+            </div>
+
+            <!-- Live Prices pane -->
+            <div id="chart-pane-live">
+                <div class="order-book-container">
+                    <div class="order-column">
+                        <h3>Sell Orders</h3>
+                        <div class="order-table-header">
+                            <span>Price</span>
+                            <span>Amount</span>
+                        </div>
+                        <div class="order-list" id="sell-orders-list"></div>
                     </div>
-                    <div class="order-list" id="sell-orders-list"></div>
+                    <div class="order-divider"></div>
+                    <div class="order-column">
+                        <h3>Buy Orders</h3>
+                        <div class="order-table-header">
+                            <span>Price</span>
+                            <span>Amount</span>
+                        </div>
+                        <div class="order-list" id="buy-orders-list"></div>
+                    </div>
                 </div>
-                <div class="order-divider"></div>
-                <div class="order-column">
-                    <h3>Buy Orders</h3>
-                    <div class="order-table-header">
-                        <span>Price</span>
-                        <span>Amount</span>
+
+                <div class="history-section">
+                    <h3>Market History</h3>
+                    <div class="chart-wrapper">
+                        <canvas id="priceChart"></canvas>
                     </div>
-                    <div class="order-list" id="buy-orders-list"></div>
+                    <div class="chart-footer">
+                        <div class="time-toggles">
+                            <label><input type="radio" name="chart-time" value="28" checked> 4 weeks</label>
+                            <label><input type="radio" name="chart-time" value="7"> 7 days</label>
+                            <label><input type="radio" name="chart-time" value="1"> 24 hours</label>
+                        </div>
+                        <div class="avg-price-display">
+                            Average Price: <span id="chart-avg-price" style="font-weight:bold;">0</span> 💰
+                        </div>
+                    </div>
                 </div>
             </div>
 
-            <div class="history-section">
-                <h3>Market History</h3>
+            <!-- Analytics pane -->
+            <div id="chart-pane-analytics" class="hidden">
+                <div class="analytics-legend" id="analytics-legend"></div>
                 <div class="chart-wrapper">
-                    <canvas id="priceChart"></canvas>
+                    <canvas id="analyticsChart"></canvas>
                 </div>
                 <div class="chart-footer">
                     <div class="time-toggles">
-                        <label><input type="radio" name="chart-time" value="28" checked> 4 weeks</label>
-                        <label><input type="radio" name="chart-time" value="7"> 7 days</label>
-                        <label><input type="radio" name="chart-time" value="1"> 24 hours</label>
+                        <label><input type="radio" name="analytics-time" value="30" checked> 30 days</label>
+                        <label><input type="radio" name="analytics-time" value="7"> 7 days</label>
                     </div>
                     <div class="avg-price-display">
-                        Average Price: <span id="chart-avg-price" style="font-weight:bold;">0</span> 💰
+                        Avg Price: <span id="analytics-avg-price" style="font-weight:bold;">—</span> 💰
                     </div>
                 </div>
             </div>
@@ -1736,6 +1762,19 @@
                 <div class="about-section">
                     <h2 class="about-heading">Changelog</h2>
                     <div class="changelog-list">
+                        <div class="changelog-entry">
+                            <div class="changelog-date">April 9, 2026</div>
+                            <div class="changelog-title">Analytics Computation Engine (Workstream 1B)</div>
+                            <ul>
+                                <li>New <strong>price_analytics</strong> table stores pre-computed SMA 7d/30d, EMA 7d, VWAP 7d, price trend, and spread volatility per item+city+quality — computed every 30 minutes</li>
+                                <li>New <strong>price_hourly</strong> OHLC table (open/high/low/close + volume) holds hourly data from 7–30 days old</li>
+                                <li>Three-tier data retention: raw hourly → price_hourly (7d) → daily (30d) → forever</li>
+                                <li>New <strong>GET /api/analytics/:itemId</strong> endpoint returns all pre-computed metrics with optional city/quality filters</li>
+                                <li><strong>GET /api/price-history</strong> now returns <code>{ history, ohlc, analytics }</code> — OHLC data and moving averages alongside the historical price series</li>
+                                <li>Disk safety: <strong>checkDiskUsage()</strong> runs every 2 hours — auto-reduces raw retention to 3 days at 10 GB, 1 day at 20 GB</li>
+                                <li>Admin endpoint <strong>GET /api/admin/db-stats</strong> (JWT-protected): DB size, row counts per table, oldest/newest timestamps</li>
+                            </ul>
+                        </div>
                         <div class="changelog-entry">
                             <div class="changelog-date">April 9, 2026</div>
                             <div class="changelog-title">VPS Upgrade — Performance &amp; Analytics Engine</div>
