@@ -9,6 +9,7 @@ All notable changes to the Coldtouch Market Analyzer will be documented in this 
 - **Removed 1M row LIMIT:** The defensive `LIMIT 1000000` cap on the price_averages spread query has been removed; the SQL aggregation approach no longer risks OOM from large result sets.
 - **Composite indexes added:** `idx_pa_item_city_ts ON price_averages(item_id, city, period_start)` and `idx_pa_spread_query ON price_averages(period_start, avg_sell, avg_buy)` speed up the spread query; `idx_ss_item_quality ON spread_stats(item_id, quality)` speeds up flipper lookups. All use `CREATE INDEX IF NOT EXISTS` — safe to re-run.
 - **WAL checkpoint added:** `PRAGMA wal_checkpoint(TRUNCATE)` now runs every 6 hours to prevent WAL file bloat on a write-heavy database.
+- **Conditional VACUUM:** After compaction, if more than 100,000 hourly rows were deleted (~500 MB), a `VACUUM` is scheduled during the 2–4 AM UTC low-traffic window to reclaim disk pages. Skips if a VACUUM is already queued.
 
 ### 2026-04-09 — Crafting Revamp Phase 1: Formula fixes and tax rate correction
 

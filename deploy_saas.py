@@ -2668,6 +2668,45 @@ function runWalCheckpoint() {
 }
 setInterval(runWalCheckpoint, 6 * 60 * 60 * 1000);
 
+// === VACUUM HELPERS ===
+// Only schedule a VACUUM if a meaningful amount of data was just deleted.
+// VACUUM reclaims disk pages but locks the DB, so we run it during 2-4 AM UTC.
+const VACUUM_ROW_THRESHOLD = 100000; // ~500 MB heuristic at ~5 KB/row average
+
+function msUntilUtcHour(targetHour) {
+  const now = new Date();
+  const next = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), targetHour, 0, 0, 0));
+  if (next <= now) next.setUTCDate(next.getUTCDate() + 1);
+  return next - now;
+}
+
+let vacuumScheduled = false; // prevent stacking multiple scheduled VACUUMs
+
+function runVacuum() {
+  vacuumScheduled = false;
+  if (dbBusy) { setTimeout(runVacuum, 30 * 60 * 1000); return; }
+  console.log('[VACUUM] Running VACUUM to reclaim disk space...');
+  db.run('VACUUM', (err) => {
+    if (err) console.error('[VACUUM] Error:', err.message);
+    else console.log('[VACUUM] Complete — disk space reclaimed');
+  });
+}
+
+function scheduleVacuumIfNeeded(rowsDeleted) {
+  if (rowsDeleted < VACUUM_ROW_THRESHOLD || vacuumScheduled) return;
+  const utcHour = new Date().getUTCHours();
+  if (utcHour >= 2 && utcHour < 4) {
+    console.log(`[VACUUM] ${rowsDeleted} rows deleted — running VACUUM now (low-traffic window)`);
+    vacuumScheduled = true;
+    setTimeout(runVacuum, 0);
+  } else {
+    const delay = msUntilUtcHour(2);
+    console.log(`[VACUUM] ${rowsDeleted} rows deleted — VACUUM scheduled for next 2 AM UTC (~${Math.round(delay/3600000)}h)`);
+    vacuumScheduled = true;
+    setTimeout(runVacuum, delay);
+  }
+}
+
 // === DATA COMPACTION (runs every 2 hours) ===
 function compactOldData() {
   const now = Date.now();
@@ -2698,8 +2737,11 @@ function compactOldData() {
       }
       db.run('COMMIT', () => {
         stmt.finalize();
-        db.run(`DELETE FROM price_averages WHERE period_type = 'hourly' AND period_start < ?`, [thirtyDaysAgo], (err2) => {
-          if (!err2) console.log(`[Compaction] Compacted ${rows.length} daily averages, deleted old hourly data`);
+        // Use a regular function (not arrow) so this.changes is available
+        db.run(`DELETE FROM price_averages WHERE period_type = 'hourly' AND period_start < ?`, [thirtyDaysAgo], function(err2) {
+          const deleted = this.changes || 0;
+          if (!err2) console.log(`[Compaction] Compacted ${rows.length} daily averages, deleted ${deleted} old hourly rows`);
+          scheduleVacuumIfNeeded(deleted);
         });
       });
     }

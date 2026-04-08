@@ -1743,7 +1743,8 @@
                                 <li>Node heap raised to 6 GB to match new Contabo VPS 20 (11 GB RAM, 6 vCPUs)</li>
                                 <li>Spread stats engine rewritten: SQL GROUP BY aggregation replaces loading 1M+ rows into memory — drastically lower memory usage per hourly run</li>
                                 <li>Composite SQLite indexes added on price_averages and spread_stats for faster query times</li>
-                                <li>WAL checkpoint (TRUNCATE) now runs every 6 hours to prevent WAL file bloat</li>
+                                <li>WAL checkpoint (TRUNCATE) every 6 hours to prevent WAL file bloat</li>
+                                <li>Conditional VACUUM after large compaction runs — scheduled for 2–4 AM UTC low-traffic window to reclaim disk space</li>
                             </ul>
                         </div>
                         <div class="changelog-entry">
