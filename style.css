@@ -2046,6 +2046,96 @@ footer a:hover {
     border: 1px solid rgba(248, 113, 113, 0.3);
 }
 
+/* ====== TREND BADGES ====== */
+.trend-badge {
+    display: inline-block;
+    font-size: 0.62rem;
+    font-weight: 700;
+    padding: 1px 6px;
+    border-radius: 8px;
+    letter-spacing: 0.2px;
+    vertical-align: middle;
+    white-space: nowrap;
+}
+.trend-up {
+    background: rgba(74, 222, 128, 0.15);
+    color: #4ade80;
+    border: 1px solid rgba(74, 222, 128, 0.3);
+}
+.trend-down {
+    background: rgba(248, 113, 113, 0.15);
+    color: #f87171;
+    border: 1px solid rgba(248, 113, 113, 0.3);
+}
+.trend-neutral {
+    background: rgba(140, 124, 104, 0.15);
+    color: #8e7c65;
+    border: 1px solid rgba(140, 124, 104, 0.3);
+}
+
+/* ====== VOLATILE BADGE ====== */
+.volatile-badge {
+    display: inline-block;
+    font-size: 0.62rem;
+    font-weight: 700;
+    padding: 1px 6px;
+    border-radius: 8px;
+    letter-spacing: 0.2px;
+    background: rgba(251, 146, 60, 0.15);
+    color: #fb923c;
+    border: 1px solid rgba(251, 146, 60, 0.35);
+    text-transform: uppercase;
+}
+
+/* ====== CHART TABS ====== */
+.chart-tab-bar {
+    display: flex;
+    gap: 0;
+    margin: 0.6rem 0 0.75rem;
+    border-radius: var(--radius);
+    overflow: hidden;
+    border: 1px solid var(--border-color);
+    width: fit-content;
+}
+.chart-tab-btn {
+    padding: 0.4rem 1.1rem;
+    border: none;
+    background: var(--bg-card);
+    color: var(--text-muted);
+    font-size: 0.82rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.18s ease;
+    font-family: inherit;
+}
+.chart-tab-btn:hover { color: var(--text-secondary); background: var(--bg-elevated); }
+.chart-tab-btn.active {
+    background: var(--accent);
+    color: #000;
+}
+
+/* ====== ANALYTICS LEGEND ====== */
+.analytics-legend {
+    display: flex;
+    gap: 1rem;
+    align-items: center;
+    padding: 0.4rem 0.2rem;
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+    flex-wrap: wrap;
+}
+.analytics-legend-item {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+}
+.analytics-legend-dot {
+    display: inline-block;
+    width: 12px;
+    height: 3px;
+    border-radius: 2px;
+}
+
 /* ====== TIER BADGES ====== */
 .tier-badge {
     display: inline-block;

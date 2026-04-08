@@ -705,7 +705,21 @@ async function fetchAnalytics(itemId) {
     try {
         const res = await fetch(`${VPS_BASE}/api/analytics/${encodeURIComponent(itemId)}`);
         if (!res.ok) { analyticsCache.delete(itemId); return null; }
-        const data = await res.json();
+        const raw = await res.json();
+        // Response is { cities: { "CityName": { price_trend, sma_7d, ... }, ... } }
+        // Extract average price_trend across all cities
+        let priceTrend = null;
+        if (raw.cities) {
+            const trends = Object.values(raw.cities)
+                .map(c => c.price_trend)
+                .filter(v => v !== null && v !== undefined && isFinite(v));
+            if (trends.length > 0) {
+                priceTrend = trends.reduce((a, b) => a + b, 0) / trends.length;
+            }
+        } else if (raw.metrics && raw.metrics.price_trend !== undefined) {
+            priceTrend = raw.metrics.price_trend;
+        }
+        const data = { price_trend: priceTrend, _raw: raw };
         analyticsCache.set(itemId, data);
         return data;
     } catch {
@@ -721,7 +735,7 @@ function prefetchTrendBadges(container) {
         if (seen.has(itemId)) return;
         seen.add(itemId);
         fetchAnalytics(itemId).then(data => {
-            if (!data || data === 'pending' || data.price_trend === undefined) return;
+            if (!data || data === 'pending' || data.price_trend === null || data.price_trend === undefined) return;
             container.querySelectorAll(`[data-trend-item="${CSS.escape(itemId)}"]`).forEach(badge => {
                 badge.outerHTML = getTrendBadge(data.price_trend);
             });

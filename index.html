@@ -1764,6 +1764,15 @@
                     <div class="changelog-list">
                         <div class="changelog-entry">
                             <div class="changelog-date">April 9, 2026</div>
+                            <div class="changelog-title">Frontend Analytics (Workstream 2) — Chart tabs, trend arrows, volatile badges</div>
+                            <ul>
+                                <li>Chart modal now has <strong>Live Prices / Analytics</strong> tabs — Analytics tab shows our own historical price line with <strong>SMA 7-day</strong> (gold) and <strong>SMA 30-day</strong> (blue) overlays. Updates when you switch cities.</li>
+                                <li>Market Flipper &amp; BM Flipper cards now show a small <strong>trend arrow badge</strong> (▲ green if +2%, ▼ red if −2%, — neutral) loaded from our analytics engine</li>
+                                <li>Market Flipper, BM Flipper &amp; Transport cards show an orange <strong>Volatile</strong> badge when a route is profitable less than 50% of the time — warns against deals that look good on average but swing wildly</li>
+                            </ul>
+                        </div>
+                        <div class="changelog-entry">
+                            <div class="changelog-date">April 9, 2026</div>
                             <div class="changelog-title">Analytics Computation Engine (Workstream 1B)</div>
                             <ul>
                                 <li>New <strong>price_analytics</strong> table stores pre-computed SMA 7d/30d, EMA 7d, VWAP 7d, price trend, and spread volatility per item+city+quality — computed every 30 minutes</li>
