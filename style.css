@@ -3399,15 +3399,59 @@ footer a:hover {
     color: var(--text-muted);
 }
 
-/* Compact item list for loot buyer */
-#loot-selected-list .flip-card {
-    padding: 0.4rem 0.65rem;
-    gap: 0.5rem;
+/* Collapsible items card for loot buyer */
+.loot-items-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius);
+    overflow: hidden;
 }
-
-#loot-selected-list .flip-icon {
-    width: 28px;
-    height: 28px;
+.loot-items-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0.65rem 0.85rem;
+    cursor: pointer;
+    transition: background var(--transition);
+}
+.loot-items-header:hover { background: var(--bg-elevated); }
+.loot-items-summary { display: flex; flex-direction: column; gap: 0.15rem; }
+.loot-items-title { font-weight: 600; font-size: 0.9rem; color: var(--text-primary); }
+.loot-items-stats { font-size: 0.72rem; color: var(--text-muted); }
+.loot-items-chevron {
+    font-size: 0.9rem;
+    color: var(--text-muted);
+    transition: transform 0.2s ease;
+}
+.loot-items-card.expanded .loot-items-chevron { transform: rotate(180deg); }
+.loot-items-grid {
+    display: none;
+    max-height: 300px;
+    overflow-y: auto;
+    border-top: 1px solid var(--border-color);
+}
+.loot-items-card.expanded .loot-items-grid { display: block; }
+.loot-item-row {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.3rem 0.85rem;
+    border-bottom: 1px solid var(--border-color);
+    font-size: 0.8rem;
+}
+.loot-item-row:last-child { border-bottom: none; }
+.loot-item-icon { width: 24px; height: 24px; flex-shrink: 0; image-rendering: pixelated; }
+.loot-item-name {
+    flex: 1;
+    color: var(--text-primary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.loot-item-qty {
+    font-weight: 600;
+    color: var(--text-muted);
+    flex-shrink: 0;
 }
 
 #loot-results .flip-card {

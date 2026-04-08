@@ -4255,48 +4255,35 @@ function renderLootCaptures() {
     }
     if (empty) empty.style.display = 'none';
 
-    // If captures have vaultTabs, split items into per-tab groups
-    let cards = [];
+    // Build compact one-line rows for each capture — click to select + expand details below
+    let rows = [];
     lootBuyerCaptures.forEach((cap, capIdx) => {
         const ago = timeAgo(new Date(cap.capturedAt).toISOString());
-        const hasDirectTabName = cap.tabName && cap.tabName.length > 0;
-        const hasTabs = !hasDirectTabName && cap.vaultTabs && cap.vaultTabs.length > 0;
+        const equipCount = cap.items.filter(it => it.isEquipment).length;
+        const stackCount = cap.items.length - equipCount;
 
-        // Helper to build a compact card
-        const makeCard = (onclick, name, badge, itemCount, equipCount, stackCount, timeAgoStr) => {
-            return `<div class="loot-capture-card" onclick="${onclick}" style="cursor:pointer;">
-                <div style="display:flex; align-items:center; gap:0.4rem;">
-                    <span class="loot-card-title">${esc(name)}</span>
-                    ${badge ? `<span style="font-size:0.6rem; padding:0.1rem 0.35rem; background:var(--bg-elevated); border-radius:8px; color:var(--text-muted);">${badge}</span>` : ''}
-                </div>
-                <div class="loot-card-meta">${itemCount} items &bull; ${equipCount}⚔ ${stackCount}📦 &bull; ${timeAgoStr}</div>
-            </div>`;
-        };
-
-        if (hasDirectTabName) {
-            const equipCount = cap.items.filter(it => it.isEquipment).length;
-            const stackCount = cap.items.length - equipCount;
-            const badge = cap.isGuild ? 'Guild' : 'Bank';
-            cards.push(makeCard(`selectLootCapture(${capIdx})`, cap.tabName, badge, cap.items.length, equipCount, stackCount, ago));
-        } else if (hasTabs) {
-            // Each capture = one tab's items. Use tabIndex to look up the vault tab name.
+        // Resolve display name
+        let displayName = cap.customName || cap.tabName || '';
+        if (!displayName && cap.vaultTabs && cap.vaultTabs.length > 0) {
             const tabIdx = typeof cap.tabIndex === 'number' ? cap.tabIndex : -1;
-            const tabName = (tabIdx >= 0 && tabIdx < cap.vaultTabs.length && cap.vaultTabs[tabIdx].name)
+            displayName = (tabIdx >= 0 && tabIdx < cap.vaultTabs.length && cap.vaultTabs[tabIdx].name)
                 ? cap.vaultTabs[tabIdx].name
                 : (tabIdx >= 0 ? `Tab ${tabIdx + 1}` : 'Chest Capture');
-            const equipCount = cap.items.filter(it => it.isEquipment).length;
-            const stackCount = cap.items.length - equipCount;
-            const vaultType = cap.isGuild ? 'Guild' : 'Bank';
-            const displayName = cap.customName || tabName;
-            cards.push(makeCard(`selectLootCapture(${capIdx})`, displayName, vaultType, cap.items.length, equipCount, stackCount, ago));
-        } else {
-            // No tab info — show as single capture
-            const equipCount = cap.items.filter(it => it.isEquipment).length;
-            const stackCount = cap.items.length - equipCount;
-            cards.push(makeCard(`selectLootCapture(${capIdx})`, `Chest Capture`, '', cap.items.length, equipCount, stackCount, ago));
         }
+        if (!displayName) displayName = 'Chest Capture';
+
+        const badge = cap.isGuild ? 'Guild' : (cap.vaultTabs ? 'Bank' : '');
+        const isSelected = lootSelectedCapture === cap;
+
+        rows.push(`<div class="loot-capture-row ${isSelected ? 'loot-capture-selected' : ''}" onclick="selectLootCapture(${capIdx})" style="cursor:pointer;">
+            <span class="loot-row-name">${esc(displayName)}</span>
+            ${badge ? `<span class="loot-row-badge">${badge}</span>` : ''}
+            <span class="loot-row-count">${cap.items.length} items</span>
+            <span class="loot-row-detail">${equipCount}⚔ ${stackCount}📦</span>
+            <span class="loot-row-time">${ago}</span>
+        </div>`);
     });
-    list.innerHTML = cards.join('');
+    list.innerHTML = rows.join('');
 }
 
 function renameLootCapture(index) {
@@ -4336,18 +4323,32 @@ function selectLootCaptureUI(titleText, items) {
     section.style.display = 'block';
     if (titleEl) titleEl.textContent = `${titleText} (${items.length} items)`;
 
-    list.innerHTML = items.map(item => {
-        const qualName = item.quality > 1 ? ` q${item.quality}` : '';
-        const iconUrl = `https://render.albiononline.com/v1/item/${item.itemId}.png?quality=${item.quality}`;
-        return `<div class="flip-card" style="animation:none;">
-            <img class="flip-icon" src="${iconUrl}" alt="" loading="lazy" onerror="this.style.display='none'">
-            <div style="min-width:0;">
-                <div style="font-weight:600; font-size:0.85rem; color:var(--text-primary); overflow:hidden; text-overflow:ellipsis;">${esc(item.itemId)}${qualName}</div>
-                <div style="font-size:0.7rem; color:var(--text-muted);">${item.isEquipment ? 'Equipment' : 'Stackable'} ${item.crafterName ? '• Crafted by ' + esc(item.crafterName) : ''}</div>
+    const equipCount = items.filter(it => it.isEquipment).length;
+    const stackCount = items.length - equipCount;
+
+    // Build a single collapsible card with summary + expandable item grid
+    list.innerHTML = `
+        <div class="loot-items-card">
+            <div class="loot-items-header" onclick="this.parentElement.classList.toggle('expanded')">
+                <div class="loot-items-summary">
+                    <span class="loot-items-title">${esc(titleText)}</span>
+                    <span class="loot-items-stats">${items.length} items &bull; ${equipCount}⚔ ${stackCount}📦</span>
+                </div>
+                <span class="loot-items-chevron">▾</span>
             </div>
-            <div style="text-align:right; font-size:0.85rem; font-weight:600; color:var(--text-primary);">x${item.quantity}</div>
+            <div class="loot-items-grid">
+                ${items.map(item => {
+                    const qualName = item.quality > 1 ? ` q${item.quality}` : '';
+                    const iconUrl = `https://render.albiononline.com/v1/item/${encodeURIComponent(item.itemId)}.png?quality=${item.quality}`;
+                    const name = getFriendlyName(item.itemId) || item.itemId;
+                    return `<div class="loot-item-row">
+                        <img src="${iconUrl}" class="loot-item-icon" loading="lazy" onerror="this.style.display='none'">
+                        <span class="loot-item-name">${esc(name)}${qualName}</span>
+                        <span class="loot-item-qty">x${item.quantity}</span>
+                    </div>`;
+                }).join('')}
+            </div>
         </div>`;
-    }).join('');
 }
 
 async function analyzeLoot() {
