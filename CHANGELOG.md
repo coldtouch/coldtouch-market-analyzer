@@ -2,6 +2,13 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-04-09 — Workstream 2: Frontend analytics improvements
+
+- **Analytics tab in chart modal:** Chart modal now has a "Live Prices" / "Analytics" toggle. The Analytics tab fetches from our own `/api/price-history` endpoint and renders a price line with SMA 7-day (gold) and SMA 30-day (blue) overlays computed client-side from hourly/daily data. Includes a legend and time toggles (7 days / 30 days). Switches city when the city dropdown changes.
+- **Trend arrows on Market Flipper and BM Flipper cards:** Each card now shows a small trend badge next to the item name (green ▲ / red ▼ / neutral —) loaded asynchronously from `/api/analytics/:itemId`. Displays the 24h-vs-SMA7 % change. Uses a client-side cache to avoid duplicate requests.
+- **Volatile badge on Market Flipper, BM Flipper, and Transport cards:** If a route's `consistencyPct < 50%` (profitable less than half the time over 7 days), an orange "Volatile" badge appears alongside the confidence badge. Helps users avoid deals that look good on average but swing unpredictably.
+- **CSS:** New `.trend-badge` (`.trend-up`, `.trend-down`, `.trend-neutral`), `.volatile-badge`, `.chart-tab-bar`, `.chart-tab-btn`, `.analytics-legend`, `.analytics-legend-item`, `.analytics-legend-dot` classes added. Gold accent for active tab.
+
 ### 2026-04-09 — Workstream 1B: Analytics computation engine
 
 - **`price_analytics` table:** Stores pre-computed SMA 7d, SMA 30d, EMA 7d (α=0.25), VWAP 7d, price trend (%), and spread volatility per `(item_id, city, quality)`. Populated by `computeAnalytics()` which runs every 30 minutes.
