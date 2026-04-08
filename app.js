@@ -4337,9 +4337,13 @@ function selectLootCaptureUI(titleText, items) {
     const equipCount = items.filter(it => it.isEquipment).length;
     const stackCount = items.length - equipCount;
 
-    // Build a single collapsible card with summary + expandable item grid
+    // Store items for search filtering
+    window._lootSelectedItems = items;
+    window._lootSelectedTitle = titleText;
+
+    // Build a single collapsible card with summary, search, and expandable item grid
     list.innerHTML = `
-        <div class="loot-items-card">
+        <div class="loot-items-card expanded">
             <div class="loot-items-header" onclick="this.parentElement.classList.toggle('expanded')">
                 <div class="loot-items-summary">
                     <span class="loot-items-title">${esc(titleText)}</span>
@@ -4348,18 +4352,47 @@ function selectLootCaptureUI(titleText, items) {
                 <span class="loot-items-chevron">▾</span>
             </div>
             <div class="loot-items-grid">
-                ${items.map(item => {
-                    const qualName = item.quality > 1 ? ` q${item.quality}` : '';
-                    const iconUrl = `https://render.albiononline.com/v1/item/${encodeURIComponent(item.itemId)}.png?quality=${item.quality}`;
-                    const name = getFriendlyName(item.itemId) || item.itemId;
-                    return `<div class="loot-item-row">
-                        <img src="${iconUrl}" class="loot-item-icon" loading="lazy" onerror="this.style.display='none'">
-                        <span class="loot-item-name">${esc(name)}${qualName}</span>
-                        <span class="loot-item-qty">x${item.quantity}</span>
-                    </div>`;
-                }).join('')}
+                <div class="loot-items-search-wrap">
+                    <input type="text" id="loot-items-search" class="sale-form-input" placeholder="Search items in this tab..." style="font-size:0.8rem;">
+                </div>
+                <div id="loot-items-rows">
+                    ${renderLootItemRows(items)}
+                </div>
             </div>
         </div>`;
+
+    // Wire search filter
+    const searchInput = document.getElementById('loot-items-search');
+    if (searchInput) {
+        searchInput.addEventListener('input', () => {
+            const q = searchInput.value.toLowerCase().trim();
+            const filtered = q ? items.filter(item => {
+                const name = (getFriendlyName(item.itemId) || item.itemId).toLowerCase();
+                const id = item.itemId.toLowerCase();
+                return name.includes(q) || id.includes(q);
+            }) : items;
+            document.getElementById('loot-items-rows').innerHTML = renderLootItemRows(filtered);
+            // Update count in header
+            const statsEl = list.querySelector('.loot-items-stats');
+            if (statsEl) {
+                const eq = filtered.filter(it => it.isEquipment).length;
+                statsEl.textContent = `${filtered.length}/${items.length} items` + (q ? ' (filtered)' : ` \u2022 ${eq}\u2694 ${filtered.length - eq}\uD83D\uDCE6`);
+            }
+        });
+    }
+}
+
+function renderLootItemRows(items) {
+    return items.map(item => {
+        const qualName = item.quality > 1 ? ` q${item.quality}` : '';
+        const iconUrl = `https://render.albiononline.com/v1/item/${encodeURIComponent(item.itemId)}.png?quality=${item.quality}`;
+        const name = getFriendlyName(item.itemId) || item.itemId;
+        return `<div class="loot-item-row">
+            <img src="${iconUrl}" class="loot-item-icon" loading="lazy" onerror="this.style.display='none'">
+            <span class="loot-item-name">${esc(name)}${qualName}</span>
+            <span class="loot-item-qty">x${item.quantity}</span>
+        </div>`;
+    }).join('');
 }
 
 async function analyzeLoot() {
