@@ -118,7 +118,19 @@
 
 ## Recent Session History
 
-### Code Tab Sessions 9-10 (April 7, 2026 — Latest)
+### Crafting Revamp Phase 1 (April 9, 2026 — Latest)
+- Global tax rate fix: `TAX_RATE` 0.065 → 0.03 (3% market tax), added `SETUP_FEE = 0.025` (2.5% listing fee)
+- Crafting profit: station fee base changed from material cost → sell price (matches Albion mechanic)
+- Crafting: tax now uses TAX_RATE + SETUP_FEE = 5.5% for sell orders
+- Transport: insta-sell shows "Tax (3%)", sell orders show "Tax+Setup (5.5%)", `soTax` fixed to 5.5%
+- Transport route enrichment: effectiveTaxRate varies by sellMode (instant=3%, market=5.5%)
+- BM journal flipper: sell order soTax corrected to 5.5%
+- Portfolio: Net P/L tax estimate corrected to 5.5%
+- City Compare refresh button: already existed and works correctly (Task 2 was already done)
+- RRR formula verified: basePB=18 (15.25% RRR ≈ 15.2% ✓), focusPB=59 flat ✓
+- CHANGELOG.md + About tab in index.html updated
+
+### Code Tab Sessions 9-10 (April 7, 2026)
 - Deployed all pending changes (3 deploys). SMTP confirmed working.
 - Inline sale recording form (replaced prompt() with item dropdown)
 - Unknown items mapped (-1 to -9 in Go client, filtered from captures, backend fallback names)

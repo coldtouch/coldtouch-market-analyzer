@@ -2,6 +2,17 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-04-09 — Crafting Revamp Phase 1: Formula fixes and tax rate correction
+
+- **Corrected market tax rates globally:** `TAX_RATE` changed from 6.5% to 3% (actual market transaction tax). Added separate `SETUP_FEE = 2.5%` constant for sell-order listing fee. Combined 5.5% now applied wherever crafters/traders place sell orders; 3% applied for instant-sell scenarios (BM flipper, transport insta-sell, Farm & Breed).
+- **Crafting station fee base fixed:** Station fee (set by station owner) is now calculated as a percentage of the item's sell price (item value), not the raw material cost. This matches how Albion Online charges station fees in-game.
+- **Crafting profit labels updated:** Crafting Profits tab now shows "Tax+Setup (5.5%)" instead of the old incorrect "Tax (6.5%)". Transport cards show "Tax (3%)" for instant sell and "Tax+Setup (5.5%)" for sell order routes.
+- **Portfolio tax estimate corrected:** Net P/L estimate now uses 5.5% (3% tax + 2.5% setup) to account for sell orders.
+- **Transport sell-order tax corrected:** `soTax` now uses 5.5% (was 6.5%) for sell-order profit rows in transport and BM journal flipper.
+- **Transport route enrichment:** Sell mode is now respected — instant-sell routes use 3% tax, market-listing routes use 5.5%.
+- **City Compare refresh button:** Already present — verified the refresh button in City Compare header works correctly (same pattern as Transport/Flipper cards).
+- **RRR formula verified:** Base RRR of 15.2% in a royal city (18% production bonus) confirmed correct. Focus bonus (59% PB flat) and spec-based scaling in standalone RRR calculator unchanged — values are within expected range of ~47-49% max effective return at max spec.
+
 ### 2026-04-07 — Batch: Flip fix, XSS hardening, mobile, download page, capture toggle
 
 - **Live Flip false positives reduced:** Black Market prices now use a tighter 3-minute freshness window (vs 5 min for other cities). Added global price outlier check — flips where the sell price exceeds 4x the global average are rejected as stale. `broadcastFlip()` now always validates (waits for rate limit instead of skipping validation).
