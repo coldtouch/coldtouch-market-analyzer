@@ -3431,6 +3431,14 @@ footer a:hover {
     border-top: 1px solid var(--border-color);
 }
 .loot-items-card.expanded .loot-items-grid { display: block; }
+.loot-items-search-wrap {
+    padding: 0.5rem 0.85rem;
+    border-bottom: 1px solid var(--border-color);
+    position: sticky;
+    top: 0;
+    background: var(--bg-card);
+    z-index: 1;
+}
 .loot-item-row {
     display: flex;
     align-items: center;
