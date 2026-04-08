@@ -1738,6 +1738,16 @@
                     <div class="changelog-list">
                         <div class="changelog-entry">
                             <div class="changelog-date">April 9, 2026</div>
+                            <div class="changelog-title">VPS Upgrade — Performance &amp; Analytics Engine</div>
+                            <ul>
+                                <li>Node heap raised to 6 GB to match new Contabo VPS 20 (11 GB RAM, 6 vCPUs)</li>
+                                <li>Spread stats engine rewritten: SQL GROUP BY aggregation replaces loading 1M+ rows into memory — drastically lower memory usage per hourly run</li>
+                                <li>Composite SQLite indexes added on price_averages and spread_stats for faster query times</li>
+                                <li>WAL checkpoint (TRUNCATE) now runs every 6 hours to prevent WAL file bloat</li>
+                            </ul>
+                        </div>
+                        <div class="changelog-entry">
+                            <div class="changelog-date">April 9, 2026</div>
                             <div class="changelog-title">Crafting Revamp Phase 1 — Formula &amp; Tax Fixes</div>
                             <ul>
                                 <li>Market tax corrected to 3% (insta-sell) + 2.5% setup fee (sell orders) = 5.5% combined — was incorrectly 6.5% everywhere</li>

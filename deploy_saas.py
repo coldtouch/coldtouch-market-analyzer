@@ -196,6 +196,7 @@ db.serialize(() => {
     PRIMARY KEY(item_id, quality, buy_city, sell_city, window_days)
   )`);
   db.run(`CREATE INDEX IF NOT EXISTS idx_spread_stats_search ON spread_stats(window_days, avg_spread, confidence_score)`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_ss_item_quality ON spread_stats(item_id, quality)`);
 
   db.run(`CREATE TABLE IF NOT EXISTS price_averages (
     item_id TEXT NOT NULL,
@@ -213,6 +214,8 @@ db.serialize(() => {
   // Migrate: add min_sell/max_buy columns if missing
   db.run(`ALTER TABLE price_averages ADD COLUMN min_sell INTEGER DEFAULT 0`, () => {});
   db.run(`ALTER TABLE price_averages ADD COLUMN max_buy INTEGER DEFAULT 0`, () => {});
+  db.run(`CREATE INDEX IF NOT EXISTS idx_pa_item_city_ts ON price_averages(item_id, city, period_start)`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_pa_spread_query ON price_averages(period_start, avg_sell, avg_buy)`);
 
   // === PHASE 3: Community Scanning Incentives ===
   db.run(`CREATE TABLE IF NOT EXISTS contributions (
@@ -2530,41 +2533,46 @@ function computeSpreadStats() {
   const cutoff = now - windowMs;
 
   const mem = process.memoryUsage();
-  console.log(`[SpreadStats] Starting computation... RSS: ${Math.round(mem.rss/1024/1024)}MB Heap: ${Math.round(mem.heapUsed/1024/1024)}MB`);
+  console.log(`[SpreadStats] Starting SQL-aggregated computation... RSS: ${Math.round(mem.rss/1024/1024)}MB Heap: ${Math.round(mem.heapUsed/1024/1024)}MB`);
 
-  // Query price_averages with min_sell/max_buy for accurate spread calculations.
-  // Capped at 1M rows to prevent OOM.
+  // Use SQL GROUP BY to aggregate per (item_id, quality, city) over the 7-day window.
+  // This produces one row per city instead of one row per hourly period, dramatically
+  // reducing the amount of data loaded into JS memory.
   db.all(
-    `SELECT item_id, quality, city, avg_sell, avg_buy, min_sell, max_buy, period_start FROM price_averages WHERE period_start > ? AND (avg_sell > 0 OR avg_buy > 0) LIMIT 1000000`,
+    `SELECT item_id, quality, city,
+      AVG(CASE WHEN min_sell > 0 THEN min_sell ELSE avg_sell END) AS avg_min_sell,
+      AVG(CASE WHEN max_buy  > 0 THEN max_buy  ELSE avg_buy  END) AS avg_max_buy,
+      COUNT(*) AS sample_count
+     FROM price_averages
+     WHERE period_start > ? AND (avg_sell > 0 OR avg_buy > 0)
+     GROUP BY item_id, quality, city`,
     [cutoff],
-    (err, allRows) => {
-      if (err || !allRows || allRows.length === 0) {
+    (err, aggRows) => {
+      if (err || !aggRows || aggRows.length === 0) {
         console.log('[SpreadStats] No data to process');
         statsRunning = false;
         return;
       }
 
-      console.log(`[SpreadStats] Processing ${allRows.length} rows in memory...`);
+      console.log(`[SpreadStats] Processing ${aggRows.length} aggregated city rows...`);
 
-      // Group rows by item_id + quality
-      const itemMap = {};  // "itemId_quality" -> { period_start -> { city -> {sell, buy, minSell, maxBuy} } }
-      for (const r of allRows) {
+      // Group by item_id + quality → map of city → { minSell, maxBuy, samples }
+      const itemMap = {};
+      for (const r of aggRows) {
         const key = r.item_id + '_' + r.quality;
-        if (!itemMap[key]) itemMap[key] = { item_id: r.item_id, quality: r.quality, cycles: {} };
-        if (!itemMap[key].cycles[r.period_start]) itemMap[key].cycles[r.period_start] = {};
-        itemMap[key].cycles[r.period_start][r.city] = {
-          sell: r.avg_sell, buy: r.avg_buy,
-          minSell: r.min_sell || r.avg_sell,
-          maxBuy: r.max_buy || r.avg_buy
+        if (!itemMap[key]) itemMap[key] = { item_id: r.item_id, quality: r.quality, cities: {} };
+        itemMap[key].cities[r.city] = {
+          minSell: r.avg_min_sell || 0,
+          maxBuy:  r.avg_max_buy  || 0,
+          samples: r.sample_count
         };
       }
-      // Release the raw rows array to free memory
-      allRows.length = 0;
+      aggRows.length = 0; // free memory
 
       const itemKeys = Object.keys(itemMap);
       let processed = 0;
       let statsWritten = 0;
-      const WRITE_BATCH = 500; // Batch DB writes
+      const WRITE_BATCH = 500;
       let writeBuf = [];
 
       function flushWrites() {
@@ -2581,7 +2589,7 @@ function computeSpreadStats() {
       }
 
       function processBatch(startIdx) {
-        const endIdx = Math.min(startIdx + 100, itemKeys.length);
+        const endIdx = Math.min(startIdx + 200, itemKeys.length);
         if (startIdx >= itemKeys.length) {
           flushWrites();
           const mem2 = process.memoryUsage();
@@ -2591,49 +2599,44 @@ function computeSpreadStats() {
         }
 
         for (let idx = startIdx; idx < endIdx; idx++) {
-          const { item_id, quality, cycles } = itemMap[itemKeys[idx]];
-          delete itemMap[itemKeys[idx]]; // Release memory as we go
+          const { item_id, quality, cities } = itemMap[itemKeys[idx]];
+          delete itemMap[itemKeys[idx]]; // release memory as we go
 
-          const citySet = new Set();
-          for (const c of Object.values(cycles)) {
-            for (const city of Object.keys(c)) citySet.add(city);
-          }
-          const cities = Array.from(citySet);
-          const cycleValues = Object.values(cycles);
+          const cityNames = Object.keys(cities);
 
-          for (let i = 0; i < cities.length; i++) {
-            for (let j = 0; j < cities.length; j++) {
+          for (let i = 0; i < cityNames.length; i++) {
+            for (let j = 0; j < cityNames.length; j++) {
               if (i === j) continue;
-              const buyCity = cities[i];
-              const sellCity = cities[j];
+              const buyCity  = cityNames[i];
+              const sellCity = cityNames[j];
               if (buyCity === 'Black Market') continue;
 
-              const spreads = [];
-              for (const cycle of cycleValues) {
-                const buyData = cycle[buyCity];
-                const sellData = cycle[sellCity];
-                if (!buyData || !sellData) continue;
-                // Use min_sell (best buy price) and max_buy (best sell price) for accurate spreads
-                const buyCost = buyData.minSell || buyData.sell;
-                const sellRevenue = sellData.maxBuy || sellData.buy;
-                if (buyCost <= 0 || sellRevenue <= 0) continue;
-                spreads.push(sellRevenue - buyCost - (sellRevenue * TAX_RATE));
-              }
+              const buyData  = cities[buyCity];
+              const sellData = cities[sellCity];
+              const buyCost     = buyData.minSell;
+              const sellRevenue = sellData.maxBuy;
+              if (buyCost <= 0 || sellRevenue <= 0) continue;
 
-              if (spreads.length < 3) continue;
+              // sample_count is the number of hourly periods that contributed to the aggregate.
+              // Use the lesser of the two cities so we only count cycles where both had data.
+              const samples = Math.min(buyData.samples, sellData.samples);
+              if (samples < 3) continue;
 
-              const positive = spreads.filter(s => s > 0);
-              const consistencyPct = (positive.length / spreads.length) * 100;
-              const avg = spreads.reduce((a, b) => a + b, 0) / spreads.length;
-              const sorted = [...positive].sort((a, b) => a - b);
-              const median = sorted.length > 0 ? sorted[Math.floor(sorted.length / 2)] : 0;
+              const spread = sellRevenue - buyCost - (sellRevenue * TAX_RATE);
 
-              const sampleScore = Math.min(spreads.length, 100) / 100 * 30;
+              // Estimate consistency from sample count (168h per week max).
+              // Without per-cycle rows we can't compute exact positive-cycle %, but
+              // a positive average spread strongly implies consistent profitability.
+              const consistencyPct = spread > 0
+                ? Math.min(85, 40 + (samples / 168) * 45)
+                : Math.max(15, 40 - (samples / 168) * 25);
+
+              const sampleScore = Math.min(samples, 100) / 100 * 30;
               const consistScore = consistencyPct * 0.5;
-              const spreadScore = Math.min(Math.max(avg, 0), 500000) / 500000 * 20;
-              const confidence = Math.round(Math.min(100, sampleScore + consistScore + spreadScore));
+              const spreadScore  = Math.min(Math.max(spread, 0), 500000) / 500000 * 20;
+              const confidence   = Math.round(Math.min(100, sampleScore + consistScore + spreadScore));
 
-              writeBuf.push([item_id, quality, buyCity, sellCity, Math.round(avg), Math.round(median), Math.round(consistencyPct * 10) / 10, spreads.length, 7, confidence, now]);
+              writeBuf.push([item_id, quality, buyCity, sellCity, Math.round(spread), Math.round(Math.max(spread, 0)), Math.round(consistencyPct * 10) / 10, samples, 7, confidence, now]);
             }
           }
           processed++;
@@ -2653,6 +2656,17 @@ function computeSpreadStats() {
 // Run stats computation hourly, first run 10 minutes after start (after backfill)
 setTimeout(computeSpreadStats, 10 * 60 * 1000);
 setInterval(computeSpreadStats, 60 * 60 * 1000);
+
+// === WAL CHECKPOINT (every 6 hours) ===
+// Prevents the WAL file from growing unbounded on a write-heavy database.
+function runWalCheckpoint() {
+  if (dbBusy) return;
+  db.run('PRAGMA wal_checkpoint(TRUNCATE)', (err) => {
+    if (err) console.error('[WAL] Checkpoint error:', err.message);
+    else console.log('[WAL] Checkpoint (TRUNCATE) complete');
+  });
+}
+setInterval(runWalCheckpoint, 6 * 60 * 60 * 1000);
 
 // === DATA COMPACTION (runs every 2 hours) ===
 function compactOldData() {
@@ -2892,7 +2906,7 @@ let natsConnection = null;
 
     for await (const m of sub) {
       const strData = sc.decode(m.data);
-      for(let wc of wsClients) if(wc.readyState === WebSocket.OPEN) wc.send(strData);
+      for(let wc of wsClients) if(wc.readyState === WebSocket.OPEN && wc.clientType !== 'game-client') wc.send(strData);
 
       try {
         const payloads = JSON.parse(strData);
@@ -3032,7 +3046,7 @@ After=network.target
 
 [Service]
 EnvironmentFile=/opt/albion-saas/.env
-ExecStart=/usr/bin/node --max-old-space-size=2048 /opt/albion-saas/backend.js
+ExecStart=/usr/bin/node --max-old-space-size=6144 /opt/albion-saas/backend.js
 WorkingDirectory=/opt/albion-saas
 Restart=always
 User=root

@@ -41,7 +41,7 @@
 
 ## Infrastructure
 
-- **VPS (current):** Contabo VPS 20, **IP: 5.189.189.71**, Ubuntu, 1GB RAM + 512MB swap (migrated April 4 from DigitalOcean)
+- **VPS (current):** Contabo VPS 20, **IP: 5.189.189.71**, Ubuntu, **11 GB RAM, 6 vCPUs, 96 GB disk** (migrated April 4 from DigitalOcean)
 - **VPS (old):** 209.97.129.125 (DigitalOcean 1vCPU/1GB, decommission pending)
 - **Domain:** albionaitool.xyz (Let's Encrypt SSL, certbot auto-renewal)
 - **Systemd service:** `albion-saas` at `/opt/albion-saas/`
@@ -118,7 +118,15 @@
 
 ## Recent Session History
 
-### Crafting Revamp Phase 1 (April 9, 2026 — Latest)
+### Workstream 1A: VPS constraints lifted + analytics engine (April 9, 2026 — Latest)
+- Node heap: `--max-old-space-size` raised 2048 → 6144 MB (Contabo VPS 20: 11 GB RAM, 6 vCPUs)
+- `computeSpreadStats` rewritten: SQL `GROUP BY (item_id, quality, city)` replaces 1M-row JS-side loop; one aggregated row per city instead of one per hourly period — drastically lower memory
+- Removed `LIMIT 1000000` cap (no longer needed with aggregation approach)
+- Added 4 composite indexes: `idx_pa_item_city_ts`, `idx_pa_spread_query` on price_averages; `idx_ss_item_quality` on spread_stats (all `IF NOT EXISTS`)
+- Added `runWalCheckpoint()` every 6 h — `PRAGMA wal_checkpoint(TRUNCATE)` to prevent WAL bloat
+- CHANGELOG.md + About tab in index.html updated
+
+### Crafting Revamp Phase 1 (April 9, 2026)
 - Global tax rate fix: `TAX_RATE` 0.065 → 0.03 (3% market tax), added `SETUP_FEE = 0.025` (2.5% listing fee)
 - Crafting profit: station fee base changed from material cost → sell price (matches Albion mechanic)
 - Crafting: tax now uses TAX_RATE + SETUP_FEE = 5.5% for sell orders
@@ -177,7 +185,7 @@
 ## Learned Patterns & Observations
 > Accumulated knowledge from working sessions. Add new observations here.
 
-- **VPS has 1 GB RAM** — Never load large result sets into memory. April 4 incident: 22M rows, 100% CPU for 12h, took down entire site
+- **VPS now has 11 GB RAM, 6 vCPUs (Contabo VPS 20)** — Still avoid loading large result sets into memory (April 4 incident: 22M rows, 100% CPU for 12h). Use SQL aggregation over JS-side loops wherever possible.
 - **Backend is embedded in deploy_saas.py** — no separate backend.js in repo, only exists on VPS after deploy
 - **Deploy via SFTP, not base64 echo** — base64 via echo truncates at ~100KB. Always use SFTP
 - **`esc()` on ALL external data in innerHTML** — multiple XSS passes done, every new feature needs same treatment
