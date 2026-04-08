@@ -261,6 +261,35 @@ db.serialize(() => {
   )`);
   db.run(`CREATE INDEX IF NOT EXISTS idx_loot_tab_sales_tab ON loot_tab_sales(loot_tab_id)`);
 
+  // === ANALYTICS TABLES ===
+  db.run(`CREATE TABLE IF NOT EXISTS price_analytics (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    item_id TEXT NOT NULL,
+    city TEXT NOT NULL,
+    quality INTEGER DEFAULT 1,
+    metric TEXT NOT NULL,
+    value REAL NOT NULL,
+    computed_at TEXT NOT NULL,
+    UNIQUE(item_id, city, quality, metric)
+  )`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_analytics_item ON price_analytics(item_id, city, quality)`);
+
+  db.run(`CREATE TABLE IF NOT EXISTS price_hourly (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    item_id TEXT NOT NULL,
+    city TEXT NOT NULL,
+    quality INTEGER DEFAULT 1,
+    hour TEXT NOT NULL,
+    open_price REAL,
+    high_price REAL,
+    low_price REAL,
+    close_price REAL,
+    avg_price REAL,
+    volume INTEGER DEFAULT 0,
+    UNIQUE(item_id, city, quality, hour)
+  )`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_hourly_item ON price_hourly(item_id, city, quality, hour)`);
+
   // === SERVER MIGRATION: detect if data was collected from a different game server ===
   // Store which game server the data was collected from
   db.run(`CREATE TABLE IF NOT EXISTS meta_config (key TEXT PRIMARY KEY, value TEXT)`);
@@ -1918,16 +1947,136 @@ app.get('/api/price-history', (req, res) => {
   if (!item_id) return res.status(400).json({ error: 'item_id required' });
   const daysBack = Math.min(parseInt(days) || 7, 90);
   const cutoff = Date.now() - daysBack * 24 * 60 * 60 * 1000;
+  const now = Date.now();
+  const quality = parseInt(req.query.quality) || 1;
 
   // Query price_averages (hourly/daily) instead of raw snapshots
-  const query = city
-    ? `SELECT avg_sell as sell_price_min, avg_buy as buy_price_max, min_sell, max_buy, period_start as recorded_at FROM price_averages WHERE item_id = ? AND city = ? AND period_start > ? ORDER BY period_start`
-    : `SELECT city, avg_sell as sell_price_min, avg_buy as buy_price_max, min_sell, max_buy, period_start as recorded_at FROM price_averages WHERE item_id = ? AND period_start > ? ORDER BY period_start`;
+  const histQuery = city
+    ? `SELECT avg_sell as sell_price_min, avg_buy as buy_price_max, min_sell, max_buy, period_start as recorded_at FROM price_averages WHERE item_id = ? AND city = ? AND quality = ? AND period_start > ? ORDER BY period_start`
+    : `SELECT city, avg_sell as sell_price_min, avg_buy as buy_price_max, min_sell, max_buy, period_start as recorded_at FROM price_averages WHERE item_id = ? AND quality = ? AND period_start > ? ORDER BY period_start`;
+  const histParams = city ? [item_id, city, quality, cutoff] : [item_id, quality, cutoff];
 
-  const params = city ? [item_id, city, cutoff] : [item_id, cutoff];
+  db.all(histQuery, histParams, (err, histRows) => {
+    if (err) return res.status(500).json({ error: 'An internal error occurred' });
+    const history = histRows || [];
+
+    // OHLC from price_hourly (7–30 day range)
+    const sevenDaysAgo = now - 7 * 24 * 60 * 60 * 1000;
+    const ohlcQuery = city
+      ? `SELECT hour, open_price, high_price, low_price, close_price, avg_price, volume FROM price_hourly WHERE item_id = ? AND city = ? AND quality = ? AND hour >= ? ORDER BY hour`
+      : `SELECT city, hour, open_price, high_price, low_price, close_price, avg_price, volume FROM price_hourly WHERE item_id = ? AND quality = ? AND hour >= ? ORDER BY hour`;
+    const ohlcCutoff = new Date(cutoff).toISOString().slice(0, 13);
+    const ohlcParams = city ? [item_id, city, quality, ohlcCutoff] : [item_id, quality, ohlcCutoff];
+
+    db.all(ohlcQuery, ohlcParams, (errO, ohlcRows) => {
+      const ohlc = ohlcRows || [];
+
+      // Pre-computed analytics from price_analytics
+      const analyticsQuery = city
+        ? `SELECT metric, value, computed_at FROM price_analytics WHERE item_id = ? AND city = ? AND quality = ?`
+        : `SELECT city, metric, value, computed_at FROM price_analytics WHERE item_id = ? AND quality = ?`;
+      const analyticsParams = city ? [item_id, city, quality] : [item_id, quality];
+
+      db.all(analyticsQuery, analyticsParams, (errA, analyticsRows) => {
+        const analytics = {};
+        for (const r of (analyticsRows || [])) {
+          if (city) {
+            analytics[r.metric] = r.value;
+          } else {
+            if (!analytics[r.city]) analytics[r.city] = {};
+            analytics[r.city][r.metric] = r.value;
+          }
+        }
+        res.json({ history, ohlc, analytics });
+      });
+    });
+  });
+});
+
+// === ANALYTICS API ===
+// Returns all pre-computed metrics from price_analytics per item+city+quality.
+// Optional query params: city, quality (default 1)
+app.get('/api/analytics/:itemId', (req, res) => {
+  const item_id = req.params.itemId;
+  const quality  = parseInt(req.query.quality) || 1;
+  const city     = req.query.city || null;
+
+  const query = city
+    ? `SELECT metric, value, computed_at FROM price_analytics WHERE item_id = ? AND city = ? AND quality = ? ORDER BY metric`
+    : `SELECT city, metric, value, computed_at FROM price_analytics WHERE item_id = ? AND quality = ? ORDER BY city, metric`;
+  const params = city ? [item_id, city, quality] : [item_id, quality];
+
   db.all(query, params, (err, rows) => {
     if (err) return res.status(500).json({ error: 'An internal error occurred' });
-    res.json(rows || []);
+    if (!rows || rows.length === 0) return res.json({ item_id, quality, metrics: {} });
+
+    if (city) {
+      // Flat metrics object for a single city
+      const metrics = {};
+      let computed_at = null;
+      for (const r of rows) {
+        metrics[r.metric] = r.value;
+        computed_at = computed_at || r.computed_at;
+      }
+      res.json({ item_id, city, quality, metrics, computed_at });
+    } else {
+      // Group by city
+      const cities = {};
+      let computed_at = null;
+      for (const r of rows) {
+        if (!cities[r.city]) cities[r.city] = {};
+        cities[r.city][r.metric] = r.value;
+        computed_at = computed_at || r.computed_at;
+      }
+      res.json({ item_id, quality, cities, computed_at });
+    }
+  });
+});
+
+// === ADMIN: DB STATS (JWT-protected) ===
+// Returns DB size, row counts per table, oldest/newest timestamps for monitoring.
+app.get('/api/admin/db-stats', requireAuth, (req, res) => {
+  const tables = [
+    'price_averages', 'price_hourly', 'price_analytics',
+    'spread_stats', 'price_snapshots', 'users', 'contributions', 'loot_tabs'
+  ];
+
+  db.get(`SELECT page_count * page_size as size FROM pragma_page_count(), pragma_page_size()`, (errSz, szRow) => {
+    if (errSz) return res.status(500).json({ error: 'An internal error occurred' });
+
+    // Count rows and get min/max timestamps per table
+    const results = {};
+    let pending = tables.length;
+
+    function done() {
+      if (--pending === 0) {
+        res.json({
+          db_size_bytes: szRow ? szRow.size : 0,
+          db_size_mb: szRow ? Math.round(szRow.size / (1024 * 1024)) : 0,
+          tables: results,
+          analytics_running: analyticsRunning,
+          vacuum_scheduled: vacuumScheduled,
+          server_time: new Date().toISOString()
+        });
+      }
+    }
+
+    for (const t of tables) {
+      const tsCol = t === 'price_hourly' ? 'hour' : t === 'price_analytics' ? 'computed_at' : 'period_start';
+      const hasTs = ['price_averages', 'price_hourly', 'price_analytics', 'spread_stats'].includes(t);
+      const countQ = hasTs && t !== 'price_hourly' && t !== 'price_analytics'
+        ? `SELECT COUNT(*) as cnt, MIN(period_start) as oldest, MAX(period_start) as newest FROM ${t}`
+        : `SELECT COUNT(*) as cnt FROM ${t}`;
+
+      db.get(countQ, (err, row) => {
+        results[t] = {
+          rows: row ? row.cnt : 0,
+          oldest: row && row.oldest ? new Date(row.oldest).toISOString().slice(0, 16) : null,
+          newest: row && row.newest ? new Date(row.newest).toISOString().slice(0, 16) : null
+        };
+        done();
+      });
+    }
   });
 });
 
@@ -2708,42 +2857,90 @@ function scheduleVacuumIfNeeded(rowsDeleted) {
 }
 
 // === DATA COMPACTION (runs every 2 hours) ===
-function compactOldData() {
+// Three-tier retention:
+//   Tier 1: price_averages hourly  → keep rawRetentionDays (default 7)
+//   Tier 2: price_hourly (OHLC)    → keep 30 days
+//   Tier 3: price_averages daily   → keep forever
+function compactOldData(rawRetentionDays) {
+  const keepRawDays = rawRetentionDays || 7;
   const now = Date.now();
-  const thirtyDaysAgo = now - 30 * 24 * 60 * 60 * 1000;
+  const rawCutoff    = now - keepRawDays * 24 * 60 * 60 * 1000;
+  const hourlyCutoff = now - 30 * 24 * 60 * 60 * 1000;
 
-  console.log('[Compaction] Starting...');
+  console.log(`[Compaction] Starting (raw retention: ${keepRawDays}d)...`);
 
-  // Compact >30 day old hourly averages into daily (preserves min_sell/max_buy)
+  // === TIER 1→2: Migrate price_averages hourly older than rawCutoff into price_hourly ===
   db.all(
     `SELECT item_id, quality, city,
-      CAST(period_start / 86400000 AS INTEGER) * 86400000 as day_start,
-      AVG(avg_sell) as avg_sell,
-      AVG(avg_buy) as avg_buy,
-      MIN(CASE WHEN min_sell > 0 THEN min_sell ELSE NULL END) as min_sell,
-      MAX(max_buy) as max_buy,
-      SUM(sample_count) as cnt
+      strftime('%Y-%m-%dT%H', datetime(period_start/1000, 'unixepoch')) as hour,
+      avg_sell as open_price,
+      avg_sell as high_price,
+      CASE WHEN min_sell > 0 THEN min_sell ELSE avg_sell END as low_price,
+      avg_sell as close_price,
+      avg_sell as avg_price,
+      sample_count as volume
     FROM price_averages
-    WHERE period_type = 'hourly' AND period_start < ?
-    GROUP BY item_id, quality, city, day_start`,
-    [thirtyDaysAgo],
+    WHERE period_type = 'hourly' AND period_start < ?`,
+    [rawCutoff],
     (err, rows) => {
-      if (err || !rows || rows.length === 0) return;
-
-      const stmt = db.prepare(`INSERT OR REPLACE INTO price_averages (item_id, quality, city, avg_sell, avg_buy, min_sell, max_buy, sample_count, period_type, period_start) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
-      db.run('BEGIN TRANSACTION');
-      for (const r of rows) {
-        stmt.run(r.item_id, r.quality, r.city, Math.round(r.avg_sell), Math.round(r.avg_buy), r.min_sell || 0, r.max_buy || 0, r.cnt, 'daily', r.day_start);
-      }
-      db.run('COMMIT', () => {
-        stmt.finalize();
-        // Use a regular function (not arrow) so this.changes is available
-        db.run(`DELETE FROM price_averages WHERE period_type = 'hourly' AND period_start < ?`, [thirtyDaysAgo], function(err2) {
-          const deleted = this.changes || 0;
-          if (!err2) console.log(`[Compaction] Compacted ${rows.length} daily averages, deleted ${deleted} old hourly rows`);
-          scheduleVacuumIfNeeded(deleted);
+      if (err) { console.error('[Compaction] Tier1→2 error:', err.message); return; }
+      if (!rows || rows.length === 0) {
+        console.log('[Compaction] No hourly rows to migrate');
+      } else {
+        db.serialize(() => {
+          db.run('BEGIN TRANSACTION');
+          const stmt = db.prepare(`INSERT OR IGNORE INTO price_hourly (item_id, city, quality, hour, open_price, high_price, low_price, close_price, avg_price, volume) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+          for (const r of rows) {
+            stmt.run(r.item_id, r.city, r.quality, r.hour, r.open_price, r.high_price, r.low_price, r.close_price, r.avg_price, r.volume);
+          }
+          stmt.finalize();
+          db.run('COMMIT', () => {
+            db.run(`DELETE FROM price_averages WHERE period_type = 'hourly' AND period_start < ?`, [rawCutoff], function(err2) {
+              const deleted = this.changes || 0;
+              if (!err2) console.log(`[Compaction] Tier1→2: migrated ${rows.length} rows to price_hourly, deleted ${deleted} raw rows`);
+              scheduleVacuumIfNeeded(deleted);
+            });
+          });
         });
-      });
+      }
+
+      // === TIER 2→3: Roll price_hourly older than 30 days into price_averages daily ===
+      // SQLite strftime comparison: convert hourlyCutoff ms to ISO hour string
+      const hourlyCutoffSec = Math.floor(hourlyCutoff / 1000);
+      const hourlyCutoffStr = new Date(hourlyCutoff).toISOString().slice(0, 13); // 'YYYY-MM-DDTHH'
+      db.all(
+        `SELECT item_id, city, quality,
+          CAST(strftime('%s', hour || ':00:00') AS INTEGER) / 86400 * 86400000 as day_start,
+          AVG(avg_price) as avg_sell,
+          AVG(avg_price) as avg_buy,
+          MIN(low_price) as min_sell,
+          MAX(high_price) as max_buy,
+          SUM(volume) as cnt
+        FROM price_hourly
+        WHERE hour < ?
+        GROUP BY item_id, city, quality, day_start`,
+        [hourlyCutoffStr],
+        (errH, hrows) => {
+          if (errH) { console.error('[Compaction] Tier2→3 error:', errH.message); return; }
+          if (!hrows || hrows.length === 0) { console.log('[Compaction] No price_hourly rows to roll into daily'); return; }
+
+          db.serialize(() => {
+            db.run('BEGIN TRANSACTION');
+            const stmt2 = db.prepare(`INSERT OR REPLACE INTO price_averages (item_id, quality, city, avg_sell, avg_buy, min_sell, max_buy, sample_count, period_type, period_start) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'daily', ?)`);
+            for (const r of hrows) {
+              stmt2.run(r.item_id, r.quality, r.city, Math.round(r.avg_sell), Math.round(r.avg_buy), r.min_sell || 0, r.max_buy || 0, r.cnt, r.day_start);
+            }
+            stmt2.finalize();
+            db.run('COMMIT', () => {
+              db.run(`DELETE FROM price_hourly WHERE hour < ?`, [hourlyCutoffStr], function(err3) {
+                const deletedH = this.changes || 0;
+                if (!err3) console.log(`[Compaction] Tier2→3: compacted ${hrows.length} daily rows, deleted ${deletedH} price_hourly rows`);
+                scheduleVacuumIfNeeded(deletedH);
+              });
+            });
+          });
+        }
+      );
     }
   );
 
@@ -2758,10 +2955,247 @@ function compactOldData() {
   db.run(`DELETE FROM contributions WHERE created_at < ?`, [sixtyDaysAgo]);
 }
 
+// === DISK SAFETY CHECK (runs alongside compaction every 2 hours) ===
+// Prevents SQLite DB from growing unbounded. Adaptive retention based on DB size.
+const DB_WARN_GB  = 10;
+const DB_EMERG_GB = 20;
+
+function checkDiskUsage() {
+  db.get(`SELECT page_count * page_size as size FROM pragma_page_count(), pragma_page_size()`, (err, row) => {
+    if (err || !row) return;
+    const sizeBytes = row.size;
+    const sizeGB = sizeBytes / (1024 * 1024 * 1024);
+    const sizeMB = sizeBytes / (1024 * 1024);
+
+    if (sizeGB >= DB_EMERG_GB) {
+      console.error(`[DiskSafety] EMERGENCY: DB is ${sizeGB.toFixed(1)}GB (>${DB_EMERG_GB}GB). Emergency compact: 1 day raw retention`);
+      compactOldData(1);
+    } else if (sizeGB >= DB_WARN_GB) {
+      console.warn(`[DiskSafety] WARNING: DB is ${sizeGB.toFixed(1)}GB (>${DB_WARN_GB}GB). Aggressive compact: 3 day raw retention`);
+      compactOldData(3);
+    } else {
+      console.log(`[DiskSafety] DB size: ${sizeMB.toFixed(0)}MB — OK`);
+    }
+  });
+}
+
 // Run compaction every 2 hours, first run 25 minutes after start
 // STAGGERED: SpreadStats runs at 10min+hourly, compaction at 25min+2h — they never overlap
-setTimeout(compactOldData, 25 * 60 * 1000);
-setInterval(compactOldData, 2 * 60 * 60 * 1000);
+setTimeout(() => { checkDiskUsage(); compactOldData(); }, 25 * 60 * 1000);
+setInterval(() => { checkDiskUsage(); compactOldData(); }, 2 * 60 * 60 * 1000);
+
+// === ANALYTICS COMPUTATION ENGINE ===
+// Computes SMA 7d, SMA 30d, EMA 7d, VWAP 7d, price_trend, spread_volatility
+// per active item+city+quality combo. Runs every 30 minutes.
+let analyticsRunning = false;
+let analyticsStartTime = 0;
+
+function computeAnalytics() {
+  if (analyticsRunning) {
+    if (Date.now() - analyticsStartTime > 25 * 60 * 1000) {
+      console.error('[Analytics] Resetting stuck analyticsRunning flag after 25min');
+      analyticsRunning = false;
+    } else {
+      console.log('[Analytics] Busy, skipping this cycle');
+      return;
+    }
+  }
+  if (dbBusy) { console.log('[Analytics] DB busy, skipping'); return; }
+  analyticsRunning = true;
+  analyticsStartTime = Date.now();
+
+  const now = Date.now();
+  const sevenDaysAgo  = now - 7  * 24 * 60 * 60 * 1000;
+  const thirtyDaysAgo = now - 30 * 24 * 60 * 60 * 1000;
+  const oneDayAgo     = now - 24 * 60 * 60 * 1000;
+  const computedAt    = new Date(now).toISOString();
+
+  console.log('[Analytics] Starting computation...');
+
+  // === STEP 1: Bulk SQL metrics (SMA 7d, SMA 30d, VWAP 7d, price_trend, spread_volatility) ===
+  // One GROUP BY query per metric window to minimize JS memory. Each produces one row per combo.
+  db.all(
+    `SELECT item_id, city, quality,
+      AVG(CASE WHEN avg_sell > 0 THEN avg_sell ELSE NULL END) AS sma_7d,
+      AVG(CASE WHEN avg_sell > 0 THEN avg_sell * sample_count ELSE NULL END) /
+        NULLIF(AVG(CASE WHEN avg_sell > 0 THEN sample_count ELSE NULL END), 0) AS vwap_7d,
+      AVG(CASE WHEN period_start > ? AND avg_sell > 0 THEN avg_sell ELSE NULL END) AS avg_24h,
+      COUNT(CASE WHEN avg_sell > 0 THEN 1 ELSE NULL END) AS data_points_7d,
+      SUM(CASE WHEN min_sell > 0 AND max_buy > 0 THEN (min_sell - max_buy) ELSE NULL END) AS sum_spread,
+      SUM(CASE WHEN min_sell > 0 AND max_buy > 0 THEN (min_sell - max_buy) * (min_sell - max_buy) ELSE NULL END) AS sum_spread_sq,
+      COUNT(CASE WHEN min_sell > 0 AND max_buy > 0 THEN 1 ELSE NULL END) AS spread_count
+    FROM price_averages
+    WHERE period_start > ? AND (avg_sell > 0 OR avg_buy > 0)
+    GROUP BY item_id, city, quality
+    HAVING data_points_7d >= 2`,
+    [oneDayAgo, sevenDaysAgo],
+    (err, rows7d) => {
+      if (err || !rows7d || rows7d.length === 0) {
+        console.log('[Analytics] No 7d data, skipping');
+        analyticsRunning = false;
+        return;
+      }
+      // Build lookup for 7d results keyed by item_id|city|quality
+      const map7d = {};
+      for (const r of rows7d) {
+        map7d[r.item_id + '|' + r.city + '|' + r.quality] = r;
+      }
+
+      // SMA 30d — separate query since it spans a different time window
+      db.all(
+        `SELECT item_id, city, quality,
+          AVG(CASE WHEN avg_sell > 0 THEN avg_sell ELSE NULL END) AS sma_30d
+        FROM price_averages
+        WHERE period_start > ? AND (avg_sell > 0 OR avg_buy > 0)
+        GROUP BY item_id, city, quality`,
+        [thirtyDaysAgo],
+        (err2, rows30d) => {
+          if (err2) { analyticsRunning = false; return; }
+
+          const map30d = {};
+          for (const r of rows30d || []) {
+            map30d[r.item_id + '|' + r.city + '|' + r.quality] = r.sma_30d;
+          }
+
+          // === STEP 2: Write bulk metrics (all except EMA) ===
+          const bulkResults = []; // [ [item_id, city, quality, metric, value, computedAt], ... ]
+          const combos = Object.keys(map7d);
+
+          for (const key of combos) {
+            const r = map7d[key];
+            const [item_id, city, quality] = key.split('|');
+            const q = parseInt(quality);
+
+            if (r.sma_7d > 0) bulkResults.push([item_id, city, q, 'sma_7d', r.sma_7d, computedAt]);
+
+            const sma30 = map30d[key];
+            if (sma30 > 0) bulkResults.push([item_id, city, q, 'sma_30d', sma30, computedAt]);
+
+            if (r.vwap_7d > 0) bulkResults.push([item_id, city, q, 'vwap_7d', r.vwap_7d, computedAt]);
+
+            // Price trend: ((24h avg - sma_7d) / sma_7d) * 100
+            if (r.avg_24h > 0 && r.sma_7d > 0) {
+              const trend = ((r.avg_24h - r.sma_7d) / r.sma_7d) * 100;
+              bulkResults.push([item_id, city, q, 'price_trend', trend, computedAt]);
+            }
+
+            // Spread volatility: sqrt(sum_sq/n - (sum/n)^2)
+            if (r.spread_count >= 2) {
+              const mean = r.sum_spread / r.spread_count;
+              const variance = (r.sum_spread_sq / r.spread_count) - (mean * mean);
+              const stddev = variance > 0 ? Math.sqrt(variance) : 0;
+              bulkResults.push([item_id, city, q, 'spread_volatility', stddev, computedAt]);
+            }
+          }
+
+          // Flush bulk results in transaction
+          function flushBulk(results, cb) {
+            if (results.length === 0) return cb();
+            db.serialize(() => {
+              db.run('BEGIN TRANSACTION');
+              const stmt = db.prepare(`INSERT OR REPLACE INTO price_analytics (item_id, city, quality, metric, value, computed_at) VALUES (?, ?, ?, ?, ?, ?)`);
+              for (const row of results) stmt.run(...row);
+              stmt.finalize();
+              db.run('COMMIT', cb);
+            });
+          }
+
+          flushBulk(bulkResults, () => {
+            console.log(`[Analytics] Wrote ${bulkResults.length} bulk metrics (SMA/VWAP/trend/volatility)`);
+
+            // === STEP 3: EMA 7d — batched per combo (needs ordered price series) ===
+            // α = 2/(7+1) = 0.25 for a 7-period EMA
+            const EMA_ALPHA = 0.25;
+            const BATCH_SIZE = 100;
+            let batchIdx = 0;
+            let emaWritten = 0;
+
+            function processEmaBatch() {
+              const end = Math.min(batchIdx + BATCH_SIZE, combos.length);
+              if (batchIdx >= combos.length) {
+                const elapsed = Math.round((Date.now() - analyticsStartTime) / 1000);
+                console.log(`[Analytics] Done. EMA rows written: ${emaWritten}. Total time: ${elapsed}s`);
+                analyticsRunning = false;
+                return;
+              }
+
+              const batchCombos = combos.slice(batchIdx, end);
+              batchIdx = end;
+
+              // Build IN clause using concatenated key (compatible with all SQLite versions)
+              const placeholders = batchCombos.map(() => '?').join(',');
+
+              db.all(
+                `SELECT item_id, city, quality, avg_sell
+                FROM price_averages
+                WHERE period_start > ?
+                  AND avg_sell > 0
+                  AND (item_id || '|' || city || '|' || quality) IN (${placeholders})
+                ORDER BY item_id, city, quality, period_start ASC`,
+                [sevenDaysAgo, ...batchCombos],
+                (errEma, priceRows) => {
+                  if (errEma || !priceRows || priceRows.length === 0) {
+                    setTimeout(processEmaBatch, 20);
+                    return;
+                  }
+
+                  // Group rows by combo key and compute EMA
+                  const emaResults = [];
+                  let curKey = null, curPrices = [];
+
+                  function computeEmaForKey(key, prices) {
+                    if (prices.length === 0) return;
+                    let ema = prices[0].avg_sell;
+                    for (let i = 1; i < prices.length; i++) {
+                      ema = EMA_ALPHA * prices[i].avg_sell + (1 - EMA_ALPHA) * ema;
+                    }
+                    const [ii, cc, qq] = key.split('|');
+                    emaResults.push([ii, cc, parseInt(qq), 'ema_7d', ema, computedAt]);
+                  }
+
+                  for (const pr of priceRows) {
+                    const k = pr.item_id + '|' + pr.city + '|' + pr.quality;
+                    if (k !== curKey) {
+                      if (curKey) computeEmaForKey(curKey, curPrices);
+                      curKey = k;
+                      curPrices = [pr];
+                    } else {
+                      curPrices.push(pr);
+                    }
+                  }
+                  if (curKey) computeEmaForKey(curKey, curPrices);
+
+                  if (emaResults.length === 0) {
+                    setTimeout(processEmaBatch, 20);
+                    return;
+                  }
+
+                  db.serialize(() => {
+                    db.run('BEGIN TRANSACTION');
+                    const stmt = db.prepare(`INSERT OR REPLACE INTO price_analytics (item_id, city, quality, metric, value, computed_at) VALUES (?, ?, ?, ?, ?, ?)`);
+                    for (const row of emaResults) stmt.run(...row);
+                    stmt.finalize();
+                    db.run('COMMIT', () => {
+                      emaWritten += emaResults.length;
+                      setTimeout(processEmaBatch, 30); // yield to event loop
+                    });
+                  });
+                }
+              );
+            }
+
+            processEmaBatch();
+          });
+        }
+      );
+    }
+  );
+}
+
+// Run analytics every 30 minutes; first run 35 minutes after start (after spread stats)
+// STAGGERED: SpreadStats @10min, Compaction @25min, Analytics @35min
+setTimeout(computeAnalytics, 35 * 60 * 1000);
+setInterval(computeAnalytics, 30 * 60 * 1000);
 
 // === HISTORICAL BACKFILL (Charts + History APIs) ===
 // Runs once on start if no historical data exists

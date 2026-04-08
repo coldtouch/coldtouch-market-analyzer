@@ -41,8 +41,10 @@ let compareSelectedId = null;
 let arbSearchExactId = null;
 let craftSearchExactId = null;
 let priceChartInstance = null;
+let analyticsChartInstance = null;
 let scanAbortController = null;
 let spreadStatsCache = {}; // keyed by "itemId_quality_buyCity_sellCity"
+const analyticsCache = new Map(); // keyed by itemId, value: { price_trend, latest_price } | 'pending'
 let spreadStatsCacheTime = 0;
 let discordUser = null; // stored on auth check for contribution tracking
 
@@ -679,6 +681,62 @@ function getConfidenceBadge(confidence) {
     return `<span class="confidence-badge ${cls}" title="Historical confidence: ${confidence}% — Based on 7 days of server scans">${confidence}% ${label}</span>`;
 }
 
+function getTrendBadge(priceTrend) {
+    if (priceTrend === null || priceTrend === undefined) return '';
+    if (priceTrend > 2) {
+        return `<span class="trend-badge trend-up" title="Price trending up ${priceTrend.toFixed(1)}% over last 7 days">&#9650; ${priceTrend.toFixed(1)}%</span>`;
+    } else if (priceTrend < -2) {
+        return `<span class="trend-badge trend-down" title="Price trending down ${Math.abs(priceTrend).toFixed(1)}% over last 7 days">&#9660; ${Math.abs(priceTrend).toFixed(1)}%</span>`;
+    }
+    return `<span class="trend-badge trend-neutral" title="Price stable (${priceTrend.toFixed(1)}% over 7 days)">&#8212; ${Math.abs(priceTrend).toFixed(1)}%</span>`;
+}
+
+function getVolatilityBadge(consistencyPct) {
+    if (consistencyPct === null || consistencyPct === undefined) return '';
+    if (consistencyPct < 50) {
+        return `<span class="volatile-badge" title="High spread volatility — this route is only profitable ${consistencyPct}% of the time. Proceeds may vary significantly.">Volatile</span>`;
+    }
+    return '';
+}
+
+async function fetchAnalytics(itemId) {
+    if (analyticsCache.has(itemId)) return analyticsCache.get(itemId);
+    analyticsCache.set(itemId, 'pending');
+    try {
+        const res = await fetch(`${VPS_BASE}/api/analytics/${encodeURIComponent(itemId)}`);
+        if (!res.ok) { analyticsCache.delete(itemId); return null; }
+        const data = await res.json();
+        analyticsCache.set(itemId, data);
+        return data;
+    } catch {
+        analyticsCache.delete(itemId);
+        return null;
+    }
+}
+
+function prefetchTrendBadges(container) {
+    const seen = new Set();
+    container.querySelectorAll('[data-trend-item]').forEach(el => {
+        const itemId = el.dataset.trendItem;
+        if (seen.has(itemId)) return;
+        seen.add(itemId);
+        fetchAnalytics(itemId).then(data => {
+            if (!data || data === 'pending' || data.price_trend === undefined) return;
+            container.querySelectorAll(`[data-trend-item="${CSS.escape(itemId)}"]`).forEach(badge => {
+                badge.outerHTML = getTrendBadge(data.price_trend);
+            });
+        });
+    });
+}
+
+function computeSMA(values, period) {
+    return values.map((_, i) => {
+        if (i < period - 1) return null;
+        const slice = values.slice(i - period + 1, i + 1).filter(v => v > 0);
+        return slice.length > 0 ? slice.reduce((a, b) => a + b, 0) / slice.length : null;
+    });
+}
+
 // ============================================================
 // MARKET FLIPPING (ARBITRAGE)
 // ============================================================
@@ -848,7 +906,7 @@ function buildArbitrageCardDOM(trade) {
                 ${getEnchantmentBadge(trade.itemId)}
             </div>
             <div class="header-titles">
-                <div class="item-name">${esc(getFriendlyName(trade.itemId))}</div>
+                <div class="item-name">${esc(getFriendlyName(trade.itemId))} <span class="trend-badge" data-trend-item="${esc(trade.itemId)}"></span></div>
                 <span class="item-quality">${getQualityName(trade.quality)}</span>
             </div>
         </div>
@@ -895,8 +953,9 @@ function buildArbitrageCardDOM(trade) {
                 <span title="Sell Data Age">${getFreshnessIndicator(trade.dateSell)} ${esc(trade.sellCity)}: ${timeAgo(trade.dateSell)}</span>
             </div>
             ${trade.confidence !== null ? `
-            <div style="margin-top:0.4rem; display:flex; justify-content:center; align-items:center; gap:0.5rem;">
+            <div style="margin-top:0.4rem; display:flex; justify-content:center; align-items:center; gap:0.5rem; flex-wrap:wrap;">
                 ${getConfidenceBadge(trade.confidence)}
+                ${getVolatilityBadge(trade.consistencyPct)}
                 <span title="Profitable ${trade.consistencyPct}% of the time over 7 days (${trade.sampleCount} samples). Avg spread: ${trade.avgSpread ? Math.floor(trade.avgSpread).toLocaleString() : '?'} silver">
                     Profitable ${trade.consistencyPct}% of the time
                 </span>
@@ -975,6 +1034,7 @@ function renderArbitrage(trades, isSingleItem = false, targetItemId = null) {
     });
 
     setupCardButtons(container);
+    prefetchTrendBadges(container);
 }
 
 async function doArbScan(targetItemId = null) {
@@ -1905,12 +1965,20 @@ async function showGraph(itemId) {
     const citySelect = document.getElementById('chart-city-select');
 
     modal.classList.remove('hidden');
-    
+
+    // Reset to live tab on each new item
+    document.getElementById('chart-pane-live').classList.remove('hidden');
+    document.getElementById('chart-pane-analytics').classList.add('hidden');
+    document.querySelectorAll('.chart-tab-btn').forEach(b => {
+        b.classList.toggle('active', b.dataset.chartTab === 'live');
+    });
+
     if (priceChartInstance) priceChartInstance.destroy();
+    if (analyticsChartInstance) { analyticsChartInstance.destroy(); analyticsChartInstance = null; }
     document.getElementById('chart-avg-price').textContent = 'Loading...';
     document.getElementById('sell-orders-list').innerHTML = '';
     document.getElementById('buy-orders-list').innerHTML = '';
-    
+
     if (citySelect) {
         citySelect.innerHTML = '<option>Loading...</option>';
         citySelect.disabled = true;
@@ -1929,10 +1997,10 @@ async function showGraph(itemId) {
 
         currentChartData = data;
         currentChartItemId = itemId;
-        
+
         // Extract unique locations
         const uniqueLocations = [...new Set(data.map(d => d.location).filter(Boolean))].sort();
-        
+
         let defaultCity = null;
         if (citySelect && uniqueLocations.length > 0) {
             citySelect.innerHTML = '';
@@ -1942,22 +2010,34 @@ async function showGraph(itemId) {
                 opt.textContent = loc;
                 citySelect.appendChild(opt);
             });
-            
+
             // Default to non-BM city if possible
             const nonBM = uniqueLocations.filter(c => c !== 'Black Market');
             defaultCity = nonBM.length > 0 ? nonBM[0] : uniqueLocations[0];
             citySelect.value = defaultCity;
             citySelect.disabled = false;
-            
+
             citySelect.onchange = () => {
                 renderChartForCity(citySelect.value);
+                const analyticsPane = document.getElementById('chart-pane-analytics');
+                if (!analyticsPane.classList.contains('hidden')) {
+                    const days = parseInt(document.querySelector('input[name="analytics-time"]:checked')?.value || '30');
+                    renderAnalyticsChart(currentChartItemId, citySelect.value, days);
+                }
             };
         } else {
             defaultCity = data[0].location; // Fallback
         }
-        
+
         document.querySelectorAll('input[name="chart-time"]').forEach(radio => {
             radio.onclick = () => renderChartForCity(citySelect.value || defaultCity);
+        });
+
+        document.querySelectorAll('input[name="analytics-time"]').forEach(radio => {
+            radio.onclick = () => {
+                const city = citySelect?.value || defaultCity;
+                renderAnalyticsChart(currentChartItemId, city, parseInt(radio.value));
+            };
         });
 
         renderChartForCity(defaultCity);
@@ -2115,6 +2195,140 @@ function renderChartForCity(city) {
                 }
             }
         });
+}
+
+async function renderAnalyticsChart(itemId, city, days) {
+    if (!itemId || !city) return;
+    const canvas = document.getElementById('analyticsChart');
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+
+    document.getElementById('analytics-avg-price').textContent = 'Loading...';
+    document.getElementById('analytics-legend').innerHTML = '';
+
+    if (analyticsChartInstance) { analyticsChartInstance.destroy(); analyticsChartInstance = null; }
+
+    try {
+        const res = await fetch(`${VPS_BASE}/api/price-history?item_id=${encodeURIComponent(itemId)}&city=${encodeURIComponent(city)}&days=${days}`);
+        if (!res.ok) throw new Error('fetch failed');
+        const data = await res.json();
+        // Support legacy array and new { history, ohlc, analytics } envelope
+        const rows = Array.isArray(data) ? data : (data.history || []);
+
+        if (!rows || rows.length < 2) {
+            document.getElementById('analytics-avg-price').textContent = 'No data';
+            document.getElementById('analytics-legend').innerHTML = `<span style="color:var(--text-muted); font-size:0.8rem;">No historical data from our servers for this item/city yet. Data accumulates over time as scans run.</span>`;
+            return;
+        }
+
+        const labels = rows.map(r => {
+            const d = new Date(r.recorded_at);
+            return `${d.getMonth() + 1}/${d.getDate()}`;
+        });
+        const prices = rows.map(r => r.sell_price_min || 0);
+        const highs = rows.map(r => r.min_sell || 0);
+        const sma7 = computeSMA(prices, 7);
+        const sma30 = computeSMA(prices, 30);
+
+        const validPrices = prices.filter(p => p > 0);
+        if (validPrices.length > 0) {
+            const avg = validPrices.reduce((a, b) => a + b, 0) / validPrices.length;
+            document.getElementById('analytics-avg-price').textContent = Math.round(avg).toLocaleString();
+        } else {
+            document.getElementById('analytics-avg-price').textContent = '—';
+        }
+
+        document.getElementById('analytics-legend').innerHTML = `
+            <span class="analytics-legend-item"><span class="analytics-legend-dot" style="background:#c64a38;"></span>Price</span>
+            <span class="analytics-legend-item"><span class="analytics-legend-dot" style="background:#d4af37;"></span>SMA 7d</span>
+            <span class="analytics-legend-item"><span class="analytics-legend-dot" style="background:#7c9fcc;"></span>SMA 30d</span>
+        `;
+
+        analyticsChartInstance = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels,
+                datasets: [
+                    {
+                        label: 'Price',
+                        data: prices.map(p => p > 0 ? p : null),
+                        borderColor: '#c64a38',
+                        backgroundColor: 'rgba(198,74,56,0.08)',
+                        borderWidth: 1.5,
+                        pointRadius: 2,
+                        tension: 0.2,
+                        fill: false,
+                        spanGaps: true,
+                        yAxisID: 'y'
+                    },
+                    {
+                        label: 'SMA 7d',
+                        data: sma7,
+                        borderColor: '#d4af37',
+                        backgroundColor: 'transparent',
+                        borderWidth: 2,
+                        pointRadius: 0,
+                        tension: 0.3,
+                        fill: false,
+                        spanGaps: true,
+                        yAxisID: 'y'
+                    },
+                    {
+                        label: 'SMA 30d',
+                        data: sma30,
+                        borderColor: '#7c9fcc',
+                        backgroundColor: 'transparent',
+                        borderWidth: 2,
+                        pointRadius: 0,
+                        tension: 0.3,
+                        fill: false,
+                        spanGaps: true,
+                        yAxisID: 'y'
+                    }
+                ]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                interaction: { mode: 'index', intersect: false },
+                scales: {
+                    x: {
+                        display: true,
+                        grid: { display: false },
+                        ticks: { color: '#8e7c65', font: { weight: 'bold' }, maxRotation: 0, maxTicksLimit: 10 }
+                    },
+                    y: {
+                        type: 'linear',
+                        display: true,
+                        position: 'left',
+                        beginAtZero: false,
+                        grid: { color: 'rgba(177,148,114,0.3)' },
+                        ticks: { color: '#8e7c65', font: { weight: 'bold' }, maxTicksLimit: 5 }
+                    }
+                },
+                plugins: {
+                    legend: { display: false },
+                    tooltip: {
+                        backgroundColor: '#1c1814',
+                        titleColor: '#a89c8a',
+                        bodyColor: '#ffffff',
+                        borderColor: '#4a3e31',
+                        borderWidth: 1,
+                        padding: 10,
+                        displayColors: true,
+                        callbacks: {
+                            label: ctx => {
+                                if (ctx.parsed.y === null) return null;
+                                return `  ${ctx.dataset.label}: 💰${Math.round(ctx.parsed.y).toLocaleString()}`;
+                            }
+                        }
+                    }
+                }
+            }
+        });
+    } catch (e) {
+        document.getElementById('analytics-avg-price').textContent = 'Error';
+    }
 }
 
 // ====== AUTOCOMPLETE SETUP ======
@@ -2355,7 +2569,7 @@ function renderBMFlips(trades) {
                     ${getEnchantmentBadge(trade.itemId)}
                 </div>
                 <div class="header-titles">
-                    <div class="item-name">${esc(getFriendlyName(trade.itemId))}</div>
+                    <div class="item-name">${esc(getFriendlyName(trade.itemId))} <span class="trend-badge" data-trend-item="${esc(trade.itemId)}"></span></div>
                     <span class="item-quality">${getQualityName(trade.quality)} ${getTierEnchLabel(trade.itemId)}</span>
                 </div>
             </div>
@@ -2387,8 +2601,9 @@ function renderBMFlips(trades) {
                     <span title="Sell Data Age">${getFreshnessIndicator(trade.dateSell)} BM: ${timeAgo(trade.dateSell)}</span>
                 </div>
                 ${trade.confidence !== null ? `
-                <div style="margin-top:0.4rem; display:flex; justify-content:center; align-items:center; gap:0.5rem;">
+                <div style="margin-top:0.4rem; display:flex; justify-content:center; align-items:center; gap:0.5rem; flex-wrap:wrap;">
                     ${getConfidenceBadge(trade.confidence)}
+                    ${getVolatilityBadge(trade.consistencyPct)}
                     <span title="Profitable ${trade.consistencyPct}% of the time over 7 days (${trade.sampleCount} samples)">
                         Profitable ${trade.consistencyPct}% of the time
                     </span>
@@ -2413,6 +2628,7 @@ function renderBMFlips(trades) {
     });
 
     setupCardButtons(container);
+    prefetchTrendBadges(container);
 }
 
 // ============================================================
@@ -3373,6 +3589,22 @@ async function init() {
     // Chart modal close
     document.getElementById('chart-close-btn').addEventListener('click', () => {
         document.getElementById('chart-modal').classList.add('hidden');
+    });
+
+    // Chart tab switching
+    document.querySelectorAll('.chart-tab-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            document.querySelectorAll('.chart-tab-btn').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            const tab = btn.dataset.chartTab;
+            document.getElementById('chart-pane-live').classList.toggle('hidden', tab !== 'live');
+            document.getElementById('chart-pane-analytics').classList.toggle('hidden', tab !== 'analytics');
+            if (tab === 'analytics' && currentChartItemId) {
+                const city = document.getElementById('chart-city-select')?.value;
+                const days = parseInt(document.querySelector('input[name="analytics-time"]:checked')?.value || '30');
+                if (city && city !== 'Loading...') renderAnalyticsChart(currentChartItemId, city, days);
+            }
+        });
     });
 
     // Black Market Flipper tab
@@ -5783,7 +6015,10 @@ function renderTransportResults(routes, budget, mountCapacity, haulPlans, availa
                         <div class="item-name">${esc(getFriendlyName(r.itemId))}</div>
                         <span class="item-quality">${getQualityName(r.quality)} ${getTierEnchLabel(r.itemId)}</span>
                     </div>
-                    ${r.confidence !== null ? getConfidenceBadge(r.confidence) : ''}
+                    <div style="display:flex; gap:0.3rem; align-items:center; flex-wrap:wrap;">
+                        ${r.confidence !== null ? getConfidenceBadge(r.confidence) : ''}
+                        ${getVolatilityBadge(r.consistencyPct)}
+                    </div>
                 </div>
                 <div class="transport-route-bar">
                     <span class="city-tag">${esc(r.buyCity)}</span>
