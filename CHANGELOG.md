@@ -2,6 +2,15 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-04-09 — Audit fixes #1-6
+
+- **Fix #1:** `computeAnalytics` moved to `statsDb` connection — was silently failing with SQLITE_BUSY because it ran on the main DB connection that blocks all user requests. Now properly logs errors instead of "No 7d data, skipping."
+- **Fix #2:** `itemNames` → `ITEM_NAMES` in Loot Buyer sale form (2 occurrences) — sale recording dropdown was showing raw item IDs instead of friendly names.
+- **Fix #3:** XSS fix — `esc()` added to `plan.buyCity`/`plan.sellCity` in innerHTML on transport haul cards.
+- **Fix #4:** `scanAbortController` wired into `doArbScan` and `doTransportScan` — rapid clicks now abort the previous scan instead of firing duplicate fetch chains.
+- **Fix #5:** Analytics chart now shows **EMA 7d** (green dashed) and **VWAP** (purple dashed, when volume data available) alongside Price, SMA 7d, and SMA 30d. Added `computeEMA()` helper.
+- **Fix #6:** **Stale data badges** on Market Flipper cards — red "STALE DATA" badge when prices are 6+ hours old, yellow "Data is 2+ hours old" warning for moderately aged data.
+
 ### 2026-04-09 — Loot Logger Viewer + Accountability Check
 
 - **New tab: Loot Logger** — under Trading group. Three modes: Live Sessions, Upload Log File, Accountability Check.
