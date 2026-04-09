@@ -2,6 +2,12 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-04-09 — Audit fixes #7-9: Toasts, cross-feature links, price cache
+
+- **Fix #7:** Replaced 20+ `alert()` calls with non-blocking toast notifications. Toast system supports info/warn/error/success types with auto-dismiss. 5 `confirm()` calls kept for destructive actions only.
+- **Fix #8:** Cross-feature synergy links — "Craft?" button on Market Flipper cards jumps to Crafting tab with item pre-filled. "Flips" button on Market Browser cards scans that item for flip opportunities.
+- **Fix #9:** Module-level price cache (`getCachedPrices()`) with 30-second TTL. `renderBrowser()` no longer reads all IndexedDB prices on every page flip, filter, or sort change. Cache invalidated when new market data arrives.
+
 ### 2026-04-09 — Audit fixes #1-6
 
 - **Fix #1:** `computeAnalytics` moved to `statsDb` connection — was silently failing with SQLITE_BUSY because it ran on the main DB connection that blocks all user requests. Now properly logs errors instead of "No 7d data, skipping."
