@@ -17,6 +17,26 @@ const CHART_API_URLS = {
 const CITIES = ['Martlock', 'Thetford', 'Fort Sterling', 'Lymhurst', 'Bridgewatch', 'Caerleon', 'Brecilien', 'Black Market'];
 const TAX_RATE = 0.03;      // 3% market transaction tax (insta-sell to buy orders)
 const SETUP_FEE = 0.025;    // 2.5% listing setup fee (sell orders only; combined = 5.5%)
+
+// Transport mount carry-weight table. Mounts only add weight capacity — slots come from player inventory only.
+// "none" = player base carry capacity with a standard bag (600 kg).
+const MOUNT_DATA = {
+    'none':            { weight: 600,      label: 'No Mount'             },
+    'ox_t3':           { weight: 476,      label: 'T3 Transport Ox'      },
+    'ox_t5':           { weight: 816,      label: 'T5 Transport Ox'      },
+    'ox_t7':           { weight: 1262,     label: 'T7 Transport Ox'      },
+    'mammoth_t8':      { weight: 1764,     label: 'T8 Transport Mammoth'  },
+    'mammoth_saddled': { weight: 2308,     label: 'T8 Saddled Mammoth'   },
+    'ignore':          { weight: Infinity, label: 'Ignore Weight'         },
+};
+
+function getTransportMountConfig() {
+    const key = document.getElementById('transport-mount').value;
+    const mount = MOUNT_DATA[key] || MOUNT_DATA.none;
+    const freeSlots = Math.max(1, parseInt(document.getElementById('transport-free-slots').value) || 30);
+    return { mountCapacity: mount.weight, freeSlots };
+}
+
 const ITEMS_PER_PAGE = 48;
 const MAX_INVENTORY_SLOTS = 48;
 
@@ -1951,8 +1971,7 @@ function setupCardButtons(container) {
                 else if (currentTab === 'transport' && lastTransportRoutes) {
                     const budget = parseInt(document.getElementById('transport-budget').value) || 500000;
                     const sortBy = document.getElementById('transport-sort').value;
-                    const mountCapacity = parseInt(document.getElementById('transport-mount').value) || 0;
-                    const freeSlots = Math.max(1, Math.min(48, parseInt(document.getElementById('transport-free-slots').value) || 30));
+                    const { mountCapacity, freeSlots } = getTransportMountConfig();
                     await enrichAndRenderTransport(lastTransportRoutes, budget, sortBy, mountCapacity, freeSlots);
                 }
             } catch (err) {
@@ -3495,8 +3514,7 @@ async function init() {
             if (lastTransportRoutes) {
                 const budget = parseInt(document.getElementById('transport-budget').value) || 500000;
                 const sortBy = document.getElementById('transport-sort').value;
-                const mountCapacity = parseInt(document.getElementById('transport-mount').value) || 0;
-                const freeSlots = Math.max(1, Math.min(48, parseInt(document.getElementById('transport-free-slots').value) || 30));
+                const { mountCapacity, freeSlots } = getTransportMountConfig();
                 enrichAndRenderTransport(lastTransportRoutes, budget, sortBy, mountCapacity, freeSlots);
             }
         });
@@ -3535,8 +3553,7 @@ async function init() {
             if (lastTransportRoutes) {
                 const budget = parseInt(document.getElementById('transport-budget').value) || 500000;
                 const sortBy = document.getElementById('transport-sort').value;
-                const mountCapacity = parseInt(document.getElementById('transport-mount').value) || 0;
-                const freeSlots = Math.max(1, Math.min(48, parseInt(document.getElementById('transport-free-slots').value) || 30));
+                const { mountCapacity, freeSlots } = getTransportMountConfig();
                 enrichAndRenderTransport(lastTransportRoutes, budget, sortBy, mountCapacity, freeSlots);
             }
         });
@@ -3552,8 +3569,7 @@ async function init() {
             if (lastTransportRoutes) {
                 const budget = parseInt(document.getElementById('transport-budget').value) || 500000;
                 const sortBy = document.getElementById('transport-sort').value;
-                const mountCapacity = parseInt(document.getElementById('transport-mount').value) || 0;
-                const freeSlots = Math.max(1, Math.min(48, parseInt(document.getElementById('transport-free-slots').value) || 30));
+                const { mountCapacity, freeSlots } = getTransportMountConfig();
                 enrichAndRenderTransport(lastTransportRoutes, budget, sortBy, mountCapacity, freeSlots);
             }
         });
@@ -3563,11 +3579,33 @@ async function init() {
             if (lastTransportRoutes && transportFreshMode?.value !== 'off') {
                 const budget = parseInt(document.getElementById('transport-budget').value) || 500000;
                 const sortBy = document.getElementById('transport-sort').value;
-                const mountCapacity = parseInt(document.getElementById('transport-mount').value) || 0;
-                const freeSlots = Math.max(1, Math.min(48, parseInt(document.getElementById('transport-free-slots').value) || 30));
+                const { mountCapacity, freeSlots } = getTransportMountConfig();
                 enrichAndRenderTransport(lastTransportRoutes, budget, sortBy, mountCapacity, freeSlots);
             }
         });
+    }
+
+    // Transport mount: update capacity info line and re-render on change
+    const transportMountEl = document.getElementById('transport-mount');
+    function updateMountCapacityInfo() {
+        const key = transportMountEl?.value || 'mammoth_t8';
+        const md = MOUNT_DATA[key] || MOUNT_DATA['mammoth_t8'];
+        const infoEl = document.getElementById('transport-mount-info');
+        if (!infoEl) return;
+        const weightStr = Number.isFinite(md.weight) ? md.weight.toLocaleString() + ' kg' : '∞';
+        infoEl.textContent = `Carry capacity: ${weightStr}`;
+    }
+    if (transportMountEl) {
+        transportMountEl.addEventListener('change', () => {
+            updateMountCapacityInfo();
+            if (lastTransportRoutes) {
+                const budget = parseInt(document.getElementById('transport-budget').value) || 500000;
+                const sortBy = document.getElementById('transport-sort').value;
+                const { mountCapacity, freeSlots } = getTransportMountConfig();
+                enrichAndRenderTransport(lastTransportRoutes, budget, sortBy, mountCapacity, freeSlots);
+            }
+        });
+        updateMountCapacityInfo();
     }
 
     // Alerts tab
@@ -5332,7 +5370,7 @@ async function doTransportScan() {
     const budget = parseInt(document.getElementById('transport-budget').value) || 500000;
     const minConfidence = parseInt(document.getElementById('transport-min-confidence').value) || 0;
     const sortBy = document.getElementById('transport-sort').value;
-    const mountCapacity = parseInt(document.getElementById('transport-mount').value) || 0;
+    const mountKey = document.getElementById('transport-mount').value || 'mammoth_t8';
     const freeSlots = Math.max(1, Math.min(48, parseInt(document.getElementById('transport-free-slots').value) || 30));
     const transportMode = document.querySelector('.transport-mode-btn.active')?.dataset.mode || 'live';
     const sellStrategy = document.getElementById('transport-sell-strategy')?.value || 'market';
@@ -5386,15 +5424,17 @@ async function doTransportScan() {
         }
 
         spinner.classList.add('hidden');
-        await enrichAndRenderTransport(lastTransportRoutes, budget, sortBy, mountCapacity, freeSlots);
+        await enrichAndRenderTransport(lastTransportRoutes, budget, sortBy, mountKey, freeSlots);
     } catch (e) {
         spinner.classList.add('hidden');
         showError(errorEl, 'Failed to load transport routes: ' + e.message);
     }
 }
 
-async function enrichAndRenderTransport(routes, budget, sortBy, mountCapacity, freeSlots) {
-    const availableSlots = freeSlots || 30;
+async function enrichAndRenderTransport(routes, budget, sortBy, mountKey, freeSlots) {
+    const mountData = MOUNT_DATA[mountKey] || MOUNT_DATA['mammoth_t8'];
+    const mountCapacity = mountData.weight;
+    const availableSlots = (freeSlots || 30) + mountData.extraSlots;
     const transportMode = document.querySelector('.transport-mode-btn.active')?.dataset.mode || 'live';
 
     // Enrich with current live prices from IndexedDB
@@ -5501,7 +5541,7 @@ async function enrichAndRenderTransport(routes, budget, sortBy, mountCapacity, f
         const hasVolumeData = realisticVolume > 0;
         let maxByVolume = hasVolumeData ? Math.ceil(realisticVolume) : Infinity;
         let maxBySlots = stackable ? availableSlots * stackSize : availableSlots;
-        let maxByWeight = (mountCapacity > 0 && itemWeight > 0) ? Math.floor(mountCapacity / itemWeight) : Infinity;
+        let maxByWeight = itemWeight > 0 ? Math.floor(mountCapacity / itemWeight) : Infinity;
         // Hard cap: available quantity at this price (from NATS order amounts)
         const buyAmount = r._buyAmount || r.buyAmount || 0;
         let maxByAmount = buyAmount > 0 ? buyAmount : Infinity;
@@ -5614,14 +5654,14 @@ async function enrichAndRenderTransport(routes, budget, sortBy, mountCapacity, f
         const scored = items.map(item => {
             const maxAffordable = Math.floor(budget / item.buyPrice);
             const maxVol = item.realisticVolume > 0 ? Math.ceil(item.realisticVolume) : maxAffordable;
-            const maxWt = (item.itemWeight > 0 && mountCapacity > 0) ? Math.floor(mountCapacity / item.itemWeight) : maxAffordable;
+            const maxWt = item.itemWeight > 0 ? Math.floor(mountCapacity / item.itemWeight) : maxAffordable;
             const unitsPerSlot = item.stackable ? Math.min(item.stackSize, maxAffordable, maxVol) : 1;
             return { ...item, slotScore: item.profitPerUnit * unitsPerSlot };
         });
         scored.sort((a, b) => b.slotScore - a.slotScore);
 
         let remainingBudget = budget;
-        let remainingWeight = mountCapacity > 0 ? mountCapacity : 999999;
+        let remainingWeight = mountCapacity;
         let remainingSlots = availableSlots;
         const planItems = [];
 
@@ -5639,7 +5679,7 @@ async function enrichAndRenderTransport(routes, budget, sortBy, mountCapacity, f
             let maxVolume = item.realisticVolume > 0 ? Math.ceil(item.realisticVolume) : Infinity;
             const slotsAvail = Math.min(maxSlotsPerItem, remainingSlots);
             let maxSlots = item.stackable ? slotsAvail * item.stackSize : slotsAvail;
-            let maxWeight = (item.itemWeight > 0 && mountCapacity > 0) ? Math.floor(remainingWeight / item.itemWeight) : Infinity;
+            let maxWeight = item.itemWeight > 0 ? Math.floor(remainingWeight / item.itemWeight) : Infinity;
 
             const units = Math.min(maxAfford, maxVolume, maxSlots, maxWeight);
             if (units <= 0) continue;
@@ -5665,7 +5705,7 @@ async function enrichAndRenderTransport(routes, budget, sortBy, mountCapacity, f
                 if (extraAfford <= 0) continue;
                 let extraVol = pi.realisticVolume > 0 ? Math.max(0, Math.ceil(pi.realisticVolume) - pi.planUnits) : Infinity;
                 let extraSlots = pi.stackable ? remainingSlots * pi.stackSize : remainingSlots;
-                let extraWeight = (pi.itemWeight > 0 && mountCapacity > 0) ? Math.floor(remainingWeight / pi.itemWeight) : Infinity;
+                let extraWeight = pi.itemWeight > 0 ? Math.floor(remainingWeight / pi.itemWeight) : Infinity;
                 const extra = Math.min(extraAfford, extraVol, extraSlots, extraWeight);
                 if (extra <= 0) continue;
                 const extraCost = extra * pi.buyPrice;
@@ -5935,7 +5975,7 @@ function renderTransportResults(routes, budget, mountCapacity, haulPlans, availa
                         if (lastTransportRoutes) {
                             const b = parseInt(document.getElementById('transport-budget').value) || 500000;
                             const s = document.getElementById('transport-sort').value;
-                            const mc = parseInt(document.getElementById('transport-mount').value) || 0;
+                            const mc = document.getElementById('transport-mount').value || 'mammoth_t8';
                             const fs = Math.max(1, Math.min(48, parseInt(document.getElementById('transport-free-slots').value) || 30));
                             await enrichAndRenderTransport(lastTransportRoutes, b, s, mc, fs);
                         }
@@ -5959,7 +5999,7 @@ function renderTransportResults(routes, budget, mountCapacity, haulPlans, availa
                     if (lastTransportRoutes) {
                         const b = parseInt(document.getElementById('transport-budget').value) || 500000;
                         const s = document.getElementById('transport-sort').value;
-                        const mc = parseInt(document.getElementById('transport-mount').value) || 0;
+                        const mc = document.getElementById('transport-mount').value || 'mammoth_t8';
                         const fs = Math.max(1, Math.min(48, parseInt(document.getElementById('transport-free-slots').value) || 30));
                         await enrichAndRenderTransport(lastTransportRoutes, b, s, mc, fs);
                     }

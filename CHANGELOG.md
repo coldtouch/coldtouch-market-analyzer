@@ -2,6 +2,16 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-04-09 — Transport mount capacity system fix
+
+- **Corrected mount weight values:** T8 Transport Mammoth updated from 1,696 kg to 1,764 kg; all other mount weights verified against in-game values.
+- **Mount inventory slots:** Mammoth variants now grant +8 extra bag slots (their own inventory bag). These are added to the player's free slots for haul packing. Note: slot count may need verification from in-game testing.
+- **"No Mount" now uses 600 kg base weight** (player's inventory bags) instead of treating weight as infinite.
+- **MOUNT_DATA config object:** Centralized mount data (weight + extraSlots) replacing raw weight values in the dropdown. Makes future updates trivial.
+- **Capacity info line:** A small "Capacity: X kg + Y mount slots" line now appears below the mount dropdown, updating live on selection change.
+- **Mount change triggers re-render:** Changing the mount dropdown immediately re-renders results without requiring a rescan.
+- **Weight always applied:** Removed the old `mountCapacity > 0` guard that skipped weight constraints when "No Mount" was selected. All mounts now properly enforce their weight limit.
+
 ### 2026-04-09 — Workstream 2: Frontend analytics improvements
 
 - **Analytics tab in chart modal:** Chart modal now has a "Live Prices" / "Analytics" toggle. The Analytics tab fetches from our own `/api/price-history` endpoint and renders a price line with SMA 7-day (gold) and SMA 30-day (blue) overlays computed client-side from hourly/daily data. Includes a legend and time toggles (7 days / 30 days). Switches city when the city dropdown changes.
