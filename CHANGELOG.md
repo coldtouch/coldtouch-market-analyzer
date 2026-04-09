@@ -2,6 +2,14 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-04-09 — Go Client: Chest capture fully working + item weights
+
+- **Chest capture architecture rewrite:** Replaced timer-based EquipItem collection with a global item cache + `evAttachItemContainer` param 3 slot lookup. Items are cached globally by slot number from all 6 item event types, then looked up when the game attaches a container tab. This matches how Triky313/AlbionOnline-StatisticsAnalysis captures chests.
+- **3 new item event handlers:** Added `evNewFurnitureItem` (opcode 33), `evNewKillTrophyItem` (34), `evNewLaborerItem` (36). Mounts, furniture, kill trophies, and laborer contracts now captured correctly. Total: 6 item event types handled.
+- **Updated itemmap.json:** Regenerated from latest ao-bin-dumps (April 1, 2026 game update). ALL 11,964 numeric item IDs had shifted — the old map resolved every item to the wrong name. Now 11,963 entries.
+- **New weightmap.json:** Generated 11,235 weight entries from ao-bin-dumps `items.json` `@weight` field. Enchanted items inherit base weight. Per-item weight and total tab weight included in every capture.
+- **Verified on personal island:** 4 tabs captured (Bank 109 items/589.4 kg, loot 43/160 kg, loot3 15/40.2 kg, vanity 5/230.5 kg). All items match in-game names, crafter names verified, weight exact match confirmed.
+
 ### 2026-04-09 — Fix: Discord login broken during SpreadStats (separate DB connection)
 
 - **Root cause:** `computeSpreadStats` was running a 90-second `db.all()` (GROUP BY across 3M+ rows) on the **main shared SQLite connection**. All Express handlers — including the 5-second-timeout `/api/me` call made right after Discord OAuth — queued behind it. Result: `/api/me` timed out, user saw "Could not reach server", login appeared broken.

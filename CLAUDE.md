@@ -118,7 +118,30 @@
 
 ## Recent Session History
 
-### Workstream 2: Frontend Analytics (April 9, 2026 — Latest)
+### April 9 — Chest Capture FULLY WORKING + Weight Data (Latest)
+- **Root cause:** itemmap.json was stale — ALL 11,964 IDs shifted in game update. Regenerated from ao-bin-dumps April 1 dump.
+- **Architecture rewrite:** Global item cache (sync.Map by slot) + evAttachItemContainer param 3 slot lookup. Same approach as Triky313's C# app.
+- **3 new event handlers:** FurnitureItem (33), KillTrophyItem (34), LaborerItem (36) — 6 total. Mounts/furniture now captured.
+- **Weight data:** weightmap.json (11,235 entries), per-item + total tab weight. Verified 40.2kg exact match.
+- **Verified on personal island:** 4 tabs, all items + crafters + weights correct.
+- **Uncommitted Go client changes:** decode.go, operation_container_open.go, event_container_items.go, itemmap.go, client.go, itemmap.json, weightmap.json
+
+### Hotfix: Discord Login Broken During SpreadStats (April 9, 2026)
+- **Root cause found**: `computeSpreadStats` did a 90-second `db.all()` GROUP BY query (203k rows from 3M+ price_averages) on the **main shared db connection**. The node-sqlite3 queue serializes ALL operations, so `/api/me` (5s AbortSignal.timeout) stalled behind it and timed out → user saw "Could not reach server" → Discord login appeared broken.
+- **Fix**: Added `statsDb` — a separate `sqlite3.Database` connection for SpreadStats only. Both the big read (`statsDb.all()`) and all 526k write transactions (`statsDb.serialize()`) use `statsDb`. Main `db` queue is now completely unaffected during SpreadStats.
+- **Cross-guards**: `computeAnalytics` now checks `statsRunning`, `computeSpreadStats` now checks `analyticsRunning` — prevents simultaneous heavy DB runs (both were firing at the exact same minute every hour).
+- **No CPU/memory issue**: VPS was healthy (24% CPU avg, 2GB/12GB RAM, 0 CLOSE_WAIT). The issue was purely DB queue starvation.
+
+### Transport Mount Capacity Fix (April 9, 2026)
+- **`MOUNT_DATA` config object** added near constants: maps keys (`none`, `ox_t3`, `ox_t5`, `ox_t7`, `mammoth_t8`, `mammoth_saddled`, `ignore`) to `{weight, extraSlots, label}`. Centralizes all mount data.
+- **Mammoth weight corrected**: 1,696 kg → 1,764 kg. Saddled Mammoth stays 2,308 kg.
+- **Mammoth extra slots**: `extraSlots: 8` added for both Mammoth variants (mount bag). Added to `availableSlots` in `enrichAndRenderTransport()`. Comment notes in-game verification needed.
+- **"No Mount" now 600 kg**: Was value=0 (treated as infinite weight), now `weight: 600` enforces base player bag limit.
+- **HTML dropdown** switched from raw number values to string keys. `transport-mount-info` div shows live capacity info below the select.
+- **`updateMountCapacityInfo()`** added; called on change and on init. Change event also triggers re-render if routes loaded.
+- **Weight guards cleaned up**: Removed old `mountCapacity > 0 &&` from `maxByWeight`, haul plan `maxWt`/`maxWeight`/`extraWeight` lines. All weight limits now always apply.
+
+### Workstream 2: Frontend Analytics (April 9, 2026)
 - Chart modal now has **Live Prices / Analytics** tab toggle. Analytics tab fetches `/api/price-history`, computes SMA 7d (gold) and SMA 30d (blue) client-side, renders with Chart.js. Updates on city change and time toggle (7d/30d).
 - **Trend arrows** on Market Flipper + BM Flipper cards: `<span data-trend-item="...">` placeholder filled asynchronously via `fetchAnalytics()` → `/api/analytics/:itemId` → `cities[*].price_trend` averaged. Green ▲ >2%, red ▼ <-2%, neutral dash.
 - **Volatile badge** on Market Flipper, BM Flipper, Transport cards: `getVolatilityBadge(consistencyPct)` — orange "VOLATILE" if `consistencyPct < 50` (route profitable <50% of 7-day scans). No extra API call — uses existing spread_stats data already in `spreadStatsCache`.
@@ -183,10 +206,17 @@
 
 ## TODO / Unfinished Work
 
-### Immediate — In-Game Testing Required
-- [ ] **Live game test of chest capture** — Go client → WS → VPS → frontend. Test GUID matching, tab names, item accuracy. If GUID matching fails, try mixed-endian byte-swap. Exe ready at `albiondata-client-custom.exe -debug`
+### Chest Capture — DONE
+- [x] ~~Chest capture~~ — FULLY WORKING (April 9). Global item cache + slot lookup from evAttachItemContainer param 3. All items, weights, tab names verified correct.
+- [x] ~~GUID matching~~ — 100% match rate
+- [x] ~~Item mismatch~~ — Root cause was stale itemmap.json. Regenerated from latest ao-bin-dumps.
+- [x] ~~Weight data~~ — weightmap.json with 11,235 entries. Verified exact match.
+- [ ] **Commit + push Go client changes** — all uncommitted
+- [ ] **Test on guild island** — only verified on personal island so far
+
+### In-Game Testing Required
 - [ ] **Device Auth end-to-end test** — device code flow from Go client to browser approval
-- [ ] **Verify negative item ID mappings** — IDs -1 to -9 are guesses, need live verification
+- [ ] **Verify negative item ID mappings** — IDs -1 to -9 are guesses. Also discovered IDs far beyond -9: -54, -57, -60, etc.
 
 ### Short Term
 - [ ] **ReadMail opcode handler** — capture sale mail notifications, auto-match to tracked loot tabs
@@ -202,6 +232,7 @@
 ## Learned Patterns & Observations
 > Accumulated knowledge from working sessions. Add new observations here.
 
+- **node-sqlite3 serializes ALL db operations on one connection** — a long-running `db.all()` (even seconds) blocks ALL other `db.get()`/`db.run()` calls queued after it. For bulk batch jobs (SpreadStats, Analytics), use a **separate `sqlite3.Database` connection** to avoid starving user-facing endpoints like `/api/me` (5s timeout). WAL mode helps at the OS level but NOT at the node-sqlite3 queue level.
 - **VPS now has 11 GB RAM, 6 vCPUs (Contabo VPS 20)** — Still avoid loading large result sets into memory (April 4 incident: 22M rows, 100% CPU for 12h). Use SQL aggregation over JS-side loops wherever possible.
 - **Backend is embedded in deploy_saas.py** — no separate backend.js in repo, only exists on VPS after deploy
 - **Deploy via SFTP, not base64 echo** — base64 via echo truncates at ~100KB. Always use SFTP
