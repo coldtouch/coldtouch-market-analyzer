@@ -5680,23 +5680,43 @@ function populateAccountabilityDropdowns() {
         }).catch(() => {});
 
     // Populate captures from clientCaptures (chest captures in memory)
-    let capOpts = '<option value="">-- Select capture --</option>';
     const captures = window._chestCaptures || [];
-    captures.forEach((cap, i) => {
-        const name = cap.tabName || `Capture ${i + 1}`;
-        const count = cap.items ? cap.items.length : 0;
-        capOpts += `<option value="${i}">${esc(name)} (${count} items)</option>`;
-    });
-    captureSel.innerHTML = capOpts;
+    if (captures.length === 0) {
+        captureSel.innerHTML = '<option value="" disabled>No captures yet — open a chest with the client running</option>';
+    } else {
+        captureSel.innerHTML = captures.map((cap, i) => {
+            const name = cap.tabName || `Capture ${i + 1}`;
+            const count = cap.items ? cap.items.length : 0;
+            const tw = cap.items ? cap.items.reduce((s, it) => s + getItemWeight(it.itemId) * (it.quantity || 1), 0) : 0;
+            const weightStr = tw > 0 ? ` • ${tw.toFixed(1)} kg` : '';
+            return `<option value="${i}">${esc(name)} (${count} items${weightStr})</option>`;
+        }).join('');
+    }
+}
+
+function recaptureChestTabs() {
+    // Clear existing captures and notify user to re-open the chest
+    window._chestCaptures = [];
+    populateAccountabilityDropdowns();
+    const resultEl = document.getElementById('accountability-result');
+    resultEl.innerHTML = `<div style="background:var(--bg-card); border:1px solid var(--accent); border-radius:var(--radius); padding:1rem; text-align:center;">
+        <p style="color:var(--accent); font-weight:600; margin:0 0 0.5rem;">Waiting for new chest captures...</p>
+        <p style="color:var(--text-secondary); font-size:0.82rem; margin:0;">Open the chest in-game and click through the deposit tab(s). They will appear in the dropdown automatically.</p>
+    </div>`;
 }
 
 async function runAccountabilityCheck() {
     const sessionId = document.getElementById('acc-session-select').value;
-    const captureIdx = document.getElementById('acc-capture-select').value;
+    const captureSel = document.getElementById('acc-capture-select');
+    const selectedIdxs = Array.from(captureSel.selectedOptions).map(o => parseInt(o.value)).filter(v => !isNaN(v));
     const resultEl = document.getElementById('accountability-result');
 
-    if (!sessionId || captureIdx === '') {
-        resultEl.innerHTML = '<div class="empty-state"><p>Select both a loot session and a chest capture.</p></div>';
+    if (!sessionId) {
+        resultEl.innerHTML = '<div class="empty-state"><p>Select a loot session.</p></div>';
+        return;
+    }
+    if (selectedIdxs.length === 0) {
+        resultEl.innerHTML = '<div class="empty-state"><p>Select at least one chest tab capture.</p></div>';
         return;
     }
 
@@ -5722,19 +5742,18 @@ async function runAccountabilityCheck() {
         }
     }
 
-    // Get chest capture
+    // Merge all selected chest captures into one deposit inventory
     const captures = window._chestCaptures || [];
-    const capture = captures[parseInt(captureIdx)];
-    if (!capture || !capture.items) {
-        resultEl.innerHTML = '<div class="empty-state"><p>Invalid capture selected.</p></div>';
-        return;
-    }
-
-    // Build deposit inventory: itemId → total quantity in chest
     const deposited = {};
-    for (const item of capture.items) {
-        const key = item.itemId;
-        deposited[key] = (deposited[key] || 0) + (item.quantity || 1);
+    const selectedTabNames = [];
+    for (const idx of selectedIdxs) {
+        const cap = captures[idx];
+        if (!cap || !cap.items) continue;
+        selectedTabNames.push(cap.tabName || `Tab ${idx + 1}`);
+        for (const item of cap.items) {
+            const key = item.itemId;
+            deposited[key] = (deposited[key] || 0) + (item.quantity || 1);
+        }
     }
 
     // Build looted inventory: per player → itemId → total quantity
@@ -5772,7 +5791,11 @@ async function runAccountabilityCheck() {
     const totalDeposited = playerResults.reduce((s, p) => s + p.totalDeposited, 0);
     const totalMissing = playerResults.reduce((s, p) => s + p.totalMissing, 0);
 
-    let html = `<div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(120px, 1fr)); gap:0.75rem; margin-bottom:1rem;">
+    let html = '';
+    if (selectedTabNames && selectedTabNames.length > 0) {
+        html += `<div style="font-size:0.78rem; color:var(--text-muted); margin-bottom:0.5rem;">Comparing against: <strong>${selectedTabNames.map(n => esc(n)).join(', ')}</strong></div>`;
+    }
+    html += `<div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(120px, 1fr)); gap:0.75rem; margin-bottom:1rem;">
         <div class="loot-tracked-stat"><span class="loot-tracked-stat-label">Total Looted</span><span class="loot-tracked-stat-value">${totalLooted}</span></div>
         <div class="loot-tracked-stat"><span class="loot-tracked-stat-label">In Chest</span><span class="loot-tracked-stat-value" style="color:var(--profit-green);">${totalDeposited}</span></div>
         <div class="loot-tracked-stat"><span class="loot-tracked-stat-label">Missing</span><span class="loot-tracked-stat-value" style="color:var(--loss-red);">${totalMissing}</span></div>
@@ -5826,6 +5849,10 @@ function handleLootLoggerWsMessage(msg) {
     }
     if (msg.type === 'chest-capture' && msg.data) {
         window._chestCaptures.push(msg.data);
+        // Auto-update accountability dropdown if on that mode
+        if (lootLoggerMode === 'accountability') {
+            populateAccountabilityDropdowns();
+        }
     }
 }
 

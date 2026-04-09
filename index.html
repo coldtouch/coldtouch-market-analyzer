@@ -2508,11 +2508,15 @@
                                 <select id="acc-session-select" class="transport-select" style="width:100%;"><option value="">-- Select session --</option></select>
                             </div>
                             <div>
-                                <label style="font-size:0.78rem; color:var(--text-muted); display:block; margin-bottom:0.3rem;">Chest Tab Capture</label>
-                                <select id="acc-capture-select" class="transport-select" style="width:100%;"><option value="">-- Select capture --</option></select>
+                                <label style="font-size:0.78rem; color:var(--text-muted); display:block; margin-bottom:0.3rem;">Chest Tab Captures (select one or more)</label>
+                                <select id="acc-capture-select" class="transport-select" style="width:100%; min-height:3.5rem;" multiple><option value="">-- No captures yet --</option></select>
+                                <div style="font-size:0.68rem; color:var(--text-muted); margin-top:0.25rem;">Hold Ctrl/Cmd to select multiple tabs. Open the chest in-game with the client running to capture.</div>
                             </div>
                         </div>
-                        <button class="btn-small-accent" onclick="runAccountabilityCheck()">Compare</button>
+                        <div style="display:flex; gap:0.5rem; align-items:center;">
+                            <button class="btn-small-accent" onclick="runAccountabilityCheck()">Compare</button>
+                            <button class="btn-small" onclick="recaptureChestTabs()" title="Open a chest in-game to update the capture data">Re-capture Chest Tabs</button>
+                        </div>
                     </div>
                     <div id="accountability-result"></div>
                 </div>
