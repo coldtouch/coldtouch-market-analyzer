@@ -1473,6 +1473,20 @@ app.patch('/api/loot-tab/:id/status', requireAuth, (req, res) => {
   });
 });
 
+app.delete('/api/loot-tab/:id', requireAuth, (req, res) => {
+  const tabId = parseInt(req.params.id);
+  if (!tabId) return res.status(400).json({ error: 'Invalid tab id.' });
+  // Delete sales first (foreign key), then the tab itself
+  db.run(`DELETE FROM loot_tab_sales WHERE tab_id = ? AND tab_id IN (SELECT id FROM loot_tabs WHERE user_id = ?)`, [tabId, req.user.id], (err) => {
+    if (err) return res.status(500).json({ error: err.message });
+    db.run(`DELETE FROM loot_tabs WHERE id = ? AND user_id = ?`, [tabId, req.user.id], function(err2) {
+      if (err2) return res.status(500).json({ error: err2.message });
+      if (this.changes === 0) return res.status(404).json({ error: 'Tab not found.' });
+      res.json({ success: true });
+    });
+  });
+});
+
 // === LIVE FLIPS API (registration-gated) ===
 app.get('/api/live-flips', (req, res) => {
   if (!req.user) return res.status(401).json({ error: 'Login required. Create a free account to access live flips.' });

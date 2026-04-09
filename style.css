@@ -762,6 +762,22 @@ select:focus {
     font-weight: 700;
     border: 1px solid rgba(212, 175, 55, 0.2);
 }
+.weight-badge {
+    display: inline-block;
+    padding: 0.1rem 0.35rem;
+    background: rgba(100, 180, 255, 0.1);
+    color: rgba(100, 180, 255, 0.8);
+    border-radius: var(--radius-sm);
+    font-size: 0.6rem;
+    font-weight: 600;
+}
+.loot-item-weight {
+    font-size: 0.7rem;
+    color: rgba(100, 180, 255, 0.7);
+    margin-left: auto;
+    margin-right: 0.5rem;
+    white-space: nowrap;
+}
 
 .item-card-prices {
     display: grid;
