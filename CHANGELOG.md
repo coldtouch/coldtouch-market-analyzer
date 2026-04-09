@@ -2,6 +2,18 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-04-09 — Real item weights across website + delete tracked tabs
+
+- **Real game weight data:** Added `itemweights.json` (11,535 items) generated from ao-bin-dumps game files. Replaces the old tier-based weight estimation with actual in-game weights. Mounts, furniture, and unique items now have correct weights.
+- **Market Browser:** Weight badge shown on each item card (e.g., "5.1 kg").
+- **Transport Routes:** Haul plan collapsed summary now shows total weight vs mount capacity (e.g., "450/1764 kg").
+- **Loot Buyer — Capture cards:** Total tab weight shown in card meta line.
+- **Loot Buyer — Item rows:** Per-item weight displayed next to quantity.
+- **Loot Buyer — Selected capture header:** Total weight in stats line.
+- **Loot Buyer — Sell plan:** Weight per trip shown in trip header (helps plan which mount to use).
+- **Loot Buyer — Delete tracked tab:** New "Delete" button on tracked tab cards with inline confirmation. Removes the tab and its sales from the database.
+- **Backend:** New `DELETE /api/loot-tab/:id` endpoint (JWT-authenticated, cascades to sales).
+
 ### 2026-04-09 — Go Client: Chest capture fully working + item weights
 
 - **Chest capture architecture rewrite:** Replaced timer-based EquipItem collection with a global item cache + `evAttachItemContainer` param 3 slot lookup. Items are cached globally by slot number from all 6 item event types, then looked up when the game attaches a container tab. This matches how Triky313/AlbionOnline-StatisticsAnalysis captures chests.

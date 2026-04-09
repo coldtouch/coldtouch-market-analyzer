@@ -52,6 +52,7 @@ const API_CHUNK_SIZE = 100;
 
 // ====== STATE ======
 let ITEM_NAMES = {};
+let ITEM_WEIGHTS = {};
 let itemsList = [];
 let recipesData = {};
 let currentTab = 'browser';
@@ -77,6 +78,10 @@ function esc(str) {
 function getFriendlyName(id) {
     if (ITEM_NAMES[id] && ITEM_NAMES[id].trim() !== '') return ITEM_NAMES[id];
     return id.replace(/_/g, ' ').replace(/T(\d+)/, 'Tier $1').toLowerCase().replace(/\b\w/g, l => l.toUpperCase());
+}
+
+function getItemWeight(id) {
+    return ITEM_WEIGHTS[id] || 0;
 }
 
 function getQualityName(q) {
@@ -179,17 +184,18 @@ function getEquipmentSlot(itemId) {
 
 // Calculate single item weight using tier × material count (gear) or tier weight (resources)
 function calcItemWeight(itemId) {
+    // Use real game weight data from itemweights.json (loaded from ao-bin-dumps)
+    const w = getItemWeight(itemId);
+    if (w > 0) return w;
+    // Fallback: estimate from tier × slot type (for items not in weight map)
     const tier = parseInt(extractTier(itemId));
     if (!tier) return 0;
     const slot = getEquipmentSlot(itemId);
     const matWeight = TIER_MATERIAL_WEIGHT[tier] || TIER_MATERIAL_WEIGHT[8];
     if (slot) {
-        // Gear: tier weight × materials needed
         const matCount = SLOT_MATERIAL_COUNT[slot] || 8;
         return matWeight * matCount;
     }
-    // Non-gear (resources, materials, consumables, fish, etc.): each unit = 1× tier material weight
-    // This is the base unit weight in Albion — 1 resource unit = its tier's material weight
     return matWeight;
 }
 
@@ -223,13 +229,15 @@ function hideError(container) {
 async function loadData() {
     try {
         const cb = '?v=' + Date.now();
-        const [resItems, resRecipes] = await Promise.all([
+        const [resItems, resRecipes, resWeights] = await Promise.all([
             fetch('items.json' + cb),
-            fetch('recipes.json' + cb)
+            fetch('recipes.json' + cb),
+            fetch('itemweights.json' + cb).catch(() => ({ ok: false }))
         ]);
         ITEM_NAMES = await resItems.json();
         itemsList = Object.keys(ITEM_NAMES).filter(k => k && ITEM_NAMES[k]);
         recipesData = await resRecipes.json();
+        if (resWeights.ok) ITEM_WEIGHTS = await resWeights.json();
     } catch (e) {
         console.error('Failed to load data files:', e);
     }
@@ -536,7 +544,7 @@ async function renderBrowser() {
                 </div>
                 <div class="item-card-info">
                     <div class="item-card-name" title="${esc(name)}">${esc(name)}</div>
-                    <div class="item-card-id">${esc(id)} <span class="tier-badge">${getTierEnchLabel(id)}</span></div>
+                    <div class="item-card-id">${esc(id)} <span class="tier-badge">${getTierEnchLabel(id)}</span>${(() => { const w = getItemWeight(id); return w > 0 ? ` <span class="weight-badge">${w} kg</span>` : ''; })()}</div>
                 </div>
             </div>
             <div class="item-card-prices">
@@ -4548,13 +4556,15 @@ function renderLootCaptures() {
         const hasTabs = !hasDirectTabName && cap.vaultTabs && cap.vaultTabs.length > 0;
 
         // Helper to build a compact card
-        const makeCard = (onclick, name, badge, itemCount, equipCount, stackCount, timeAgoStr) => {
+        const calcTabWeight = (items) => items.reduce((sum, it) => sum + getItemWeight(it.itemId) * (it.quantity || 1), 0);
+        const makeCard = (onclick, name, badge, itemCount, equipCount, stackCount, totalWeight, timeAgoStr) => {
+            const weightStr = totalWeight > 0 ? `${totalWeight.toFixed(1)} kg` : '';
             return `<div class="loot-capture-card" onclick="${onclick}" style="cursor:pointer;">
                 <div style="display:flex; align-items:center; gap:0.4rem;">
                     <span class="loot-card-title">${esc(name)}</span>
                     ${badge ? `<span style="font-size:0.6rem; padding:0.1rem 0.35rem; background:var(--bg-elevated); border-radius:8px; color:var(--text-muted);">${badge}</span>` : ''}
                 </div>
-                <div class="loot-card-meta">${itemCount} items &bull; ${equipCount}⚔ ${stackCount}📦 &bull; ${timeAgoStr}</div>
+                <div class="loot-card-meta">${itemCount} items &bull; ${equipCount}⚔ ${stackCount}📦${weightStr ? ` &bull; ${weightStr}` : ''} &bull; ${timeAgoStr}</div>
             </div>`;
         };
 
@@ -4562,7 +4572,7 @@ function renderLootCaptures() {
             const equipCount = cap.items.filter(it => it.isEquipment).length;
             const stackCount = cap.items.length - equipCount;
             const badge = cap.isGuild ? 'Guild' : 'Bank';
-            cards.push(makeCard(`selectLootCapture(${capIdx})`, cap.tabName, badge, cap.items.length, equipCount, stackCount, ago));
+            cards.push(makeCard(`selectLootCapture(${capIdx})`, cap.tabName, badge, cap.items.length, equipCount, stackCount, calcTabWeight(cap.items), ago));
         } else if (hasTabs) {
             const tabIdx = typeof cap.tabIndex === 'number' ? cap.tabIndex : -1;
             const tabName = (tabIdx >= 0 && tabIdx < cap.vaultTabs.length && cap.vaultTabs[tabIdx].name)
@@ -4572,11 +4582,11 @@ function renderLootCaptures() {
             const stackCount = cap.items.length - equipCount;
             const vaultType = cap.isGuild ? 'Guild' : 'Bank';
             const displayName = cap.customName || tabName;
-            cards.push(makeCard(`selectLootCapture(${capIdx})`, displayName, vaultType, cap.items.length, equipCount, stackCount, ago));
+            cards.push(makeCard(`selectLootCapture(${capIdx})`, displayName, vaultType, cap.items.length, equipCount, stackCount, calcTabWeight(cap.items), ago));
         } else {
             const equipCount = cap.items.filter(it => it.isEquipment).length;
             const stackCount = cap.items.length - equipCount;
-            cards.push(makeCard(`selectLootCapture(${capIdx})`, `Chest Capture`, '', cap.items.length, equipCount, stackCount, ago));
+            cards.push(makeCard(`selectLootCapture(${capIdx})`, `Chest Capture`, '', cap.items.length, equipCount, stackCount, calcTabWeight(cap.items), ago));
         }
     });
     list.innerHTML = cards.join('');
@@ -4632,7 +4642,7 @@ function selectLootCaptureUI(titleText, items) {
             <div class="loot-items-header" onclick="this.parentElement.classList.toggle('expanded')">
                 <div class="loot-items-summary">
                     <span class="loot-items-title">${esc(titleText)}</span>
-                    <span class="loot-items-stats">${items.length} items &bull; ${equipCount}⚔ ${stackCount}📦</span>
+                    <span class="loot-items-stats">${items.length} items &bull; ${equipCount}⚔ ${stackCount}📦 ${(() => { const tw = items.reduce((s, it) => s + getItemWeight(it.itemId) * (it.quantity || 1), 0); return tw > 0 ? `&bull; ${tw.toFixed(1)} kg` : ''; })()}</span>
                 </div>
                 <span class="loot-items-chevron">▾</span>
             </div>
@@ -4673,9 +4683,13 @@ function renderLootItemRows(items) {
         const iconUrl = `https://render.albiononline.com/v1/item/${encodeURIComponent(item.itemId)}.png?quality=${item.quality}`;
         const name = getFriendlyName(item.itemId) || item.itemId;
         const safeId = esc(item.itemId);
+        const iw = getItemWeight(item.itemId);
+        const totalW = iw * (item.quantity || 1);
+        const weightStr = totalW > 0 ? `<span class="loot-item-weight">${totalW.toFixed(1)} kg</span>` : '';
         return `<div class="loot-item-row" onclick="toggleLootItemDetail(this, '${safeId}', ${item.quality || 1})" style="cursor:pointer;">
             <img src="${iconUrl}" class="loot-item-icon" loading="lazy" onerror="this.style.display='none'">
             <span class="loot-item-name">${esc(name)}${qualName}</span>
+            ${weightStr}
             <span class="loot-item-qty">x${item.quantity}</span>
         </div>`;
     }).join('');
@@ -5029,11 +5043,13 @@ function renderSellPlan(data, container) {
         const instantNote = trip.instantTotal > 0 ? `<span style="color:var(--profit-green); font-size:0.72rem;">⚡ ${trip.instantTotal.toLocaleString()}s instant</span>` : '';
         const marketNote  = trip.marketTotal > 0  ? `<span style="color:var(--blue); font-size:0.72rem;">📋 ${trip.marketTotal.toLocaleString()}s listed</span>` : '';
 
+        const tripWeight = trip.items.reduce((s, it) => s + getItemWeight(it.itemId) * (it.quantity || 1), 0);
+        const tripWeightStr = tripWeight > 0 ? ` &bull; ${tripWeight.toFixed(1)} kg` : '';
         return `<div class="loot-city-group" id="${tripId}" data-copytext="${tripCopyText}">
             <div class="sell-trip-header">
                 <div>
                     <span class="sell-trip-title">Trip ${i + 1} — ${esc(city)}</span>
-                    <span class="sell-trip-count">${trip.items.length} item${trip.items.length > 1 ? 's' : ''}</span>
+                    <span class="sell-trip-count">${trip.items.length} item${trip.items.length > 1 ? 's' : ''}${tripWeightStr}</span>
                 </div>
                 <div style="display:flex; align-items:center; gap:0.75rem; flex-wrap:wrap;">
                     ${instantNote} ${marketNote}
@@ -5220,6 +5236,7 @@ function renderTrackedTabDetail(tab) {
                     <option value="partial" ${tab.status === 'partial' ? 'selected' : ''}>Partial</option>
                     <option value="sold" ${tab.status === 'sold' ? 'selected' : ''}>Sold</option>
                 </select>
+                <button class="btn-small-danger" onclick="deleteTrackedTab(${tab.id}, this)" title="Delete this tab">Delete</button>
             </div>
         </div>
         <div style="font-size:0.78rem; color:var(--text-muted); margin-bottom:0.35rem;">${tab.sales.length} sale record${tab.sales.length !== 1 ? 's' : ''}</div>
@@ -5355,6 +5372,44 @@ async function updateTabStatus(tabId, status) {
         loadTrackedTabs();
     } catch(e) {
         alert('Failed to update status: ' + e.message);
+    }
+}
+
+async function deleteTrackedTab(tabId, btnEl) {
+    // Inline confirmation — replace button with confirm/cancel
+    const parent = btnEl.parentElement;
+    const origHtml = btnEl.outerHTML;
+    btnEl.outerHTML = `<span id="del-confirm-${tabId}" style="display:flex; gap:0.3rem; align-items:center;">
+        <span style="font-size:0.7rem; color:var(--text-muted);">Delete?</span>
+        <button class="btn-small-danger" onclick="confirmDeleteTab(${tabId})">Yes</button>
+        <button class="btn-small" onclick="cancelDeleteTab(${tabId})">No</button>
+    </span>`;
+    window._deleteOrigHtml = window._deleteOrigHtml || {};
+    window._deleteOrigHtml[tabId] = origHtml;
+}
+
+function cancelDeleteTab(tabId) {
+    const span = document.getElementById(`del-confirm-${tabId}`);
+    if (span && window._deleteOrigHtml && window._deleteOrigHtml[tabId]) {
+        span.outerHTML = window._deleteOrigHtml[tabId];
+        delete window._deleteOrigHtml[tabId];
+    }
+}
+
+async function confirmDeleteTab(tabId) {
+    try {
+        const res = await fetch(`${VPS_BASE}/api/loot-tab/${tabId}`, {
+            method: 'DELETE',
+            headers: authHeaders()
+        });
+        if (!res.ok) { const d = await res.json(); throw new Error(d.error || 'Failed'); }
+        // Remove the card from DOM
+        const card = document.getElementById(`del-confirm-${tabId}`)?.closest('.loot-tracked-card');
+        if (card) card.remove();
+        else loadTrackedTabs(); // fallback: reload all
+    } catch(e) {
+        const span = document.getElementById(`del-confirm-${tabId}`);
+        if (span) span.innerHTML = `<span style="color:var(--profit-red); font-size:0.7rem;">${esc(e.message)}</span>`;
     }
 }
 
@@ -5817,7 +5872,7 @@ function renderTransportResults(routes, budget, mountCapacity, haulPlans, availa
                         </div>
                         <div style="min-width:0;">
                             <div style="font-weight:600; font-size:0.9rem; color:var(--text-primary);">${plan.buyCity} ➔ ${plan.sellCity}</div>
-                            <div style="font-size:0.72rem; color:var(--text-muted);">${plan.items.length} item${plan.items.length > 1 ? 's' : ''} &bull; ${plan.totalSlots}/${availableSlots} slots &bull; ${plan.budgetUsed}% budget &bull; ${freshnessHtml} ${confBadge}${histBadge}</div>
+                            <div style="font-size:0.72rem; color:var(--text-muted);">${plan.items.length} item${plan.items.length > 1 ? 's' : ''} &bull; ${plan.totalSlots}/${availableSlots} slots &bull; ${Number.isFinite(mountCapacity) ? `${plan.totalWeight.toFixed(1)}/${mountCapacity} kg` : `${plan.totalWeight.toFixed(1)} kg`} &bull; ${plan.budgetUsed}% budget &bull; ${freshnessHtml} ${confBadge}${histBadge}</div>
                         </div>
                     </div>
                     <div style="display:flex; align-items:center; gap:1.2rem; flex-shrink:0;">
