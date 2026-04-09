@@ -2,6 +2,20 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-04-10 — SEO improvements
+
+- **Title tag:** Expanded with targeted keywords ("Market Prices, Flipping & Crafting Tool") for better search ranking
+- **Meta description:** Rewritten to cover all major features and call-to-actions for search result snippets
+- **Meta keywords:** Added comprehensive Albion Online keyword set
+- **Canonical URL:** Added `<link rel="canonical">` and `<meta name="robots" content="index, follow">`
+- **Open Graph:** Added `og:title`, `og:description`, `og:image`, `og:url`, `og:type`, `og:site_name` for Discord/social previews
+- **Twitter Card:** Added `twitter:card`, `twitter:title`, `twitter:description`, `twitter:image` for Twitter/X previews
+- **JSON-LD:** Added WebApplication schema markup (name, description, featureList, offers) for Google rich results
+- **Favicon:** Inline SVG favicon — site now shows a gold chart icon in browser tabs without a separate image file
+- **robots.txt:** Created — allows all crawlers, references sitemap
+- **sitemap.xml:** Created — single canonical URL with weekly changefreq
+- **Performance:** Added `preconnect` for `fonts.gstatic.com` (was missing alongside the googleapis preconnect)
+
 ### 2026-04-09 — Audit fixes #7-9: Toasts, cross-feature links, price cache
 
 - **Fix #7:** Replaced 20+ `alert()` calls with non-blocking toast notifications. Toast system supports info/warn/error/success types with auto-dismiss. 5 `confirm()` calls kept for destructive actions only.
