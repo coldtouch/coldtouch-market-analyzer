@@ -271,6 +271,27 @@ db.serialize(() => {
   )`);
   db.run(`CREATE INDEX IF NOT EXISTS idx_loot_tab_sales_tab ON loot_tab_sales(loot_tab_id)`);
 
+  // === LOOT LOGGER ===
+  db.run(`CREATE TABLE IF NOT EXISTS loot_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    timestamp INTEGER NOT NULL,
+    looted_by_name TEXT NOT NULL,
+    looted_by_guild TEXT DEFAULT '',
+    looted_by_alliance TEXT DEFAULT '',
+    looted_from_name TEXT DEFAULT '',
+    looted_from_guild TEXT DEFAULT '',
+    looted_from_alliance TEXT DEFAULT '',
+    item_id TEXT NOT NULL,
+    numeric_id INTEGER DEFAULT 0,
+    quantity INTEGER DEFAULT 1,
+    weight REAL DEFAULT 0,
+    is_silver INTEGER DEFAULT 0
+  )`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_loot_events_user_session ON loot_events(user_id, session_id)`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_loot_events_session ON loot_events(session_id, timestamp)`);
+
   // === ANALYTICS TABLES ===
   db.run(`CREATE TABLE IF NOT EXISTS price_analytics (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1487,6 +1508,61 @@ app.delete('/api/loot-tab/:id', requireAuth, (req, res) => {
   });
 });
 
+// === LOOT LOGGER API ===
+
+// List loot sessions for the current user
+app.get('/api/loot-sessions', requireAuth, (req, res) => {
+  db.all(`SELECT session_id, MIN(timestamp) as started_at, MAX(timestamp) as ended_at, COUNT(*) as event_count,
+    COUNT(DISTINCT looted_by_name) as player_count
+    FROM loot_events WHERE user_id = ? GROUP BY session_id ORDER BY started_at DESC LIMIT 50`,
+    [req.user.id], (err, rows) => {
+      if (err) return res.status(500).json({ error: err.message });
+      res.json({ sessions: rows || [] });
+    });
+});
+
+// Get all events for a specific session
+app.get('/api/loot-session/:sessionId', requireAuth, (req, res) => {
+  const sessionId = req.params.sessionId;
+  db.all(`SELECT * FROM loot_events WHERE session_id = ? AND user_id = ? ORDER BY timestamp ASC`,
+    [sessionId, req.user.id], (err, rows) => {
+      if (err) return res.status(500).json({ error: err.message });
+      res.json({ events: rows || [] });
+    });
+});
+
+// Upload a .txt loot log file (ao-loot-logger format)
+app.post('/api/loot-upload', requireAuth, (req, res) => {
+  const { lines } = req.body;
+  if (!lines || !Array.isArray(lines) || lines.length === 0) {
+    return res.status(400).json({ error: 'No loot data provided.' });
+  }
+  const sessionId = req.user.id + '_upload_' + Date.now();
+  const stmt = db.prepare(`INSERT INTO loot_events (user_id, session_id, timestamp, looted_by_name, looted_by_guild, looted_by_alliance, looted_from_name, looted_from_guild, looted_from_alliance, item_id, numeric_id, quantity, weight, is_silver)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0)`);
+  let count = 0;
+  for (const line of lines) {
+    // Format: timestamp_utc;looted_by__alliance;looted_by__guild;looted_by__name;item_id;item_name;quantity;looted_from__alliance;looted_from__guild;looted_from__name
+    const parts = line.split(';');
+    if (parts.length < 10) continue;
+    const [ts, byAlliance, byGuild, byName, itemId, itemName, qty, fromAlliance, fromGuild, fromName] = parts;
+    const timestamp = new Date(ts).getTime() || Date.now();
+    stmt.run(req.user.id, sessionId, timestamp, byName || '', byGuild || '', byAlliance || '', fromName || '', fromGuild || '', fromAlliance || '', itemId || '', 0, parseInt(qty) || 1);
+    count++;
+  }
+  stmt.finalize();
+  res.json({ success: true, sessionId, eventsImported: count });
+});
+
+// Delete a loot session
+app.delete('/api/loot-session/:sessionId', requireAuth, (req, res) => {
+  const sessionId = req.params.sessionId;
+  db.run(`DELETE FROM loot_events WHERE session_id = ? AND user_id = ?`, [sessionId, req.user.id], function(err) {
+    if (err) return res.status(500).json({ error: err.message });
+    res.json({ success: true, deleted: this.changes });
+  });
+});
+
 // === LIVE FLIPS API (registration-gated) ===
 app.get('/api/live-flips', (req, res) => {
   if (!req.user) return res.status(401).json({ error: 'Login required. Create a free account to access live flips.' });
@@ -2149,6 +2225,31 @@ wss.on('connection', ws => {
           ws.send(JSON.stringify({ type: 'client-auth', success: true, username: user.username }));
           console.log(`[ClientAuth] Game client authenticated for user ${user.username}`);
         });
+      }
+
+      // Loot event from game client
+      if (msg.type === 'loot-event' && ws.clientType === 'game-client' && ws.user) {
+        const ev = msg.data;
+        if (!ev || !ev.lootedBy || !ev.lootedBy.name) return;
+
+        // Assign session ID (one per WS connection)
+        if (!ws.lootSessionId) {
+          ws.lootSessionId = ws.user.id + '_' + Date.now();
+        }
+
+        db.run(`INSERT INTO loot_events (user_id, session_id, timestamp, looted_by_name, looted_by_guild, looted_by_alliance, looted_from_name, looted_from_guild, looted_from_alliance, item_id, numeric_id, quantity, weight, is_silver)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [ws.user.id, ws.lootSessionId, ev.timestamp || Date.now(),
+           ev.lootedBy.name, ev.lootedBy.guild || '', ev.lootedBy.alliance || '',
+           ev.lootedFrom?.name || '', ev.lootedFrom?.guild || '', ev.lootedFrom?.alliance || '',
+           ev.itemId || '', ev.numericId || 0, ev.quantity || 1, ev.weight || 0, ev.isSilver ? 1 : 0]);
+
+        // Push to user's browser session(s) in real-time
+        for (const wc of wsClients) {
+          if (wc.clientType === 'browser' && wc.isAuthenticated && wc.user && wc.user.id === ws.user.id) {
+            wc.send(JSON.stringify({ type: 'loot-event', data: { ...ev, sessionId: ws.lootSessionId } }));
+          }
+        }
       }
 
       // Chest capture from game client

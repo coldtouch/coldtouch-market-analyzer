@@ -2,6 +2,14 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-04-09 — Loot Logger Viewer + Accountability Check
+
+- **New tab: Loot Logger** — under Trading group. Three modes: Live Sessions, Upload Log File, Accountability Check.
+- **Live Sessions:** View loot events captured in real-time by the Coldtouch client. Per-player breakdown showing who looted what, with guild/alliance info, item icons, and quantities. Sessions auto-created per client connection.
+- **Upload Log File:** Import `.txt` files from the ao-loot-logger tool (semicolon-delimited format). Events stored in DB and viewable like live sessions.
+- **Accountability Check:** Cross-reference a loot session (who picked up items) against a chest tab capture (what was deposited). Shows per-player deposit percentage with progress bars. Items color-coded: green = deposited, yellow = partial, red = missing.
+- **Backend:** New `loot_events` DB table with session grouping. WebSocket handler stores incoming loot events from game client and pushes to browser in real-time. New API endpoints: `GET /api/loot-sessions`, `GET /api/loot-session/:id`, `POST /api/loot-upload`, `DELETE /api/loot-session/:id`.
+
 ### 2026-04-09 — Real item weights across website + delete tracked tabs
 
 - **Real game weight data:** Added `itemweights.json` (11,535 items) generated from ao-bin-dumps game files. Replaces the old tier-based weight estimation with actual in-game weights. Mounts, furniture, and unique items now have correct weights.

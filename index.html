@@ -266,6 +266,7 @@
                     <button class="nav-tab" data-tab="live-flips">Live Flips</button>
                     <button class="nav-tab" data-tab="portfolio">Portfolio Tracker</button>
                     <button class="nav-tab" data-tab="loot-buyer">Loot Buyer</button>
+                    <button class="nav-tab" data-tab="loot-logger">Loot Logger</button>
                 </div>
             </div>
             <!-- Game Tools group -->
@@ -1801,6 +1802,15 @@
                     <div class="changelog-list">
                         <div class="changelog-entry">
                             <div class="changelog-date">April 9, 2026</div>
+                            <div class="changelog-title">Loot Logger + Accountability Check</div>
+                            <ul>
+                                <li>New Loot Logger tab &mdash; view live loot events from the client or upload log files from ao-loot-logger</li>
+                                <li>Per-player breakdown: who looted what, with guild info, item icons, and quantities</li>
+                                <li>Accountability Check &mdash; cross-reference loot pickups vs chest deposits to see who deposited and who didn&rsquo;t</li>
+                            </ul>
+                        </div>
+                        <div class="changelog-entry">
+                            <div class="changelog-date">April 9, 2026</div>
                             <div class="changelog-title">Real Item Weights + Delete Tracked Tabs</div>
                             <ul>
                                 <li>Item weight data from game files now shown across the website &mdash; Market Browser cards, Transport haul plans, Loot Buyer captures and sell plans</li>
@@ -2428,6 +2438,72 @@
                 <div id="loot-tracked-list"></div>
                 <div id="loot-tracked-empty" class="empty-state" style="padding:1.5rem; display:none;">
                     <p style="margin:0; color:var(--text-muted); font-size:0.85rem;">No tracked tabs yet. Analyze a loot tab then click <strong>I Bought This</strong> to start tracking.</p>
+                </div>
+            </div>
+        </section>
+
+        <section class="tab-pane hidden" id="pane-loot-logger">
+            <div class="controls-panel">
+                <h2 style="color:var(--accent); margin:0 0 0.5rem 0; font-size:1.2rem;">
+                    <span style="display:inline-flex; align-items:center; gap:0.5rem;">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+                        Loot Logger
+                    </span>
+                </h2>
+                <p style="color:var(--text-secondary); font-size:0.82rem; margin:0 0 1rem;">
+                    Track who looted what during PvP/PvE content. Upload a log file or view live data from the Coldtouch client.
+                    Use the Accountability Check to cross-reference loot pickups against chest deposits.
+                </p>
+
+                <div style="display:flex; gap:0.5rem; margin-bottom:1rem; flex-wrap:wrap;">
+                    <button class="btn-small-accent" onclick="showLootLoggerMode('live')" id="loot-log-live-btn">Live Sessions</button>
+                    <button class="btn-small" onclick="showLootLoggerMode('upload')" id="loot-log-upload-btn">Upload Log File</button>
+                    <button class="btn-small" onclick="showLootLoggerMode('accountability')" id="loot-log-acc-btn">Accountability Check</button>
+                </div>
+
+                <!-- Live Sessions Mode -->
+                <div id="loot-log-live" class="loot-log-mode">
+                    <div id="loot-sessions-list" style="margin-bottom:1rem;">
+                        <div class="empty-state"><p>Loading sessions...</p></div>
+                    </div>
+                    <div id="loot-session-detail" style="display:none;"></div>
+                </div>
+
+                <!-- Upload Mode -->
+                <div id="loot-log-upload" class="loot-log-mode" style="display:none;">
+                    <div style="background:var(--bg-card); border:1px solid var(--border-color); border-radius:var(--radius); padding:1rem; margin-bottom:1rem;">
+                        <p style="color:var(--text-secondary); font-size:0.82rem; margin:0 0 0.75rem;">
+                            Upload a <code>.txt</code> file from the <a href="https://github.com/matheussampaio/ao-loot-logger" target="_blank" style="color:var(--accent);">ao-loot-logger</a>.
+                            Format: <code>timestamp;alliance;guild;name;item_id;item_name;qty;from_alliance;from_guild;from_name</code>
+                        </p>
+                        <input type="file" id="loot-log-file-input" accept=".txt" style="display:none;" onchange="handleLootFileUpload(this)">
+                        <button class="btn-small-accent" onclick="document.getElementById('loot-log-file-input').click()">Choose File</button>
+                        <span id="loot-log-file-status" style="margin-left:0.5rem; font-size:0.78rem; color:var(--text-muted);"></span>
+                    </div>
+                    <div id="loot-upload-result"></div>
+                </div>
+
+                <!-- Accountability Check Mode -->
+                <div id="loot-log-accountability" class="loot-log-mode" style="display:none;">
+                    <div style="background:var(--bg-card); border:1px solid var(--border-color); border-radius:var(--radius); padding:1rem; margin-bottom:1rem;">
+                        <h3 style="color:var(--accent); margin:0 0 0.5rem; font-size:0.9rem;">Loot Accountability Check</h3>
+                        <p style="color:var(--text-secondary); font-size:0.82rem; margin:0 0 1rem;">
+                            Cross-reference a loot log against a chest deposit. Select a loot session (who picked up items)
+                            and a chest capture (what was deposited), then compare.
+                        </p>
+                        <div style="display:grid; grid-template-columns:1fr 1fr; gap:1rem; margin-bottom:1rem;">
+                            <div>
+                                <label style="font-size:0.78rem; color:var(--text-muted); display:block; margin-bottom:0.3rem;">Loot Session</label>
+                                <select id="acc-session-select" class="transport-select" style="width:100%;"><option value="">-- Select session --</option></select>
+                            </div>
+                            <div>
+                                <label style="font-size:0.78rem; color:var(--text-muted); display:block; margin-bottom:0.3rem;">Chest Tab Capture</label>
+                                <select id="acc-capture-select" class="transport-select" style="width:100%;"><option value="">-- Select capture --</option></select>
+                            </div>
+                        </div>
+                        <button class="btn-small-accent" onclick="runAccountabilityCheck()">Compare</button>
+                    </div>
+                    <div id="accountability-result"></div>
                 </div>
             </div>
         </section>

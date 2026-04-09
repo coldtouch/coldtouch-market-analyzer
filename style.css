@@ -779,6 +779,59 @@ select:focus {
     white-space: nowrap;
 }
 
+/* Loot Logger */
+.loot-session-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius);
+    padding: 0.75rem 1rem;
+    margin-bottom: 0.5rem;
+    cursor: pointer;
+    transition: all var(--transition);
+}
+.loot-session-card:hover { border-color: var(--accent); }
+.loot-session-card.active { border-color: var(--profit-green); }
+
+.loot-player-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius);
+    margin-bottom: 0.5rem;
+    overflow: hidden;
+}
+.loot-player-header {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.6rem 0.75rem;
+    cursor: pointer;
+}
+.loot-player-header:hover { background: var(--bg-elevated); }
+.loot-player-items {
+    display: none;
+    padding: 0 0.75rem 0.5rem;
+}
+.loot-player-card.expanded .loot-player-items { display: block; }
+
+.loot-log-item-row {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.25rem 0;
+    font-size: 0.78rem;
+}
+
+/* Accountability status */
+.acc-deposited { opacity: 0.6; }
+.acc-partial .acc-status-badge { color: #fbbf24; }
+.acc-missing .acc-status-badge { color: var(--loss-red); font-weight: 600; }
+.acc-deposited .acc-status-badge { color: var(--profit-green); }
+.acc-status-badge {
+    margin-left: auto;
+    font-size: 0.7rem;
+    white-space: nowrap;
+}
+
 .item-card-prices {
     display: grid;
     grid-template-columns: 1fr 1fr;
