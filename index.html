@@ -4,23 +4,94 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="description"
-        content="Coldtouch Market Analyzer for Albion Online – scan the entire market, find arbitrage routes, compare cities, and calculate crafting profits.">
-    <title>Coldtouch Market Analyzer – Albion Online</title>
-    <link rel="stylesheet" href="style.css">
+
+    <!-- Primary SEO -->
+    <title>Coldtouch Market Analyzer – Albion Online Market Prices, Flipping &amp; Crafting Tool</title>
+    <meta name="description" content="The most comprehensive Albion Online market tool. Real-time item prices across all cities, arbitrage flip finder, crafting profit calculator, transport route planner, Black Market flipper, and 20+ free tools. Track market trends, set price alerts, and maximize your silver earnings.">
+    <meta name="keywords" content="Albion Online market, Albion Online prices, Albion Online flipping, Albion Online crafting calculator, Albion Online arbitrage, Albion Online transport routes, Albion Online silver, Albion Online market analyzer, albion market tool, albion flipper, albion online tools">
+    <meta name="robots" content="index, follow">
+    <meta name="author" content="Coldtouch">
+    <link rel="canonical" href="https://albionaitool.xyz/">
+
+    <!-- Open Graph -->
+    <meta property="og:type" content="website">
+    <meta property="og:site_name" content="Coldtouch Market Analyzer">
+    <meta property="og:title" content="Coldtouch Market Analyzer – Albion Online Market Prices &amp; Tools">
+    <meta property="og:description" content="Real-time Albion Online market prices, flip finder, crafting profits, transport routes, and 20+ free tools. The ultimate market intelligence platform for serious Albion players.">
+    <meta property="og:url" content="https://albionaitool.xyz/">
+    <meta property="og:image" content="https://albionaitool.xyz/og-image.png">
+    <meta property="og:image:width" content="1200">
+    <meta property="og:image:height" content="630">
+    <meta property="og:image:alt" content="Coldtouch Market Analyzer – Albion Online market tool dashboard">
+
+    <!-- Twitter Card -->
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:title" content="Coldtouch Market Analyzer – Albion Online Market Prices &amp; Tools">
+    <meta name="twitter:description" content="Real-time Albion Online market prices, flip finder, crafting profits, transport routes, and 20+ free tools.">
+    <meta name="twitter:image" content="https://albionaitool.xyz/og-image.png">
+    <meta name="twitter:image:alt" content="Coldtouch Market Analyzer – Albion Online market tool dashboard">
+
+    <!-- Favicon (inline SVG — no separate image file required) -->
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg%20xmlns%3D'http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg'%20viewBox%3D'0%200%2024%2024'%20fill%3D'none'%20stroke%3D'%23d4af37'%20stroke-width%3D'1.5'%20stroke-linecap%3D'round'%20stroke-linejoin%3D'round'%3E%3Cpolyline%20points%3D'23%206%2013.5%2015.5%208.5%2010.5%201%2018'%2F%3E%3Cpolyline%20points%3D'17%206%2023%206%2023%2012'%2F%3E%3C%2Fsvg%3E">
+
+    <!-- Structured Data -->
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "WebApplication",
+      "name": "Coldtouch Market Analyzer",
+      "url": "https://albionaitool.xyz/",
+      "description": "Comprehensive Albion Online market analysis tool with real-time prices, flip finder, crafting profit calculator, transport route planner, and 20+ free tools.",
+      "applicationCategory": "GameApplication",
+      "operatingSystem": "Web Browser",
+      "offers": {
+        "@type": "Offer",
+        "price": "0",
+        "priceCurrency": "USD"
+      },
+      "featureList": [
+        "Real-time market prices across all Albion Online cities",
+        "Cross-city arbitrage flip finder",
+        "Black Market flipper",
+        "Crafting profit calculator",
+        "Transport route planner",
+        "Live flip detection",
+        "Crafting journals calculator",
+        "Resource return rate calculator",
+        "Farm and breed profit calculator",
+        "Price trend analytics with SMA and EMA",
+        "Discord price alerts",
+        "Portfolio tracker with P&L"
+      ],
+      "author": {
+        "@type": "Person",
+        "name": "Coldtouch"
+      }
+    }
+    </script>
+
+    <!-- Preconnect / DNS prefetch for performance -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <!-- Warm up VPS connection while user reads the landing page (DNS + TLS handshake) -->
     <link rel="dns-prefetch" href="https://albionaitool.xyz">
     <link rel="preconnect" href="https://albionaitool.xyz" crossorigin>
-    <link rel="preconnect" href="https://fonts.googleapis.com">
+
+    <!-- Fonts -->
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+
+    <!-- Styles -->
+    <link rel="stylesheet" href="style.css">
+
+    <!-- Chart.js -->
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-    <!-- Google tag (gtag.js) -->
+
+    <!-- Google Analytics -->
     <script async src="https://www.googletagmanager.com/gtag/js?id=G-S3GS92QKC9"></script>
     <script>
         window.dataLayer = window.dataLayer || [];
         function gtag(){dataLayer.push(arguments);}
         gtag('js', new Date());
-
         gtag('config', 'G-S3GS92QKC9');
     </script>
 </head>
@@ -1800,6 +1871,21 @@
                 <div class="about-section">
                     <h2 class="about-heading">Changelog</h2>
                     <div class="changelog-list">
+                        <div class="changelog-entry">
+                            <div class="changelog-date">April 10, 2026</div>
+                            <div class="changelog-title">SEO Improvements</div>
+                            <ul>
+                                <li>Expanded title tag with targeted keywords for Albion Online market search rankings</li>
+                                <li>Richer meta description covering all major tool features</li>
+                                <li>Added Open Graph tags for Discord/social media link previews</li>
+                                <li>Added Twitter Card tags for Twitter/X link previews</li>
+                                <li>Added JSON-LD structured data (WebApplication schema) for Google rich results</li>
+                                <li>Added inline SVG favicon &mdash; site now shows a chart icon in browser tabs</li>
+                                <li>Added <code>robots.txt</code> and <code>sitemap.xml</code></li>
+                                <li>Added <code>rel="canonical"</code>, <code>meta robots</code>, and <code>meta keywords</code></li>
+                                <li>Added <code>preconnect</code> hint for Google Fonts static assets</li>
+                            </ul>
+                        </div>
                         <div class="changelog-entry">
                             <div class="changelog-date">April 9, 2026</div>
                             <div class="changelog-title">Quality &amp; Analytics Improvements</div>
