@@ -1,6 +1,6 @@
 # Albion Market Analyzer — Project Handoff
 
-> **Last updated:** 2026-04-07
+> **Last updated:** 2026-04-09
 > **Author:** Coldtouch (yuvalvilensky@gmail.com)
 > **Purpose:** Everything a new session needs to continue development without re-discovering context.
 
@@ -346,9 +346,17 @@ go build -v ./...
 
 ## 12. Known Bugs & Technical Debt
 
+### CRITICAL — Chest Capture Item Mismatch (Active Investigation)
+- **Items captured do NOT match actual chest contents.** Verified with known 3-item test (T4 Mistcaller = T4_OFF_HORN_KEEPER id:3710, T6.1 Assassin Hood = T6_HEAD_LEATHER_SET3@1 id:5069, T3 Ox = T3_MOUNT_OX id:10677). Every capture returned 3 phantom items instead (UNIQUE_LOOTCHEST_ADC_NOV2018 by Fakaz, T4_CAPEITEM_MORGANA by SargasT, UNIQUE_UNLOCK_SKIN_DIREWOLF_BOBTAIL by 007speed — objectIDs 69534264, 660587197, 75354710, always at slots -34, -35, -29).
+- **Same phantom items appear for EVERY tab** — personal bank, guild tabs, empty tabs, tabs where items were just moved in. Persists across zone changes.
+- **The game does NOT send chest contents during zone loading.** Only ~12 items from one nearby container arrived (at slots 1546-1556). The test items never appear in any event, not even as raw numeric IDs.
+- **The 373-item Loot 2 capture from earlier is also suspect** — we never validated those items were correct either.
+- **Root cause unknown.** Possible theories: (a) EquipItem events for chest tabs are from nearby Morgana chests on the island, not from the opened tab; (b) items come from player equipment/wardrobe/loadout slots; (c) the game uses a different mechanism to send chest contents that we're not capturing.
+- **What DOES work:** GUID matching (100% correct), tab name resolution, vault info detection, WebSocket relay.
+- **Next steps to try:** (1) Check if Fakaz/SargasT/007speed are guild members or if those items are from player worn gear; (2) Add `RawParams mapstructure:",remain"` to item event structs to capture undocumented parameters; (3) Research how Triky313/AlbionOnline-StatisticsAnalysis (C# desktop app) captures chest contents — it's the only tool that does this successfully; (4) Log ALL raw event types during chest interaction to find events we might be missing; (5) Check evInvalidateItemContainer (101) and evLockItemContainer (102) which are defined but not handled.
+
 ### High Priority
-- **Client GUID matching untested in live game** -- ContainerManageSubContainer GUID matching was coded but never verified in a real game session. If it fails, try mixed-endian byte-swap (same pattern as Character IDs in decodeCharacterID). Logs show `[ContainerManageSubContainer] guid=... len=...` -- if len=0 then there's no GUID in the packet.
-- **Negative item ID mappings are guesses** -- IDs -1 to -9 mapped to Silver, Gold, Fame Credit, Silver Pouch, etc. based on community knowledge. Need live verification.
+- **Negative item ID mappings are guesses** -- IDs -1 to -9 mapped to Silver, Gold, Fame Credit, Silver Pouch, etc. based on community knowledge. Need live verification. Also discovered IDs far beyond -9: -54, -57, -60, -62, -63, -66, -69, -84, -96, -107.
 
 ### Medium Priority
 - **Transport volume data** -- `sample_count` is data frequency, not actual trade volume.
@@ -356,6 +364,18 @@ go build -v ./...
 ### Low Priority
 - **app.js is 7,128+ lines** -- Could benefit from modularization
 - **Go client build pipeline** -- Manual `go build`, no CI/CD
+
+### RESOLVED (April 8 Evening Session — Chest Capture Debugging)
+- ~~GUID matching untested in live game~~ -- CONFIRMED WORKING: All 7 guild tabs + 1 bank tab match by GUID every time. Mixed-endian byte-swap NOT needed.
+- ~~Default tab not captured~~ -- FIXED: Added `evAttachItemContainer` (opcode 99) handler in decode.go + operation_container_open.go. Default tab now triggers collection.
+- ~~Items arriving before collector starts~~ -- FIXED: Added pre-buffer in itemCollector. Items that arrive before `startCollecting()` are buffered (2s window) and drained when collection begins.
+- ~~NATS flood killing game client auth~~ -- FIXED (earlier session): Added `wc.clientType !== 'game-client'` filter to NATS broadcast in deploy_saas.py.
+- ~~Rapid tab switching loses captures~~ -- FIXED (earlier session): `startCollecting()` now finalizes previous tab before resetting.
+
+### RESOLVED (April 8 Session — Cowork/Dispatch)
+- ~~Freshness age bug~~ -- `fresh-threshold-group` had `display:none` hardcoded in HTML and JS sync only fired on change events, never on page load. Fixed by extracting `syncFreshThreshold()` function called on init. Deployed.
+- ~~Phase 3 Lifecycle Tracker~~ -- DB tables (`loot_tabs`, `loot_tab_sales`), 5 API endpoints, "I Bought This" button, tracking UI with progress %, net profit, status badges. All JWT-authenticated. Deployed.
+- ~~Feedback/Bug Report feature~~ -- Discord webhook form (Bug Report / Suggestion + textarea), rate-limited 1/min per user. **CONFIRMED LIVE** (April 9 Cowork session) — `/api/feedback` active, `DISCORD_FEEDBACK_WEBHOOK` set in VPS `.env`, points to `#website-feedback`.
 
 ### RESOLVED (April 7 Session 9-10)
 - ~~Latest changes not deployed~~ -- DEPLOYED (3 deploys this session)
@@ -370,13 +390,41 @@ go build -v ./...
 
 ## 13. Roadmap (Next Up)
 
-### Immediate — In-Game Testing
-1. **Live game test of chest capture** -- Go client → WebSocket → VPS → frontend. Verify GUID matching, tab names, item accuracy
-2. **Device Auth end-to-end test** -- Device code flow from Go client to browser approval
+### Immediate — Fix Chest Capture Item Mismatch
+1. **Solve the item mismatch bug** -- See Section 12 "CRITICAL" for full details. GUID matching works but captured items are wrong. Need to figure out how the game actually sends chest tab contents.
+2. **Device Auth end-to-end test** -- Device code flow from Go client to browser approval (not yet tested)
 
 ### Short Term
-3. **ReadMail opcode handler** in Go client -- capture sale completion mails, auto-match to tracked loot tabs
+3. **ReadMail opcode — wire into loot tab matching** — opcode research DONE (April 9). Implementation: intercept `lib.NatsMarketNotifications`, match by ItemID + LocationID + timestamp window. Fix expiry bug at `operation_read_mail.go:103` (ItemID = body[1] is wrong — it's the total amount). Handle MailInfos cache miss (zone transition required before mails populate).
 4. **Go client GitHub Releases** -- automated builds for Windows/Mac/Linux via GitHub Actions
+5. ~~**Feedback form deployment**~~ -- CONFIRMED LIVE (April 9 Cowork session)
+
+### Crafting Profits Revamp (5 Phases)
+
+**Phase 1 — Test & stabilize existing crafting features (START HERE)**
+- Test all existing Crafting Profits functionality; identify what's broken vs working
+- Add refresh buttons to City Compare tab
+
+**Phase 2 — Improve cost breakdowns**
+- Verify RRR (Resource Return Rate) formulas are accurate
+- Fix journal profit calculation
+- Add enchantment material costs
+- Add sub-recipe option (craft sub-components vs buy)
+
+**Phase 3 — Cross-feature navigation**
+- Implement `switchToCraft(itemId)` function callable from Item Browser, Transport, Loot Buyer, Market Flipper
+- "Craft this item" buttons across tabs that jump directly to Crafting Profits with item pre-loaded
+
+**Phase 4 — Enhanced bulk scanner**
+- Filters by tier/enchant/category
+- Insta-sell vs list toggle (like Transport Routes)
+- Profit-per-focus-point metric
+- Historical trend support
+
+**Phase 5 — QoL**
+- Favorites / saved setups
+- Shopping list export
+- Mobile responsive layout
 
 ### Major New Feature — Loot Logger Viewer
 5. **Forked:** https://github.com/coldtouch/ao-loot-logger (GPL-3.0, cloned to `D:\Coding\ao-loot-logger\`)
@@ -409,7 +457,52 @@ go build -v -o albiondata-client-custom.exe .
 
 ## 14. Session History (Recent)
 
-### April 7, Sessions 9-10 (Latest)
+### April 9 — Cowork/Dispatch Session (Latest)
+
+#### Completed
+1. **Feedback form verified LIVE** — `/api/feedback` endpoint confirmed deployed. `DISCORD_FEEDBACK_WEBHOOK` set in VPS `.env` pointing to `#website-feedback`. Service active. No action needed.
+
+2. **ReadMail opcode research — COMPLETE**
+   - Both `opGetMailInfos` (168) and `opReadMail` (170) are already fully wired in the Go client
+   - Mail body is pipe-delimited: `quantity | itemID | unused | price_in_10000ths`
+   - Price formula: `body[3] / 10000`; total after tax: `price * amount * 0.97`
+   - Existing code produces `MarketSellNotification` with: ItemID, Amount, Price, TotalAfterTaxes, LocationID, MailID
+   - For loot tab matching: match by ItemID + LocationID + timestamp window. No buyer name available at protocol level
+   - **GOTCHA:** MailInfos cache requires prior zone transition or clicking mail icon. If ReadMail fires before GetMailInfos, item is silently dropped — needs handling in implementation
+   - **BUG:** `operation_read_mail.go:103` — expiry notification sets `ItemID = body[1]` which is actually total amount, not item ID
+   - Notifications sent via `lib.NatsMarketNotifications` — intercept here for loot tab matching
+
+3. **Crafting Profits Revamp Phase 1** — attempted but stuck waiting for workspace directory approval (user was at work, not at PC). Changes from earlier in the day session:
+   - TAX_RATE corrected to 3% (`0.03`), SETUP_FEE added at 2.5% (`0.025`)
+   - Station fee base changed from material cost → sell price
+   - Tax display labels updated across Transport, BM Flipper, Portfolio
+   - RRR formula verified: basePB=18, focusPB=59 flat
+
+#### Not completed (needs PC access)
+- Crafting Revamp Phase 1 audit (full formula verification + refresh buttons) — two sessions blocked waiting for workspace approval
+
+#### Next steps when at PC
+1. Complete Crafting Revamp Phase 1 (formula audit + refresh buttons)
+2. Wire ReadMail into loot tab matching (opcode research done, implementation is straightforward)
+3. Fix expiry notification ItemID bug at `operation_read_mail.go:103`
+4. Continue with Crafting Revamp Phase 2+ per roadmap
+
+---
+
+### April 8 Evening — Chest Capture Debugging Session
+- **evAttachItemContainer handler** — added opcode 99 handler to decode.go + operation_container_open.go. Default/initial tab now triggers item collection (previously only explicit tab clicks via opContainerOpen worked).
+- **Pre-buffer for item timing** — items arrive BEFORE evAttachItemContainer. Added pre-buffer in itemCollector that holds items for 2s window, drains into collector when startCollecting() is called.
+- **Item mismatch investigation** — 6 test runs with known items (Mistcaller, Assassin Hood, T3 Ox). Every capture returned 3 phantom items from a nearby container instead. Phantom items persist across zone changes. Game doesn't re-send chest contents during zone loading. Root cause unknown — see Section 12 for full details and next steps.
+- **Code changes (uncommitted):** `operation_container_open.go` (AttachItemContainer handler), `event_container_items.go` (pre-buffer), `decode.go` (evAttachItemContainer registration)
+- **Test item IDs for validation:** T4_OFF_HORN_KEEPER (id:3710), T6_HEAD_LEATHER_SET3@1 (id:5069), T3_MOUNT_OX (id:10677). Currently in guild chest Loot 3 tab on Panico's Island.
+
+### April 8 — Cowork/Dispatch Session
+- **Phase 3: Lifecycle Tracker** — built and deployed: `loot_tabs` + `loot_tab_sales` DB tables, 5 API endpoints (save/list/record sale/get detail/update status), "I Bought This" button on loot eval results, tracking UI with progress %, net profit, status badges (open/partial/sold). JWT-authenticated. Confirmed live on VPS.
+- **Freshness age bug** — fixed and deployed: `fresh-threshold-group` had `display:none` hardcoded in HTML; JS sync only fired on change events, never on init. Extracted `syncFreshThreshold()` called on page load.
+- **Feedback/Bug Report feature** — built: Discord webhook form with Bug Report / Suggestion selector + message textarea, rate-limited 1/min per user. **CONFIRMED LIVE** (verified April 9 Cowork session) — `DISCORD_FEEDBACK_WEBHOOK` set, points to `#website-feedback`.
+- **Crafting Profits Revamp** — full 5-phase plan added to roadmap (see Section 13 above). Phase 1 is the starting point for next session.
+
+### April 7, Sessions 9-10 (Previous)
 - Deployed all pending changes (3 deploys)
 - Inline sale recording form (replaced prompt() dialogs with item dropdown from tab)
 - Unknown items mapped (negative IDs -1 to -9 in Go client, filtered from captures)
@@ -457,6 +550,11 @@ go build -v -o albiondata-client-custom.exe .
 6. **Discord OAuth was painful** -- Went through passport -> manual OAuth, sessions -> JWT. Current stateless JWT approach works well.
 7. **Deploy via SFTP, not base64 echo** -- Base64 via echo truncates at ~100KB. Always use SFTP for backend.js upload.
 8. **Vault info fires for ALL chests** -- BankVaultInfo/GuildVaultInfo fire when approaching any chest. Must match by GUID or use separate guild/bank vars.
+9. **GUID matching works perfectly** -- All 7 guild tabs + 1 bank tab matched by GUID on first try. Mixed-endian byte-swap was NOT needed. Sequential fallback was never triggered.
+10. **EquipItem/SimpleItem events have NO container reference** -- Param 0=slot, 1=itemTypeID, 2=quality, 4=objectID, 5=crafter, 6=enchantment, 7=durability, 8=spells, 9=sockets, 10=unknown. No way to link an item to its container from the event alone.
+11. **evAttachItemContainer param 3 is a slot map** -- Array of signed bytes listing which slots have items. Zeros = empty. Matches slot positions of EquipItem events. Param 4 = capacity (500 for guild tabs, 128 for bank).
+12. **Game does NOT resend chest items on tab switch** -- It assumes the client cached them from earlier. EquipItem events after ContainerOpen may be from nearby containers, NOT from the opened tab.
+13. **Never assume large captures are correct** -- 373 items in Loot 2 looked right but was never validated. Always test with known items.
 
 ---
 
