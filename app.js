@@ -1081,6 +1081,11 @@ function renderArbitrage(trades, isSingleItem = false, targetItemId = null) {
 }
 
 async function doArbScan(targetItemId = null) {
+    // Abort any previous scan in progress
+    if (scanAbortController) scanAbortController.abort();
+    scanAbortController = new AbortController();
+    const signal = scanAbortController.signal;
+
     if (itemsList.length === 0) await loadData();
     await loadSpreadStats();
 
@@ -5212,7 +5217,7 @@ function renderTrackedTabDetail(tab) {
     const salesHtml = tab.sales.length === 0
         ? '<p style="color:var(--text-muted); font-size:0.8rem; margin:0.5rem 0;">No sales recorded yet.</p>'
         : tab.sales.map(s => {
-            const name = (typeof itemNames !== 'undefined' && itemNames[s.item_id]) || s.item_id;
+            const name = (typeof ITEM_NAMES !== 'undefined' && ITEM_NAMES[s.item_id]) || s.item_id;
             const qualLabel = s.quality > 1 ? ` q${s.quality}` : '';
             const total = (s.sale_price * s.quantity).toLocaleString();
             const date = new Date(s.sold_at).toLocaleDateString();
@@ -5279,7 +5284,7 @@ function showSaleForm(tabId) {
                     <label class="sale-form-label">Item</label>
                     <select id="sale-item-${tabId}" class="sale-form-select">
                         ${opts.map(o => {
-                            const name = (typeof itemNames !== 'undefined' && itemNames[o.itemId]) || o.itemId;
+                            const name = (typeof ITEM_NAMES !== 'undefined' && ITEM_NAMES[o.itemId]) || o.itemId;
                             const qLbl = (o.quality || 1) > 1 ? ` q${o.quality}` : '';
                             return `<option value="${esc(o.itemId)}" data-quality="${o.quality || 1}" data-qty="${o.quantity}">${esc(name)}${qLbl} (×${o.quantity})</option>`;
                         }).join('')}
@@ -5763,6 +5768,9 @@ function handleLootLoggerWsMessage(msg) {
 let lastTransportRoutes = null;
 
 async function doTransportScan() {
+    if (scanAbortController) scanAbortController.abort();
+    scanAbortController = new AbortController();
+
     const spinner = document.getElementById('transport-spinner');
     const errorEl = document.getElementById('transport-error');
     const container = document.getElementById('transport-results');
@@ -6217,7 +6225,7 @@ function renderTransportResults(routes, budget, mountCapacity, haulPlans, availa
                             ${plan.items.length > 5 ? `<span style="font-size:0.7rem; color:var(--text-muted);">+${plan.items.length - 5}</span>` : ''}
                         </div>
                         <div style="min-width:0;">
-                            <div style="font-weight:600; font-size:0.9rem; color:var(--text-primary);">${plan.buyCity} ➔ ${plan.sellCity}</div>
+                            <div style="font-weight:600; font-size:0.9rem; color:var(--text-primary);">${esc(plan.buyCity)} ➔ ${esc(plan.sellCity)}</div>
                             <div style="font-size:0.72rem; color:var(--text-muted);">${plan.items.length} item${plan.items.length > 1 ? 's' : ''} &bull; ${plan.totalSlots}/${availableSlots} slots &bull; ${Number.isFinite(mountCapacity) ? `${plan.totalWeight.toFixed(1)}/${mountCapacity} kg` : `${plan.totalWeight.toFixed(1)} kg`} &bull; ${plan.budgetUsed}% budget &bull; ${freshnessHtml} ${confBadge}${histBadge}</div>
                         </div>
                     </div>

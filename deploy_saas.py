@@ -3143,8 +3143,8 @@ function computeAnalytics() {
   console.log('[Analytics] Starting computation...');
 
   // === STEP 1: Bulk SQL metrics (SMA 7d, SMA 30d, VWAP 7d, price_trend, spread_volatility) ===
-  // One GROUP BY query per metric window to minimize JS memory. Each produces one row per combo.
-  db.all(
+  // Use statsDb to avoid blocking the main db connection during heavy reads
+  statsDb.all(
     `SELECT item_id, city, quality,
       AVG(CASE WHEN avg_sell > 0 THEN avg_sell ELSE NULL END) AS sma_7d,
       AVG(CASE WHEN avg_sell > 0 THEN avg_sell * sample_count ELSE NULL END) /
@@ -3160,8 +3160,13 @@ function computeAnalytics() {
     HAVING data_points_7d >= 2`,
     [oneDayAgo, sevenDaysAgo],
     (err, rows7d) => {
-      if (err || !rows7d || rows7d.length === 0) {
-        console.log('[Analytics] No 7d data, skipping');
+      if (err) {
+        console.error('[Analytics] 7d query FAILED:', err.message || err);
+        analyticsRunning = false;
+        return;
+      }
+      if (!rows7d || rows7d.length === 0) {
+        console.log('[Analytics] No 7d data yet, skipping');
         analyticsRunning = false;
         return;
       }
@@ -3172,7 +3177,7 @@ function computeAnalytics() {
       }
 
       // SMA 30d — separate query since it spans a different time window
-      db.all(
+      statsDb.all(
         `SELECT item_id, city, quality,
           AVG(CASE WHEN avg_sell > 0 THEN avg_sell ELSE NULL END) AS sma_30d
         FROM price_averages
@@ -3180,7 +3185,7 @@ function computeAnalytics() {
         GROUP BY item_id, city, quality`,
         [thirtyDaysAgo],
         (err2, rows30d) => {
-          if (err2) { analyticsRunning = false; return; }
+          if (err2) { console.error('[Analytics] 30d query FAILED:', err2.message || err2); analyticsRunning = false; return; }
 
           const map30d = {};
           for (const r of rows30d || []) {
@@ -3221,12 +3226,12 @@ function computeAnalytics() {
           // Flush bulk results in transaction
           function flushBulk(results, cb) {
             if (results.length === 0) return cb();
-            db.serialize(() => {
-              db.run('BEGIN TRANSACTION');
-              const stmt = db.prepare(`INSERT OR REPLACE INTO price_analytics (item_id, city, quality, metric, value, computed_at) VALUES (?, ?, ?, ?, ?, ?)`);
+            statsDb.serialize(() => {
+              statsDb.run('BEGIN TRANSACTION');
+              const stmt = statsDb.prepare(`INSERT OR REPLACE INTO price_analytics (item_id, city, quality, metric, value, computed_at) VALUES (?, ?, ?, ?, ?, ?)`);
               for (const row of results) stmt.run(...row);
               stmt.finalize();
-              db.run('COMMIT', cb);
+              statsDb.run('COMMIT', cb);
             });
           }
 
@@ -3255,7 +3260,7 @@ function computeAnalytics() {
               // Build IN clause using concatenated key (compatible with all SQLite versions)
               const placeholders = batchCombos.map(() => '?').join(',');
 
-              db.all(
+              statsDb.all(
                 `SELECT item_id, city, quality, avg_sell
                 FROM price_averages
                 WHERE period_start > ?
@@ -3300,12 +3305,12 @@ function computeAnalytics() {
                     return;
                   }
 
-                  db.serialize(() => {
-                    db.run('BEGIN TRANSACTION');
-                    const stmt = db.prepare(`INSERT OR REPLACE INTO price_analytics (item_id, city, quality, metric, value, computed_at) VALUES (?, ?, ?, ?, ?, ?)`);
+                  statsDb.serialize(() => {
+                    statsDb.run('BEGIN TRANSACTION');
+                    const stmt = statsDb.prepare(`INSERT OR REPLACE INTO price_analytics (item_id, city, quality, metric, value, computed_at) VALUES (?, ?, ?, ?, ?, ?)`);
                     for (const row of emaResults) stmt.run(...row);
                     stmt.finalize();
-                    db.run('COMMIT', () => {
+                    statsDb.run('COMMIT', () => {
                       emaWritten += emaResults.length;
                       setTimeout(processEmaBatch, 30); // yield to event loop
                     });
