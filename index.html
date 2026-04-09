@@ -801,7 +801,7 @@
                             <option value="mammoth_saddled">T8 Saddled Mammoth (2,308 kg)</option>
                             <option value="ignore">Ignore Weight (&#x221e;)</option>
                         </select>
-                        <div id="transport-mount-info" style="font-size:0.73rem; color:var(--text-muted); margin-top:3px;">Capacity: 1,764 kg + 8 mount slots</div>
+                        <div id="transport-mount-info" style="font-size:0.73rem; color:var(--text-muted); margin-top:3px;">Carry capacity: 1,764 kg</div>
                     </div>
                     <div class="control-group">
                         <label for="transport-free-slots" title="How many inventory slots are free after your gear, food, potions, etc.">Free Slots</label>
@@ -1768,10 +1768,10 @@
                             <div class="changelog-title">Transport Mount Capacity Fix</div>
                             <ul>
                                 <li>Mammoth weight corrected: 1,696 kg &rarr; <strong>1,764 kg</strong></li>
-                                <li>Mammoth inventory bag now grants <strong>+8 extra slots</strong> on top of your player slots</li>
-                                <li>&ldquo;No Mount&rdquo; now uses <strong>600 kg base weight</strong> (your inventory bags) instead of ignoring weight entirely</li>
-                                <li>Capacity info line below the mount dropdown shows &ldquo;Capacity: X kg + Y mount slots&rdquo; and updates live</li>
-                                <li>Changing the mount now immediately re-renders results without a full rescan</li>
+                                <li>Mounts only add carry weight &mdash; <strong>no extra inventory slots</strong>; slot limit is always your &ldquo;Free Slots&rdquo; input</li>
+                                <li>&ldquo;No Mount&rdquo; now uses <strong>600 kg base weight</strong> instead of ignoring weight entirely</li>
+                                <li>Carry capacity info line below the mount dropdown updates live on selection change</li>
+                                <li>Changing the mount immediately re-renders results without a full rescan</li>
                             </ul>
                         </div>
                         <div class="changelog-entry">

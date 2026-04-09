@@ -5370,8 +5370,7 @@ async function doTransportScan() {
     const budget = parseInt(document.getElementById('transport-budget').value) || 500000;
     const minConfidence = parseInt(document.getElementById('transport-min-confidence').value) || 0;
     const sortBy = document.getElementById('transport-sort').value;
-    const mountKey = document.getElementById('transport-mount').value || 'mammoth_t8';
-    const freeSlots = Math.max(1, Math.min(48, parseInt(document.getElementById('transport-free-slots').value) || 30));
+    const { mountCapacity, freeSlots } = getTransportMountConfig();
     const transportMode = document.querySelector('.transport-mode-btn.active')?.dataset.mode || 'live';
     const sellStrategy = document.getElementById('transport-sell-strategy')?.value || 'market';
     const excludeCaerleon = document.getElementById('transport-exclude-caerleon').checked;
@@ -5424,17 +5423,15 @@ async function doTransportScan() {
         }
 
         spinner.classList.add('hidden');
-        await enrichAndRenderTransport(lastTransportRoutes, budget, sortBy, mountKey, freeSlots);
+        await enrichAndRenderTransport(lastTransportRoutes, budget, sortBy, mountCapacity, freeSlots);
     } catch (e) {
         spinner.classList.add('hidden');
         showError(errorEl, 'Failed to load transport routes: ' + e.message);
     }
 }
 
-async function enrichAndRenderTransport(routes, budget, sortBy, mountKey, freeSlots) {
-    const mountData = MOUNT_DATA[mountKey] || MOUNT_DATA['mammoth_t8'];
-    const mountCapacity = mountData.weight;
-    const availableSlots = (freeSlots || 30) + mountData.extraSlots;
+async function enrichAndRenderTransport(routes, budget, sortBy, mountCapacity, freeSlots) {
+    const availableSlots = freeSlots || 30;
     const transportMode = document.querySelector('.transport-mode-btn.active')?.dataset.mode || 'live';
 
     // Enrich with current live prices from IndexedDB
@@ -5796,7 +5793,7 @@ function renderTransportResults(routes, budget, mountCapacity, haulPlans, availa
             const planCard = document.createElement('div');
             planCard.className = 'haul-plan-card';
             planCard.dataset.routeKey = plan.routeKey;
-            const weightPct = mountCapacity > 0 && mountCapacity < 999999 ? ((plan.totalWeight / mountCapacity) * 100).toFixed(0) : null;
+            const weightPct = Number.isFinite(mountCapacity) && mountCapacity > 0 ? ((plan.totalWeight / mountCapacity) * 100).toFixed(0) : null;
             const roiPct = plan.totalCost > 0 ? ((plan.totalProfit / plan.totalCost) * 100).toFixed(1) : 0;
             const confBadge = plan.avgConfidence >= 70 ? '<span style="color:#22c55e; font-size:0.7rem;">HIGH</span>' : plan.avgConfidence >= 40 ? '<span style="color:#f59e0b; font-size:0.7rem;">MED</span>' : '<span style="color:#ef4444; font-size:0.7rem;">LOW</span>';
             const histBadge = plan.isHistorical ? ' <span style="background:rgba(167,139,250,0.15); color:#a78bfa; border:1px solid rgba(167,139,250,0.3); padding:0 4px; border-radius:4px; font-size:0.6rem; font-weight:700;">HISTORICAL</span>' : '';
@@ -5975,8 +5972,7 @@ function renderTransportResults(routes, budget, mountCapacity, haulPlans, availa
                         if (lastTransportRoutes) {
                             const b = parseInt(document.getElementById('transport-budget').value) || 500000;
                             const s = document.getElementById('transport-sort').value;
-                            const mc = document.getElementById('transport-mount').value || 'mammoth_t8';
-                            const fs = Math.max(1, Math.min(48, parseInt(document.getElementById('transport-free-slots').value) || 30));
+                            const { mountCapacity: mc, freeSlots: fs } = getTransportMountConfig();
                             await enrichAndRenderTransport(lastTransportRoutes, b, s, mc, fs);
                         }
                     } catch (err) { console.error('Refresh failed:', err); }
@@ -5999,8 +5995,7 @@ function renderTransportResults(routes, budget, mountCapacity, haulPlans, availa
                     if (lastTransportRoutes) {
                         const b = parseInt(document.getElementById('transport-budget').value) || 500000;
                         const s = document.getElementById('transport-sort').value;
-                        const mc = document.getElementById('transport-mount').value || 'mammoth_t8';
-                        const fs = Math.max(1, Math.min(48, parseInt(document.getElementById('transport-free-slots').value) || 30));
+                        const { mountCapacity: mc, freeSlots: fs } = getTransportMountConfig();
                         await enrichAndRenderTransport(lastTransportRoutes, b, s, mc, fs);
                     }
                 } catch (err) { console.error('Refresh all failed:', err); }
