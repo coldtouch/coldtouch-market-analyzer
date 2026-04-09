@@ -780,6 +780,19 @@ function computeSMA(values, period) {
     });
 }
 
+function computeEMA(values, period) {
+    const alpha = 2 / (period + 1);
+    const result = [];
+    let ema = null;
+    for (let i = 0; i < values.length; i++) {
+        if (values[i] <= 0) { result.push(ema); continue; }
+        if (ema === null) { ema = values[i]; result.push(null); continue; }
+        ema = alpha * values[i] + (1 - alpha) * ema;
+        result.push(ema);
+    }
+    return result;
+}
+
 // ============================================================
 // MARKET FLIPPING (ARBITRAGE)
 // ============================================================
@@ -991,6 +1004,15 @@ function buildArbitrageCardDOM(trade) {
         </div>
         ` : ''}
         <div style="text-align:center; font-size:0.7rem; color:var(--text-muted); padding: 0.5rem 0 0 0; font-style:italic;">
+            ${(() => {
+                const ageMs = Math.max(
+                    trade.dateBuy ? Date.now() - new Date(trade.dateBuy).getTime() : Infinity,
+                    trade.dateSell ? Date.now() - new Date(trade.dateSell).getTime() : Infinity
+                );
+                const ageHrs = ageMs / 3600000;
+                return ageHrs > 6 ? '<div class="stale-data-badge">STALE DATA — prices may have changed</div>' :
+                       ageHrs > 2 ? '<div class="stale-data-badge mild">Data is 2+ hours old</div>' : '';
+            })()}
             <div style="display:flex; justify-content:center; gap:1rem; flex-wrap:wrap;">
                 <span title="Buy Data Age">${getFreshnessIndicator(trade.dateBuy)} ${esc(trade.buyCity)}: ${timeAgo(trade.dateBuy)}</span>
                 <span title="Sell Data Age">${getFreshnessIndicator(trade.dateSell)} ${esc(trade.sellCity)}: ${timeAgo(trade.dateSell)}</span>
@@ -2276,6 +2298,21 @@ async function renderAnalyticsChart(itemId, city, days) {
         const highs = rows.map(r => r.min_sell || 0);
         const sma7 = computeSMA(prices, 7);
         const sma30 = computeSMA(prices, 30);
+        const ema7 = computeEMA(prices, 7);
+
+        // VWAP from analytics data if available, otherwise compute from rows
+        let vwapLine = null;
+        if (rows.some(r => r.sample_count > 0)) {
+            let cumVol = 0, cumPV = 0;
+            vwapLine = rows.map(r => {
+                const p = r.sell_price_min || 0;
+                const v = r.sample_count || 0;
+                if (p <= 0 || v <= 0) return null;
+                cumPV += p * v;
+                cumVol += v;
+                return cumVol > 0 ? cumPV / cumVol : null;
+            });
+        }
 
         const validPrices = prices.filter(p => p > 0);
         if (validPrices.length > 0) {
@@ -2289,6 +2326,8 @@ async function renderAnalyticsChart(itemId, city, days) {
             <span class="analytics-legend-item"><span class="analytics-legend-dot" style="background:#c64a38;"></span>Price</span>
             <span class="analytics-legend-item"><span class="analytics-legend-dot" style="background:#d4af37;"></span>SMA 7d</span>
             <span class="analytics-legend-item"><span class="analytics-legend-dot" style="background:#7c9fcc;"></span>SMA 30d</span>
+            <span class="analytics-legend-item"><span class="analytics-legend-dot" style="background:#50c878;"></span>EMA 7d</span>
+            ${vwapLine ? '<span class="analytics-legend-item"><span class="analytics-legend-dot" style="background:#e879f9;"></span>VWAP</span>' : ''}
         `;
 
         analyticsChartInstance = new Chart(ctx, {
@@ -2331,7 +2370,33 @@ async function renderAnalyticsChart(itemId, city, days) {
                         fill: false,
                         spanGaps: true,
                         yAxisID: 'y'
-                    }
+                    },
+                    {
+                        label: 'EMA 7d',
+                        data: ema7,
+                        borderColor: '#50c878',
+                        backgroundColor: 'transparent',
+                        borderWidth: 1.5,
+                        borderDash: [4, 2],
+                        pointRadius: 0,
+                        tension: 0.3,
+                        fill: false,
+                        spanGaps: true,
+                        yAxisID: 'y'
+                    },
+                    ...(vwapLine ? [{
+                        label: 'VWAP',
+                        data: vwapLine,
+                        borderColor: '#e879f9',
+                        backgroundColor: 'transparent',
+                        borderWidth: 1.5,
+                        borderDash: [6, 3],
+                        pointRadius: 0,
+                        tension: 0.3,
+                        fill: false,
+                        spanGaps: true,
+                        yAxisID: 'y'
+                    }] : [])
                 ]
             },
             options: {

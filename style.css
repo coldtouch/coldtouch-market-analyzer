@@ -832,6 +832,25 @@ select:focus {
     white-space: nowrap;
 }
 
+/* Stale data badge */
+.stale-data-badge {
+    background: rgba(239, 68, 68, 0.15);
+    color: #ef4444;
+    border: 1px solid rgba(239, 68, 68, 0.3);
+    border-radius: var(--radius-sm);
+    padding: 0.2rem 0.5rem;
+    font-size: 0.68rem;
+    font-weight: 600;
+    font-style: normal;
+    margin-bottom: 0.3rem;
+    display: inline-block;
+}
+.stale-data-badge.mild {
+    background: rgba(251, 191, 36, 0.1);
+    color: #fbbf24;
+    border-color: rgba(251, 191, 36, 0.25);
+}
+
 .item-card-prices {
     display: grid;
     grid-template-columns: 1fr 1fr;
