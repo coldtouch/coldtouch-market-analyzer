@@ -118,13 +118,18 @@
 
 ## Recent Session History
 
-### April 9 — Chest Capture FULLY WORKING + Weight Data (Latest)
+### April 9 — Mega Session (Latest)
 - **Root cause:** itemmap.json was stale — ALL 11,964 IDs shifted in game update. Regenerated from ao-bin-dumps April 1 dump.
 - **Architecture rewrite:** Global item cache (sync.Map by slot) + evAttachItemContainer param 3 slot lookup. Same approach as Triky313's C# app.
 - **3 new event handlers:** FurnitureItem (33), KillTrophyItem (34), LaborerItem (36) — 6 total. Mounts/furniture now captured.
 - **Weight data:** weightmap.json (11,235 entries), per-item + total tab weight. Verified 40.2kg exact match.
 - **Verified on personal island:** 4 tabs, all items + crafters + weights correct.
-- **Uncommitted Go client changes:** decode.go, operation_container_open.go, event_container_items.go, itemmap.go, client.go, itemmap.json, weightmap.json
+- **All committed and pushed.** Go client + website.
+- **Loot Logger full pipeline:** Go client EvOtherGrabbedLoot + player tracking → VPS loot_events DB → website Loot Logger tab (live/upload/accountability). Saves .txt on exit. Delete sessions. Upload viewer works without login.
+- **Weight data across website:** itemweights.json (11,535), Market Browser badges, Transport haul X/Y kg, Loot Buyer captures/items/sell plan.
+- **GitHub Releases:** v1.0.0 released, CI working (Win/Linux/Mac).
+- **Audit fixes #1-9 ALL COMPLETE:** analytics→statsDb, itemNames fix, XSS, abort controller, EMA+VWAP chart, stale badges, toast notifications, cross-feature links, price cache.
+- **Delete tracked tabs + client docs rewrite.**
 
 ### Hotfix: Discord Login Broken During SpreadStats (April 9, 2026)
 - **Root cause found**: `computeSpreadStats` did a 90-second `db.all()` GROUP BY query (203k rows from 3M+ price_averages) on the **main shared db connection**. The node-sqlite3 queue serializes ALL operations, so `/api/me` (5s AbortSignal.timeout) stalled behind it and timed out → user saw "Could not reach server" → Discord login appeared broken.
@@ -206,13 +211,20 @@
 
 ## TODO / Unfinished Work
 
-### Chest Capture — DONE
-- [x] ~~Chest capture~~ — FULLY WORKING (April 9). Global item cache + slot lookup from evAttachItemContainer param 3. All items, weights, tab names verified correct.
-- [x] ~~GUID matching~~ — 100% match rate
-- [x] ~~Item mismatch~~ — Root cause was stale itemmap.json. Regenerated from latest ao-bin-dumps.
-- [x] ~~Weight data~~ — weightmap.json with 11,235 entries. Verified exact match.
-- [ ] **Commit + push Go client changes** — all uncommitted
-- [ ] **Test on guild island** — only verified on personal island so far
+### Done (April 9)
+- [x] Chest capture — FULLY WORKING, all committed
+- [x] Weight data — 11,535 items, verified exact match, displayed across website
+- [x] Loot Logger — full pipeline (Go client + VPS + website tab)
+- [x] GitHub Releases — v1.0.0, CI pipeline
+- [x] Audit fixes #1-9 — ALL COMPLETE
+- [x] Delete tracked tabs, client docs, toast system, cross-feature links
+
+### Pending
+- [ ] **Loot Logger Viewer UX** — better layout, sorting, filtering, player search, total value estimates
+- [ ] **Device Auth end-to-end test**
+- [ ] **Test chest capture on guild island**
+- [ ] **ReadMail opcode** → auto-match sold items to tracked loot tabs
+- [ ] **Negative item ID cosmetic names** — identify -56, -59, -62, -63, -64, -65, -68, -71, -121 from in-game bank
 
 ### In-Game Testing Required
 - [ ] **Device Auth end-to-end test** — device code flow from Go client to browser approval

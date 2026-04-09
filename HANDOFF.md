@@ -104,12 +104,13 @@ Session ran but report not fully captured. Needs re-run. Known issue from prior 
 
 ### Still Pending (Carried Forward)
 - Crafting Revamp Phases 1–5 (see Section 13)
-- In-game testing: GUID matching, Device Auth, negative item ID mappings, chest capture phantom items
-- ReadMail → loot tab matching integration (research done, implementation pending)
+- Device Auth end-to-end test (never tested)
+- Test chest capture on guild island with updated itemmap
+- ReadMail opcode → auto-match sold items to tracked loot tabs (research done)
 - Fix `operation_read_mail.go:103` expiry notification ItemID bug
-- Go client GitHub Releases / Actions CI
-- Loot Logger Viewer (major future feature)
-- Re-run backend + git/devops audits with PC access
+- Loot Logger Viewer UX improvements (better layout, sorting, filtering, player search, total value estimates)
+- Negative item ID cosmetic names (need to identify -56, -59, -62, -63, -64, -65, -68, -71, -121 from in-game bank quantities)
+- Re-run backend + git/devops audit sections (were blocked on workspace approval)
 
 ---
 
@@ -454,7 +455,7 @@ go build -v ./...
 ## 12. Known Bugs & Technical Debt
 
 ### High Priority
-- **Negative item ID mappings are guesses** -- IDs -1 to -9 mapped to Silver, Gold, Fame Credit, Silver Pouch, etc. based on community knowledge. Need live verification. Also discovered IDs far beyond -9: -54, -57, -60, -62, -63, -66, -69, -84, -96, -107.
+- **Negative item ID mappings are cosmetic only** -- IDs -1 to -9 have names (Silver, Gold, etc.). IDs beyond -9 (-54, -56, -62, etc.) show as UNKNOWN in logs but are all filtered from captures by `IsSpecialItem()`. Does not affect functionality — all real items are captured correctly via the updated 11,963-entry itemmap.
 
 ### Medium Priority
 - **Transport volume data** -- `sample_count` is data frequency, not actual trade volume.
@@ -490,15 +491,17 @@ go build -v ./...
 ## 13. Roadmap (Next Up)
 
 ### Immediate
-1. ~~**Chest capture**~~ -- FULLY WORKING (April 9). Items, weights, tab names, GUIDs all verified.
-2. **Commit + push Go client changes** -- All changes uncommitted. Need to commit decode.go, operation_container_open.go, event_container_items.go, itemmap.go, client.go, itemmap.json, weightmap.json
-3. **Device Auth end-to-end test** -- Device code flow from Go client to browser approval (not yet tested)
-4. **Test on guild island** -- Verified on personal island only. Guild island needs retest with new architecture + updated itemmap
+1. ~~**Chest capture**~~ -- FULLY WORKING. All committed and pushed.
+2. ~~**Go client GitHub Releases**~~ -- v1.0.0 released. CI pipeline working (Windows/Linux/macOS).
+3. ~~**Loot Logger**~~ -- Full pipeline: Go client + VPS backend + website tab. Uploaded and live modes.
+4. ~~**Audit fixes #1-9**~~ -- ALL COMPLETE and pushed.
+5. **Device Auth end-to-end test** -- never tested
+6. **Test chest capture on guild island** -- only verified on personal island
 
 ### Short Term
-3. **ReadMail opcode — wire into loot tab matching** — opcode research DONE (April 9). Implementation: intercept `lib.NatsMarketNotifications`, match by ItemID + LocationID + timestamp window. Fix expiry bug at `operation_read_mail.go:103` (ItemID = body[1] is wrong — it's the total amount). Handle MailInfos cache miss (zone transition required before mails populate).
-4. **Go client GitHub Releases** -- automated builds for Windows/Mac/Linux via GitHub Actions
-5. ~~**Feedback form deployment**~~ -- CONFIRMED LIVE (April 9 Cowork session)
+1. **Loot Logger Viewer UX** -- improve organization, sorting, filtering, player search, total value estimates
+2. **ReadMail opcode → loot tab matching** — research DONE. Fix expiry bug at `operation_read_mail.go:103`.
+3. ~~**Feedback form deployment**~~ -- CONFIRMED LIVE
 
 ### Crafting Profits Revamp (5 Phases)
 
@@ -590,7 +593,23 @@ go build -v -o albiondata-client-custom.exe .
 
 ---
 
-### April 9 — Chest Capture SOLVED + Weight Data (Latest)
+### April 9 — Mega Session: Chest Capture + Weights + Loot Logger + Full Audit (Latest)
+
+**Chest Capture:** Root cause was stale itemmap (all 11,964 IDs shifted in game update). Architecture rewrite: global item cache + evAttachItemContainer param 3 slot lookup. 6 item event handlers. Verified on personal island.
+
+**Weight Data:** weightmap.json (11,235 entries) + itemweights.json for website. Per-item weight shown across Market Browser, Transport haul plans (X/Y kg), Loot Buyer captures/items/sell plan trips.
+
+**Loot Logger — Full Pipeline:** Go client captures EvOtherGrabbedLoot (275) + player tracking (29, 143). Saves to .txt on exit. VPS stores in loot_events DB, pushes to browser via WS. Website Loot Logger tab with 3 modes: Live Sessions, Upload .txt, Accountability Check (cross-reference loot vs chest deposits, multi-tab selection, re-capture button). Delete sessions. Upload shows viewer immediately without login.
+
+**GitHub Releases:** CI pipeline working (Windows/Linux/macOS). v1.0.0 released.
+
+**Audit Fixes #1-9 ALL COMPLETE:** (1) computeAnalytics→statsDb, (2) itemNames→ITEM_NAMES, (3) XSS esc(), (4) scanAbortController, (5) EMA+VWAP on chart, (6) stale data badges, (7) toast notifications replace alerts, (8) cross-feature Craft?/Flips buttons, (9) price cache 30s TTL.
+
+**Delete tracked tabs:** button + backend DELETE endpoint.
+
+**Client docs:** Rewrote About tab — 3 feature cards, 10-row comparison table, per-feature setup instructions.
+
+### April 9 — Chest Capture SOLVED + Weight Data
 - **Root cause found:** itemmap.json was stale — game update shifted ALL 11,964 numeric item IDs. Capture was correct all along, just displaying wrong names. Regenerated from latest ao-bin-dumps (April 1 2026 update).
 - **Architecture rewrite:** Replaced timer-based EquipItem collection with global item cache (`sync.Map` keyed by slot number) + `evAttachItemContainer` param 3 slot lookup. Param 3 = `[globalSlotId_at_pos0, globalSlotId_at_pos1, ...]`. Same approach as Triky313/AlbionOnline-StatisticsAnalysis.
 - **3 new item event handlers:** `evNewFurnitureItem` (33), `evNewKillTrophyItem` (34), `evNewLaborerItem` (36). Now 6 total. Mounts, furniture, trophies captured correctly.
