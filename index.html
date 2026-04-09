@@ -1700,30 +1700,41 @@
                 <!-- Data Client Section -->
                 <div class="about-section" id="data-client-section">
                     <h2 class="about-heading">Coldtouch Data Client</h2>
-                    <p style="color:var(--text-secondary); margin-bottom:1.25rem; font-size:0.9rem;">
-                        A custom game data client that captures chest contents, vault tabs, and trade events in real time. Built on top of the
-                        <a href="https://www.albion-online-data.com/" target="_blank" style="color:var(--accent);">Albion Online Data Project</a> client.
+                    <p style="color:var(--text-secondary); margin-bottom:0.5rem; font-size:0.9rem;">
+                        An all-in-one game data client that does three things at once: contributes live market prices to the community,
+                        captures chest and vault contents with item weights, and logs all loot pickups for guild accountability.
+                        Built on top of the <a href="https://www.albion-online-data.com/" target="_blank" style="color:var(--accent);">Albion Online Data Project</a> client.
+                    </p>
+                    <p style="color:var(--accent); margin-bottom:1.25rem; font-size:0.82rem; font-weight:600;">
+                        We encourage you to run the client whenever you play Albion Online. Everyone benefits from fresher market prices while you use all the other features.
                     </p>
 
-                    <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(260px, 1fr)); gap:1rem; margin-bottom:1.5rem;">
+                    <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(220px, 1fr)); gap:1rem; margin-bottom:1.5rem;">
                         <div style="background:var(--bg-card); border:1px solid var(--border-color); border-radius:var(--radius); padding:1rem;">
-                            <h3 style="color:var(--accent); margin:0 0 0.5rem; font-size:0.95rem;">What It Does</h3>
+                            <h3 style="color:var(--accent); margin:0 0 0.5rem; font-size:0.95rem;">Live Market Prices</h3>
                             <ul style="color:var(--text-secondary); font-size:0.82rem; padding-left:1.2rem; margin:0; list-style:disc;">
-                                <li>Everything the standard AODP client does (market prices, gold rates)</li>
-                                <li>Captures chest and vault contents when you open them in-game</li>
-                                <li>Identifies vault tab names automatically (guild and personal banks)</li>
-                                <li>Sends captures to your account on this website via secure WebSocket</li>
-                                <li>Powers the Loot Buyer feature (evaluate tabs, plan where to sell)</li>
+                                <li>Contributes real-time market prices to the public AODP network</li>
+                                <li>Helps keep prices fresh for everyone using market tools</li>
+                                <li>Gold rates and auction data captured automatically</li>
+                                <li>Runs silently in the background while you play</li>
                             </ul>
                         </div>
                         <div style="background:var(--bg-card); border:1px solid var(--border-color); border-radius:var(--radius); padding:1rem;">
-                            <h3 style="color:var(--accent); margin:0 0 0.5rem; font-size:0.95rem;">How It Works</h3>
+                            <h3 style="color:var(--accent); margin:0 0 0.5rem; font-size:0.95rem;">Chest &amp; Vault Capture</h3>
                             <ul style="color:var(--text-secondary); font-size:0.82rem; padding-left:1.2rem; margin:0; list-style:disc;">
-                                <li>Reads network packets from Albion Online (same method as AODP)</li>
-                                <li>Does NOT modify the game client or inject code — fully SBI-compliant</li>
-                                <li>Standard market data still goes to the public AODP NATS server</li>
-                                <li>Custom data (chests, tabs) goes only to your private account</li>
-                                <li>Links to your website account via Device Authorization (one-time setup)</li>
+                                <li>Open any chest or bank &mdash; all items captured instantly</li>
+                                <li>Tab names, item quantities, quality, and weight included</li>
+                                <li>Works with guild chests, personal banks, and island chests</li>
+                                <li>Powers the Loot Buyer feature (evaluate, plan sells, track profit)</li>
+                            </ul>
+                        </div>
+                        <div style="background:var(--bg-card); border:1px solid var(--border-color); border-radius:var(--radius); padding:1rem;">
+                            <h3 style="color:var(--accent); margin:0 0 0.5rem; font-size:0.95rem;">Loot Logger</h3>
+                            <ul style="color:var(--text-secondary); font-size:0.82rem; padding-left:1.2rem; margin:0; list-style:disc;">
+                                <li>Logs every loot pickup by any nearby player in real time</li>
+                                <li>Tracks who looted what, from whom, with guild/alliance info</li>
+                                <li>Always active while the client runs &mdash; no setup needed</li>
+                                <li>Powers the Loot Accountability feature (coming soon)</li>
                             </ul>
                         </div>
                     </div>
@@ -1731,12 +1742,35 @@
                     <div style="background:var(--bg-card); border:1px solid var(--border-color); border-radius:var(--radius); padding:1rem; margin-bottom:1.5rem;">
                         <h3 style="color:var(--accent); margin:0 0 0.75rem; font-size:0.95rem;">Setup Guide</h3>
                         <ol style="color:var(--text-secondary); font-size:0.82rem; padding-left:1.5rem; margin:0;">
-                            <li style="margin-bottom:0.4rem;"><strong>Download</strong> the latest release from <a href="https://github.com/coldtouch/albiondata-client/releases" target="_blank" style="color:var(--accent);">GitHub Releases</a></li>
+                            <li style="margin-bottom:0.4rem;"><strong>Download</strong> the latest release from <a href="https://github.com/coldtouch/albiondata-client/releases" target="_blank" style="color:var(--accent);">GitHub Releases</a> (Windows installer, Linux, or macOS)</li>
+                            <li style="margin-bottom:0.4rem;"><strong>Download <code>itemmap.json</code> and <code>weightmap.json</code></strong> from the same release page and place them next to the client executable</li>
                             <li style="margin-bottom:0.4rem;"><strong>Create an account</strong> on this website (or login if you already have one)</li>
-                            <li style="margin-bottom:0.4rem;"><strong>Run the client</strong> — it will show a device code and a link</li>
+                            <li style="margin-bottom:0.4rem;"><strong>Run the client</strong> &mdash; it will show a device code and a link</li>
                             <li style="margin-bottom:0.4rem;"><strong>Open the link</strong> in your browser and enter the code to link your account</li>
-                            <li style="margin-bottom:0.4rem;"><strong>Play Albion</strong> — open any chest and the contents appear on the Loot Buyer tab</li>
+                            <li style="margin-bottom:0.4rem;"><strong>Play Albion!</strong> Keep the client running while you play. Here is what happens automatically:</li>
                         </ol>
+                        <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(220px, 1fr)); gap:0.75rem; margin-top:0.75rem; padding-left:0.5rem;">
+                            <div style="font-size:0.78rem; color:var(--text-secondary);">
+                                <strong style="color:var(--text-primary);">Market Prices:</strong> Captured automatically as you browse the auction house. No action needed.
+                            </div>
+                            <div style="font-size:0.78rem; color:var(--text-secondary);">
+                                <strong style="color:var(--text-primary);">Chest Capture:</strong> Open any chest in-game and click through the tabs you want to scan. Items appear on the Loot Buyer tab within seconds.
+                            </div>
+                            <div style="font-size:0.78rem; color:var(--text-secondary);">
+                                <strong style="color:var(--text-primary);">Loot Logger:</strong> Always recording in the background. Every loot pickup by nearby players is logged with player names, guilds, and item details.
+                            </div>
+                        </div>
+                    </div>
+
+                    <div style="background:var(--bg-card); border:1px solid var(--border-color); border-radius:var(--radius); padding:1rem; margin-bottom:1.5rem;">
+                        <h3 style="color:var(--accent); margin:0 0 0.5rem; font-size:0.95rem;">How It Works</h3>
+                        <ul style="color:var(--text-secondary); font-size:0.82rem; padding-left:1.2rem; margin:0; list-style:disc;">
+                            <li>Reads network packets from Albion Online (same method as AODP) &mdash; does NOT modify the game client or inject code</li>
+                            <li>Fully SBI-compliant: packet reading is an approved method used by thousands of players</li>
+                            <li>Standard market data goes to the public AODP NATS server (helps the community)</li>
+                            <li>Custom data (chest contents, loot events) goes only to your private account via secure WebSocket</li>
+                            <li>Links to your website account via Device Authorization (one-time setup, no passwords shared)</li>
+                        </ul>
                     </div>
 
                     <div style="background:var(--bg-elevated); border:1px solid var(--border-color); border-radius:var(--radius); padding:1rem;">
@@ -1745,14 +1779,16 @@
                             <table class="compare-table" style="font-size:0.8rem;">
                                 <thead><tr><th>Feature</th><th>AODP Client</th><th>Coldtouch Client</th></tr></thead>
                                 <tbody>
-                                    <tr><td>Market prices</td><td>Yes</td><td>Yes</td></tr>
-                                    <tr><td>Gold prices</td><td>Yes</td><td>Yes</td></tr>
+                                    <tr><td>Market prices &amp; gold rates</td><td>Yes</td><td>Yes</td></tr>
                                     <tr><td>Contributes to public AODP</td><td>Yes</td><td>Yes</td></tr>
-                                    <tr><td>Chest/vault capture</td><td>No</td><td style="color:var(--profit-green); font-weight:600;">Yes</td></tr>
-                                    <tr><td>Vault tab identification</td><td>No</td><td style="color:var(--profit-green); font-weight:600;">Yes</td></tr>
-                                    <tr><td>Website account linking</td><td>No</td><td style="color:var(--profit-green); font-weight:600;">Yes</td></tr>
-                                    <tr><td>Loot Buyer integration</td><td>No</td><td style="color:var(--profit-green); font-weight:600;">Yes</td></tr>
+                                    <tr><td>Chest/vault content capture</td><td>No</td><td style="color:var(--profit-green); font-weight:600;">Yes &mdash; all items, weights, tab names</td></tr>
+                                    <tr><td>Item weight data</td><td>No</td><td style="color:var(--profit-green); font-weight:600;">Yes &mdash; 11,500+ items</td></tr>
+                                    <tr><td>Loot logger (who looted what)</td><td>No</td><td style="color:var(--profit-green); font-weight:600;">Yes &mdash; real-time, with guild info</td></tr>
+                                    <tr><td>Loot Buyer integration</td><td>No</td><td style="color:var(--profit-green); font-weight:600;">Yes &mdash; evaluate, sell plan, track profit</td></tr>
+                                    <tr><td>Loot Accountability (coming soon)</td><td>No</td><td style="color:var(--profit-green); font-weight:600;">Yes &mdash; who deposited, who didn&rsquo;t</td></tr>
+                                    <tr><td>Website account linking</td><td>No</td><td style="color:var(--profit-green); font-weight:600;">Yes &mdash; Device Authorization</td></tr>
                                     <tr><td>SBI-compliant</td><td>Yes</td><td>Yes</td></tr>
+                                    <tr><td>Windows / Mac / Linux</td><td>Yes</td><td>Yes</td></tr>
                                 </tbody>
                             </table>
                         </div>
