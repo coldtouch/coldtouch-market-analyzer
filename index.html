@@ -1765,6 +1765,15 @@
                     <div class="changelog-list">
                         <div class="changelog-entry">
                             <div class="changelog-date">April 9, 2026</div>
+                            <div class="changelog-title">Hotfix: Discord login during background jobs</div>
+                            <ul>
+                                <li>Fixed Discord login appearing broken when SpreadStats was running &mdash; a 90-second database query was blocking all user-facing requests including <code>/api/me</code></li>
+                                <li>SpreadStats now uses a separate database connection so background bulk writes never block the login flow</li>
+                                <li>Analytics and SpreadStats now check each other&rsquo;s state before starting to prevent simultaneous heavy DB runs</li>
+                            </ul>
+                        </div>
+                        <div class="changelog-entry">
+                            <div class="changelog-date">April 9, 2026</div>
                             <div class="changelog-title">Transport Mount Capacity Fix</div>
                             <ul>
                                 <li>Mammoth weight corrected: 1,696 kg &rarr; <strong>1,764 kg</strong></li>

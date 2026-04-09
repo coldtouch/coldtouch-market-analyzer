@@ -2,6 +2,13 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-04-09 — Fix: Discord login broken during SpreadStats (separate DB connection)
+
+- **Root cause:** `computeSpreadStats` was running a 90-second `db.all()` (GROUP BY across 3M+ rows) on the **main shared SQLite connection**. All Express handlers — including the 5-second-timeout `/api/me` call made right after Discord OAuth — queued behind it. Result: `/api/me` timed out, user saw "Could not reach server", login appeared broken.
+- **Fix:** SpreadStats now uses a **separate `statsDb` connection** for both its big read (`statsDb.all()`) and all 526k write transactions (`statsDb.serialize()`). The main `db` queue is completely unblocked during SpreadStats runs.
+- **Fix:** `computeAnalytics` now checks `statsRunning` before starting (guard against simultaneous execution). `computeSpreadStats` now checks `analyticsRunning` symmetrically.
+- **No change to auth logic** — Discord OAuth code, JWT, and routes untouched.
+
 ### 2026-04-09 — Transport mount capacity system fix
 
 - **Corrected mount weight values:** T8 Transport Mammoth fixed from 1,696 kg to **1,764 kg**; all other mount weights verified against in-game values.
