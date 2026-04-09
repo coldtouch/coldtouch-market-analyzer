@@ -143,6 +143,16 @@ db.run('PRAGMA cache_size = -128000');  // 128MB page cache
 db.run('PRAGMA busy_timeout = 5000');
 db.run('PRAGMA wal_autocheckpoint = 1000');
 
+// Separate connection for SpreadStats bulk reads/writes.
+// SpreadStats does a 90-second db.all() on 3M+ rows then writes 526k rows.
+// Using a separate connection prevents this from blocking the main db queue,
+// which would cause /api/me (5s timeout) to fail and break Discord login.
+const statsDb = new sqlite3.Database('/opt/albion-saas/database.sqlite');
+statsDb.run('PRAGMA journal_mode = WAL');
+statsDb.run('PRAGMA synchronous = NORMAL');
+statsDb.run('PRAGMA cache_size = -32000');  // 32MB page cache
+statsDb.run('PRAGMA busy_timeout = 30000'); // longer timeout — bulk writes can wait
+
 db.serialize(() => {
   db.run(`CREATE TABLE IF NOT EXISTS users (id TEXT PRIMARY KEY, username TEXT, avatar TEXT)`);
   // Migrate users table: add columns for email/password registration
@@ -2673,7 +2683,8 @@ function computeSpreadStats() {
       return;
     }
   }
-  if (dbBusy) { console.log('[SpreadStats] Busy, skipping this cycle'); return; }
+  if (dbBusy) { console.log('[SpreadStats] DB busy, skipping this cycle'); return; }
+  if (analyticsRunning) { console.log('[SpreadStats] Analytics running, skipping this cycle'); return; }
   statsRunning = true;
   statsStartTime = Date.now();
 
@@ -2687,7 +2698,9 @@ function computeSpreadStats() {
   // Use SQL GROUP BY to aggregate per (item_id, quality, city) over the 7-day window.
   // This produces one row per city instead of one row per hourly period, dramatically
   // reducing the amount of data loaded into JS memory.
-  db.all(
+  // Uses statsDb (separate connection) so this 90-second query doesn't block
+  // the main db queue — otherwise /api/me (5s timeout) would fail during SpreadStats.
+  statsDb.all(
     `SELECT item_id, quality, city,
       AVG(CASE WHEN min_sell > 0 THEN min_sell ELSE avg_sell END) AS avg_min_sell,
       AVG(CASE WHEN max_buy  > 0 THEN max_buy  ELSE avg_buy  END) AS avg_max_buy,
@@ -2727,12 +2740,13 @@ function computeSpreadStats() {
       function flushWrites() {
         if (writeBuf.length === 0) return;
         const batch = writeBuf.splice(0);
-        db.serialize(() => {
-          db.run('BEGIN TRANSACTION');
-          const stmt = db.prepare(`INSERT OR REPLACE INTO spread_stats (item_id, quality, buy_city, sell_city, avg_spread, median_spread, consistency_pct, sample_count, window_days, confidence_score, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+        // Use statsDb so these 500-row transactions don't queue behind main db operations
+        statsDb.serialize(() => {
+          statsDb.run('BEGIN TRANSACTION');
+          const stmt = statsDb.prepare(`INSERT OR REPLACE INTO spread_stats (item_id, quality, buy_city, sell_city, avg_spread, median_spread, consistency_pct, sample_count, window_days, confidence_score, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
           for (const r of batch) stmt.run(...r);
           stmt.finalize();
-          db.run('COMMIT');
+          statsDb.run('COMMIT');
         });
         statsWritten += batch.length;
       }
@@ -3001,6 +3015,7 @@ function computeAnalytics() {
     }
   }
   if (dbBusy) { console.log('[Analytics] DB busy, skipping'); return; }
+  if (statsRunning) { console.log('[Analytics] SpreadStats running, skipping this cycle'); return; }
   analyticsRunning = true;
   analyticsStartTime = Date.now();
 
