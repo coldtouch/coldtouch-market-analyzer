@@ -333,6 +333,7 @@ function initTabs() {
             if (currentTab === 'live-flips') initLiveFlipsTab();
             if (currentTab === 'profile') initProfileTab();
             if (currentTab === 'loot-buyer') { renderLootCaptures(); loadTrackedTabs(); }
+            if (currentTab === 'loot-logger') { showLootLoggerMode('live'); }
 
             // Close dropdown after selection
             closeAllDropdowns();
@@ -4065,6 +4066,9 @@ function initLiveSync() {
                 return;
             }
 
+            // Loot events + chest captures → loot logger
+            if (typeof handleLootLoggerWsMessage === 'function') handleLootLoggerWsMessage(data);
+
             // Standard NATS market data
             // Format incoming NATS string arrays back to the standardized MarketDB schema
             // IMPORTANT: NATS packets are individual orders, NOT authoritative market summaries.
@@ -5410,6 +5414,348 @@ async function confirmDeleteTab(tabId) {
     } catch(e) {
         const span = document.getElementById(`del-confirm-${tabId}`);
         if (span) span.innerHTML = `<span style="color:var(--profit-red); font-size:0.7rem;">${esc(e.message)}</span>`;
+    }
+}
+
+// ====== LOOT LOGGER TAB ======
+
+let lootLoggerMode = 'live';
+let lootSessions = [];
+let liveLootEvents = []; // real-time events from current WS session
+
+function showLootLoggerMode(mode) {
+    lootLoggerMode = mode;
+    document.querySelectorAll('.loot-log-mode').forEach(el => el.style.display = 'none');
+    document.getElementById('loot-log-live').style.display = mode === 'live' ? '' : 'none';
+    document.getElementById('loot-log-upload').style.display = mode === 'upload' ? '' : 'none';
+    document.getElementById('loot-log-accountability').style.display = mode === 'accountability' ? '' : 'none';
+    // Active button styling
+    document.getElementById('loot-log-live-btn').className = mode === 'live' ? 'btn-small-accent' : 'btn-small';
+    document.getElementById('loot-log-upload-btn').className = mode === 'upload' ? 'btn-small-accent' : 'btn-small';
+    document.getElementById('loot-log-acc-btn').className = mode === 'accountability' ? 'btn-small-accent' : 'btn-small';
+    if (mode === 'live') loadLootSessions();
+    if (mode === 'accountability') populateAccountabilityDropdowns();
+}
+
+async function loadLootSessions() {
+    const list = document.getElementById('loot-sessions-list');
+    try {
+        const res = await fetch(`${VPS_BASE}/api/loot-sessions`, { headers: authHeaders() });
+        if (!res.ok) throw new Error('Not logged in');
+        const data = await res.json();
+        lootSessions = data.sessions || [];
+
+        // Add live session if we have real-time events
+        let html = '';
+        if (liveLootEvents.length > 0) {
+            const players = new Set(liveLootEvents.map(e => e.lootedBy?.name)).size;
+            html += `<div class="loot-session-card active" onclick="showLiveSession()">
+                <div style="display:flex; justify-content:space-between; align-items:center;">
+                    <span class="loot-card-title">Live Session</span>
+                    <span class="loot-tab-status status-open">LIVE</span>
+                </div>
+                <div class="loot-card-meta">${liveLootEvents.length} events &bull; ${players} players</div>
+            </div>`;
+        }
+
+        if (lootSessions.length === 0 && liveLootEvents.length === 0) {
+            list.innerHTML = '<div class="empty-state"><p>No loot sessions yet. Run the Coldtouch client during PvP/PvE content to capture loot events, or upload a log file.</p></div>';
+            return;
+        }
+
+        html += lootSessions.map(s => {
+            const started = new Date(s.started_at).toLocaleString();
+            const duration = s.ended_at ? Math.round((s.ended_at - s.started_at) / 60000) + ' min' : 'ongoing';
+            return `<div class="loot-session-card" onclick="showSessionDetail('${esc(s.session_id)}')">
+                <div style="display:flex; justify-content:space-between; align-items:center;">
+                    <span class="loot-card-title">${started}</span>
+                    <span style="font-size:0.7rem; color:var(--text-muted);">${duration}</span>
+                </div>
+                <div class="loot-card-meta">${s.event_count} events &bull; ${s.player_count} players</div>
+            </div>`;
+        }).join('');
+        list.innerHTML = html;
+    } catch(e) {
+        list.innerHTML = `<div class="empty-state"><p>Login required to view loot sessions.</p></div>`;
+    }
+}
+
+function showLiveSession() {
+    renderLootSessionEvents(liveLootEvents.map(e => ({
+        looted_by_name: e.lootedBy?.name || '',
+        looted_by_guild: e.lootedBy?.guild || '',
+        looted_by_alliance: e.lootedBy?.alliance || '',
+        looted_from_name: e.lootedFrom?.name || '',
+        looted_from_guild: e.lootedFrom?.guild || '',
+        looted_from_alliance: e.lootedFrom?.alliance || '',
+        item_id: e.itemId || '',
+        quantity: e.quantity || 1,
+        timestamp: e.timestamp,
+        weight: e.weight || 0
+    })));
+}
+
+async function showSessionDetail(sessionId) {
+    const detail = document.getElementById('loot-session-detail');
+    detail.style.display = '';
+    detail.innerHTML = '<div class="empty-state"><p>Loading...</p></div>';
+    try {
+        const res = await fetch(`${VPS_BASE}/api/loot-session/${encodeURIComponent(sessionId)}`, { headers: authHeaders() });
+        const data = await res.json();
+        renderLootSessionEvents(data.events || []);
+    } catch(e) {
+        detail.innerHTML = `<div class="empty-state"><p>Failed to load session: ${esc(e.message)}</p></div>`;
+    }
+}
+
+function renderLootSessionEvents(events) {
+    const detail = document.getElementById('loot-session-detail');
+    detail.style.display = '';
+    if (events.length === 0) {
+        detail.innerHTML = '<div class="empty-state"><p>No loot events in this session.</p></div>';
+        return;
+    }
+
+    // Build per-player breakdown
+    const byPlayer = {};
+    for (const ev of events) {
+        const name = ev.looted_by_name || 'Unknown';
+        if (!byPlayer[name]) byPlayer[name] = { guild: ev.looted_by_guild, alliance: ev.looted_by_alliance, items: [], totalQty: 0, totalWeight: 0 };
+        byPlayer[name].items.push(ev);
+        byPlayer[name].totalQty += (ev.quantity || 1);
+        const w = ev.weight || getItemWeight(ev.item_id);
+        byPlayer[name].totalWeight += w * (ev.quantity || 1);
+    }
+
+    // Sort by total items descending
+    const sorted = Object.entries(byPlayer).sort((a, b) => b[1].totalQty - a[1].totalQty);
+
+    let html = `<div style="margin-bottom:0.75rem; font-size:0.82rem; color:var(--text-muted);">
+        ${events.length} events &bull; ${sorted.length} players &bull; Total: ${events.reduce((s, e) => s + (e.quantity || 1), 0)} items
+    </div>`;
+
+    html += sorted.map(([name, data]) => {
+        const guildStr = data.guild ? ` <span style="color:var(--text-muted); font-size:0.7rem;">[${esc(data.guild)}]</span>` : '';
+        const weightStr = data.totalWeight > 0 ? ` &bull; ${data.totalWeight.toFixed(1)} kg` : '';
+        const itemsHtml = data.items.map(ev => {
+            const iName = getFriendlyName(ev.item_id) || ev.item_id;
+            const iconUrl = `https://render.albiononline.com/v1/item/${encodeURIComponent(ev.item_id)}.png`;
+            const fromStr = ev.looted_from_name ? `<span style="color:var(--text-muted); font-size:0.7rem;">from ${esc(ev.looted_from_name)}</span>` : '';
+            return `<div class="loot-log-item-row">
+                <img src="${iconUrl}" class="loot-item-icon" loading="lazy" onerror="this.style.display='none'">
+                <span class="loot-item-name">${esc(iName)}</span>
+                <span class="loot-item-qty">x${ev.quantity || 1}</span>
+                ${fromStr}
+            </div>`;
+        }).join('');
+
+        return `<div class="loot-player-card">
+            <div class="loot-player-header" onclick="this.parentElement.classList.toggle('expanded')">
+                <span class="loot-card-title">${esc(name)}${guildStr}</span>
+                <span class="loot-card-meta">${data.totalQty} items${weightStr}</span>
+                <span class="loot-items-chevron">&#x25BE;</span>
+            </div>
+            <div class="loot-player-items">${itemsHtml}</div>
+        </div>`;
+    }).join('');
+
+    detail.innerHTML = html;
+}
+
+// Handle .txt file upload
+async function handleLootFileUpload(input) {
+    const file = input.files[0];
+    if (!file) return;
+    const status = document.getElementById('loot-log-file-status');
+    status.textContent = `Reading ${file.name}...`;
+
+    const text = await file.text();
+    const allLines = text.split('\n').map(l => l.trim()).filter(l => l && !l.startsWith('timestamp'));
+    status.textContent = `Parsed ${allLines.length} lines. Uploading...`;
+
+    try {
+        const res = await fetch(`${VPS_BASE}/api/loot-upload`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', ...authHeaders() },
+            body: JSON.stringify({ lines: allLines })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Upload failed');
+        status.textContent = `Imported ${data.eventsImported} events.`;
+        // Show the uploaded session
+        showSessionDetail(data.sessionId);
+    } catch(e) {
+        status.textContent = `Error: ${e.message}`;
+    }
+    input.value = '';
+}
+
+// === ACCOUNTABILITY CHECK ===
+
+function populateAccountabilityDropdowns() {
+    const sessionSel = document.getElementById('acc-session-select');
+    const captureSel = document.getElementById('acc-capture-select');
+
+    // Populate sessions
+    fetch(`${VPS_BASE}/api/loot-sessions`, { headers: authHeaders() })
+        .then(r => r.json())
+        .then(data => {
+            let opts = '<option value="">-- Select session --</option>';
+            if (liveLootEvents.length > 0) opts += `<option value="__live__">Live Session (${liveLootEvents.length} events)</option>`;
+            (data.sessions || []).forEach(s => {
+                const d = new Date(s.started_at).toLocaleString();
+                opts += `<option value="${esc(s.session_id)}">${d} (${s.event_count} events, ${s.player_count} players)</option>`;
+            });
+            sessionSel.innerHTML = opts;
+        }).catch(() => {});
+
+    // Populate captures from clientCaptures (chest captures in memory)
+    let capOpts = '<option value="">-- Select capture --</option>';
+    const captures = window._chestCaptures || [];
+    captures.forEach((cap, i) => {
+        const name = cap.tabName || `Capture ${i + 1}`;
+        const count = cap.items ? cap.items.length : 0;
+        capOpts += `<option value="${i}">${esc(name)} (${count} items)</option>`;
+    });
+    captureSel.innerHTML = capOpts;
+}
+
+async function runAccountabilityCheck() {
+    const sessionId = document.getElementById('acc-session-select').value;
+    const captureIdx = document.getElementById('acc-capture-select').value;
+    const resultEl = document.getElementById('accountability-result');
+
+    if (!sessionId || captureIdx === '') {
+        resultEl.innerHTML = '<div class="empty-state"><p>Select both a loot session and a chest capture.</p></div>';
+        return;
+    }
+
+    resultEl.innerHTML = '<div class="empty-state"><p>Analyzing...</p></div>';
+
+    // Get loot events
+    let lootEvents;
+    if (sessionId === '__live__') {
+        lootEvents = liveLootEvents.map(e => ({
+            looted_by_name: e.lootedBy?.name || '',
+            looted_by_guild: e.lootedBy?.guild || '',
+            item_id: e.itemId || '',
+            quantity: e.quantity || 1
+        }));
+    } else {
+        try {
+            const res = await fetch(`${VPS_BASE}/api/loot-session/${encodeURIComponent(sessionId)}`, { headers: authHeaders() });
+            const data = await res.json();
+            lootEvents = data.events || [];
+        } catch(e) {
+            resultEl.innerHTML = `<div class="empty-state"><p>Failed to load session: ${esc(e.message)}</p></div>`;
+            return;
+        }
+    }
+
+    // Get chest capture
+    const captures = window._chestCaptures || [];
+    const capture = captures[parseInt(captureIdx)];
+    if (!capture || !capture.items) {
+        resultEl.innerHTML = '<div class="empty-state"><p>Invalid capture selected.</p></div>';
+        return;
+    }
+
+    // Build deposit inventory: itemId → total quantity in chest
+    const deposited = {};
+    for (const item of capture.items) {
+        const key = item.itemId;
+        deposited[key] = (deposited[key] || 0) + (item.quantity || 1);
+    }
+
+    // Build looted inventory: per player → itemId → total quantity
+    const lootedByPlayer = {};
+    for (const ev of lootEvents) {
+        const name = ev.looted_by_name || 'Unknown';
+        if (!lootedByPlayer[name]) lootedByPlayer[name] = { guild: ev.looted_by_guild || '', items: {} };
+        const key = ev.item_id;
+        lootedByPlayer[name].items[key] = (lootedByPlayer[name].items[key] || 0) + (ev.quantity || 1);
+    }
+
+    // Cross-reference: for each player, check if their looted items appear in the chest
+    const playerResults = [];
+    for (const [name, data] of Object.entries(lootedByPlayer)) {
+        let totalLooted = 0, totalDeposited = 0, totalMissing = 0;
+        const itemResults = [];
+        for (const [itemId, qty] of Object.entries(data.items)) {
+            totalLooted += qty;
+            const inChest = deposited[itemId] || 0;
+            const matched = Math.min(qty, inChest);
+            const missing = qty - matched;
+            totalDeposited += matched;
+            totalMissing += missing;
+            itemResults.push({ itemId, looted: qty, inChest: matched, missing });
+        }
+        const pct = totalLooted > 0 ? Math.round(totalDeposited / totalLooted * 100) : 0;
+        playerResults.push({ name, guild: data.guild, totalLooted, totalDeposited, totalMissing, pct, items: itemResults });
+    }
+
+    // Sort: worst depositors first
+    playerResults.sort((a, b) => a.pct - b.pct);
+
+    // Render
+    const totalLooted = playerResults.reduce((s, p) => s + p.totalLooted, 0);
+    const totalDeposited = playerResults.reduce((s, p) => s + p.totalDeposited, 0);
+    const totalMissing = playerResults.reduce((s, p) => s + p.totalMissing, 0);
+
+    let html = `<div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(120px, 1fr)); gap:0.75rem; margin-bottom:1rem;">
+        <div class="loot-tracked-stat"><span class="loot-tracked-stat-label">Total Looted</span><span class="loot-tracked-stat-value">${totalLooted}</span></div>
+        <div class="loot-tracked-stat"><span class="loot-tracked-stat-label">In Chest</span><span class="loot-tracked-stat-value" style="color:var(--profit-green);">${totalDeposited}</span></div>
+        <div class="loot-tracked-stat"><span class="loot-tracked-stat-label">Missing</span><span class="loot-tracked-stat-value" style="color:var(--loss-red);">${totalMissing}</span></div>
+        <div class="loot-tracked-stat"><span class="loot-tracked-stat-label">Players</span><span class="loot-tracked-stat-value">${playerResults.length}</span></div>
+    </div>`;
+
+    html += playerResults.map(p => {
+        const barColor = p.pct >= 80 ? 'var(--profit-green)' : p.pct >= 40 ? '#fbbf24' : 'var(--loss-red)';
+        const guildStr = p.guild ? ` <span style="color:var(--text-muted); font-size:0.7rem;">[${esc(p.guild)}]</span>` : '';
+
+        const itemsHtml = p.items.map(it => {
+            const iName = getFriendlyName(it.itemId) || it.itemId;
+            const iconUrl = `https://render.albiononline.com/v1/item/${encodeURIComponent(it.itemId)}.png`;
+            const statusClass = it.missing === 0 ? 'acc-deposited' : it.inChest > 0 ? 'acc-partial' : 'acc-missing';
+            const statusLabel = it.missing === 0 ? 'Deposited' : it.inChest > 0 ? `${it.inChest}/${it.looted} deposited` : 'Missing';
+            return `<div class="loot-log-item-row ${statusClass}">
+                <img src="${iconUrl}" class="loot-item-icon" loading="lazy" onerror="this.style.display='none'">
+                <span class="loot-item-name">${esc(iName)}</span>
+                <span class="loot-item-qty">x${it.looted}</span>
+                <span class="acc-status-badge">${statusLabel}</span>
+            </div>`;
+        }).join('');
+
+        return `<div class="loot-player-card">
+            <div class="loot-player-header" onclick="this.parentElement.classList.toggle('expanded')">
+                <span class="loot-card-title">${esc(p.name)}${guildStr}</span>
+                <span class="loot-card-meta">${p.totalLooted} looted &bull; ${p.pct}% deposited</span>
+                <span class="loot-items-chevron">&#x25BE;</span>
+            </div>
+            <div class="loot-tracked-progress-bar" style="margin:0.3rem 0;">
+                <div class="loot-tracked-progress-fill" style="width:${p.pct}%; background:${barColor};"></div>
+            </div>
+            <div class="loot-player-items">${itemsHtml}</div>
+        </div>`;
+    }).join('');
+
+    resultEl.innerHTML = html;
+}
+
+// Store chest captures for accountability dropdown
+window._chestCaptures = window._chestCaptures || [];
+
+// Hook into existing WS to capture loot events for live mode
+function handleLootLoggerWsMessage(msg) {
+    if (msg.type === 'loot-event' && msg.data) {
+        liveLootEvents.push(msg.data);
+        // If on live session view, update
+        if (lootLoggerMode === 'live' && document.getElementById('loot-session-detail')?.style.display !== 'none') {
+            showLiveSession();
+        }
+    }
+    if (msg.type === 'chest-capture' && msg.data) {
+        window._chestCaptures.push(msg.data);
     }
 }
 
