@@ -3147,12 +3147,12 @@ function computeAnalytics() {
   statsDb.all(
     `SELECT item_id, city, quality,
       AVG(CASE WHEN avg_sell > 0 THEN avg_sell ELSE NULL END) AS sma_7d,
-      AVG(CASE WHEN avg_sell > 0 THEN avg_sell * sample_count ELSE NULL END) /
+      AVG(CASE WHEN avg_sell > 0 THEN CAST(avg_sell AS REAL) * sample_count ELSE NULL END) /
         NULLIF(AVG(CASE WHEN avg_sell > 0 THEN sample_count ELSE NULL END), 0) AS vwap_7d,
       AVG(CASE WHEN period_start > ? AND avg_sell > 0 THEN avg_sell ELSE NULL END) AS avg_24h,
       COUNT(CASE WHEN avg_sell > 0 THEN 1 ELSE NULL END) AS data_points_7d,
       SUM(CASE WHEN min_sell > 0 AND max_buy > 0 THEN (min_sell - max_buy) ELSE NULL END) AS sum_spread,
-      SUM(CASE WHEN min_sell > 0 AND max_buy > 0 THEN (min_sell - max_buy) * (min_sell - max_buy) ELSE NULL END) AS sum_spread_sq,
+      SUM(CASE WHEN min_sell > 0 AND max_buy > 0 THEN CAST(min_sell - max_buy AS REAL) * CAST(min_sell - max_buy AS REAL) ELSE NULL END) AS sum_spread_sq,
       COUNT(CASE WHEN min_sell > 0 AND max_buy > 0 THEN 1 ELSE NULL END) AS spread_count
     FROM price_averages
     WHERE period_start > ? AND (avg_sell > 0 OR avg_buy > 0)
