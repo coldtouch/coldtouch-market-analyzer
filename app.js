@@ -5633,12 +5633,14 @@ async function loadLootSessions() {
         html += lootSessions.map(s => {
             const started = new Date(s.started_at).toLocaleString();
             const duration = s.ended_at ? Math.round((s.ended_at - s.started_at) / 60000) + ' min' : 'ongoing';
-            return `<div class="loot-session-card" onclick="showSessionDetail('${esc(s.session_id)}')">
+            const sid = esc(s.session_id);
+            return `<div class="loot-session-card" data-session="${sid}">
                 <div style="display:flex; justify-content:space-between; align-items:center;">
-                    <span class="loot-card-title">${started}</span>
-                    <span style="font-size:0.7rem; color:var(--text-muted);">${duration}</span>
+                    <span class="loot-card-title" style="cursor:pointer; flex:1;" onclick="showSessionDetail('${sid}')">${started}</span>
+                    <span style="font-size:0.7rem; color:var(--text-muted); margin-right:0.5rem;">${duration}</span>
+                    <button class="btn-small-danger" style="padding:0.2rem 0.4rem; font-size:0.65rem;" onclick="event.stopPropagation(); deleteLootSession('${sid}', this)" title="Delete this session">✕</button>
                 </div>
-                <div class="loot-card-meta">${s.event_count} events &bull; ${s.player_count} players</div>
+                <div class="loot-card-meta" style="cursor:pointer;" onclick="showSessionDetail('${sid}')">${s.event_count} events &bull; ${s.player_count} players</div>
             </div>`;
         }).join('');
         list.innerHTML = html;
@@ -5812,6 +5814,34 @@ function populateAccountabilityDropdowns() {
             const weightStr = tw > 0 ? ` • ${tw.toFixed(1)} kg` : '';
             return `<option value="${i}">${esc(name)} (${count} items${weightStr})</option>`;
         }).join('');
+    }
+}
+
+async function deleteLootSession(sessionId, btnEl) {
+    const card = btnEl.closest('.loot-session-card');
+    // Inline confirmation
+    btnEl.outerHTML = `<span style="display:flex; gap:0.2rem; align-items:center;">
+        <span style="font-size:0.6rem; color:var(--text-muted);">Delete?</span>
+        <button class="btn-small-danger" style="padding:0.15rem 0.3rem; font-size:0.6rem;" onclick="confirmDeleteLootSession('${esc(sessionId)}', this)">Yes</button>
+        <button class="btn-small" style="padding:0.15rem 0.3rem; font-size:0.6rem;" onclick="loadLootSessions()">No</button>
+    </span>`;
+}
+
+async function confirmDeleteLootSession(sessionId, btnEl) {
+    try {
+        const res = await fetch(`${VPS_BASE}/api/loot-session/${encodeURIComponent(sessionId)}`, {
+            method: 'DELETE',
+            headers: authHeaders()
+        });
+        if (!res.ok) { const d = await res.json(); throw new Error(d.error || 'Failed'); }
+        const card = btnEl.closest('.loot-session-card');
+        if (card) card.remove();
+        // Hide detail if showing this session
+        document.getElementById('loot-session-detail').style.display = 'none';
+        showToast('Session deleted', 'success');
+    } catch(e) {
+        showToast('Failed to delete: ' + e.message, 'error');
+        loadLootSessions();
     }
 }
 
