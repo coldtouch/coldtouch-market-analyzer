@@ -58,6 +58,21 @@ let recipesData = {};
 let currentTab = 'browser';
 let browserPage = 1;
 let browserFilteredItems = [];
+let _priceCache = null;
+let _priceCacheTime = 0;
+const PRICE_CACHE_TTL = 30000; // 30 seconds
+
+async function getCachedPrices() {
+    const now = Date.now();
+    if (_priceCache && (now - _priceCacheTime) < PRICE_CACHE_TTL) return _priceCache;
+    try {
+        _priceCache = await MarketDB.getAllPrices();
+        _priceCacheTime = now;
+    } catch { _priceCache = []; }
+    return _priceCache;
+}
+
+function invalidatePriceCache() { _priceCache = null; _priceCacheTime = 0; }
 let compareSelectedId = null;
 let arbSearchExactId = null;
 let craftSearchExactId = null;
@@ -73,6 +88,42 @@ let discordUser = null; // stored on auth check for contribution tracking
 function esc(str) {
     if (!str) return '';
     return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
+
+// Toast notification system — replaces alert()/confirm()
+function showToast(message, type = 'info', duration = 4000) {
+    let container = document.getElementById('toast-container');
+    if (!container) {
+        container = document.createElement('div');
+        container.id = 'toast-container';
+        document.body.appendChild(container);
+    }
+    const toast = document.createElement('div');
+    toast.className = `toast toast-${type}`;
+    toast.innerHTML = esc(message);
+    container.appendChild(toast);
+    requestAnimationFrame(() => toast.classList.add('show'));
+    setTimeout(() => {
+        toast.classList.remove('show');
+        setTimeout(() => toast.remove(), 300);
+    }, duration);
+}
+
+function showConfirm(message, onYes) {
+    let container = document.getElementById('toast-container');
+    if (!container) {
+        container = document.createElement('div');
+        container.id = 'toast-container';
+        document.body.appendChild(container);
+    }
+    const toast = document.createElement('div');
+    toast.className = 'toast toast-confirm show';
+    toast.innerHTML = `<div style="margin-bottom:0.5rem;">${esc(message)}</div>
+        <div style="display:flex; gap:0.5rem; justify-content:flex-end;">
+            <button class="btn-small" onclick="this.closest('.toast').remove()">Cancel</button>
+            <button class="btn-small-danger" onclick="this.closest('.toast').remove(); (${onYes.toString()})()">Confirm</button>
+        </div>`;
+    container.appendChild(toast);
 }
 
 function getFriendlyName(id) {
@@ -264,6 +315,7 @@ async function fetchMarketData(server, items) {
 
 // ====== DB STATUS ======
 async function updateDbStatus() {
+    invalidatePriceCache(); // New data arrived — bust the browser price cache
     try {
         const count = await MarketDB.getStoredItemCount();
         const meta = await MarketDB.getMeta('lastScan');
@@ -416,10 +468,10 @@ async function renderBrowser() {
 
     countEl.textContent = `${total.toLocaleString()} items`;
 
-    // Get cached prices
+    // Get cached prices (module-level cache avoids re-reading IndexedDB on every page/filter)
     let priceMap = {};
     try {
-        const allPrices = await MarketDB.getAllPrices();
+        const allPrices = await getCachedPrices();
         for (const p of allPrices) {
             if (!priceMap[p.item_id]) priceMap[p.item_id] = [];
             priceMap[p.item_id].push(p);
@@ -586,6 +638,10 @@ async function renderBrowser() {
                     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"></polyline></svg>
                     Graph
                 </button>
+                <button class="btn-card-action" data-action="flips" data-item="${id}" title="Find flip opportunities for this item">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 1l4 4-4 4"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><path d="M7 23l-4-4 4-4"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg>
+                    Flips
+                </button>
             </div>
         `;
         container.appendChild(card);
@@ -619,6 +675,14 @@ async function renderBrowser() {
 
     container.querySelectorAll('[data-action="graph"]').forEach(btn => {
         btn.addEventListener('click', () => showGraph(btn.dataset.item));
+    });
+
+    container.querySelectorAll('[data-action="flips"]').forEach(btn => {
+        btn.addEventListener('click', () => {
+            // Switch to Market Flipper tab and scan for this item
+            document.querySelector('[data-tab="arbitrage"]')?.click();
+            setTimeout(() => doArbScan(btn.dataset.item), 200);
+        });
     });
 
     renderPagination(totalPages);
@@ -1038,6 +1102,10 @@ function buildArbitrageCardDOM(trade) {
             <button class="btn-card-action" data-action="graph" data-item="${trade.itemId}" title="View price history">
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"></polyline></svg>
                 Graph
+            </button>
+            <button class="btn-card-action" data-action="craft" data-item="${trade.itemId}" title="Check crafting profit for this item">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>
+                Craft?
             </button>
         </div>
     `;
@@ -2023,6 +2091,35 @@ function setupCardButtons(container) {
             showGraph(btn.dataset.item);
         });
     });
+
+    container.querySelectorAll('[data-action="craft"]').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            switchToCraft(btn.dataset.item);
+        });
+    });
+
+    container.querySelectorAll('[data-action="flips"]').forEach(btn => {
+        if (btn._flipsWired) return;
+        btn._flipsWired = true;
+        btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            document.querySelector('[data-tab="arbitrage"]')?.click();
+            setTimeout(() => doArbScan(btn.dataset.item), 200);
+        });
+    });
+}
+
+function switchToCraft(itemId) {
+    // Switch to crafting tab and pre-fill the search with this item
+    document.querySelector('[data-tab="crafting"]')?.click();
+    setTimeout(() => {
+        const search = document.getElementById('craft-search');
+        if (search) {
+            search.value = getFriendlyName(itemId) || itemId;
+            search.dispatchEvent(new Event('input'));
+        }
+    }, 100);
 }
 
 let currentChartData = [];
@@ -2549,8 +2646,8 @@ async function createAlert() {
     const channelId = document.getElementById('alert-channel-id').value.trim();
     const minProfit = document.getElementById('alert-min-profit').value;
 
-    if (!channelId) return alert('Please enter a Discord Channel ID.');
-    if (!minProfit || parseInt(minProfit) < 1000) return alert('Min profit must be at least 1,000 silver.');
+    if (!channelId) return showToast('Please enter a Discord Channel ID.', 'warn');
+    if (!minProfit || parseInt(minProfit) < 1000) return showToast('Min profit must be at least 1,000 silver.', 'warn');
 
     try {
         const res = await fetch(`${VPS_BASE}/api/alerts`, {
@@ -2563,10 +2660,10 @@ async function createAlert() {
             document.getElementById('alert-channel-id').value = '';
             await loadAlerts();
         } else {
-            alert('Failed to create alert: ' + (data.error || 'Unknown error'));
+            showToast('Failed to create alert: ' + (data.error || 'Unknown error'), 'error');
         }
     } catch (e) {
-        alert('Failed to connect to alert server.');
+        showToast('Failed to connect to alert server.', 'error');
     }
 }
 
@@ -2580,7 +2677,7 @@ async function deleteAlert(channelId) {
         });
         await loadAlerts();
     } catch (e) {
-        alert('Failed to delete alert.');
+        showToast('Failed to delete alert.', 'error');
     }
 }
 
@@ -4468,7 +4565,7 @@ function renderProfile(data) {
             const res = await fetch(`${VPS_BASE}/api/link-discord`, { method: 'POST', headers: authHeaders() });
             const d = await res.json();
             if (d.url) window.location.href = d.url;
-        } catch { alert('Failed to start Discord linking.'); }
+        } catch { showToast('Failed to start Discord linking.', 'error'); }
     };
 
     if (unlinkBtn) unlinkBtn.onclick = async () => {
@@ -4481,9 +4578,9 @@ function renderProfile(data) {
                 unlinkBtn.style.display = 'none';
                 linkBtn.style.display = '';
             } else {
-                alert(d.error || 'Failed to unlink.');
+                showToast(d.error || 'Failed to unlink.', 'error');
             }
-        } catch { alert('Network error.'); }
+        } catch { showToast('Network error.', 'error'); }
     };
 
     // Capture token
@@ -4512,7 +4609,7 @@ function renderProfile(data) {
                 if (tokenValue) tokenValue.textContent = d.token;
                 if (tokenDisplay) tokenDisplay.classList.remove('hidden');
             }
-        } catch { alert('Failed to generate token.'); }
+        } catch { showToast('Failed to generate token.', 'error'); }
     };
 }
 
@@ -4830,7 +4927,7 @@ async function toggleLootItemDetail(rowEl, itemId, quality) {
 
 async function analyzeLoot() {
     if (!lootSelectedCapture || !lootSelectedCapture.items.length) {
-        alert('Select a chest capture first.');
+        showToast('Select a chest capture first.', 'warn');
         return;
     }
     if (!localStorage.getItem('albion_auth_token')) {
@@ -4907,7 +5004,7 @@ async function buyThisTab() {
         loadTrackedTabs();
     } catch(e) {
         if (btn) { btn.disabled = false; btn.textContent = 'I Bought This — Track Tab'; }
-        alert('Failed to save: ' + e.message);
+        showToast('Failed to save: ' + e.message, 'error');
     }
 }
 
@@ -5431,7 +5528,7 @@ async function submitSaleForm(tabId) {
         loadTrackedTabs();
     } catch(e) {
         if (btn) { btn.disabled = false; btn.textContent = 'Save Sale'; }
-        alert('Failed to record sale: ' + e.message);
+        showToast('Failed to record sale: ' + e.message, 'error');
     }
 }
 
@@ -5445,7 +5542,7 @@ async function updateTabStatus(tabId, status) {
         if (!res.ok) { const d = await res.json(); throw new Error(d.error || 'Failed'); }
         loadTrackedTabs();
     } catch(e) {
-        alert('Failed to update status: ' + e.message);
+        showToast('Failed to update status: ' + e.message, 'error');
     }
 }
 
@@ -6958,11 +7055,11 @@ function saveFavoriteList() {
     const name = nameInput.value.trim();
 
     if (!name) {
-        alert('Please enter a list name.');
+        showToast('Please enter a list name.', 'warn');
         return;
     }
     if (favCurrentItems.length === 0) {
-        alert('Please add at least one item to the list.');
+        showToast('Please add at least one item to the list.', 'warn');
         return;
     }
 
@@ -6989,7 +7086,7 @@ function deleteFavoriteList() {
     const name = select ? select.value : '';
 
     if (!name) {
-        alert('Please select a list to delete.');
+        showToast('Please select a list to delete.', 'warn');
         return;
     }
 
@@ -7496,7 +7593,7 @@ function addPortfolioTrade() {
     const city = document.getElementById('portfolio-city').value;
 
     if (!itemId || quantity <= 0 || price <= 0) {
-        alert('Please fill in all fields.');
+        showToast('Please fill in all fields.', 'warn');
         return;
     }
 
@@ -7545,7 +7642,7 @@ function clearPortfolio() {
 
 function exportPortfolioCSV() {
     const trades = getPortfolioTrades();
-    if (trades.length === 0) { alert('No trades to export.'); return; }
+    if (trades.length === 0) { showToast('No trades to export.', 'warn'); return; }
 
     const header = 'Type,Item,Quantity,Price,Total,City,Date\n';
     const rows = trades.map(t => {
@@ -8029,7 +8126,7 @@ function getCraftSetups() {
 function saveCraftSetup() {
     const searchInput = document.getElementById('craft-search');
     const itemId = craftSearchExactId || searchInput.value.trim();
-    if (!itemId) { alert('Search for an item first.'); return; }
+    if (!itemId) { showToast('Search for an item first.', 'warn'); return; }
 
     const name = prompt('Name this crafting setup:', getFriendlyName(itemId) || itemId);
     if (!name) return;
