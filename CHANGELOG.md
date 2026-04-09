@@ -4,13 +4,13 @@ All notable changes to the Coldtouch Market Analyzer will be documented in this 
 
 ### 2026-04-09 — Transport mount capacity system fix
 
-- **Corrected mount weight values:** T8 Transport Mammoth updated from 1,696 kg to 1,764 kg; all other mount weights verified against in-game values.
-- **Mount inventory slots:** Mammoth variants now grant +8 extra bag slots (their own inventory bag). These are added to the player's free slots for haul packing. Note: slot count may need verification from in-game testing.
-- **"No Mount" now uses 600 kg base weight** (player's inventory bags) instead of treating weight as infinite.
-- **MOUNT_DATA config object:** Centralized mount data (weight + extraSlots) replacing raw weight values in the dropdown. Makes future updates trivial.
-- **Capacity info line:** A small "Capacity: X kg + Y mount slots" line now appears below the mount dropdown, updating live on selection change.
-- **Mount change triggers re-render:** Changing the mount dropdown immediately re-renders results without requiring a rescan.
-- **Weight always applied:** Removed the old `mountCapacity > 0` guard that skipped weight constraints when "No Mount" was selected. All mounts now properly enforce their weight limit.
+- **Corrected mount weight values:** T8 Transport Mammoth fixed from 1,696 kg to **1,764 kg**; all other mount weights verified against in-game values.
+- **"No Mount" now uses 600 kg base weight** (player inventory bags) instead of ignoring weight entirely.
+- **Mounts do not add inventory slots** — slot calculation is now purely based on the player's "Free Slots" input. Removed the incorrect "+8 slots for Mammoth" logic.
+- **MOUNT_DATA config object:** Centralized `{ weight, label }` table replacing raw numeric dropdown values. Mount keys used instead of raw integers.
+- **`getTransportMountConfig()` helper:** Single function reads mount dropdown + free-slots input, returns `{ mountCapacity, freeSlots }`. All 8 call sites updated to use it.
+- **Capacity info line:** A "Carry capacity: X kg" line below the mount dropdown updates live on selection change.
+- **Infinity-safe weight check:** `Number.isFinite(mountCapacity)` replaces old `> 0 && < 999999` guard; "Ignore Weight" option properly passes `Infinity` through the entire chain.
 
 ### 2026-04-09 — Workstream 2: Frontend analytics improvements
 
