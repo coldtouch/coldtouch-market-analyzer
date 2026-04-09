@@ -6,6 +6,113 @@
 
 ---
 
+## 0. Latest Session — April 9, 2026 (Full Project Audit)
+
+### What Was Done
+Ran 4 parallel audit sessions covering the entire project.
+
+#### 1. Frontend & UX Audit (COMPLETED — 40 findings)
+
+**CRITICAL (2):**
+- `scanAbortController` declared at `app.js:65` but never wired up — no abort protection on any scan. Rapid clicks fire duplicate fetch chains.
+- `itemNames` at `app.js:5261` references non-existent variable (should be `ITEM_NAMES`) — Loot Buyer sale form shows raw item IDs instead of friendly names.
+
+**HIGH (8):**
+- 20+ `alert()`/`confirm()` calls blocking UI thread
+- `analyticsCache` Map has no size cap or eviction (grows unbounded in long sessions)
+- Silent failure when `items.json`/`recipes.json` fail to load (no error banner, no retry)
+- `plan.buyCity`/`plan.sellCity` injected into innerHTML without `esc()` at `app.js:5819,5928` (XSS)
+- Live Flips REST fallback `.catch(() => {})` silences all errors — no user feedback
+- `renderBrowser()` reads ALL IndexedDB prices on every page flip/filter/sort change
+- `setupAutocomplete()` accumulates 7+ permanent global `document.click` listeners at init
+- Stale VPS IP `"209-97-129-125"` in console.log at `app.js:3975`
+
+**MEDIUM (9):**
+- Inline `onclick` with `esc()` uses wrong escaping context — HTML entity-decodes before JS runs
+- Only 7 CSS breakpoints for 24-tab app (no 1024px tablet, no 480px/375px phone breakpoints)
+- Zero ARIA attributes in entire app (no `role`, `aria-selected`, `aria-expanded`, `aria-live`, `aria-label`)
+- No keyboard/Escape handler for chart modal, no focus trap
+- `window._userData` and `window._lootSelectedItems` pollute global scope
+- Top Traded ranks by cities in YOUR IndexedDB cache, not actual server trading volume
+- CSV export from Portfolio doesn't escape commas in item names
+- No `<label for="">` on form inputs — placeholders only
+- Chart time radio `onclick` stale closure risk when `showGraph()` called while modal open
+
+**Cross-Feature Synergy Gaps (10):**
+1. Market Flipper → no "Check Crafting" action on flip cards
+2. Transport haul → no crafting/refining alternative check per item
+3. City Compare → no "Find Flips for this item" button
+4. Live Flips → no Chart/History button on flip cards
+5. Loot Buyer sell plan → no transport route suggestion for multi-city hauls
+6. BM Flipper → no "Check Craft for BM" link
+7. Portfolio → no current market prices / unrealized P/L
+8. Item Browser → no "Add to Favorites" button on cards
+9. City filter state doesn't persist when switching between tabs
+10. Alerts → no preview of recent flips that would have matched the threshold
+
+**Low/Nice-to-Have (10):**
+- No contextual tooltips (Confidence %, VOLATILE, RRR unexplained inline)
+- No global "Backend unreachable" banner when VPS is down
+- No dark/light mode toggle
+- No URL deep linking (`?tab=compare&item=T6_MAIN_SWORD`)
+- Favorites lists stored in localStorage only — no server sync for logged-in users
+- No back-to-top button on long results pages
+- WebSocket reconnect has no exponential backoff (360 attempts/hr if VPS down for 30 min)
+- Old DNS prefetch refs (`dns-prefetch`) in `index.html` pointing to current domain (correct but annotated to old IP in comments)
+- No loading skeleton for initial `items.json`/`recipes.json` load
+- Top Traded shows `--` volume for items without 7d chart data, making ranking misleading
+
+#### 2. Data & Analytics Audit (COMPLETED)
+
+**CRITICAL:**
+- `computeAnalytics` silently fails every run. `price_analytics` has 0 rows.
+- Error handler: `if (err || !rows7d || rows7d.length === 0)` logs "No 7d data, skipping" without logging `err`.
+- Real error is likely `SQLITE_BUSY` — runs on main `db` connection. **Fix:** add `console.error(err)` + move to `statsDb` (same fix used for SpreadStats).
+
+**Data Quality (Healthy):**
+- 14.1M rows in `price_averages`, 9,799 unique items, 8 cities
+- Average data freshness: 5.5 hours
+- Daily intake: 3.1–3.5M rows/day, consistent
+- 527K `spread_stats` rows, avg confidence 35.8%
+- WAL file 220MB — healthy
+
+**Issues Found:**
+- 3 computed metrics exist in DB schema but are never exposed to frontend: `vwap_7d`, `ema_7d`, `spread_volatility`
+- SpreadStats and Analytics background jobs can collide (both can run in same minute window)
+- `price_hourly` has 0 rows — NOT a bug, first compaction run triggers ~April 11
+- NATS flush is skipped during SpreadStats run (~2 min gap, minor data loss)
+
+#### 3. Backend & VPS Audit (INCOMPLETE)
+Blocked on workspace approval during session. Needs re-run with PC access. Should check: CPU/RAM/disk health, Node process, journalctl logs, NATS connectivity, CORS config, rate limiting, JWT expiry policy.
+
+#### 4. Git/DevOps/Go Client Audit (INCOMPLETE)
+Session ran but report not fully captured. Needs re-run. Known issue from prior work: `operation_read_mail.go:103` — expiry notification sets `ItemID = body[1]` (total amount, not item ID). Go client also needs GitHub Actions for automated builds.
+
+### Recommended Fix Order
+| # | Task | Effort | Impact |
+|---|------|--------|--------|
+| 1 | Fix `computeAnalytics` — log error + move to `statsDb` | 30 min | Unlocks trend arrows, SMA chart, VWAP/EMA |
+| 2 | Fix `itemNames` → `ITEM_NAMES` at `app.js:5261` | 5 min | Fixes Loot Buyer sale form |
+| 3 | Fix `plan.buyCity`/`plan.sellCity` XSS — add `esc()` at `app.js:5819,5928` | 5 min | Security hardening |
+| 4 | Wire up `scanAbortController` in all scan functions | 1 hour | Scan stability |
+| 5 | Expose VWAP + EMA on analytics chart | 1 hour | Requires fix #1 first |
+| 6 | Add stale data badges to Market Flipper cards | 1 hour | Data transparency |
+| 7 | Replace `alert()`/`confirm()` with inline modals/toast | 3 hours | UX polish |
+| 8 | Add top 3 cross-feature synergy links | 2 hours | Usability |
+| 9 | Cache `renderBrowser()` IndexedDB reads in module-level variable | 1 hour | Performance |
+| 10 | Monitor first compaction run ~April 11 | Passive | Data retention validation |
+
+### Still Pending (Carried Forward)
+- Crafting Revamp Phases 1–5 (see Section 13)
+- In-game testing: GUID matching, Device Auth, negative item ID mappings, chest capture phantom items
+- ReadMail → loot tab matching integration (research done, implementation pending)
+- Fix `operation_read_mail.go:103` expiry notification ItemID bug
+- Go client GitHub Releases / Actions CI
+- Loot Logger Viewer (major future feature)
+- Re-run backend + git/devops audits with PC access
+
+---
+
 ## 1. What This Project Is
 
 A full-stack SaaS web app for analyzing the Albion Online in-game economy. Players use it to find profitable market flips, plan transport hauls, evaluate guild loot tabs, track crafting profits, and more.
@@ -346,15 +453,6 @@ go build -v ./...
 
 ## 12. Known Bugs & Technical Debt
 
-### CRITICAL — Chest Capture Item Mismatch (Active Investigation)
-- **Items captured do NOT match actual chest contents.** Verified with known 3-item test (T4 Mistcaller = T4_OFF_HORN_KEEPER id:3710, T6.1 Assassin Hood = T6_HEAD_LEATHER_SET3@1 id:5069, T3 Ox = T3_MOUNT_OX id:10677). Every capture returned 3 phantom items instead (UNIQUE_LOOTCHEST_ADC_NOV2018 by Fakaz, T4_CAPEITEM_MORGANA by SargasT, UNIQUE_UNLOCK_SKIN_DIREWOLF_BOBTAIL by 007speed — objectIDs 69534264, 660587197, 75354710, always at slots -34, -35, -29).
-- **Same phantom items appear for EVERY tab** — personal bank, guild tabs, empty tabs, tabs where items were just moved in. Persists across zone changes.
-- **The game does NOT send chest contents during zone loading.** Only ~12 items from one nearby container arrived (at slots 1546-1556). The test items never appear in any event, not even as raw numeric IDs.
-- **The 373-item Loot 2 capture from earlier is also suspect** — we never validated those items were correct either.
-- **Root cause unknown.** Possible theories: (a) EquipItem events for chest tabs are from nearby Morgana chests on the island, not from the opened tab; (b) items come from player equipment/wardrobe/loadout slots; (c) the game uses a different mechanism to send chest contents that we're not capturing.
-- **What DOES work:** GUID matching (100% correct), tab name resolution, vault info detection, WebSocket relay.
-- **Next steps to try:** (1) Check if Fakaz/SargasT/007speed are guild members or if those items are from player worn gear; (2) Add `RawParams mapstructure:",remain"` to item event structs to capture undocumented parameters; (3) Research how Triky313/AlbionOnline-StatisticsAnalysis (C# desktop app) captures chest contents — it's the only tool that does this successfully; (4) Log ALL raw event types during chest interaction to find events we might be missing; (5) Check evInvalidateItemContainer (101) and evLockItemContainer (102) which are defined but not handled.
-
 ### High Priority
 - **Negative item ID mappings are guesses** -- IDs -1 to -9 mapped to Silver, Gold, Fame Credit, Silver Pouch, etc. based on community knowledge. Need live verification. Also discovered IDs far beyond -9: -54, -57, -60, -62, -63, -66, -69, -84, -96, -107.
 
@@ -365,12 +463,13 @@ go build -v ./...
 - **app.js is 7,128+ lines** -- Could benefit from modularization
 - **Go client build pipeline** -- Manual `go build`, no CI/CD
 
-### RESOLVED (April 8 Evening Session — Chest Capture Debugging)
-- ~~GUID matching untested in live game~~ -- CONFIRMED WORKING: All 7 guild tabs + 1 bank tab match by GUID every time. Mixed-endian byte-swap NOT needed.
-- ~~Default tab not captured~~ -- FIXED: Added `evAttachItemContainer` (opcode 99) handler in decode.go + operation_container_open.go. Default tab now triggers collection.
-- ~~Items arriving before collector starts~~ -- FIXED: Added pre-buffer in itemCollector. Items that arrive before `startCollecting()` are buffered (2s window) and drained when collection begins.
+### RESOLVED (April 9 Session — Chest Capture FULLY WORKING)
+- ~~Item mismatch bug~~ -- ROOT CAUSE: itemmap.json was stale. Game update shifted ALL 11,964 numeric IDs. Regenerated from latest ao-bin-dumps (April 1 2026 dump). Items now verified correct with crafter names + in-game visual confirmation.
+- ~~Capture architecture rewrite~~ -- Replaced timer-based EquipItem collection with global item cache + `evAttachItemContainer` param 3 slot lookup. Param 3 contains global slot IDs referencing items in cache. This is the same approach used by Triky313/AlbionOnline-StatisticsAnalysis.
+- ~~Missing item types~~ -- Added 3 new event handlers: `evNewFurnitureItem` (33), `evNewKillTrophyItem` (34), `evNewLaborerItem` (36). Now handling all 6 item event types. Mounts and furniture now captured correctly.
+- ~~Item weight~~ -- Added weightmap.json (11,235 entries) generated from ao-bin-dumps items.json. Per-item weight + total tab weight included in captures. Verified exact match (40.2 kg) against in-game display.
+- ~~GUID matching untested in live game~~ -- CONFIRMED WORKING: All tabs match by GUID every time. Mixed-endian byte-swap NOT needed.
 - ~~NATS flood killing game client auth~~ -- FIXED (earlier session): Added `wc.clientType !== 'game-client'` filter to NATS broadcast in deploy_saas.py.
-- ~~Rapid tab switching loses captures~~ -- FIXED (earlier session): `startCollecting()` now finalizes previous tab before resetting.
 
 ### RESOLVED (April 8 Session — Cowork/Dispatch)
 - ~~Freshness age bug~~ -- `fresh-threshold-group` had `display:none` hardcoded in HTML and JS sync only fired on change events, never on page load. Fixed by extracting `syncFreshThreshold()` function called on init. Deployed.
@@ -390,9 +489,11 @@ go build -v ./...
 
 ## 13. Roadmap (Next Up)
 
-### Immediate — Fix Chest Capture Item Mismatch
-1. **Solve the item mismatch bug** -- See Section 12 "CRITICAL" for full details. GUID matching works but captured items are wrong. Need to figure out how the game actually sends chest tab contents.
-2. **Device Auth end-to-end test** -- Device code flow from Go client to browser approval (not yet tested)
+### Immediate
+1. ~~**Chest capture**~~ -- FULLY WORKING (April 9). Items, weights, tab names, GUIDs all verified.
+2. **Commit + push Go client changes** -- All changes uncommitted. Need to commit decode.go, operation_container_open.go, event_container_items.go, itemmap.go, client.go, itemmap.json, weightmap.json
+3. **Device Auth end-to-end test** -- Device code flow from Go client to browser approval (not yet tested)
+4. **Test on guild island** -- Verified on personal island only. Guild island needs retest with new architecture + updated itemmap
 
 ### Short Term
 3. **ReadMail opcode — wire into loot tab matching** — opcode research DONE (April 9). Implementation: intercept `lib.NatsMarketNotifications`, match by ItemID + LocationID + timestamp window. Fix expiry bug at `operation_read_mail.go:103` (ItemID = body[1] is wrong — it's the total amount). Handle MailInfos cache miss (zone transition required before mails populate).
@@ -489,12 +590,16 @@ go build -v -o albiondata-client-custom.exe .
 
 ---
 
+### April 9 — Chest Capture SOLVED + Weight Data (Latest)
+- **Root cause found:** itemmap.json was stale — game update shifted ALL 11,964 numeric item IDs. Capture was correct all along, just displaying wrong names. Regenerated from latest ao-bin-dumps (April 1 2026 update).
+- **Architecture rewrite:** Replaced timer-based EquipItem collection with global item cache (`sync.Map` keyed by slot number) + `evAttachItemContainer` param 3 slot lookup. Param 3 = `[globalSlotId_at_pos0, globalSlotId_at_pos1, ...]`. Same approach as Triky313/AlbionOnline-StatisticsAnalysis.
+- **3 new item event handlers:** `evNewFurnitureItem` (33), `evNewKillTrophyItem` (34), `evNewLaborerItem` (36). Now 6 total. Mounts, furniture, trophies captured correctly.
+- **Weight data:** Generated weightmap.json (11,235 entries) from ao-bin-dumps `@weight` field. Per-item + total tab weight in captures. Verified exact match (40.2 kg) against in-game.
+- **Verified on personal island:** 4 tabs (Bank 109 items/589.4kg, loot 43/160kg, loot3 15/40.2kg, vanity 5/230.5kg), all items + crafter names + weights verified correct.
+- **Code changes (uncommitted):** decode.go, operation_container_open.go (full rewrite), event_container_items.go (full rewrite), itemmap.go (weight loading), client.go (LoadWeightMap), itemmap.json (regenerated), weightmap.json (new)
+
 ### April 8 Evening — Chest Capture Debugging Session
-- **evAttachItemContainer handler** — added opcode 99 handler to decode.go + operation_container_open.go. Default/initial tab now triggers item collection (previously only explicit tab clicks via opContainerOpen worked).
-- **Pre-buffer for item timing** — items arrive BEFORE evAttachItemContainer. Added pre-buffer in itemCollector that holds items for 2s window, drains into collector when startCollecting() is called.
-- **Item mismatch investigation** — 6 test runs with known items (Mistcaller, Assassin Hood, T3 Ox). Every capture returned 3 phantom items from a nearby container instead. Phantom items persist across zone changes. Game doesn't re-send chest contents during zone loading. Root cause unknown — see Section 12 for full details and next steps.
-- **Code changes (uncommitted):** `operation_container_open.go` (AttachItemContainer handler), `event_container_items.go` (pre-buffer), `decode.go` (evAttachItemContainer registration)
-- **Test item IDs for validation:** T4_OFF_HORN_KEEPER (id:3710), T6_HEAD_LEATHER_SET3@1 (id:5069), T3_MOUNT_OX (id:10677). Currently in guild chest Loot 3 tab on Panico's Island.
+- Investigated item mismatch across 6 test runs on guild island. Fixed default tab capture (evAttachItemContainer handler) and item timing (pre-buffer). Discovered the real issue was stale itemmap, not the capture mechanism.
 
 ### April 8 — Cowork/Dispatch Session
 - **Phase 3: Lifecycle Tracker** — built and deployed: `loot_tabs` + `loot_tab_sales` DB tables, 5 API endpoints (save/list/record sale/get detail/update status), "I Bought This" button on loot eval results, tracking UI with progress %, net profit, status badges (open/partial/sold). JWT-authenticated. Confirmed live on VPS.
