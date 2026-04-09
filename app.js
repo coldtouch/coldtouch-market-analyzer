@@ -5675,8 +5675,8 @@ async function showSessionDetail(sessionId) {
     }
 }
 
-function renderLootSessionEvents(events) {
-    const detail = document.getElementById('loot-session-detail');
+function renderLootSessionEvents(events, targetEl) {
+    const detail = targetEl || document.getElementById('loot-session-detail');
     detail.style.display = '';
     if (events.length === 0) {
         detail.innerHTML = '<div class="empty-state"><p>No loot events in this session.</p></div>';
@@ -5734,26 +5734,50 @@ async function handleLootFileUpload(input) {
     const file = input.files[0];
     if (!file) return;
     const status = document.getElementById('loot-log-file-status');
+    const resultEl = document.getElementById('loot-upload-result');
     status.textContent = `Reading ${file.name}...`;
 
     const text = await file.text();
     const allLines = text.split('\n').map(l => l.trim()).filter(l => l && !l.startsWith('timestamp'));
-    status.textContent = `Parsed ${allLines.length} lines. Uploading...`;
 
+    // Parse locally first — show the viewer immediately without requiring login/upload
+    const parsedEvents = [];
+    for (const line of allLines) {
+        const parts = line.split(';');
+        if (parts.length < 10) continue;
+        const [ts, byAlliance, byGuild, byName, itemId, itemName, qty, fromAlliance, fromGuild, fromName] = parts;
+        parsedEvents.push({
+            timestamp: new Date(ts).getTime() || Date.now(),
+            looted_by_name: byName || '',
+            looted_by_guild: byGuild || '',
+            looted_by_alliance: byAlliance || '',
+            looted_from_name: fromName || '',
+            looted_from_guild: fromGuild || '',
+            looted_from_alliance: fromAlliance || '',
+            item_id: itemId || '',
+            quantity: parseInt(qty) || 1,
+            weight: getItemWeight(itemId) || 0
+        });
+    }
+
+    status.textContent = `${parsedEvents.length} loot events from ${file.name}`;
+
+    // Render the viewer directly in the upload result area (no login required)
+    renderLootSessionEvents(parsedEvents, resultEl);
+
+    // Also try uploading to server in background (for accountability check later)
     try {
         const res = await fetch(`${VPS_BASE}/api/loot-upload`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', ...authHeaders() },
             body: JSON.stringify({ lines: allLines })
         });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || 'Upload failed');
-        status.textContent = `Imported ${data.eventsImported} events.`;
-        // Show the uploaded session
-        showSessionDetail(data.sessionId);
-    } catch(e) {
-        status.textContent = `Error: ${e.message}`;
-    }
+        if (res.ok) {
+            const data = await res.json();
+            status.textContent += ` — saved to account (${data.eventsImported} events)`;
+        }
+    } catch { /* silent — viewing works without login */ }
+
     input.value = '';
 }
 
