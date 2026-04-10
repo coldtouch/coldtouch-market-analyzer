@@ -5659,6 +5659,13 @@ let liveLootEvents = []; // real-time events from current WS session
 let liveSessionActive = false; // whether we are actively recording live events
 let chestCaptureActive = false; // whether chest capture mode is on
 window._chestCaptures = window._chestCaptures || [];
+// Loot Logger filter/sort state (persisted across re-renders)
+let _llCurrentEvents = [];
+let _llCurrentByPlayer = {};
+let _llPriceMap = {};
+let _llDepositedMap = null;
+let _llTargetEl = null;
+let _llIsDetail = false;
 
 // --- Silver formatting ---
 function formatSilver(n) {
@@ -5829,7 +5836,15 @@ function showLootLoggerMode(mode) {
     document.getElementById('loot-log-live-btn').className = mode === 'live' ? 'btn-small-accent' : 'btn-small';
     document.getElementById('loot-log-upload-btn').className = mode === 'upload' ? 'btn-small-accent' : 'btn-small';
     document.getElementById('loot-log-acc-btn').className = mode === 'accountability' ? 'btn-small-accent' : 'btn-small';
-    if (mode === 'live') loadLootSessions();
+    if (mode === 'live') {
+        const token = localStorage.getItem('albion_auth_token');
+        if (!token && !discordUser) {
+            const list = document.getElementById('loot-sessions-list');
+            if (list) list.innerHTML = `<div class="empty-state"><p>Log in with Discord to view saved sessions.<br><span style="font-size:0.78rem; color:var(--text-muted);">Upload mode works without login.</span></p></div>`;
+            return;
+        }
+        loadLootSessions();
+    }
     if (mode === 'accountability') { populateAccountabilityDropdowns(); renderCaptureChips(); }
 }
 
@@ -5837,8 +5852,9 @@ async function loadLootSessions() {
     const list = document.getElementById('loot-sessions-list');
     if (!list) return;
     try {
-        const res = await fetch(`${VPS_BASE}/api/loot-sessions`, { headers: authHeaders() });
-        if (!res.ok) throw new Error('Not logged in');
+        const res = await fetch(`${VPS_BASE}/api/loot-sessions`, { headers: authHeaders(), signal: AbortSignal.timeout(8000) });
+        if (res.status === 401 || res.status === 403) throw new Error('auth');
+        if (!res.ok) throw new Error('server');
         const data = await res.json();
         lootSessions = data.sessions || [];
 
@@ -5877,7 +5893,13 @@ async function loadLootSessions() {
         }).join('');
         list.innerHTML = html;
     } catch(e) {
-        list.innerHTML = `<div class="empty-state"><p>Login required to view saved sessions.</p></div>`;
+        const isAuth = e.message === 'auth';
+        const msg = isAuth
+            ? 'Log in with Discord to view saved sessions.'
+            : 'Could not reach server. Check your connection.';
+        list.innerHTML = `<div class="empty-state"><p>${msg}</p>
+            ${!isAuth ? '<button class="btn-small" onclick="loadLootSessions()" style="margin-top:0.5rem;">Retry</button>' : ''}
+        </div>`;
     }
 }
 
@@ -5950,27 +5972,98 @@ async function renderLootSessionEvents(events, targetEl, depositedMap) {
     const allItemIds = new Set(events.map(e => e.item_id).filter(Boolean));
     const priceMap = await getLootPriceMap(allItemIds);
 
-    const sorted = Object.entries(byPlayer).sort((a, b) => b[1].totalQty - a[1].totalQty);
+    // Cache state for filter/sort re-renders
+    _llCurrentEvents = events;
+    _llCurrentByPlayer = byPlayer;
+    _llPriceMap = priceMap;
+    _llDepositedMap = depositedMap || null;
+    _llTargetEl = detail;
+    _llIsDetail = isDetail;
+
+    // Compute player values and attach to byPlayer for sorting
+    for (const [, data] of Object.entries(byPlayer)) {
+        data.totalValue = data.items.reduce((s, ev) => {
+            const p = priceMap[ev.item_id];
+            return s + (p ? p.price * (ev.quantity || 1) : 0);
+        }, 0);
+    }
+
+    // Render header + search/sort bar + cards
+    _llRenderFiltered();
+}
+
+// Re-render player cards based on current search/sort (no async, no price refetch)
+function _llRenderFiltered() {
+    const detail = _llTargetEl;
+    const byPlayer = _llCurrentByPlayer;
+    const priceMap = _llPriceMap;
+    const depositedMap = _llDepositedMap;
+    const isDetail = _llIsDetail;
+    const events = _llCurrentEvents;
+    if (!detail || !events.length) return;
+
+    // Read current filter/sort values (may not exist yet on first render)
+    const searchEl = document.getElementById('ll-search');
+    const sortEl = document.getElementById('ll-sort');
+    const searchVal = searchEl ? searchEl.value.toLowerCase().trim() : '';
+    const sortVal = sortEl ? sortEl.value : 'value';
+
+    // Filter players by search text (match player name, guild, or any item name)
+    let entries = Object.entries(byPlayer);
+    if (searchVal) {
+        entries = entries.filter(([name, data]) => {
+            if (name.toLowerCase().includes(searchVal)) return true;
+            if (data.guild && data.guild.toLowerCase().includes(searchVal)) return true;
+            if (data.alliance && data.alliance.toLowerCase().includes(searchVal)) return true;
+            return data.items.some(ev => {
+                const iName = getFriendlyName(ev.item_id) || ev.item_id || '';
+                return iName.toLowerCase().includes(searchVal);
+            });
+        });
+    }
+
+    // Sort
+    if (sortVal === 'value') entries.sort((a, b) => b[1].totalValue - a[1].totalValue);
+    else if (sortVal === 'items') entries.sort((a, b) => b[1].totalQty - a[1].totalQty);
+    else if (sortVal === 'weight') entries.sort((a, b) => b[1].totalWeight - a[1].totalWeight);
+    else if (sortVal === 'name') entries.sort((a, b) => a[0].localeCompare(b[0]));
+
+    // Totals (from full dataset, not filtered)
     const totalItems = events.reduce((s, e) => s + (e.quantity || 1), 0);
     const totalValue = events.reduce((s, e) => {
         const p = priceMap[e.item_id];
         return s + (p ? p.price * (e.quantity || 1) : 0);
     }, 0);
+    const totalPlayers = Object.keys(byPlayer).length;
 
+    // Header
     let html = `<div class="ll-viewer-header">
         <div style="font-size:0.82rem; color:var(--text-muted);">
-            ${events.length} events &bull; ${sorted.length} players &bull; ${totalItems} items
+            ${events.length} events &bull; ${totalPlayers} players &bull; ${totalItems} items
             ${totalValue > 0 ? `&bull; <span style="color:var(--accent);">${formatSilver(totalValue)} est. value</span>` : ''}
         </div>
         ${isDetail ? `<button class="btn-small" onclick="hideLootSessionDetail()">&#x2190; Back</button>` : ''}
     </div>`;
 
-    html += sorted.map(([name, data]) => {
+    // Search/sort bar
+    html += `<div class="ll-filter-bar">
+        <div class="search-input-wrapper" style="flex:1; min-width:160px;">
+            <span class="search-icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg></span>
+            <input type="text" id="ll-search" placeholder="Search player, guild, or item..." value="${esc(searchVal)}" oninput="_llRenderFiltered()">
+        </div>
+        <select id="ll-sort" class="transport-select" style="min-width:100px;" onchange="_llRenderFiltered()">
+            <option value="value"${sortVal === 'value' ? ' selected' : ''}>Value ↓</option>
+            <option value="items"${sortVal === 'items' ? ' selected' : ''}>Items ↓</option>
+            <option value="weight"${sortVal === 'weight' ? ' selected' : ''}>Weight ↓</option>
+            <option value="name"${sortVal === 'name' ? ' selected' : ''}>Name A-Z</option>
+        </select>
+        <span style="font-size:0.72rem; color:var(--text-muted); white-space:nowrap;">${entries.length}/${totalPlayers}</span>
+    </div>`;
+
+    // Player cards
+    html += entries.map(([name, data]) => {
         const initials = name.substring(0, 2).toUpperCase();
-        const playerValue = data.items.reduce((s, ev) => {
-            const p = priceMap[ev.item_id];
-            return s + (p ? p.price * (ev.quantity || 1) : 0);
-        }, 0);
+        const playerValue = data.totalValue;
         const weightStr = data.totalWeight > 0 ? data.totalWeight.toFixed(1) + ' kg' : '—';
 
         const itemsHtml = data.items.map(ev => {
@@ -6032,7 +6125,18 @@ async function renderLootSessionEvents(events, targetEl, depositedMap) {
         </div>`;
     }).join('');
 
+    if (entries.length === 0 && searchVal) {
+        html += '<div class="empty-state"><p>No players match your search.</p></div>';
+    }
+
     detail.innerHTML = html;
+
+    // Restore search focus + cursor position after re-render
+    const newSearch = document.getElementById('ll-search');
+    if (newSearch && searchVal) {
+        newSearch.focus();
+        newSearch.setSelectionRange(searchVal.length, searchVal.length);
+    }
 }
 
 // Handle .txt file upload
