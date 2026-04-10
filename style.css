@@ -1008,19 +1008,27 @@ select:focus {
     transition: background var(--transition);
 }
 .ll-player-header:hover { background: var(--bg-elevated); }
-.ll-player-avatar {
-    width: 34px;
-    height: 34px;
-    border-radius: 50%;
-    background: linear-gradient(135deg, rgba(212,175,55,0.8) 0%, rgba(212,175,55,0.3) 100%);
+.ll-item-preview {
     display: flex;
     align-items: center;
-    justify-content: center;
-    font-weight: 700;
-    font-size: 0.8rem;
-    color: #111;
+    gap: 1px;
+    flex: 1;
+    flex-wrap: wrap;
+    min-width: 0;
+    overflow: hidden;
+    max-height: 46px;
+}
+.ll-preview-icon {
+    width: 22px;
+    height: 22px;
+    image-rendering: pixelated;
     flex-shrink: 0;
-    letter-spacing: 0.02em;
+}
+.ll-item-clickable {
+    cursor: pointer;
+}
+.ll-item-clickable:hover {
+    background: rgba(212,175,55,0.08) !important;
 }
 .ll-player-info { flex: 1; min-width: 0; }
 .ll-player-name {
