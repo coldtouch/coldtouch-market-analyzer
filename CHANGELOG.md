@@ -2,6 +2,10 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-04-10 — UX: Browser item count label
+
+- **`#browser-count` now reads "X known items"** instead of "X items" — clarifies this is the full game catalog count, not items with price data in cache. Commit 155c685.
+
 ### 2026-04-10 — Fix server switch not reloading prices
 
 - **Server dropdown now clears and reloads prices on change.** Switching between Europe / Americas West / Asia East now immediately clears the IndexedDB price cache (which was stale from the previous server) and reloads it from the correct source.

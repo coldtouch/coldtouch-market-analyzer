@@ -1,12 +1,46 @@
 # Albion Market Analyzer — Project Handoff
 
-> **Last updated:** 2026-04-09
+> **Last updated:** 2026-04-10
 > **Author:** Coldtouch (yuvalvilensky@gmail.com)
 > **Purpose:** Everything a new session needs to continue development without re-discovering context.
 
 ---
 
-## 0. Latest Session — April 9, 2026 (Full Project Audit)
+## 0. Latest Session — April 10, 2026
+
+### What Was Done
+
+#### 1. Server Switch Fix (merged from `claude/priceless-driscoll` → `main`)
+- **`onServerChange()`** added to `app.js`: clears IndexedDB (`MarketDB.clearAll()`), invalidates the module-level price cache, reloads VPS cache only when `getServer() === vpsGameServer`, re-renders Market Browser, and shows a toast for non-VPS servers.
+- **Background 5-min refresh guard**: `setInterval` at `app.js:4159` now has `if (getServer() === vpsGameServer)` before calling `loadServerCache(true)` — prevents Europe prices from silently repopulating the cache when the user is on West or East.
+- **`vpsGameServer` detection**: set during `init()` from `/api/market-cache/status` response; defaults to `'europe'`.
+- **Browser-verified**: Europe→West clears cache + loads different 24H data; West→Europe restores correct prices; East works correctly.
+- Fix was sitting in worktree `claude/priceless-driscoll` (commit `b045913`); merged to `main` and pushed.
+
+#### 2. "Known items" label fix (commit `155c685`)
+- `#browser-count` in Market Browser now reads "11,115 known items" instead of "11,115 items".
+- Clarifies this is the full game catalog count (items.json), not items with price data in cache.
+
+#### 3. Multi-server VPS investigation (no code changes)
+- **Finding: backend is single-server only by design.** No `server` column in `price_averages`, `price_analytics`, `price_hourly`, or `spread_stats`. NATS subscription single-server. No `?server=` param on any API endpoint.
+- **Migration guard**: if `GAME_SERVER` env var changes, the backend wipes the entire DB — confirming single-server-only intent.
+- **Near-future plan**: add `server` column to 5 tables, NATS multi-subscribe (3 servers), `?server=` on all market API endpoints, frontend passes `getServer()` on every analytics call. Estimated ~3x resource growth — manageable on 11 GB/6-vCPU Contabo.
+
+### Still Pending (Carried Forward)
+- **Multi-server VPS price history** — schema migration (5 tables), NATS multi-subscribe, API `?server=` param (near-future priority)
+- **Crafting Revamp Phases 1–5** — not started (see Section 13)
+- **Device Auth end-to-end test** — never tested in live game
+- **Test chest capture on guild island** — only verified on personal island
+- **Death events 164/165** — not yet handled in Go client
+- **GUID matching in live guild context** — only tested on personal island
+- **Fix `operation_read_mail.go:103`** — expiry notification sets `ItemID = body[1]` (total amount, not item ID)
+- **Negative item ID cosmetic names** — IDs -56, -59, -62, -63, -64, -65, -68, -71, -121 unidentified
+- **Go client standalone repo migration** — future work
+- **Monitor first compaction run ~April 11** — `price_hourly` has 0 rows until then, expected
+
+---
+
+## 0b. Previous Session — April 9, 2026 (Full Project Audit)
 
 ### What Was Done
 Ran 4 parallel audit sessions covering the entire project.
@@ -174,7 +208,7 @@ Custom additions on top of standard AODP client:
 | **VPS provider** | Contabo VPS 20 |
 | **IP** | 5.189.189.71 |
 | **OS** | Ubuntu |
-| **RAM** | 1 GB + 512 MB swap |
+| **RAM** | 11 GB (Contabo VPS 20) |
 | **Domain** | albionaitool.xyz |
 | **SSL** | Let's Encrypt via certbot |
 | **Systemd service** | `albion-saas` |
@@ -213,7 +247,7 @@ GAME_SERVER  (default: europe)
 | `meta_config` | Key-value config store |
 | `device_authorizations` | OAuth Device Flow state |
 
-**Critical lesson:** The VPS has 1 GB RAM. On April 4, 22M rows in `price_snapshots` caused 100% CPU for 12+ hours, killing OAuth and all user-facing endpoints. Compaction now runs aggressively (6h retention on snapshots, daily aggregation).
+**Critical lesson:** On April 4, 22M rows in `price_snapshots` caused 100% CPU for 12+ hours, killing OAuth and all user-facing endpoints — even though the VPS now has 11 GB RAM (Contabo VPS 20). The bottleneck was node-sqlite3 queue saturation, not RAM. Compaction now runs aggressively (6h retention on snapshots, daily aggregation). Never load large result sets into JS-side memory; use SQL aggregation.
 
 ---
 
