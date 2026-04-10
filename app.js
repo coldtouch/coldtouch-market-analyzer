@@ -77,6 +77,7 @@ let compareSelectedId = null;
 let arbSearchExactId = null;
 let craftSearchExactId = null;
 let priceChartInstance = null;
+let vpsGameServer = 'europe'; // detected from VPS on init; used to skip VPS cache reload when on a different server
 let analyticsChartInstance = null;
 let scanAbortController = null;
 let spreadStatsCache = {}; // keyed by "itemId_quality_buyCity_sellCity"
@@ -3653,10 +3654,36 @@ async function loadServerCache(silent = false) {
     return false;
 }
 
+async function onServerChange() {
+    const server = getServer();
+    const serverLabels = { europe: 'Europe', west: 'Americas West', east: 'Asia East' };
+    const statusEl = document.querySelector('.db-status-text');
+    if (statusEl) statusEl.textContent = `Switching to ${serverLabels[server] || server}...`;
+
+    // Clear all cached prices from the previous server
+    await MarketDB.clearAll();
+    invalidatePriceCache();
+
+    // Reload from VPS cache only when the VPS scans the same server the user selected
+    if (server === vpsGameServer) {
+        await loadServerCache();
+    } else {
+        // Non-VPS server: VPS cache doesn't apply; prices load on-demand via AODP
+        await updateDbStatus();
+        showToast(`Switched to ${serverLabels[server]} — prices load on demand when you browse items`, 'info');
+    }
+
+    // Re-render browser immediately; other tabs require the user to re-run their scan
+    if (currentTab === 'browser') await renderBrowser();
+}
+
 async function init() {
     // === IMMEDIATE: attach all UI listeners before any async work ===
     // Scripts are at bottom of <body> so DOM is fully ready here.
     initTabs();
+
+    // Server switch: clear cached prices and reload for the new server
+    document.getElementById('server-select').addEventListener('change', onServerChange);
 
     // Fresh filter mode shows/hides threshold dropdown
     const freshMode = document.getElementById('fresh-mode');
@@ -4113,6 +4140,7 @@ async function init() {
                 const serverVal = serverMap[statusData.gameServer];
                 if (serverVal) {
                     document.getElementById('server-select').value = serverVal;
+                    vpsGameServer = serverVal;
                 }
             }
         }
@@ -4126,9 +4154,10 @@ async function init() {
 
     await updateDbStatus();
 
-    // Background refresh: pull server cache every 5 min + evict stale data
+    // Background refresh: pull server cache every 5 min + evict stale data.
+    // Only reload VPS cache when the user is on the same server the VPS scans.
     setInterval(async () => {
-        await loadServerCache(true);
+        if (getServer() === vpsGameServer) await loadServerCache(true);
         await MarketDB.evictStale(24 * 60 * 60 * 1000);
         if (currentTab === 'browser') renderBrowser();
     }, 5 * 60 * 1000);
