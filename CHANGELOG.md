@@ -2,6 +2,14 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-04-11 — Loot Logger: search/sort + fix stuck loading
+
+- **Search bar on player cards:** Filter loot session results by player name, guild, alliance, or item name. Shows filtered/total count (e.g., "2/8").
+- **Sort dropdown:** Sort players by Value, Items, Weight, or Name A-Z. Default is Value descending.
+- **Fix: "Loading sessions..." no longer hangs forever.** Sessions tab now checks auth upfront — if not logged in, shows "Log in with Discord" immediately instead of waiting for a fetch that never completes. Upload mode hint shown for unauthenticated users.
+- **Timeout + retry:** Session fetch now has 8-second timeout. Network errors show "Could not reach server" with a Retry button (separate from auth errors).
+- **Responsive:** Search/sort bar stacks vertically on mobile.
+
 ### 2026-04-10 — UX: Browser item count label
 
 - **`#browser-count` now reads "X known items"** instead of "X items" — clarifies this is the full game catalog count, not items with price data in cache. Commit 155c685.
