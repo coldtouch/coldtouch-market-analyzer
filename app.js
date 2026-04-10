@@ -467,7 +467,7 @@ async function renderBrowser() {
     const totalPages = Math.max(1, Math.ceil(total / ITEMS_PER_PAGE));
     if (browserPage > totalPages) browserPage = totalPages;
 
-    countEl.textContent = `${total.toLocaleString()} items`;
+    countEl.textContent = `${total.toLocaleString()} known items`;
 
     // Get cached prices (module-level cache avoids re-reading IndexedDB on every page/filter)
     let priceMap = {};
