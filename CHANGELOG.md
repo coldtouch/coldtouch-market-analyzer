@@ -2,6 +2,14 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-04-10 — Fix server switch not reloading prices
+
+- **Server dropdown now clears and reloads prices on change.** Switching between Europe / Americas West / Asia East now immediately clears the IndexedDB price cache (which was stale from the previous server) and reloads it from the correct source.
+- **VPS cache reload is server-aware.** The background `/api/market-cache` endpoint is only used when the user's selected server matches the server the VPS scans. For other servers, prices load on-demand directly from AODP when browsing items.
+- **Background refresh interval fixed.** The 5-minute auto-refresh of the VPS cache is now skipped when the user is viewing a different server, preventing Europe-server prices from silently repopulating the cache.
+- **Status bar updates** show "Switching to [Server]..." during the transition and update to reflect the new item count once done. A toast message informs users of the on-demand pricing mode for non-VPS servers.
+- **Market Browser re-renders** immediately after the switch; other scan tabs (Flipper, Transport, etc.) require the user to re-run their scan to get new-server data.
+
 ### 2026-04-10 — Loot Logger major revamp
 
 - **Live Session toolbar:** Persistent "Start / Stop Live Session" toggle button at the top of the tab. Loot events from the Coldtouch client only accumulate while the session is active. "Save Session" and "New Session" buttons also added.
