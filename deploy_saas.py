@@ -143,7 +143,7 @@ db.run('PRAGMA cache_size = -128000');  // 128MB page cache
 db.run('PRAGMA busy_timeout = 5000');
 db.run('PRAGMA wal_autocheckpoint = 1000');
 
-// Separate connection for SpreadStats bulk reads/writes.
+// Separate connection for SpreadStats + Analytics bulk reads/writes.
 // SpreadStats does a 90-second db.all() on 3M+ rows then writes 526k rows.
 // Using a separate connection prevents this from blocking the main db queue,
 // which would cause /api/me (5s timeout) to fail and break Discord login.
@@ -152,6 +152,15 @@ statsDb.run('PRAGMA journal_mode = WAL');
 statsDb.run('PRAGMA synchronous = NORMAL');
 statsDb.run('PRAGMA cache_size = -32000');  // 32MB page cache
 statsDb.run('PRAGMA busy_timeout = 30000'); // longer timeout — bulk writes can wait
+
+// Dedicated read-only connection for user-facing endpoints (/api/me, etc.).
+// WAL mode allows concurrent readers, but node-sqlite3 serialises ALL ops
+// on a single connection object — so even a fast SELECT queues behind slow
+// writes on the main db connection (e.g. market scan batch-inserts).
+// A separate connection bypasses that queue entirely.
+const readDb = new sqlite3.Database('/opt/albion-saas/database.sqlite', sqlite3.OPEN_READONLY);
+readDb.run('PRAGMA journal_mode = WAL');
+readDb.run('PRAGMA busy_timeout = 5000');
 
 db.serialize(() => {
   db.run(`CREATE TABLE IF NOT EXISTS users (id TEXT PRIMARY KEY, username TEXT, avatar TEXT)`);
@@ -899,8 +908,11 @@ app.get('/', (req, res) => res.redirect('https://coldtouch.github.io/coldtouch-m
 
 app.get('/api/me', (req, res) => {
   if(req.user) {
-    db.get(`SELECT u.auth_type, u.role, u.email, u.linked_discord_id, u.email_verified, u.created_at, s.scans_30d, s.scans_total, s.tier
+    // Use readDb (separate connection) so this never queues behind main db writes
+    // (market scan batch-inserts, compaction, etc.) — prevents login timeouts.
+    readDb.get(`SELECT u.auth_type, u.role, u.email, u.linked_discord_id, u.email_verified, u.created_at, s.scans_30d, s.scans_total, s.tier
       FROM users u LEFT JOIN user_stats s ON u.id = s.user_id WHERE u.id = ?`, [req.user.id], (err, row) => {
+      if (err) console.error('[/api/me] readDb error:', err.message);
       const stats = row ? { scans_30d: row.scans_30d || 0, scans_total: row.scans_total || 0, tier: row.tier || 'bronze' } : { scans_30d: 0, scans_total: 0, tier: 'bronze' };
       res.json({
         loggedIn: true,

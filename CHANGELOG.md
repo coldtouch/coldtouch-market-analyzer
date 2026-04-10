@@ -2,6 +2,12 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-04-10 — Discord login reliability fix
+
+- **Backend:** Added `readDb` — a third SQLite connection (`OPEN_READONLY`) dedicated to `/api/me`. In WAL mode, separate connections can read concurrently without waiting for write transactions. Previously `/api/me` queued behind market scan batch-inserts on the main `db` connection, causing 5s timeouts during background jobs → Discord login appeared broken.
+- **Frontend:** JWT fallback — if `/api/me` is unreachable (timeout/network error) but a valid non-expired JWT exists in localStorage, the auth check now decodes the JWT payload locally and logs the user in from cached claims. A transient VPS hiccup no longer looks like a login failure.
+- **Frontend:** `/api/me` timeout raised 5s → 8s. Added one auto-retry with 1.5s pause before throwing.
+
 ### 2026-04-10 — SEO improvements
 
 - **Title tag:** Expanded with targeted keywords ("Market Prices, Flipping & Crafting Tool") for better search ranking
