@@ -2,6 +2,12 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-04-11 — Loot Logger: player card UX overhaul
+
+- **Item icon preview in header:** Each player card now shows all unique item icons to the right of the player name, giving an at-a-glance view of what they looted. Replaces the old gold initials avatar.
+- **Guild color grouping:** Players from the same guild share a matching left border color and guild name color, making it easy to visually identify guild members at a glance.
+- **Clickable items → Market Browser:** Clicking any item row in the expanded player card navigates directly to the Market Browser with that item pre-filled in search for price lookup.
+
 ### 2026-04-11 — Loot Logger: search/sort + fix stuck loading
 
 - **Search bar on player cards:** Filter loot session results by player name, guild, alliance, or item name. Shows filtered/total count (e.g., "2/8").
