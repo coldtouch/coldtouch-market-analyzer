@@ -1873,6 +1873,19 @@
                     <div class="changelog-list">
                         <div class="changelog-entry">
                             <div class="changelog-date">April 10, 2026</div>
+                            <div class="changelog-title">Loot Logger Revamp</div>
+                            <ul>
+                                <li>Live Session toolbar with Start/Stop toggle, Save, and New Session buttons &mdash; events only accumulate while active</li>
+                                <li>Redesigned player cards with avatar, per-player item count, estimated silver value, and weight at a glance</li>
+                                <li>Item rows now show icons, quantity, estimated value (Caerleon-preferred price cache), and weight</li>
+                                <li>Accountability tab: explicit "Start/Stop Capturing Chests" toggle with pulsing indicator; captured tabs shown as chips</li>
+                                <li>Accountability coloring in-place: green = deposited, red = missing, yellow = partial, gray = died with</li>
+                                <li>Deposit progress bar on each player card in accountability mode</li>
+                                <li>Death event support: <code>death-event</code> from Go client marks player's items as "died with" (gray)</li>
+                            </ul>
+                        </div>
+                        <div class="changelog-entry">
+                            <div class="changelog-date">April 10, 2026</div>
                             <div class="changelog-title">Discord Login Reliability Fix</div>
                             <ul>
                                 <li>Discord login no longer breaks during background database jobs &mdash; a dedicated read-only connection now handles login checks so they never queue behind bulk writes</li>
@@ -2558,17 +2571,32 @@
                     </span>
                 </h2>
                 <p style="color:var(--text-secondary); font-size:0.82rem; margin:0 0 1rem;">
-                    Track who looted what during PvP/PvE content. Upload a log file or view live data from the Coldtouch client.
-                    Use the Accountability Check to cross-reference loot pickups against chest deposits.
+                    Track who looted what during PvP/PvE. Start a live session with the Coldtouch client, or upload a log file.
+                    Run the Accountability Check to cross-reference pickups against chest deposits.
                 </p>
 
-                <div style="display:flex; gap:0.5rem; margin-bottom:1rem; flex-wrap:wrap;">
-                    <button class="btn-small-accent" onclick="showLootLoggerMode('live')" id="loot-log-live-btn">Live Sessions</button>
-                    <button class="btn-small" onclick="showLootLoggerMode('upload')" id="loot-log-upload-btn">Upload Log File</button>
-                    <button class="btn-small" onclick="showLootLoggerMode('accountability')" id="loot-log-acc-btn">Accountability Check</button>
+                <!-- Live Session Toolbar -->
+                <div class="ll-toolbar">
+                    <button id="ll-live-toggle-btn" class="ll-live-toggle" onclick="toggleLiveSession()">
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="10"/></svg>
+                        Start Live Session
+                    </button>
+                    <button id="ll-save-btn" class="btn-small" onclick="saveLiveSession()" disabled>Save Session</button>
+                    <button id="ll-reset-btn" class="btn-small" onclick="resetLiveSession()" disabled>New Session</button>
+                    <div id="ll-live-indicator" class="ll-live-indicator hidden">
+                        <span class="ll-pulse-dot"></span>
+                        LIVE &mdash; <span id="ll-event-count">0</span> events, <span id="ll-player-count">0</span> players
+                    </div>
                 </div>
 
-                <!-- Live Sessions Mode -->
+                <!-- Mode tabs -->
+                <div style="display:flex; gap:0.5rem; margin-bottom:1rem; flex-wrap:wrap;">
+                    <button class="btn-small-accent" onclick="showLootLoggerMode('live')" id="loot-log-live-btn">Sessions</button>
+                    <button class="btn-small" onclick="showLootLoggerMode('upload')" id="loot-log-upload-btn">Upload File</button>
+                    <button class="btn-small" onclick="showLootLoggerMode('accountability')" id="loot-log-acc-btn">Accountability</button>
+                </div>
+
+                <!-- SESSIONS MODE -->
                 <div id="loot-log-live" class="loot-log-mode">
                     <div id="loot-sessions-list" style="margin-bottom:1rem;">
                         <div class="empty-state"><p>Loading sessions...</p></div>
@@ -2576,7 +2604,7 @@
                     <div id="loot-session-detail" style="display:none;"></div>
                 </div>
 
-                <!-- Upload Mode -->
+                <!-- UPLOAD MODE -->
                 <div id="loot-log-upload" class="loot-log-mode" style="display:none;">
                     <div style="background:var(--bg-card); border:1px solid var(--border-color); border-radius:var(--radius); padding:1rem; margin-bottom:1rem;">
                         <p style="color:var(--text-secondary); font-size:0.82rem; margin:0 0 0.75rem;">
@@ -2585,18 +2613,41 @@
                         </p>
                         <input type="file" id="loot-log-file-input" accept=".txt" style="display:none;" onchange="handleLootFileUpload(this)">
                         <button class="btn-small-accent" onclick="document.getElementById('loot-log-file-input').click()">Choose File</button>
+                        <span id="ll-upload-clear-btn" style="display:none; margin-left:0.5rem;"><button class="btn-small" onclick="clearLootUpload()">Clear</button></span>
                         <span id="loot-log-file-status" style="margin-left:0.5rem; font-size:0.78rem; color:var(--text-muted);"></span>
                     </div>
                     <div id="loot-upload-result"></div>
                 </div>
 
-                <!-- Accountability Check Mode -->
+                <!-- ACCOUNTABILITY MODE -->
                 <div id="loot-log-accountability" class="loot-log-mode" style="display:none;">
+
+                    <!-- Chest Capture Panel -->
+                    <div class="ll-capture-panel">
+                        <div class="ll-capture-header">
+                            <div>
+                                <h3 style="margin:0 0 0.2rem; font-size:0.92rem; color:var(--text-primary);">Chest Captures</h3>
+                                <p style="margin:0; font-size:0.78rem; color:var(--text-secondary);">Open a chest in-game with the Coldtouch client running to record its contents.</p>
+                            </div>
+                            <div style="display:flex; gap:0.5rem; align-items:center; flex-shrink:0;">
+                                <button id="ll-capture-toggle-btn" class="ll-capture-toggle" onclick="toggleChestCapture()">Start Capturing</button>
+                                <button class="btn-small" onclick="resetChestCaptures()">Reset</button>
+                            </div>
+                        </div>
+                        <div id="ll-capture-status-bar" class="ll-capture-status-bar hidden">
+                            <span class="ll-pulse-dot"></span>
+                            Capturing&hellip; open a chest in-game to record its contents
+                        </div>
+                        <div id="ll-capture-chips" class="ll-capture-chips">
+                            <span style="font-size:0.75rem; color:var(--text-muted);">No chest captures yet</span>
+                        </div>
+                    </div>
+
+                    <!-- Compare Panel -->
                     <div style="background:var(--bg-card); border:1px solid var(--border-color); border-radius:var(--radius); padding:1rem; margin-bottom:1rem;">
-                        <h3 style="color:var(--accent); margin:0 0 0.5rem; font-size:0.9rem;">Loot Accountability Check</h3>
+                        <h3 style="color:var(--accent); margin:0 0 0.4rem; font-size:0.9rem;">Run Accountability Check</h3>
                         <p style="color:var(--text-secondary); font-size:0.82rem; margin:0 0 1rem;">
-                            Cross-reference a loot log against a chest deposit. Select a loot session (who picked up items)
-                            and a chest capture (what was deposited), then compare.
+                            Select a loot session (who picked up what) and chest captures (what was deposited), then compare.
                         </p>
                         <div style="display:grid; grid-template-columns:1fr 1fr; gap:1rem; margin-bottom:1rem;">
                             <div>
@@ -2604,15 +2655,11 @@
                                 <select id="acc-session-select" class="transport-select" style="width:100%;"><option value="">-- Select session --</option></select>
                             </div>
                             <div>
-                                <label style="font-size:0.78rem; color:var(--text-muted); display:block; margin-bottom:0.3rem;">Chest Tab Captures (select one or more)</label>
+                                <label style="font-size:0.78rem; color:var(--text-muted); display:block; margin-bottom:0.3rem;">Chest Captures (hold Ctrl to multi-select)</label>
                                 <select id="acc-capture-select" class="transport-select" style="width:100%; min-height:3.5rem;" multiple><option value="">-- No captures yet --</option></select>
-                                <div style="font-size:0.68rem; color:var(--text-muted); margin-top:0.25rem;">Hold Ctrl/Cmd to select multiple tabs. Open the chest in-game with the client running to capture.</div>
                             </div>
                         </div>
-                        <div style="display:flex; gap:0.5rem; align-items:center;">
-                            <button class="btn-small-accent" onclick="runAccountabilityCheck()">Compare</button>
-                            <button class="btn-small" onclick="recaptureChestTabs()" title="Open a chest in-game to update the capture data">Re-capture Chest Tabs</button>
-                        </div>
+                        <button class="btn-small-accent" onclick="runAccountabilityCheck()">Run Check</button>
                     </div>
                     <div id="accountability-result"></div>
                 </div>

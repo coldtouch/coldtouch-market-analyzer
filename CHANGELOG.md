@@ -2,6 +2,17 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-04-10 — Loot Logger major revamp
+
+- **Live Session toolbar:** Persistent "Start / Stop Live Session" toggle button at the top of the tab. Loot events from the Coldtouch client only accumulate while the session is active. "Save Session" and "New Session" buttons also added.
+- **Player cards redesigned:** Circular avatar with initials, per-player stats (item count, estimated silver value, weight). Items collapsed by default; expand to see full item list with icons, quantity, value, and weight per row. Cards update in-place for accountability status.
+- **Estimated item values:** All item rows now show estimated silver value from IndexedDB price cache (Caerleon-preferred, best available city fallback). Session and player totals show aggregate estimated value.
+- **Chest Capture panel (Accountability tab):** Explicit "Start Capturing" / "Stop Capturing" toggle with pulsing indicator. Captured tabs shown as chips (name + item count + weight). "Reset" clears all captures.
+- **Accountability coloring in-place:** After running the check, item rows in each player card are color-coded: green = deposited, red = missing, yellow = partial deposit, gray = died with it. Deposit progress bar under each player header.
+- **Death event prep:** `handleLootLoggerWsMessage` handles `death-event` type; marks looted items as "died with" (gray) when a player death is received from the Go client.
+- **Upload mode:** Added "Clear" button to reset upload view. Upload parser unchanged.
+- **Back button:** Session detail view now has a "← Back" button to return to the session list.
+
 ### 2026-04-10 — Discord login reliability fix
 
 - **Backend:** Added `readDb` — a third SQLite connection (`OPEN_READONLY`) dedicated to `/api/me`. In WAL mode, separate connections can read concurrently without waiting for write transactions. Previously `/api/me` queued behind market scan batch-inserts on the main `db` connection, causing 5s timeouts during background jobs → Discord login appeared broken.
