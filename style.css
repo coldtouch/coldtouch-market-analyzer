@@ -3856,6 +3856,19 @@ footer a:hover {
 
 .profile-input:focus { border-color: var(--accent); }
 
+.btn-small {
+    background: transparent;
+    color: var(--text-muted);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 0.4rem 0.75rem;
+    font-size: 0.75rem;
+    cursor: pointer;
+    transition: all var(--transition);
+}
+.btn-small:hover { border-color: var(--text-primary); color: var(--text-primary); }
+.btn-small:disabled { opacity: 0; pointer-events: none; width: 0; padding: 0; border: none; margin: 0; overflow: hidden; }
+
 .btn-small-accent {
     background: var(--accent);
     color: #000;
