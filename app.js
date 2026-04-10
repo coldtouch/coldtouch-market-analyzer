@@ -3544,12 +3544,17 @@ async function checkDiscordAuth() {
     if (authChecking) authChecking.style.display = 'flex';
     if (authContent) authContent.style.display = 'none';
 
+    let data;
     try {
-        const res = await fetch(`${VPS_BASE}/api/me`, {
-            headers: authHeaders(),
-            signal: AbortSignal.timeout(5000)
-        });
-        const data = await res.json();
+        // 8s timeout; single retry after 1.5s pause on transient failures
+        let res;
+        try {
+            res = await fetch(`${VPS_BASE}/api/me`, { headers: authHeaders(), signal: AbortSignal.timeout(8000) });
+        } catch (retryErr) {
+            await new Promise(r => setTimeout(r, 1500));
+            res = await fetch(`${VPS_BASE}/api/me`, { headers: authHeaders(), signal: AbortSignal.timeout(8000) });
+        }
+        data = await res.json();
         if (data.loggedIn) {
             discordUser = data.user;
 
@@ -3594,7 +3599,30 @@ async function checkDiscordAuth() {
         }
     } catch (e) {
         console.log('Discord OAuth check failed:', e.message);
-        // Show login UI with a connection error hint
+        // If the VPS is temporarily unreachable but we have a valid (non-expired) JWT,
+        // decode its payload and log the user in using the embedded claims.
+        // This prevents a transient network hiccup from looking like a login failure.
+        const fallbackToken = localStorage.getItem('albion_auth_token');
+        if (fallbackToken) {
+            try {
+                const payload = JSON.parse(atob(fallbackToken.split('.')[1]));
+                if (payload.exp && payload.exp * 1000 > Date.now()) {
+                    discordUser = {
+                        id: payload.id,
+                        username: payload.username,
+                        avatar: payload.avatar,
+                        authType: 'discord',
+                        role: 'free'
+                    };
+                    dismissLandingOverlay();
+                    updateHeaderProfile(discordUser);
+                    window._userData = { user: discordUser, stats: { scans_30d: 0, scans_total: 0, tier: 'bronze' } };
+                    console.log('[Auth] VPS unreachable — logged in from cached JWT claims');
+                    return;
+                }
+            } catch { /* malformed token, fall through to error UI */ }
+        }
+        // No valid token — show connection error
         if (authChecking) authChecking.style.display = 'none';
         if (authContent) authContent.style.display = 'block';
         if (authError) {

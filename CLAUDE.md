@@ -118,7 +118,12 @@
 
 ## Recent Session History
 
-### April 9 — Mega Session (Latest)
+### April 10 — SEO + Discord Login Fix (Latest)
+- **SEO:** Full meta tag overhaul — expanded title, richer description, keywords, canonical, OG tags, Twitter Card, JSON-LD WebApplication schema, inline SVG favicon, robots.txt, sitemap.xml, og-image.png.
+- **Discord login reliability:** `readDb` (OPEN_READONLY, third SQLite connection) for `/api/me` — no queue starvation. Frontend JWT fallback — when VPS unreachable, decodes token locally and logs user in from cached claims. Timeout 5s → 8s + 1 retry.
+- **HANDOFF:** Fixed stale VPS RAM (was "1 GB", now 11 GB Contabo).
+
+### April 9 — Mega Session
 - **Root cause:** itemmap.json was stale — ALL 11,964 IDs shifted in game update. Regenerated from ao-bin-dumps April 1 dump.
 - **Architecture rewrite:** Global item cache (sync.Map by slot) + evAttachItemContainer param 3 slot lookup. Same approach as Triky313's C# app.
 - **3 new event handlers:** FurnitureItem (33), KillTrophyItem (34), LaborerItem (36) — 6 total. Mounts/furniture now captured.
@@ -244,7 +249,7 @@
 ## Learned Patterns & Observations
 > Accumulated knowledge from working sessions. Add new observations here.
 
-- **node-sqlite3 serializes ALL db operations on one connection** — a long-running `db.all()` (even seconds) blocks ALL other `db.get()`/`db.run()` calls queued after it. For bulk batch jobs (SpreadStats, Analytics), use a **separate `sqlite3.Database` connection** to avoid starving user-facing endpoints like `/api/me` (5s timeout). WAL mode helps at the OS level but NOT at the node-sqlite3 queue level.
+- **node-sqlite3 serializes ALL db operations on one connection** — a long-running `db.all()` (even seconds) blocks ALL other `db.get()`/`db.run()` calls queued after it. Three-connection pattern: `db` (main writes), `statsDb` (bulk analytics/spreadstats), `readDb` (OPEN_READONLY, `/api/me` and other user-facing reads). WAL mode allows true concurrent reads on separate connection objects. WAL helps at the OS level but NOT at the node-sqlite3 queue level.
 - **VPS now has 11 GB RAM, 6 vCPUs (Contabo VPS 20)** — Still avoid loading large result sets into memory (April 4 incident: 22M rows, 100% CPU for 12h). Use SQL aggregation over JS-side loops wherever possible.
 - **Backend is embedded in deploy_saas.py** — no separate backend.js in repo, only exists on VPS after deploy
 - **Deploy via SFTP, not base64 echo** — base64 via echo truncates at ~100KB. Always use SFTP

@@ -1873,6 +1873,15 @@
                     <div class="changelog-list">
                         <div class="changelog-entry">
                             <div class="changelog-date">April 10, 2026</div>
+                            <div class="changelog-title">Discord Login Reliability Fix</div>
+                            <ul>
+                                <li>Discord login no longer breaks during background database jobs &mdash; a dedicated read-only connection now handles login checks so they never queue behind bulk writes</li>
+                                <li>Login survives temporary VPS slowdowns: if the server is momentarily unreachable, your saved session is used automatically without showing an error</li>
+                                <li>Login check timeout increased from 5s to 8s with one automatic retry</li>
+                            </ul>
+                        </div>
+                        <div class="changelog-entry">
+                            <div class="changelog-date">April 10, 2026</div>
                             <div class="changelog-title">SEO Improvements</div>
                             <ul>
                                 <li>Expanded title tag with targeted keywords for Albion Online market search rankings</li>
