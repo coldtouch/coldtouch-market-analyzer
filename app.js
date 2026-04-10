@@ -467,7 +467,7 @@ async function renderBrowser() {
     const totalPages = Math.max(1, Math.ceil(total / ITEMS_PER_PAGE));
     if (browserPage > totalPages) browserPage = totalPages;
 
-    countEl.textContent = `${total.toLocaleString()} known items`;
+    countEl.textContent = `${total.toLocaleString()} items`;
 
     // Get cached prices (module-level cache avoids re-reading IndexedDB on every page/filter)
     let priceMap = {};
@@ -478,6 +478,14 @@ async function renderBrowser() {
             priceMap[p.item_id].push(p);
         }
     } catch (e) { /* no data yet */ }
+
+    // Update count with prices info so users know whether cached data exists for this server
+    const priceCount = Object.keys(priceMap).length;
+    if (priceCount > 0) {
+        countEl.textContent = `${total.toLocaleString()} items · ${priceCount.toLocaleString()} prices cached`;
+    } else if (getServer() !== vpsGameServer) {
+        countEl.textContent = `${total.toLocaleString()} items · prices load on demand`;
+    }
 
     const sortVal = document.getElementById('browser-sort').value;
     const qualityVal = document.getElementById('browser-quality').value;
@@ -4146,8 +4154,10 @@ async function init() {
         }
     } catch (e) { /* ignore */ }
 
-    // Load shared server cache (always — keeps data fresh for all users)
-    await loadServerCache();
+    // Load VPS cache on startup — only when the selected server matches the VPS server.
+    // If the user switched servers during init (race), or on first load of a non-VPS server,
+    // skip the load so we don't populate the DB with the wrong server's prices.
+    if (getServer() === vpsGameServer) await loadServerCache();
 
     // Evict stale prices older than 24h
     await MarketDB.evictStale(24 * 60 * 60 * 1000);
