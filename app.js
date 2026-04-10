@@ -2131,6 +2131,18 @@ function switchToCraft(itemId) {
     }, 100);
 }
 
+function switchToBrowser(itemId) {
+    document.querySelector('[data-tab="browser"]')?.click();
+    setTimeout(() => {
+        const search = document.getElementById('browser-search');
+        if (search) {
+            search.value = getFriendlyName(itemId) || itemId;
+            browserPage = 1;
+            renderBrowser();
+        }
+    }, 100);
+}
+
 let currentChartData = [];
 let currentChartItemId = null;
 
@@ -6060,11 +6072,38 @@ function _llRenderFiltered() {
         <span style="font-size:0.72rem; color:var(--text-muted); white-space:nowrap;">${entries.length}/${totalPlayers}</span>
     </div>`;
 
+    // Guild color palette (muted, dark-theme friendly)
+    const guildPalette = ['#5b8def','#e06c75','#56b6c2','#c678dd','#e5c07b','#61afef','#98c379','#d19a66','#be5046','#7ec8e3'];
+    const guildColorMap = {};
+    let guildIdx = 0;
+    for (const [, data] of entries) {
+        const g = data.guild;
+        if (g && !(g in guildColorMap)) {
+            const hash = [...g].reduce((s, c) => s + c.charCodeAt(0), 0);
+            guildColorMap[g] = guildPalette[hash % guildPalette.length];
+            guildIdx++;
+        }
+    }
+
     // Player cards
     html += entries.map(([name, data]) => {
-        const initials = name.substring(0, 2).toUpperCase();
         const playerValue = data.totalValue;
         const weightStr = data.totalWeight > 0 ? data.totalWeight.toFixed(1) + ' kg' : '—';
+        const guildBorder = data.guild && guildColorMap[data.guild]
+            ? `border-left: 3px solid ${guildColorMap[data.guild]};` : '';
+
+        // Item icon preview strip (all unique items)
+        const seenIds = new Set();
+        const previewIcons = [];
+        for (const ev of data.items) {
+            if (ev.item_id && !seenIds.has(ev.item_id)) {
+                seenIds.add(ev.item_id);
+                previewIcons.push(ev.item_id);
+            }
+        }
+        const iconStripHtml = previewIcons.map(id =>
+            `<img src="https://render.albiononline.com/v1/item/${encodeURIComponent(id)}.png" class="ll-preview-icon" loading="lazy" onerror="this.style.display='none'">`
+        ).join('');
 
         const itemsHtml = data.items.map(ev => {
             const iName = getFriendlyName(ev.item_id) || ev.item_id;
@@ -6088,7 +6127,7 @@ function _llRenderFiltered() {
                 else { rowClass = 'll-item-partial'; dotClass = 'll-dot-partial'; }
             }
 
-            return `<div class="ll-item-row ${rowClass}">
+            return `<div class="ll-item-row ll-item-clickable ${rowClass}" onclick="event.stopPropagation(); switchToBrowser('${esc(iconId)}')" title="View in Market Browser">
                 <img src="${iconUrl}" class="ll-item-icon" loading="lazy" onerror="this.style.display='none'">
                 <span class="ll-item-name">${esc(iName)}${fromStr}</span>
                 <span class="ll-item-qty">&times;${ev.quantity || 1}</span>
@@ -6098,13 +6137,13 @@ function _llRenderFiltered() {
             </div>`;
         }).join('');
 
-        return `<div class="ll-player-card">
+        return `<div class="ll-player-card" style="${guildBorder}">
             <div class="ll-player-header" onclick="this.closest('.ll-player-card').classList.toggle('expanded')">
-                <div class="ll-player-avatar">${esc(initials)}</div>
                 <div class="ll-player-info">
                     <span class="ll-player-name">${esc(name)}</span>
-                    ${data.guild ? `<span class="ll-player-guild">[${esc(data.guild)}]</span>` : ''}
+                    ${data.guild ? `<span class="ll-player-guild" style="color:${guildColorMap[data.guild]}">[${esc(data.guild)}]</span>` : ''}
                 </div>
+                <div class="ll-item-preview">${iconStripHtml}</div>
                 <div class="ll-player-stats">
                     <div class="ll-player-stat">
                         <span class="ll-stat-label">Items</span>
