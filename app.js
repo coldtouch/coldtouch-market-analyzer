@@ -5989,7 +5989,14 @@ function showLootLoggerMode(mode) {
         }
         loadLootSessions();
     }
-    if (mode === 'accountability') { populateAccountabilityDropdowns(); renderCaptureChips(); }
+    if (mode === 'accountability') {
+        // Seed from lootBuyerCaptures if _chestCaptures is empty (captures arrived before switching here)
+        if ((!window._chestCaptures || window._chestCaptures.length === 0) && typeof lootBuyerCaptures !== 'undefined' && lootBuyerCaptures.length > 0) {
+            window._chestCaptures = [...lootBuyerCaptures];
+        }
+        populateAccountabilityDropdowns();
+        renderCaptureChips();
+    }
 }
 
 async function loadLootSessions() {
@@ -6586,12 +6593,14 @@ function handleLootLoggerWsMessage(msg) {
         }
     }
     if (msg.type === 'chest-capture' && msg.data) {
-        if (chestCaptureActive || lootLoggerMode === 'accountability') {
-            window._chestCaptures.push(msg.data);
-            if (lootLoggerMode === 'accountability') {
-                populateAccountabilityDropdowns();
-                renderCaptureChips();
-            }
+        // Always store captures — available on both Loot Buyer and Loot Logger Accountability
+        if (!window._chestCaptures) window._chestCaptures = [];
+        window._chestCaptures.push(msg.data);
+        if (window._chestCaptures.length > 20) window._chestCaptures.shift();
+        // Update Accountability UI if visible
+        if (lootLoggerMode === 'accountability') {
+            populateAccountabilityDropdowns();
+            renderCaptureChips();
         }
     }
     // Death event — prepare for future opcode
