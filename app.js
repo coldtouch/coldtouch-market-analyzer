@@ -3515,6 +3515,9 @@ async function checkDiscordAuth() {
     const linkParam = urlParams.get('link');
     const verifyParam = urlParams.get('verify');
     const deviceParam = urlParams.get('device');
+    // Persist device code through login redirects — the param gets stripped by replaceState
+    if (deviceParam) sessionStorage.setItem('pending_device_code', deviceParam);
+    const pendingDevice = deviceParam || sessionStorage.getItem('pending_device_code');
     if (linkParam === 'success') {
         history.replaceState(null, '', window.location.pathname);
         // Discord account linked — just continue with existing session
@@ -3608,9 +3611,10 @@ async function checkDiscordAuth() {
             }
 
             // Handle device authorization (OAuth Device Flow)
-            if (deviceParam) {
+            if (pendingDevice) {
+                sessionStorage.removeItem('pending_device_code');
                 history.replaceState(null, '', window.location.pathname);
-                showDeviceAuthDialog(deviceParam);
+                showDeviceAuthDialog(pendingDevice);
             }
         } else {
             // Not logged in — show login/guest options
