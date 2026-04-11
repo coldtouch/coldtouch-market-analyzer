@@ -1536,6 +1536,75 @@ app.delete('/api/loot-tab/:id', requireAuth, (req, res) => {
   });
 });
 
+// === BATCH PRICE LOOKUP (for loot logger estimates) ===
+// Uses price_averages (aggregated scan data) — no outliers, no stale NATS orders.
+app.post('/api/batch-prices', (req, res) => {
+  const { itemIds } = req.body;
+  if (!itemIds || !Array.isArray(itemIds) || itemIds.length === 0 || itemIds.length > 500) {
+    return res.status(400).json({ error: 'itemIds array required (1-500).' });
+  }
+
+  // Build SQL placeholders for the item list
+  const cleanIds = itemIds.filter(id => typeof id === 'string').slice(0, 500);
+  if (cleanIds.length === 0) return res.json({});
+
+  const placeholders = cleanIds.map(() => '?').join(',');
+
+  // Query price_averages: get the most recent average sell price per item across all cities
+  // Uses the last 48 hours of aggregated data — reliable, no outlier single orders
+  const cutoff = Date.now() - 48 * 60 * 60 * 1000;
+  readDb.all(
+    `SELECT item_id, city,
+            AVG(avg_sell) as price_avg,
+            MIN(min_sell) as price_min
+     FROM price_averages
+     WHERE item_id IN (${placeholders})
+       AND avg_sell > 0
+       AND quality = 1
+       AND period_start > ?
+     GROUP BY item_id, city`,
+    [...cleanIds, cutoff],
+    (err, rows) => {
+      if (err) return res.status(500).json({ error: err.message });
+
+      const result = {};
+      for (const row of (rows || [])) {
+        const existing = result[row.item_id];
+        const price = Math.round(row.price_avg);
+        if (!existing) {
+          result[row.item_id] = { price, city: row.city, source: 'avg' };
+        } else if (price < existing.price) {
+          result[row.item_id] = { price, city: row.city, source: 'avg' };
+        }
+      }
+
+      // Fill gaps from in-memory alertMarketDb (real-time scan data)
+      for (const itemId of cleanIds) {
+        if (result[itemId]) continue;
+        const data = alertMarketDb[itemId] && alertMarketDb[itemId][1];
+        if (data) {
+          for (const [city, cd] of Object.entries(data)) {
+            if (cd.sellMin > 0) {
+              if (!result[itemId] || cd.sellMin < result[itemId].price) {
+                result[itemId] = { price: cd.sellMin, city, source: 'live' };
+              }
+            }
+          }
+        }
+      }
+
+      // Last resort: globalPriceRef
+      for (const itemId of cleanIds) {
+        if (result[itemId]) continue;
+        const gAvg = globalPriceRef[itemId + '_1'] || 0;
+        if (gAvg > 0) result[itemId] = { price: Math.round(gAvg), city: '', source: 'global' };
+      }
+
+      res.json(result);
+    }
+  );
+});
+
 // === SALE NOTIFICATIONS API ===
 app.get('/api/sale-notifications', requireAuth, (req, res) => {
   readDb.all(`SELECT * FROM sale_notifications WHERE user_id = ? ORDER BY sold_at DESC LIMIT 50`, [req.user.id], (err, rows) => {

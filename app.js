@@ -5748,8 +5748,25 @@ function formatSilver(n) {
     return Math.round(n).toLocaleString();
 }
 
-// --- Price map for loot values (IndexedDB, Caerleon-preferred) ---
+// --- Price map for loot values (VPS scan data, fallback to IndexedDB) ---
 async function getLootPriceMap(itemIds) {
+    const ids = [...itemIds].filter(Boolean);
+    if (ids.length === 0) return {};
+
+    // Try VPS batch lookup first (fresh scan data, no outliers)
+    try {
+        const res = await fetch(`${VPS_BASE}/api/batch-prices`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ itemIds: ids })
+        });
+        if (res.ok) {
+            const data = await res.json();
+            if (Object.keys(data).length > 0) return data;
+        }
+    } catch { /* fall through to IndexedDB */ }
+
+    // Fallback: IndexedDB cache (may have stale/outlier NATS data)
     try {
         const allPrices = await getCachedPrices();
         const map = {};
@@ -5758,14 +5775,8 @@ async function getLootPriceMap(itemIds) {
             const existing = map[p.item_id];
             if (!existing) {
                 map[p.item_id] = { price: p.sell_price_min, city: p.city || '' };
-            } else {
-                const isCaer = p.city && p.city.includes('Caerleon');
-                const existIsCaer = existing.city.includes('Caerleon');
-                if (isCaer && !existIsCaer) {
-                    map[p.item_id] = { price: p.sell_price_min, city: p.city };
-                } else if (!existIsCaer && !isCaer && p.sell_price_min < existing.price) {
-                    map[p.item_id] = { price: p.sell_price_min, city: p.city };
-                }
+            } else if (p.sell_price_min < existing.price) {
+                map[p.item_id] = { price: p.sell_price_min, city: p.city || '' };
             }
         }
         return map;
