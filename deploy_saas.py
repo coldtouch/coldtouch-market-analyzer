@@ -2224,9 +2224,9 @@ wss.on('connection', ws => {
         }
       }
 
-      // Game client auth (capture token)
+      // Game client auth (capture token) — use readDb to avoid queue starvation behind NATS inserts
       if (msg.type === 'client-auth' && msg.token) {
-        db.get(`SELECT id, username FROM users WHERE capture_token = ?`, [msg.token], (err, user) => {
+        readDb.get(`SELECT id, username FROM users WHERE capture_token = ?`, [msg.token], (err, user) => {
           if (err || !user) {
             ws.send(JSON.stringify({ type: 'client-auth', success: false, error: 'Invalid capture token' }));
             return;
