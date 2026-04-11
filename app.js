@@ -3564,31 +3564,91 @@ async function checkDiscordAuth() {
         return;
     }
 
-    // Show the checking spinner (only for returning users with a stored JWT)
+    // --- Optimistic login from JWT claims (no network wait) ---
+    // Decode the JWT payload to get user info immediately, then verify /api/me in background.
+    // This avoids the 8-17s hang when VPS is slow or under heavy query load.
+    let jwtPayload = null;
+    try {
+        jwtPayload = JSON.parse(atob(storedToken.split('.')[1]));
+    } catch { /* invalid JWT, will fall through to network check */ }
+
+    if (jwtPayload && jwtPayload.id) {
+        // Optimistic: trust the JWT and show the UI immediately
+        discordUser = {
+            id: jwtPayload.id,
+            username: jwtPayload.username || jwtPayload.name || 'User',
+            avatar: jwtPayload.avatar || null,
+            discriminator: jwtPayload.discriminator || '0'
+        };
+
+        dismissLandingOverlay();
+        updateHeaderProfile(discordUser);
+        const profileTab = document.getElementById('nav-profile-tab');
+        if (profileTab) profileTab.style.display = '';
+
+        // Handle device authorization immediately (no waiting for /api/me)
+        if (pendingDevice) {
+            sessionStorage.removeItem('pending_device_code');
+            history.replaceState(null, '', window.location.pathname);
+            showDeviceAuthDialog(pendingDevice);
+        }
+
+        // Verify /api/me in background — update tier, stats, full profile data
+        // If verification fails (token revoked), sign out gracefully
+        fetch(`${VPS_BASE}/api/me`, { headers: authHeaders(), signal: AbortSignal.timeout(6000) })
+            .then(r => r.json())
+            .then(data => {
+                if (data.loggedIn) {
+                    discordUser = data.user;
+                    updateHeaderProfile(data.user);
+                    window._userData = data;
+                    const tier = data.stats && data.stats.tier;
+                    if (tier) {
+                        const tierBadge = document.getElementById('discord-tier-badge');
+                        tierBadge.textContent = tier.charAt(0).toUpperCase() + tier.slice(1);
+                        tierBadge.className = `tier-badge tier-${tier}`;
+                        tierBadge.style.display = 'inline-block';
+                    }
+                } else {
+                    // Token was revoked server-side — sign out
+                    localStorage.removeItem('albion_auth_token');
+                    location.reload();
+                }
+            })
+            .catch(() => {
+                // VPS unreachable — stay logged in optimistically, user can still use cached data
+                console.warn('[Auth] VPS unreachable for verification — using JWT claims');
+            });
+
+        // Handle email verification redirect
+        if (verifyParam === 'success') {
+            const succDiv = document.getElementById('landing-auth-success');
+            if (succDiv) { succDiv.style.display = 'flex'; succDiv.querySelector('span').textContent = 'Email verified successfully!'; }
+        }
+
+        return; // Done — page is usable immediately
+    }
+
+    // --- Fallback: JWT has no user claims (old format?) — do full /api/me check ---
     if (authChecking) authChecking.style.display = 'flex';
     if (authContent) authContent.style.display = 'none';
 
     let data;
     try {
-        // 8s timeout; single retry after 1.5s pause on transient failures
         let res;
         try {
-            res = await fetch(`${VPS_BASE}/api/me`, { headers: authHeaders(), signal: AbortSignal.timeout(8000) });
+            res = await fetch(`${VPS_BASE}/api/me`, { headers: authHeaders(), signal: AbortSignal.timeout(6000) });
         } catch (retryErr) {
-            await new Promise(r => setTimeout(r, 1500));
-            res = await fetch(`${VPS_BASE}/api/me`, { headers: authHeaders(), signal: AbortSignal.timeout(8000) });
+            await new Promise(r => setTimeout(r, 1000));
+            res = await fetch(`${VPS_BASE}/api/me`, { headers: authHeaders(), signal: AbortSignal.timeout(6000) });
         }
         data = await res.json();
         if (data.loggedIn) {
             discordUser = data.user;
 
-            // Dismiss the landing overlay with fade-out transition
             dismissLandingOverlay();
-
-            // Update header — hide login button, show profile
             updateHeaderProfile(data.user);
 
-            // Show tier badge in header (tier is nested under data.stats)
             const tier = data.stats && data.stats.tier;
             if (tier) {
                 const tierBadge = document.getElementById('discord-tier-badge');
@@ -3597,20 +3657,16 @@ async function checkDiscordAuth() {
                 tierBadge.style.display = 'inline-block';
             }
 
-            // Show profile nav tab when logged in
             const profileTab = document.getElementById('nav-profile-tab');
             if (profileTab) profileTab.style.display = '';
 
-            // Store full user data for profile page
             window._userData = data;
 
-            // Handle email verification redirect
             if (verifyParam === 'success') {
                 const succDiv = document.getElementById('landing-auth-success');
                 if (succDiv) { succDiv.style.display = 'flex'; succDiv.querySelector('span').textContent = 'Email verified successfully!'; }
             }
 
-            // Handle device authorization (OAuth Device Flow)
             if (pendingDevice) {
                 sessionStorage.removeItem('pending_device_code');
                 history.replaceState(null, '', window.location.pathname);
