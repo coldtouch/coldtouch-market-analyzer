@@ -2,6 +2,15 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-04-11 — Sale Notifications from In-Game Mail
+
+- **Auto sale detection:** The Go client now reads marketplace sale mails (sold/expired) and relays them to the VPS in real-time.
+- **Auto-match to tracked tabs:** When a sale is detected, it automatically matches to open/partial loot tabs containing that item and records the sale.
+- **Recent Sales feed:** New section on the Loot Buyer tab shows the last 10 auto-detected sales with item, quantity, price, and auto-match status.
+- **Toast notifications:** Real-time toast when an item sells while the website is open.
+- **Chest capture fix:** Fixed int16 overflow in slot IDs — game update pushed slot values beyond 32,767. Widened all item event struct fields to int32.
+- **Mail protocol update:** Rewrote GetMailInfos decoder for changed game protocol param layout.
+
 ### 2026-04-11 — Loot Logger: player card UX overhaul
 
 - **Item icon preview in header:** Each player card now shows all unique item icons to the right of the player name, giving an at-a-glance view of what they looted. Replaces the old gold initials avatar.

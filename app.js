@@ -385,7 +385,7 @@ function initTabs() {
             if (currentTab === 'browser') renderBrowser();
             if (currentTab === 'live-flips') initLiveFlipsTab();
             if (currentTab === 'profile') initProfileTab();
-            if (currentTab === 'loot-buyer') { renderLootCaptures(); loadTrackedTabs(); }
+            if (currentTab === 'loot-buyer') { renderLootCaptures(); loadTrackedTabs(); loadRecentSales(); }
             if (currentTab === 'loot-logger') { showLootLoggerMode('live'); }
 
             // Close dropdown after selection
@@ -4312,6 +4312,23 @@ function initLiveSync() {
                 return;
             }
 
+            // Sale notification from in-game mail
+            if (data.type === 'sale-notification' && data.data) {
+                const sale = data.data;
+                const name = sale.itemId || 'Unknown';
+                const qty = sale.amount || 1;
+                const price = (sale.price || 0).toLocaleString();
+                showToast(`Sold: ${name} x${qty} @ ${price} silver`, 'success');
+                // Refresh Phase 3 if on Loot Buyer tab
+                if (currentTab === 'loot-buyer' && typeof loadTrackedTabs === 'function') loadTrackedTabs();
+                // Store for Recent Sales feed
+                if (!window._recentSales) window._recentSales = [];
+                window._recentSales.unshift({ ...sale, receivedAt: Date.now() });
+                if (window._recentSales.length > 20) window._recentSales.length = 20;
+                renderRecentSales();
+                return;
+            }
+
             // Loot events + chest captures → loot logger
             if (typeof handleLootLoggerWsMessage === 'function') handleLootLoggerWsMessage(data);
 
@@ -5387,6 +5404,50 @@ async function loadTrackedTabs() {
     } catch(e) {
         list.innerHTML = `<div class="empty-state"><p>Failed to load tracked tabs: ${esc(e.message)}</p></div>`;
     }
+}
+
+async function loadRecentSales() {
+    if (!localStorage.getItem('albion_auth_token')) return;
+    try {
+        const res = await fetch(`${VPS_BASE}/api/sale-notifications`, { headers: authHeaders() });
+        if (!res.ok) return;
+        const data = await res.json();
+        window._recentSales = data.map(s => ({
+            itemId: s.item_id, amount: s.quantity, price: s.unit_price,
+            total: s.total, location: s.location, orderType: s.order_type,
+            mailId: s.mail_id, matchedTabId: s.matched_tab_id,
+            receivedAt: s.sold_at
+        }));
+        renderRecentSales();
+    } catch(e) { /* silent */ }
+}
+
+function renderRecentSales() {
+    let container = document.getElementById('loot-recent-sales');
+    if (!container) return;
+    const sales = window._recentSales || [];
+    if (sales.length === 0) {
+        container.innerHTML = '<div style="color:var(--text-muted); font-size:0.78rem; padding:0.5rem;">No sales detected yet. Open your in-game mailbox while the client is running.</div>';
+        return;
+    }
+    container.innerHTML = sales.slice(0, 10).map(s => {
+        const name = s.itemId || 'Unknown';
+        const icon = getItemIcon ? getItemIcon(name) : '';
+        const qty = s.amount || 1;
+        const price = (s.price || 0).toLocaleString();
+        const total = (s.total || 0).toLocaleString();
+        const ago = timeAgo ? timeAgo(s.receivedAt) : '';
+        const matched = s.matchedTabId ? `<span style="color:var(--profit-green); font-size:0.68rem;"> (auto-matched)</span>` : '';
+        const typeLabel = s.orderType === 'EXPIRED' ? '<span style="color:var(--loss-red); font-size:0.68rem;">EXPIRED</span>' : '';
+        return `<div class="sale-notif-card">
+            ${icon ? `<img src="${icon}" class="sale-notif-icon" onerror="this.style.display='none'" />` : ''}
+            <div class="sale-notif-info">
+                <span class="sale-notif-item">${esc(name)} x${qty}</span>
+                <span class="sale-notif-price">${price}s/ea = ${total}s total${matched}</span>
+            </div>
+            <div class="sale-notif-meta">${typeLabel} ${ago}</div>
+        </div>`;
+    }).join('');
 }
 
 function renderTrackedTabCard(tab) {

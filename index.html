@@ -1873,6 +1873,17 @@
                     <div class="changelog-list">
                         <div class="changelog-entry">
                             <div class="changelog-date">April 11, 2026</div>
+                            <div class="changelog-title">Sale Notifications from In-Game Mail</div>
+                            <ul>
+                                <li>Auto sale detection &mdash; Go client reads marketplace sale mails and relays to VPS in real-time</li>
+                                <li>Auto-match to tracked loot tabs &mdash; sales automatically recorded against matching open tabs</li>
+                                <li>Recent Sales feed on Loot Buyer tab &mdash; last 10 sales with item, price, and match status</li>
+                                <li>Toast notifications when items sell while the website is open</li>
+                                <li>Fixed chest capture after game update (int16 overflow in slot IDs)</li>
+                            </ul>
+                        </div>
+                        <div class="changelog-entry">
+                            <div class="changelog-date">April 11, 2026</div>
                             <div class="changelog-title">Loot Logger: Player Card UX Overhaul</div>
                             <ul>
                                 <li>Item icon preview in each player header &mdash; see at a glance what someone looted without expanding the card</li>
@@ -2576,6 +2587,12 @@
 
             <!-- Analysis results -->
             <div id="loot-results" style="display:none;"></div>
+
+            <!-- ====== RECENT SALES (from in-game mail) ====== -->
+            <div id="loot-sales-section" style="margin-top:2rem;">
+                <h3 style="color:var(--text-primary); margin:0 0 0.75rem 0; font-size:1rem;">Recent Sales <span style="font-size:0.72rem; color:var(--text-muted); font-weight:normal;">(auto-detected from in-game mail)</span></h3>
+                <div id="loot-recent-sales"></div>
+            </div>
 
             <!-- ====== MY TRACKED TABS ====== -->
             <div id="loot-tracked-section" style="margin-top:2rem;">

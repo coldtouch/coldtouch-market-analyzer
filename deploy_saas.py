@@ -280,6 +280,22 @@ db.serialize(() => {
   )`);
   db.run(`CREATE INDEX IF NOT EXISTS idx_loot_tab_sales_tab ON loot_tab_sales(loot_tab_id)`);
 
+  // === SALE NOTIFICATIONS (from in-game mail) ===
+  db.run(`CREATE TABLE IF NOT EXISTS sale_notifications (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id TEXT NOT NULL,
+    mail_id INTEGER NOT NULL,
+    item_id TEXT NOT NULL,
+    quantity INTEGER DEFAULT 1,
+    unit_price INTEGER NOT NULL,
+    total INTEGER NOT NULL,
+    location TEXT DEFAULT '',
+    order_type TEXT DEFAULT 'FINISHED',
+    sold_at INTEGER NOT NULL,
+    matched_tab_id INTEGER DEFAULT NULL
+  )`);
+  db.run(`CREATE UNIQUE INDEX IF NOT EXISTS idx_sale_notif_mail ON sale_notifications(user_id, mail_id)`);
+
   // === LOOT LOGGER ===
   db.run(`CREATE TABLE IF NOT EXISTS loot_events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1520,6 +1536,14 @@ app.delete('/api/loot-tab/:id', requireAuth, (req, res) => {
   });
 });
 
+// === SALE NOTIFICATIONS API ===
+app.get('/api/sale-notifications', requireAuth, (req, res) => {
+  readDb.all(`SELECT * FROM sale_notifications WHERE user_id = ? ORDER BY sold_at DESC LIMIT 50`, [req.user.id], (err, rows) => {
+    if (err) return res.status(500).json({ error: err.message });
+    res.json(rows || []);
+  });
+});
+
 // === LOOT LOGGER API ===
 
 // List loot sessions for the current user
@@ -2287,6 +2311,56 @@ wss.on('connection', ws => {
             wc.send(JSON.stringify({ type: 'chest-capture', data: capture }));
           }
         }
+      }
+
+      // Sale notification from game client (in-game mail)
+      if (msg.type === 'sale-notification' && ws.clientType === 'game-client' && ws.user) {
+        const sale = msg.data;
+        if (!sale || !sale.itemId || !sale.mailId) return;
+
+        const userId = ws.user.id;
+        const now = sale.timestamp || Date.now();
+
+        // Insert into sale_notifications (dedup by mail_id)
+        db.run(`INSERT OR IGNORE INTO sale_notifications (user_id, mail_id, item_id, quantity, unit_price, total, location, order_type, sold_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [userId, sale.mailId, sale.itemId, sale.amount || 1, sale.price || 0,
+           sale.total || (sale.price || 0) * (sale.amount || 1), sale.location || '', sale.orderType || 'FINISHED', now],
+          function(err) {
+            if (err) { console.error('[SaleNotif] DB error:', err.message); return; }
+            if (this.changes === 0) return; // duplicate mail_id, skip
+
+            console.log(`[SaleNotif] ${sale.itemId} x${sale.amount || 1} @ ${sale.price} silver from ${ws.user.username}`);
+
+            // Auto-match to open/partial loot tabs containing this item
+            db.all(`SELECT id, items_json FROM loot_tabs WHERE user_id = ? AND status IN ('open','partial')`, [userId], (err2, tabs) => {
+              if (err2 || !tabs) return;
+              for (const tab of tabs) {
+                try {
+                  const items = JSON.parse(tab.items_json);
+                  const match = items.find(it => it.itemId === sale.itemId);
+                  if (match) {
+                    // Auto-record sale on this tab
+                    db.run(`INSERT INTO loot_tab_sales (loot_tab_id, item_id, quality, quantity, sale_price, sold_at)
+                      VALUES (?, ?, ?, ?, ?, ?)`,
+                      [tab.id, sale.itemId, match.quality || 1, sale.amount || 1, sale.price || 0, now]);
+                    db.run(`UPDATE sale_notifications SET matched_tab_id = ? WHERE user_id = ? AND mail_id = ?`,
+                      [tab.id, userId, sale.mailId]);
+                    console.log(`[SaleNotif] Auto-matched to tab ${tab.id}`);
+                    break; // match first open tab only
+                  }
+                } catch(e) { /* skip bad JSON */ }
+              }
+            });
+
+            // Push to user's browser
+            const payload = JSON.stringify({ type: 'sale-notification', data: { ...sale, userId } });
+            for (const wc of wsClients) {
+              if (wc.clientType === 'browser' && wc.isAuthenticated && wc.user && wc.user.id === userId) {
+                wc.send(payload);
+              }
+            }
+          });
       }
     } catch(e) { /* ignore non-JSON messages */ }
   });

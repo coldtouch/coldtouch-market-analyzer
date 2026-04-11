@@ -4489,6 +4489,24 @@ footer {
     color: var(--text-primary);
 }
 
+/* ====== SALE NOTIFICATIONS (auto-detected from mail) ====== */
+
+.sale-notif-card {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius);
+    padding: 0.55rem 0.75rem;
+    margin-bottom: 0.4rem;
+}
+.sale-notif-icon { width: 28px; height: 28px; border-radius: 4px; flex-shrink: 0; }
+.sale-notif-info { display: flex; flex-direction: column; gap: 0.1rem; flex: 1; min-width: 0; }
+.sale-notif-item { font-size: 0.8rem; color: var(--text-primary); font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sale-notif-price { font-size: 0.72rem; color: var(--profit-green); }
+.sale-notif-meta { font-size: 0.68rem; color: var(--text-muted); flex-shrink: 0; text-align: right; }
+
 /* ====== LOOT TAB LIFECYCLE TRACKER (Phase 3) ====== */
 
 .loot-tracked-card {
