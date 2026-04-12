@@ -928,10 +928,15 @@ app.get('/health', (req, res) => {
   res.json({
     status: 'ok',
     uptime: Math.floor(process.uptime()),
-    memory: Math.floor(process.memoryUsage().heapUsed / 1024 / 1024) + 'MB',
+    memory: {
+      rss: Math.floor(process.memoryUsage().rss / 1024 / 1024),
+      heap: Math.floor(process.memoryUsage().heapUsed / 1024 / 1024),
+      heapTotal: Math.floor(process.memoryUsage().heapTotal / 1024 / 1024)
+    },
     nats: !!natsConnection,
     wsClients: wsClients ? wsClients.size : 0,
-    cacheItems: cacheItemCount || 0
+    cacheItems: cacheItemCount || 0,
+    alertDbItems: Object.keys(alertMarketDb).length
   });
 });
 
@@ -2316,10 +2321,37 @@ function wsSafeSend(wc, data) {
     wc.send(typeof data === 'string' ? data : JSON.stringify(data));
   }
 }
+
+// Prune idle/dead WebSocket connections every 60s
+setInterval(() => {
+  const now = Date.now();
+  let pruned = 0;
+  for (const ws of wsClients) {
+    // No activity for 5 minutes — close
+    if (ws._lastActivity && now - ws._lastActivity > 5 * 60 * 1000) {
+      ws.terminate();
+      wsClients.delete(ws);
+      pruned++;
+    }
+  }
+  if (pruned > 0) console.log(`[WS] Pruned ${pruned} idle connections (${wsClients.size} active)`);
+}, 60000);
+
+// Ping all clients every 30s to detect dead connections
+setInterval(() => {
+  for (const ws of wsClients) {
+    if (ws.readyState === WebSocket.OPEN) {
+      ws.ping();
+    }
+  }
+}, 30000);
 wss.on('connection', ws => {
   wsClients.add(ws);
   ws.isAuthenticated = false;
+  ws._lastActivity = Date.now();
+  ws.on('pong', () => { ws._lastActivity = Date.now(); }); // keepalive response
   ws.on('message', data => {
+    ws._lastActivity = Date.now();
     try {
       const msg = JSON.parse(data.toString());
       // Browser auth (JWT token)
@@ -2792,17 +2824,23 @@ function seedAlerterFromScan(allPrices) {
 }
 
 // Evict stale entries every 30 minutes
+// Evict stale alertMarketDb entries every 10 min (was 30 min with 2h TTL — now 10 min with 30 min TTL)
+const ALERT_EVICTION_TTL = 30 * 60 * 1000; // 30 minutes (was 2 hours)
+const ALERT_MAX_ITEMS = 50000; // hard cap on unique item IDs in alertMarketDb
+
 setInterval(() => {
   const now = Date.now();
   for (const key of Object.keys(alertCooldowns)) {
     if (now - alertCooldowns[key] > 3600000) delete alertCooldowns[key];
   }
   let evicted = 0;
+  let totalEntries = 0;
   for (const itemId of Object.keys(alertMarketDb)) {
     for (const q of Object.keys(alertMarketDb[itemId])) {
       for (const loc of Object.keys(alertMarketDb[itemId][q])) {
         const entry = alertMarketDb[itemId][q][loc];
-        if (entry.lastSeen && now - entry.lastSeen > 7200000) {
+        totalEntries++;
+        if (entry.lastSeen && now - entry.lastSeen > ALERT_EVICTION_TTL) {
           delete alertMarketDb[itemId][q][loc];
           evicted++;
         }
@@ -2811,8 +2849,32 @@ setInterval(() => {
     }
     if (Object.keys(alertMarketDb[itemId]).length === 0) delete alertMarketDb[itemId];
   }
-  if (evicted > 0) console.log(`[Eviction] Cleared ${evicted} stale alertMarketDb entries`);
-}, 1800000);
+  // Emergency eviction if still too large
+  const itemCount = Object.keys(alertMarketDb).length;
+  if (itemCount > ALERT_MAX_ITEMS) {
+    let pruned = 0;
+    const items = Object.keys(alertMarketDb);
+    // Remove the oldest 20%
+    const toRemove = Math.floor(items.length * 0.2);
+    const sortedByAge = items.map(id => {
+      let oldest = Infinity;
+      for (const q of Object.keys(alertMarketDb[id])) {
+        for (const c of Object.keys(alertMarketDb[id][q])) {
+          const ls = alertMarketDb[id][q][c].lastSeen || 0;
+          if (ls < oldest) oldest = ls;
+        }
+      }
+      return { id, oldest };
+    }).sort((a, b) => a.oldest - b.oldest);
+    for (let i = 0; i < toRemove && i < sortedByAge.length; i++) {
+      delete alertMarketDb[sortedByAge[i].id];
+      pruned++;
+    }
+    if (pruned > 0) console.log(`[Eviction] Emergency: pruned ${pruned} oldest items (was ${itemCount})`);
+  }
+  const mem = process.memoryUsage();
+  console.log(`[Eviction] Cleared ${evicted} stale entries (${totalEntries - evicted} remaining, ${Object.keys(alertMarketDb).length} items). RSS: ${Math.round(mem.rss/1024/1024)}MB Heap: ${Math.round(mem.heapUsed/1024/1024)}MB`);
+}, 600000); // every 10 minutes (was 30)
 
 function checkAndAlert(id, q) {
   if (!alertMarketDb[id] || !alertMarketDb[id][q]) { alertStats.noData++; return; }
@@ -3679,7 +3741,7 @@ setTimeout(backfillHistoricalData, 30 * 60 * 1000);
 // Buffer incoming NATS orders — deduplicated by item/quality/city, flushed every 60s
 // Only stores the BEST price per item/quality/city combo (lowest sell, highest buy)
 const natsSnapshotMap = {};  // key: "itemId_quality_city" → { sell, buy }
-const NATS_FLUSH_INTERVAL = 60 * 1000;
+const NATS_FLUSH_INTERVAL = 30 * 1000; // 30s (was 60s) — reduce buffer memory
 
 function flushNatsBuffer() {
   const keys = Object.keys(natsSnapshotMap);
@@ -3728,7 +3790,7 @@ let natsConnection = null;
       user: "public",
       pass: "thenewalbiondata",
       reconnect: true,
-      maxReconnectAttempts: -1,
+      maxReconnectAttempts: 20,
       reconnectTimeWait: 5000
     });
     natsConnection.closed().then(() => console.error('[NATS] Connection closed permanently'));
