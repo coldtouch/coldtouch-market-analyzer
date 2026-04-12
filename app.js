@@ -2651,6 +2651,12 @@ async function loadAlerts() {
     const emptyEl = document.getElementById('alerts-empty');
     if (!listEl) return;
 
+    if (!localStorage.getItem('albion_auth_token')) {
+        listEl.innerHTML = '<div class="empty-state"><p>Login to create and manage price alerts.</p></div>';
+        if (emptyEl) emptyEl.style.display = 'none';
+        return;
+    }
+
     try {
         const res = await fetch(`${VPS_BASE}/api/alerts`, { headers: authHeaders() });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -4318,7 +4324,7 @@ function initLiveSync() {
     wsLink = new WebSocket('wss://albionaitool.xyz');
 
     wsLink.onopen = () => {
-        console.log("🟢 Connected to Live NATS Stream at 209-97-129-125");
+        console.log("[WS] Connected to live data stream");
         if(syncText) syncText.textContent = "Live Sync Active";
         if(syncDot) {
             syncDot.style.background = '#00ff00';
