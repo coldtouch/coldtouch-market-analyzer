@@ -1874,12 +1874,42 @@
                                     <tr><td>Item weight data</td><td>No</td><td style="color:var(--profit-green); font-weight:600;">Yes &mdash; 11,500+ items</td></tr>
                                     <tr><td>Loot logger (who looted what)</td><td>No</td><td style="color:var(--profit-green); font-weight:600;">Yes &mdash; real-time, with guild info</td></tr>
                                     <tr><td>Loot Buyer integration</td><td>No</td><td style="color:var(--profit-green); font-weight:600;">Yes &mdash; evaluate, sell plan, track profit</td></tr>
-                                    <tr><td>Loot Accountability (coming soon)</td><td>No</td><td style="color:var(--profit-green); font-weight:600;">Yes &mdash; who deposited, who didn&rsquo;t</td></tr>
+                                    <tr><td>Loot Accountability</td><td>No</td><td style="color:var(--profit-green); font-weight:600;">Yes &mdash; who deposited, who didn&rsquo;t</td></tr>
+                                    <tr><td>Trade tracking (buy/sell)</td><td>No</td><td style="color:var(--profit-green); font-weight:600;">Yes &mdash; insta-buy, listings, mail sales</td></tr>
+                                    <tr><td>Sale notifications from mail</td><td>No</td><td style="color:var(--profit-green); font-weight:600;">Yes &mdash; auto-detects sold items</td></tr>
                                     <tr><td>Website account linking</td><td>No</td><td style="color:var(--profit-green); font-weight:600;">Yes &mdash; Device Authorization</td></tr>
                                     <tr><td>SBI-compliant</td><td>Yes</td><td>Yes</td></tr>
                                     <tr><td>Windows / Mac / Linux</td><td>Yes</td><td>Yes</td></tr>
                                 </tbody>
                             </table>
+                        </div>
+                    </div>
+
+                    <div style="background:var(--bg-elevated); border:1px solid var(--border-color); border-radius:var(--radius); padding:1rem; margin-top:0.75rem;">
+                        <h3 style="color:var(--accent); margin:0 0 0.5rem; font-size:0.95rem;">Trade Tracking Guide</h3>
+                        <p style="color:var(--text-muted); font-size:0.82rem; margin:0 0 0.75rem;">The client tracks your marketplace activity in real-time. Here&rsquo;s what gets captured and how:</p>
+
+                        <div style="display:grid; gap:0.6rem; font-size:0.8rem;">
+                            <div style="background:var(--bg-card); border-radius:6px; padding:0.6rem 0.8rem;">
+                                <div style="color:var(--profit-green); font-weight:600; margin-bottom:0.2rem;">Chest Capture</div>
+                                <div style="color:var(--text-secondary);">Open any chest or vault tab in-game. Items, quantities, weights, and tab names are captured instantly. No extra steps needed.</div>
+                            </div>
+                            <div style="background:var(--bg-card); border-radius:6px; padding:0.6rem 0.8rem;">
+                                <div style="color:var(--accent); font-weight:600; margin-bottom:0.2rem;">Insta-Buy (Buy from Sell Order)</div>
+                                <div style="color:var(--text-secondary);"><strong>Important:</strong> Browse the item on the marketplace first (view its sell orders), then buy. The client caches orders when you view them &mdash; this is how it knows the item name and price when you buy.</div>
+                            </div>
+                            <div style="background:var(--bg-card); border-radius:6px; padding:0.6rem 0.8rem;">
+                                <div style="color:var(--accent); font-weight:600; margin-bottom:0.2rem;">Sell Order Listing</div>
+                                <div style="color:var(--text-secondary);">When you create a sell order, the item and price are captured automatically. Shows as &ldquo;Listed&rdquo; in the trade feed.</div>
+                            </div>
+                            <div style="background:var(--bg-card); border-radius:6px; padding:0.6rem 0.8rem;">
+                                <div style="color:var(--accent); font-weight:600; margin-bottom:0.2rem;">Listing Sold (Someone Buys Your Order)</div>
+                                <div style="color:var(--text-secondary);">Open your mailbox and click the sale notification mail. The client reads the mail body and extracts item, price, and quantity. Auto-matches to tracked Loot Buyer tabs.</div>
+                            </div>
+                            <div style="background:var(--bg-card); border-radius:6px; padding:0.6rem 0.8rem;">
+                                <div style="color:var(--text-muted); font-weight:600; margin-bottom:0.2rem;">Insta-Sell (Sell to Buy Order)</div>
+                                <div style="color:var(--text-secondary);">The game sends no client-side packet for insta-sells. To track these, open your mailbox after selling &mdash; the sale notification mail will be detected the same way as a regular listing sale.</div>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -2529,9 +2559,19 @@
                         Loot Buyer
                     </span>
                 </h2>
-                <p style="color:var(--text-secondary); font-size:0.85rem; margin:0 0 1rem 0;">
+                <p style="color:var(--text-secondary); font-size:0.85rem; margin:0 0 0.75rem 0;">
                     Evaluate guild loot tabs before buying. Run the <strong>Coldtouch Data Client</strong> while playing — open a chest and items appear here automatically. Or analyze manually.
                 </p>
+                <details style="background:var(--bg-elevated); border:1px solid var(--border-color); border-radius:var(--radius); padding:0.6rem 0.8rem; margin-bottom:1rem; font-size:0.78rem;">
+                    <summary style="cursor:pointer; color:var(--accent); font-weight:600;">How Trade Tracking Works</summary>
+                    <div style="color:var(--text-secondary); margin-top:0.5rem; line-height:1.6;">
+                        <p style="margin:0 0 0.4rem;"><strong>Chest Capture:</strong> Open any chest in-game &mdash; items appear here instantly.</p>
+                        <p style="margin:0 0 0.4rem;"><strong>Insta-Buy Tracking:</strong> Browse an item on the marketplace first, then buy it. The client caches orders when you view them, so it knows what you bought.</p>
+                        <p style="margin:0 0 0.4rem;"><strong>Sell Order Tracking:</strong> When you list a sell order, the client captures the item and price automatically.</p>
+                        <p style="margin:0 0 0.4rem;"><strong>Sale Notifications:</strong> When your listing sells, open your mailbox and click the sale mail &mdash; the client reads it and records the sale.</p>
+                        <p style="margin:0;"><strong>Insta-Sell:</strong> Selling to a buy order generates no client packet &mdash; open mailbox afterwards to detect it via the sale notification mail.</p>
+                    </div>
+                </details>
             </div>
 
             <!-- Captured chests notification area -->
