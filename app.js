@@ -387,6 +387,15 @@ function initTabs() {
             if (currentTab === 'profile') initProfileTab();
             if (currentTab === 'loot-buyer') { renderLootCaptures(); loadTrackedTabs(); loadRecentSales(); }
             if (currentTab === 'loot-logger') { showLootLoggerMode('live'); }
+            if (currentTab === 'crafting') {
+                // Restore detail view if we had one calculated before switching away
+                if (window._craftLastData && window._craftLastRecipe && window._craftLastItemId) {
+                    document.getElementById('craft-settings').style.display = 'flex';
+                    document.getElementById('craft-detail-view').style.display = 'block';
+                    document.getElementById('craft-bulk-section').style.display = 'none';
+                    renderCraftDetail(window._craftLastItemId, window._craftLastRecipe, window._craftLastData);
+                }
+            }
 
             // Close dropdown after selection
             closeAllDropdowns();
@@ -1561,11 +1570,16 @@ async function doCraftSearch() {
 
     try {
         const server = getServer();
-        // Fetch prices for finished item + all materials across all cities
+        // Fetch prices for finished item (all qualities) + all materials across all cities
         const allItemIds = [resolvedId, ...recipe.materials.map(m => m.id)];
         const uniqueIds = [...new Set(allItemIds)];
         const data = await fetchMarketData(server, uniqueIds);
         if (data.length > 0) await MarketDB.saveMarketData(data);
+
+        // Store raw data for recalculation with different quality/settings
+        window._craftLastData = data;
+        window._craftLastRecipe = recipe;
+        window._craftLastItemId = resolvedId;
 
         spinner.classList.add('hidden');
         renderCraftDetail(resolvedId, recipe, data);
@@ -1586,13 +1600,18 @@ function renderCraftDetail(itemId, recipe, data) {
     const masteryLevel = parseInt(document.getElementById('craft-mastery').value) || 0;
     const cityBonusPct = parseFloat(document.getElementById('craft-city-bonus').value) || 0;
     const stationFee = parseFloat(document.getElementById('craft-fee').value) || 0;
+    const craftQuality = parseInt(document.getElementById('craft-quality')?.value) || 1;
     const rrr = calculateRRR(useFocus, cityBonusPct);
     const effectiveMultiplier = 1 - rrr;
 
-    // Index prices by item_id → city
+    // Index prices by item_id → city (filter finished item by selected quality)
     const priceIndex = {};
     for (const entry of data) {
         const id = entry.item_id;
+        const q = entry.quality || 1;
+        // For the finished item, only include prices matching selected quality
+        // For materials, include all qualities (materials are always Q1)
+        if (id === itemId && q !== craftQuality) continue;
         let city = entry.city;
         if (city && city.includes('Black Market')) city = 'Black Market';
         if (!priceIndex[id]) priceIndex[id] = {};
@@ -1789,14 +1808,20 @@ function renderCraftDetail(itemId, recipe, data) {
     if (bestProfit > -Infinity) {
         const roi = cheapestTotal > 0 ? (bestProfit / cheapestTotal * 100).toFixed(1) : '0.0';
         const gaugeWidth = Math.min(100, Math.abs(parseFloat(roi)));
+        // Focus cost calculation
+        const baseFocusCost = recipe.focusCost || 0;
+        const focusCost = baseFocusCost > 0 ? calculateFocusCost(baseFocusCost, specLevel, masteryLevel) : 0;
+        const qualityLabel = craftQuality > 1 ? ` (Q${craftQuality})` : '';
         summaryHTML += `
         <div class="craft-summary-stats">
-            <div class="stat-box"><div class="stat-label">Cheapest Materials</div><div class="stat-value">${cheapestTotal.toLocaleString()} 💰</div></div>
-            <div class="stat-box"><div class="stat-label">Best Sell (${bestCity})</div><div class="stat-value text-accent">${bestSellPrice.toLocaleString()} 💰</div></div>
+            <div class="stat-box"><div class="stat-label">Cheapest Materials</div><div class="stat-value">${cheapestTotal.toLocaleString()} s</div></div>
+            <div class="stat-box"><div class="stat-label">Best Sell${qualityLabel} (${bestCity})</div><div class="stat-value text-accent">${bestSellPrice.toLocaleString()} s</div></div>
             <div class="stat-box"><div class="stat-label">Tax+Setup (5.5%)</div><div class="stat-value text-red">-${Math.floor(bestSellPrice * (TAX_RATE + SETUP_FEE)).toLocaleString()}</div></div>
             ${stationFee > 0 ? `<div class="stat-box"><div class="stat-label">Station Fee (${stationFee}%)</div><div class="stat-value text-red">-${Math.floor(bestSellPrice * stationFee / 100).toLocaleString()}</div></div>` : ''}
-            <div class="stat-box highlight"><div class="stat-label">Net Profit</div><div class="stat-value ${bestProfit >= 0 ? 'text-green' : 'text-red'}">${Math.floor(bestProfit).toLocaleString()} 💰</div></div>
+            <div class="stat-box highlight"><div class="stat-label">Net Profit</div><div class="stat-value ${bestProfit >= 0 ? 'text-green' : 'text-red'}">${Math.floor(bestProfit).toLocaleString()} s</div></div>
             <div class="stat-box"><div class="stat-label">ROI</div><div class="stat-value ${bestProfit >= 0 ? 'text-green' : 'text-red'}">${roi}%</div></div>
+            ${useFocus && focusCost > 0 ? `<div class="stat-box"><div class="stat-label">Focus Cost</div><div class="stat-value" style="color:#a78bfa;">${focusCost.toLocaleString()} focus</div></div>
+            <div class="stat-box"><div class="stat-label">Silver/Focus</div><div class="stat-value" style="color:#a78bfa;">${focusCost > 0 ? (bestProfit / focusCost).toFixed(1) : '0'} s/f</div></div>` : ''}
         </div>
         <div class="profit-gauge"><div class="profit-gauge-fill ${bestProfit >= 0 ? 'positive' : 'negative'}" style="width:${gaugeWidth}%"></div></div>`;
     } else {
@@ -1805,6 +1830,9 @@ function renderCraftDetail(itemId, recipe, data) {
     summaryHTML += `</div>`;
 
     container.innerHTML = summaryHTML + matTableHTML + sellHTML;
+
+    // Generate shopping list grouped by cheapest city
+    generateShoppingList(recipe, itemId, priceIndex, effectiveMultiplier);
 }
 
 // ====== BULK SCAN (legacy) ======
@@ -3794,8 +3822,11 @@ async function init() {
     document.getElementById('craft-search-btn').addEventListener('click', doCraftSearch);
     document.getElementById('craft-scan-btn').addEventListener('click', doCraftScan);
     document.getElementById('craft-recalc-btn').addEventListener('click', () => {
-        if (craftDetailItemId && recipesData[craftDetailItemId]) {
-            doCraftSearch(); // Re-fetch and re-render with new settings
+        // Re-render with cached data (no refetch needed for quality/settings changes)
+        if (window._craftLastData && window._craftLastRecipe && window._craftLastItemId) {
+            renderCraftDetail(window._craftLastItemId, window._craftLastRecipe, window._craftLastData);
+        } else if (craftDetailItemId && recipesData[craftDetailItemId]) {
+            doCraftSearch(); // Fallback: refetch if no cached data
         }
     });
     setupAutocomplete('craft-search', 'craft-autocomplete', (id) => { craftSearchExactId = id; });
@@ -8804,6 +8835,7 @@ function saveCraftSetup() {
         mastery: document.getElementById('craft-mastery').value,
         cityBonus: document.getElementById('craft-city-bonus').value,
         fee: document.getElementById('craft-fee').value,
+        quality: document.getElementById('craft-quality')?.value || '1',
         savedAt: new Date().toISOString()
     };
 
@@ -8841,6 +8873,8 @@ function loadCraftSetup() {
     document.getElementById('craft-mastery').value = setup.mastery || '0';
     document.getElementById('craft-city-bonus').value = setup.cityBonus || '0';
     document.getElementById('craft-fee').value = setup.fee || '0';
+    const qualitySelect = document.getElementById('craft-quality');
+    if (qualitySelect) qualitySelect.value = setup.quality || '1';
 
     if (setup.itemId) {
         craftSearchExactId = setup.itemId;
@@ -8863,7 +8897,7 @@ function deleteCraftSetup() {
     loadCraftSetupDropdown();
 }
 
-function generateShoppingList(recipe, itemId) {
+function generateShoppingList(recipe, itemId, priceIndex, effectiveMultiplier) {
     const container = document.getElementById('craft-shopping-list');
     const content = document.getElementById('craft-shopping-content');
     if (!container || !content || !recipe || !recipe.materials) {
@@ -8873,35 +8907,68 @@ function generateShoppingList(recipe, itemId) {
 
     container.style.display = 'block';
 
-    // Build shopping list from materials
-    let html = '<div class="table-scroll-wrapper"><table class="compare-table"><thead><tr>';
-    html += '<th>Material</th><th>Quantity</th><th>Estimated Cost</th>';
-    html += '</tr></thead><tbody>';
-
+    // Group materials by cheapest buy city
+    const byCheapestCity = {};
     let totalCost = 0;
+    const buyCities = CITIES.filter(c => c !== 'Black Market');
+
     for (const mat of recipe.materials) {
-        const name = getFriendlyName(mat.id);
-        // Try to get price from cache
-        const price = mat.estimatedPrice || 0;
-        const cost = price * mat.qty;
+        const matPrices = priceIndex ? (priceIndex[mat.id] || {}) : {};
+        const effQty = effectiveMultiplier ? Math.ceil(mat.qty * effectiveMultiplier * 100) / 100 : mat.qty;
+
+        // Find cheapest city
+        let cheapestPrice = Infinity, cheapestCity = 'Unknown';
+        for (const city of buyCities) {
+            const p = matPrices[city];
+            if (p && p.sellMin > 0 && p.sellMin < cheapestPrice) {
+                cheapestPrice = p.sellMin;
+                cheapestCity = city;
+            }
+        }
+
+        const cost = cheapestPrice < Infinity ? Math.ceil(cheapestPrice * effQty) : 0;
         totalCost += cost;
 
-        html += `<tr>
-            <td style="display:flex; align-items:center; gap:0.5rem;">
-                <img src="https://render.albiononline.com/v1/item/${mat.id}.png" width="24" height="24" style="image-rendering:pixelated;" onerror="this.style.display='none'">
-                ${name}
-            </td>
-            <td style="font-weight:700;">${mat.qty}</td>
-            <td>${price > 0 ? cost.toLocaleString() + ' silver' : '--'}</td>
-        </tr>`;
+        if (!byCheapestCity[cheapestCity]) byCheapestCity[cheapestCity] = [];
+        byCheapestCity[cheapestCity].push({
+            id: mat.id,
+            name: getFriendlyName(mat.id),
+            qty: mat.qty,
+            effQty: effQty.toFixed(1),
+            unitPrice: cheapestPrice < Infinity ? cheapestPrice : 0,
+            cost
+        });
     }
 
-    html += `<tr style="border-top:2px solid var(--border-color);">
-        <td style="font-weight:700;">Total</td>
-        <td></td>
-        <td style="font-weight:700; color:var(--accent);">${totalCost > 0 ? totalCost.toLocaleString() + ' silver' : '--'}</td>
-    </tr>`;
-    html += '</tbody></table></div>';
+    // Render grouped by city
+    let html = '';
+    for (const [city, mats] of Object.entries(byCheapestCity)) {
+        const cityTotal = mats.reduce((s, m) => s + m.cost, 0);
+        html += `<div style="margin-bottom:0.75rem;">
+            <div style="font-weight:600; color:var(--text-primary); margin-bottom:0.35rem; font-size:0.85rem;">${esc(city)} <span style="color:var(--text-muted); font-weight:normal;">(${cityTotal > 0 ? cityTotal.toLocaleString() + 's' : '--'})</span></div>`;
+        for (const m of mats) {
+            html += `<div style="display:flex; align-items:center; gap:0.5rem; padding:0.2rem 0; font-size:0.8rem;">
+                <img src="https://render.albiononline.com/v1/item/${m.id}.png" width="22" height="22" style="image-rendering:pixelated; border-radius:3px;" onerror="this.style.display='none'" loading="lazy">
+                <span style="flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${esc(m.name)}</span>
+                <span style="color:var(--accent); font-weight:600; flex-shrink:0;">${m.effQty}x</span>
+                <span style="color:var(--text-muted); flex-shrink:0; min-width:60px; text-align:right;">${m.cost > 0 ? m.cost.toLocaleString() + 's' : '--'}</span>
+            </div>`;
+        }
+        html += `</div>`;
+    }
+
+    html += `<div style="border-top:2px solid var(--border-color); padding-top:0.5rem; margin-top:0.5rem; display:flex; justify-content:space-between; font-weight:700; font-size:0.9rem;">
+        <span>Total Materials</span>
+        <span style="color:var(--accent);">${totalCost > 0 ? totalCost.toLocaleString() + ' silver' : '--'}</span>
+    </div>`;
+
+    // Copy button
+    const copyLines = [];
+    for (const [city, mats] of Object.entries(byCheapestCity)) {
+        copyLines.push(`--- ${city} ---`);
+        for (const m of mats) copyLines.push(`${m.effQty}x ${m.name}`);
+    }
+    html += `<button class="btn-small" style="margin-top:0.5rem; width:100%;" onclick="navigator.clipboard.writeText(${JSON.stringify(copyLines.join('\n')).replace(/'/g, "\\'")}); showToast('Shopping list copied!', 'success');">Copy Shopping List</button>`;
 
     content.innerHTML = html;
 }

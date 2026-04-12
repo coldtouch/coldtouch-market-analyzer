@@ -2,6 +2,16 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-04-12 — Crafting Calculator Revamp
+
+- **Quality selector:** Choose Normal through Masterpiece quality — sell prices now reflect the selected quality instead of always assuming Normal.
+- **City bonus dropdown:** Replaced manual percentage input with preset options (No Bonus, Royal City 15%, Caerleon 20%, Island T2/T3).
+- **Shopping list fixed:** Now actually populates with real prices grouped by cheapest buy city, with copy-to-clipboard button.
+- **Focus cost display:** Shows focus consumed and silver-per-focus ratio when Focus is enabled.
+- **Tab state persistence:** Switching away from Crafting and back now restores your last calculation instead of showing a blank page.
+- **Settings saved per setup:** Quality selection is now included in save/load setups.
+- **Recalculate without refetch:** Changing quality/settings uses cached data instead of hitting the API again.
+
 ### 2026-04-11 — Sale Notifications from In-Game Mail
 
 - **Auto sale detection:** The Go client now reads marketplace sale mails (sold/expired) and relays them to the VPS in real-time.
