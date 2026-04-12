@@ -4459,6 +4459,23 @@ function initLiveSync() {
                 return;
             }
 
+            // Trade event from game client (insta-buy, listing, buy order)
+            if (data.type === 'trade-event' && data.data) {
+                const trade = data.data;
+                const name = trade.itemId || 'Unknown';
+                const qty = trade.amount || 1;
+                const price = (trade.unitPrice || 0).toLocaleString();
+                const typeLabels = { 'insta-buy': 'Bought', 'listing-created': 'Listed', 'buy-order-placed': 'Buy Order' };
+                const label = typeLabels[trade.tradeType] || trade.tradeType;
+                showToast(`${label}: ${name} x${qty} @ ${price} silver`, trade.tradeType === 'insta-buy' ? 'info' : 'success');
+                // Add to Recent Sales feed
+                if (!window._recentSales) window._recentSales = [];
+                window._recentSales.unshift({ ...trade, price: trade.unitPrice, orderType: trade.tradeType, receivedAt: Date.now() });
+                if (window._recentSales.length > 20) window._recentSales.length = 20;
+                renderRecentSales();
+                return;
+            }
+
             // Loot events + chest captures → loot logger
             if (typeof handleLootLoggerWsMessage === 'function') handleLootLoggerWsMessage(data);
 
