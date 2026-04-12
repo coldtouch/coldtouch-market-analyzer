@@ -5617,7 +5617,12 @@ function renderTrackedTabCard(tab) {
     const net = tab.revenueSoFar - tab.purchasePrice;
     const netColor = net >= 0 ? 'var(--profit-green)' : 'var(--loss-red)';
     const netSign = net >= 0 ? '+' : '';
-    const progressPct = tab.purchasePrice > 0 ? Math.min(100, Math.round(tab.revenueSoFar / tab.purchasePrice * 100)) : 0;
+    // Progress: if purchase price set, use revenue/cost ratio. Otherwise use items sold / total items.
+    const totalItems = tab.totalQuantity || tab.itemCount || 1;
+    const itemsSold = tab.saleRecords || 0;
+    const progressPct = tab.purchasePrice > 0
+        ? Math.min(100, Math.round(tab.revenueSoFar / tab.purchasePrice * 100))
+        : Math.min(100, Math.round(itemsSold / totalItems * 100));
     const progressColor = progressPct >= 100 ? 'var(--profit-green)' : progressPct >= 50 ? '#fbbf24' : 'var(--accent)';
     const statusClass = tab.status === 'sold' ? 'status-sold' : tab.status === 'partial' ? 'status-partial' : 'status-open';
     const date = new Date(tab.purchasedAt).toLocaleDateString();
@@ -5634,7 +5639,7 @@ function renderTrackedTabCard(tab) {
         <div class="loot-tracked-stats">
             <div class="loot-tracked-stat">
                 <span class="loot-tracked-stat-label">Paid</span>
-                <span class="loot-tracked-stat-value">${tab.purchasePrice.toLocaleString()}s</span>
+                <span class="loot-tracked-stat-value">${tab.purchasePrice > 0 ? tab.purchasePrice.toLocaleString() + 's' : '—'}</span>
             </div>
             <div class="loot-tracked-stat">
                 <span class="loot-tracked-stat-label">Revenue</span>
@@ -5645,8 +5650,8 @@ function renderTrackedTabCard(tab) {
                 <span class="loot-tracked-stat-value" style="color:${netColor};">${netSign}${net.toLocaleString()}s</span>
             </div>
             <div class="loot-tracked-stat">
-                <span class="loot-tracked-stat-label">Progress</span>
-                <span class="loot-tracked-stat-value">${progressPct}%</span>
+                <span class="loot-tracked-stat-label">Sold</span>
+                <span class="loot-tracked-stat-value">${itemsSold}/${totalItems} (${progressPct}%)</span>
             </div>
         </div>
         <div class="loot-tracked-progress-bar">

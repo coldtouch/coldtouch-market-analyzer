@@ -2439,6 +2439,18 @@ wss.on('connection', ws => {
                       [tab.id, sale.itemId, match.quality || 1, sale.amount || 1, sale.unitPrice || sale.price || 0, now]);
                     db.run(`UPDATE sale_notifications SET matched_tab_id = ? WHERE user_id = ? AND mail_id = ?`,
                       [tab.id, userId, sale.mailId]);
+                    // Auto-update tab status: check if all items now have sales
+                    db.get(`SELECT COUNT(*) as saleCount FROM loot_tab_sales WHERE loot_tab_id = ?`, [tab.id], (err3, row) => {
+                      if (!err3 && row) {
+                        const totalItems = items.reduce((s, it) => s + (it.quantity || 1), 0);
+                        if (row.saleCount >= totalItems) {
+                          db.run(`UPDATE loot_tabs SET status = 'sold' WHERE id = ?`, [tab.id]);
+                          console.log(`[SaleNotif] Tab ${tab.id} fully sold (${row.saleCount}/${totalItems})`);
+                        } else if (row.saleCount > 0 && tab.status !== 'partial') {
+                          db.run(`UPDATE loot_tabs SET status = 'partial' WHERE id = ? AND status = 'open'`, [tab.id]);
+                        }
+                      }
+                    });
                     console.log(`[SaleNotif] Auto-matched to tab ${tab.id}`);
                     break; // match first open tab only
                   }
