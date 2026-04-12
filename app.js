@@ -4954,14 +4954,17 @@ function renderLootCaptures() {
 
         // Helper to build a compact card
         const calcTabWeight = (items) => items.reduce((sum, it) => sum + getItemWeight(it.itemId) * (it.quantity || 1), 0);
-        const makeCard = (onclick, name, badge, itemCount, equipCount, stackCount, totalWeight, timeAgoStr) => {
+        const makeCard = (onclick, name, badge, itemCount, equipCount, stackCount, totalWeight, timeAgoStr, capIndex) => {
             const weightStr = totalWeight > 0 ? `${totalWeight.toFixed(1)} kg` : '';
-            return `<div class="loot-capture-card" onclick="${onclick}" style="cursor:pointer;">
-                <div style="display:flex; align-items:center; gap:0.4rem;">
-                    <span class="loot-card-title">${esc(name)}</span>
-                    ${badge ? `<span style="font-size:0.6rem; padding:0.1rem 0.35rem; background:var(--bg-elevated); border-radius:8px; color:var(--text-muted);">${badge}</span>` : ''}
+            return `<div class="loot-capture-card" style="cursor:pointer; position:relative;">
+                <div onclick="${onclick}" style="flex:1;">
+                    <div style="display:flex; align-items:center; gap:0.4rem;">
+                        <span class="loot-card-title">${esc(name)}</span>
+                        ${badge ? `<span style="font-size:0.6rem; padding:0.1rem 0.35rem; background:var(--bg-elevated); border-radius:8px; color:var(--text-muted);">${badge}</span>` : ''}
+                    </div>
+                    <div class="loot-card-meta">${itemCount} items &bull; ${equipCount} equip ${stackCount} stack${weightStr ? ` &bull; ${weightStr}` : ''} &bull; ${timeAgoStr}</div>
                 </div>
-                <div class="loot-card-meta">${itemCount} items &bull; ${equipCount}⚔ ${stackCount}📦${weightStr ? ` &bull; ${weightStr}` : ''} &bull; ${timeAgoStr}</div>
+                <button class="btn-small" onclick="event.stopPropagation(); removeLootCapture(${capIndex});" style="position:absolute; top:0.4rem; right:0.4rem; font-size:0.65rem; padding:0.15rem 0.4rem; color:var(--loss-red); background:none; border:1px solid var(--loss-red); border-radius:4px;" title="Remove this capture">✕</button>
             </div>`;
         };
 
@@ -4969,7 +4972,7 @@ function renderLootCaptures() {
             const equipCount = cap.items.filter(it => it.isEquipment).length;
             const stackCount = cap.items.length - equipCount;
             const badge = cap.isGuild ? 'Guild' : 'Bank';
-            cards.push(makeCard(`selectLootCapture(${capIdx})`, cap.tabName, badge, cap.items.length, equipCount, stackCount, calcTabWeight(cap.items), ago));
+            cards.push(makeCard(`selectLootCapture(${capIdx})`, cap.tabName, badge, cap.items.length, equipCount, stackCount, calcTabWeight(cap.items), ago, capIdx));
         } else if (hasTabs) {
             const tabIdx = typeof cap.tabIndex === 'number' ? cap.tabIndex : -1;
             const tabName = (tabIdx >= 0 && tabIdx < cap.vaultTabs.length && cap.vaultTabs[tabIdx].name)
@@ -4979,14 +4982,27 @@ function renderLootCaptures() {
             const stackCount = cap.items.length - equipCount;
             const vaultType = cap.isGuild ? 'Guild' : 'Bank';
             const displayName = cap.customName || tabName;
-            cards.push(makeCard(`selectLootCapture(${capIdx})`, displayName, vaultType, cap.items.length, equipCount, stackCount, calcTabWeight(cap.items), ago));
+            cards.push(makeCard(`selectLootCapture(${capIdx})`, displayName, vaultType, cap.items.length, equipCount, stackCount, calcTabWeight(cap.items), ago, capIdx));
         } else {
             const equipCount = cap.items.filter(it => it.isEquipment).length;
             const stackCount = cap.items.length - equipCount;
-            cards.push(makeCard(`selectLootCapture(${capIdx})`, `Chest Capture`, '', cap.items.length, equipCount, stackCount, calcTabWeight(cap.items), ago));
+            cards.push(makeCard(`selectLootCapture(${capIdx})`, `Chest Capture`, '', cap.items.length, equipCount, stackCount, calcTabWeight(cap.items), ago, capIdx));
         }
     });
     list.innerHTML = cards.join('');
+}
+
+function removeLootCapture(index) {
+    if (index >= 0 && index < lootBuyerCaptures.length) {
+        lootBuyerCaptures.splice(index, 1);
+        // Also remove from _chestCaptures if synced
+        if (window._chestCaptures && index < window._chestCaptures.length) {
+            window._chestCaptures.splice(index, 1);
+        }
+        lootSelectedCapture = null;
+        renderLootCaptures();
+        showToast('Capture removed', 'info');
+    }
 }
 
 function renameLootCapture(index) {
