@@ -4788,3 +4788,54 @@ footer {
     border: 1px solid rgba(248, 113, 113, 0.25);
 }
 
+/* ====== MOBILE NAVIGATION ====== */
+.mobile-menu-btn {
+    display: none;
+    background: none;
+    border: none;
+    color: var(--text-primary);
+    font-size: 1.5rem;
+    cursor: pointer;
+    padding: 0.5rem;
+}
+
+@media (max-width: 768px) {
+    .mobile-menu-btn { display: block; }
+
+    .main-nav-inner {
+        flex-wrap: wrap;
+        position: relative;
+    }
+    .main-nav-inner .nav-group,
+    .main-nav-inner .nav-tab:not(.mobile-menu-btn) {
+        display: none;
+    }
+    .main-nav-inner.mobile-open .nav-group,
+    .main-nav-inner.mobile-open .nav-tab {
+        display: flex;
+        width: 100%;
+    }
+
+    /* Shrink header on mobile */
+    .site-header h1 { font-size: 1.2rem; }
+    .site-header .tagline { font-size: 0.7rem; }
+    .header-right { display: none; }
+
+    /* Stack controls */
+    .controls-panel { flex-wrap: wrap; gap: 0.5rem; }
+    .control-group { min-width: 120px; flex: 1 1 45%; }
+    .search-group { flex: 1 1 100%; }
+
+    /* Smaller cards */
+    .item-card { padding: 0.75rem; }
+    .item-card .card-header { flex-wrap: wrap; gap: 0.5rem; }
+
+    /* Landing overlay mobile */
+    .landing-card { padding: 1.5rem 1rem; max-width: 95vw; }
+    .landing-features { display: none; }
+
+    /* Loot Logger mobile */
+    .ll-filter-bar { flex-wrap: wrap; }
+    .ll-player-card { padding: 0.5rem; }
+}
+
