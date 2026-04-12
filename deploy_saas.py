@@ -139,7 +139,8 @@ const db = new sqlite3.Database('/opt/albion-saas/database.sqlite');
 // Performance PRAGMAs — WAL mode dramatically reduces read/write contention
 db.run('PRAGMA journal_mode = WAL');
 db.run('PRAGMA synchronous = NORMAL');
-db.run('PRAGMA cache_size = -128000');  // 128MB page cache
+db.run('PRAGMA cache_size = -32000');   // 32MB page cache (was 128MB — RSS inflated by mmap)
+db.run('PRAGMA mmap_size = 0');         // disable memory-mapped I/O to prevent RSS inflation
 db.run('PRAGMA busy_timeout = 5000');
 db.run('PRAGMA wal_autocheckpoint = 1000');
 
@@ -150,7 +151,8 @@ db.run('PRAGMA wal_autocheckpoint = 1000');
 const statsDb = new sqlite3.Database('/opt/albion-saas/database.sqlite');
 statsDb.run('PRAGMA journal_mode = WAL');
 statsDb.run('PRAGMA synchronous = NORMAL');
-statsDb.run('PRAGMA cache_size = -32000');  // 32MB page cache
+statsDb.run('PRAGMA cache_size = -16000');  // 16MB page cache (was 32MB)
+statsDb.run('PRAGMA mmap_size = 0');
 statsDb.run('PRAGMA busy_timeout = 30000'); // longer timeout — bulk writes can wait
 
 // Dedicated read-only connection for user-facing endpoints (/api/me, etc.).
@@ -161,6 +163,8 @@ statsDb.run('PRAGMA busy_timeout = 30000'); // longer timeout — bulk writes ca
 const readDb = new sqlite3.Database('/opt/albion-saas/database.sqlite', sqlite3.OPEN_READONLY);
 readDb.run('PRAGMA journal_mode = WAL');
 readDb.run('PRAGMA busy_timeout = 5000');
+readDb.run('PRAGMA mmap_size = 0');
+readDb.run('PRAGMA cache_size = -8000');  // 8MB — read-only, doesn't need large cache
 
 db.serialize(() => {
   db.run(`CREATE TABLE IF NOT EXISTS users (id TEXT PRIMARY KEY, username TEXT, avatar TEXT)`);
