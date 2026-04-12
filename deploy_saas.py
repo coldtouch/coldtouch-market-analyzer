@@ -922,6 +922,18 @@ app.use('/api/', resolveUser);
 // Redirect root to GitHub Pages frontend
 app.get('/', (req, res) => res.redirect('https://coldtouch.github.io/coldtouch-market-analyzer/'));
 
+// Health check for monitoring
+app.get('/health', (req, res) => {
+  res.json({
+    status: 'ok',
+    uptime: Math.floor(process.uptime()),
+    memory: Math.floor(process.memoryUsage().heapUsed / 1024 / 1024) + 'MB',
+    nats: !!natsConnection,
+    wsClients: wsClients ? wsClients.size : 0,
+    cacheItems: cacheItemCount || 0
+  });
+});
+
 app.get('/api/me', (req, res) => {
   if(req.user) {
     // Use readDb (separate connection) so this never queues behind main db writes
