@@ -3687,9 +3687,13 @@ let natsConnection = null;
     natsConnection = await connect({
       servers: "nats.albion-online-data.com:4222",
       user: "public",
-      pass: "thenewalbiondata"
+      pass: "thenewalbiondata",
+      reconnect: true,
+      maxReconnectAttempts: -1,
+      reconnectTimeWait: 5000
     });
-    console.log('[NATS] Connected');
+    natsConnection.closed().then(() => console.error('[NATS] Connection closed permanently'));
+    console.log('[NATS] Connected (auto-reconnect enabled)');
     const sc = StringCodec();
     const sub = natsConnection.subscribe("marketorders.deduped.*");
 
