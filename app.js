@@ -4371,7 +4371,7 @@ function initLiveSync() {
     };
 
     wsLink.onclose = () => {
-        console.log("🔴 Live Stream Disconnected. Reconnecting in 5s...");
+        console.warn("[WS] Disconnected. Reconnecting in 5s...");
         if(syncText) syncText.textContent = "Live Sync Offline";
         if(syncDot) {
             syncDot.style.background = 'var(--loss-red)';

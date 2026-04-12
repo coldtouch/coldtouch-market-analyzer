@@ -271,13 +271,14 @@ db.serialize(() => {
 
   db.run(`CREATE TABLE IF NOT EXISTS loot_tab_sales (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    loot_tab_id INTEGER NOT NULL,
+    loot_tab_id INTEGER NOT NULL REFERENCES loot_tabs(id) ON DELETE CASCADE,
     item_id TEXT NOT NULL,
     quality INTEGER DEFAULT 1,
     quantity INTEGER DEFAULT 1,
     sale_price INTEGER NOT NULL,
     sold_at INTEGER NOT NULL
   )`);
+  db.run(`PRAGMA foreign_keys = ON`);
   db.run(`CREATE INDEX IF NOT EXISTS idx_loot_tab_sales_tab ON loot_tab_sales(loot_tab_id)`);
 
   // === SALE NOTIFICATIONS (from in-game mail) ===
@@ -1557,7 +1558,8 @@ app.post('/api/batch-prices', (req, res) => {
   }
 
   // Build SQL placeholders for the item list
-  const cleanIds = itemIds.filter(id => typeof id === 'string').slice(0, 500);
+  const itemIdRegex = /^[A-Za-z0-9_@.]+$/;
+  const cleanIds = itemIds.filter(id => typeof id === 'string' && id.length <= 80 && itemIdRegex.test(id)).slice(0, 500);
   if (cleanIds.length === 0) return res.json({});
 
   const placeholders = cleanIds.map(() => '?').join(',');
@@ -1664,7 +1666,9 @@ app.post('/api/loot-upload', requireAuth, (req, res) => {
     if (parts.length < 10) continue;
     const [ts, byAlliance, byGuild, byName, itemId, itemName, qty, fromAlliance, fromGuild, fromName] = parts;
     const timestamp = new Date(ts).getTime() || Date.now();
-    stmt.run(req.user.id, sessionId, timestamp, byName || '', byGuild || '', byAlliance || '', fromName || '', fromGuild || '', fromAlliance || '', itemId || '', 0, parseInt(qty) || 1);
+    // Sanitize user-supplied strings: strip control chars, limit length
+    const san = s => (s || '').replace(/[\x00-\x1f\x7f]/g, '').slice(0, 64);
+    stmt.run(req.user.id, sessionId, timestamp, san(byName), san(byGuild), san(byAlliance), san(fromName), san(fromGuild), san(fromAlliance), san(itemId).slice(0, 100), 0, parseInt(qty) || 1);
     count++;
   }
   stmt.finalize();
@@ -2305,6 +2309,13 @@ const server = https.createServer({
 
 const wss = new WebSocket.Server({ server });
 let wsClients = new Set();
+
+// Safe send with backpressure check — skip if client buffer is > 1MB
+function wsSafeSend(wc, data) {
+  if (wc.readyState === WebSocket.OPEN && wc.bufferedAmount < 1024 * 1024) {
+    wc.send(typeof data === 'string' ? data : JSON.stringify(data));
+  }
+}
 wss.on('connection', ws => {
   wsClients.add(ws);
   ws.isAuthenticated = false;
@@ -2351,7 +2362,7 @@ wss.on('connection', ws => {
 
         // Assign session ID (one per WS connection)
         if (!ws.lootSessionId) {
-          ws.lootSessionId = ws.user.id + '_' + Date.now();
+          ws.lootSessionId = ws.user.id + '_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
         }
 
         db.run(`INSERT INTO loot_events (user_id, session_id, timestamp, looted_by_name, looted_by_guild, looted_by_alliance, looted_from_name, looted_from_guild, looted_from_alliance, item_id, numeric_id, quantity, weight, is_silver)
@@ -2364,7 +2375,7 @@ wss.on('connection', ws => {
         // Push to user's browser session(s) in real-time
         for (const wc of wsClients) {
           if (wc.clientType === 'browser' && wc.isAuthenticated && wc.user && wc.user.id === ws.user.id) {
-            wc.send(JSON.stringify({ type: 'loot-event', data: { ...ev, sessionId: ws.lootSessionId } }));
+            wsSafeSend(wc, { type: 'loot-event', data: { ...ev, sessionId: ws.lootSessionId } });
           }
         }
       }
@@ -2389,7 +2400,7 @@ wss.on('connection', ws => {
         // Push to user's browser session(s) in real-time
         for (const wc of wsClients) {
           if (wc.clientType === 'browser' && wc.isAuthenticated && wc.user && wc.user.id === ws.user.id) {
-            wc.send(JSON.stringify({ type: 'chest-capture', data: capture }));
+            wsSafeSend(wc, { type: 'chest-capture', data: capture });
           }
         }
       }

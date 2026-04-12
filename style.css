@@ -204,10 +204,11 @@ header::after {
     transform: translateY(0);
 }
 
-.btn-scan-all:disabled {
-    opacity: 0.6;
+button:disabled, .btn-primary:disabled, .btn-secondary:disabled, .btn-scan-all:disabled {
+    opacity: 0.5;
     cursor: not-allowed;
     transform: none;
+    pointer-events: none;
 }
 
 /* ====== SCAN PROGRESS ====== */
