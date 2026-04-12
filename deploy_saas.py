@@ -2454,6 +2454,32 @@ wss.on('connection', ws => {
             }
           });
       }
+      // Trade event from game client (insta-buy, listing, buy order)
+      if (msg.type === 'trade-event' && ws.clientType === 'game-client' && ws.user) {
+        const trade = msg.data;
+        if (!trade || !trade.itemId) return;
+
+        const userId = ws.user.id;
+        console.log(`[TradeEvent] ${trade.tradeType}: ${trade.itemId} x${trade.amount || 1} @ ${trade.unitPrice} silver from ${ws.user.username}`);
+
+        // Auto-match insta-buys to tracked loot tabs (could be buying loot to resell)
+        if (trade.tradeType === 'insta-buy') {
+          // Store as a sale notification equivalent for the Recent Sales feed
+          const now = trade.timestamp || Date.now();
+          db.run(`INSERT OR IGNORE INTO sale_notifications (user_id, mail_id, item_id, quantity, unit_price, total, location, order_type, sold_at, matched_tab_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)`,
+            [userId, -(trade.orderId || now), trade.itemId, trade.amount || 1, trade.unitPrice || 0,
+             trade.total || 0, trade.location || '', 'INSTA_BUY', now]);
+        }
+
+        // Push to user's browser
+        const payload = JSON.stringify({ type: 'trade-event', data: { ...trade, userId } });
+        for (const wc of wsClients) {
+          if (wc.clientType === 'browser' && wc.isAuthenticated && wc.user && wc.user.id === userId) {
+            wsSafeSend(wc, payload);
+          }
+        }
+      }
     } catch(e) { /* ignore non-JSON messages */ }
   });
   ws.on('close', () => wsClients.delete(ws));
