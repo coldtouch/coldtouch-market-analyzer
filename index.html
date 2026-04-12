@@ -1906,9 +1906,9 @@
                                 <div style="color:var(--accent); font-weight:600; margin-bottom:0.2rem;">Listing Sold (Someone Buys Your Order)</div>
                                 <div style="color:var(--text-secondary);">Open your mailbox and click the sale notification mail. The client reads the mail body and extracts item, price, and quantity. Auto-matches to tracked Loot Buyer tabs.</div>
                             </div>
-                            <div style="background:var(--bg-card); border-radius:6px; padding:0.6rem 0.8rem;">
-                                <div style="color:var(--text-muted); font-weight:600; margin-bottom:0.2rem;">Insta-Sell (Sell to Buy Order)</div>
-                                <div style="color:var(--text-secondary);">The game sends no client-side packet for insta-sells. To track these, open your mailbox after selling &mdash; the sale notification mail will be detected the same way as a regular listing sale.</div>
+                            <div style="background:var(--bg-card); border-radius:6px; padding:0.6rem 0.8rem; border-left:3px solid var(--loss-red);">
+                                <div style="color:var(--loss-red); font-weight:600; margin-bottom:0.2rem;">Insta-Sell &mdash; Not Trackable</div>
+                                <div style="color:var(--text-secondary);">Selling directly to a buy order generates no client-side packet and no in-game mail. The silver just appears in your wallet silently. <strong>To keep your Loot Buyer tab tracking accurate, always create sell order listings instead of insta-selling.</strong></div>
                             </div>
                         </div>
                     </div>
@@ -2569,7 +2569,7 @@
                         <p style="margin:0 0 0.4rem;"><strong>Insta-Buy Tracking:</strong> Browse an item on the marketplace first, then buy it. The client caches orders when you view them, so it knows what you bought.</p>
                         <p style="margin:0 0 0.4rem;"><strong>Sell Order Tracking:</strong> When you list a sell order, the client captures the item and price automatically.</p>
                         <p style="margin:0 0 0.4rem;"><strong>Sale Notifications:</strong> When your listing sells, open your mailbox and click the sale mail &mdash; the client reads it and records the sale.</p>
-                        <p style="margin:0;"><strong>Insta-Sell:</strong> Selling to a buy order generates no client packet &mdash; open mailbox afterwards to detect it via the sale notification mail.</p>
+                        <p style="margin:0; color:var(--loss-red);"><strong>Insta-Sell (not trackable):</strong> Selling to a buy order generates no packet and no mail. To keep your Loot Buyer tab tracking accurate, <strong>always list sell orders</strong> instead of insta-selling.</p>
                     </div>
                 </details>
             </div>
