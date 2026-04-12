@@ -3223,7 +3223,7 @@ function runWalCheckpoint() {
     else console.log('[WAL] Checkpoint (TRUNCATE) complete');
   });
 }
-setInterval(runWalCheckpoint, 6 * 60 * 60 * 1000);
+setInterval(runWalCheckpoint, 30 * 60 * 1000); // every 30 min (was 6 hours — WAL grew to 5.4GB)
 
 // === VACUUM HELPERS ===
 // Only schedule a VACUUM if a meaningful amount of data was just deleted.
