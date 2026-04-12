@@ -3270,11 +3270,11 @@ function scheduleVacuumIfNeeded(rowsDeleted) {
 
 // === DATA COMPACTION (runs every 2 hours) ===
 // Three-tier retention:
-//   Tier 1: price_averages hourly  → keep rawRetentionDays (default 7)
+//   Tier 1: price_averages hourly  → keep rawRetentionDays (default 3 — was 7, caused 21M rows / 5.3GB)
 //   Tier 2: price_hourly (OHLC)    → keep 30 days
 //   Tier 3: price_averages daily   → keep forever
 function compactOldData(rawRetentionDays) {
-  const keepRawDays = rawRetentionDays || 7;
+  const keepRawDays = rawRetentionDays || 3;
   const now = Date.now();
   const rawCutoff    = now - keepRawDays * 24 * 60 * 60 * 1000;
   const hourlyCutoff = now - 30 * 24 * 60 * 60 * 1000;
