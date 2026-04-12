@@ -2416,13 +2416,14 @@ wss.on('connection', ws => {
         // Insert into sale_notifications (dedup by mail_id)
         db.run(`INSERT OR IGNORE INTO sale_notifications (user_id, mail_id, item_id, quantity, unit_price, total, location, order_type, sold_at)
           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          [userId, sale.mailId, sale.itemId, sale.amount || 1, sale.price || 0,
-           sale.total || (sale.price || 0) * (sale.amount || 1), sale.location || '', sale.orderType || 'FINISHED', now],
+          [userId, sale.mailId, sale.itemId, sale.amount || 1, sale.unitPrice || sale.price || 0,
+           sale.total || (sale.unitPrice || sale.price || 0) * (sale.amount || 1), sale.location || '', sale.orderType || 'FINISHED', now],
           function(err) {
             if (err) { console.error('[SaleNotif] DB error:', err.message); return; }
             if (this.changes === 0) return; // duplicate mail_id, skip
 
-            console.log(`[SaleNotif] ${sale.itemId} x${sale.amount || 1} @ ${sale.price} silver from ${ws.user.username}`);
+            const price = sale.unitPrice || sale.price || 0;
+            console.log(`[SaleNotif] ${sale.itemId} x${sale.amount || 1} @ ${price} silver from ${ws.user.username}`);
 
             // Auto-match to open/partial loot tabs containing this item
             db.all(`SELECT id, items_json FROM loot_tabs WHERE user_id = ? AND status IN ('open','partial')`, [userId], (err2, tabs) => {
@@ -2435,7 +2436,7 @@ wss.on('connection', ws => {
                     // Auto-record sale on this tab
                     db.run(`INSERT INTO loot_tab_sales (loot_tab_id, item_id, quality, quantity, sale_price, sold_at)
                       VALUES (?, ?, ?, ?, ?, ?)`,
-                      [tab.id, sale.itemId, match.quality || 1, sale.amount || 1, sale.price || 0, now]);
+                      [tab.id, sale.itemId, match.quality || 1, sale.amount || 1, sale.unitPrice || sale.price || 0, now]);
                     db.run(`UPDATE sale_notifications SET matched_tab_id = ? WHERE user_id = ? AND mail_id = ?`,
                       [tab.id, userId, sale.mailId]);
                     console.log(`[SaleNotif] Auto-matched to tab ${tab.id}`);
