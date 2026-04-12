@@ -72,7 +72,12 @@ async function getCachedPrices() {
     return _priceCache;
 }
 
-function invalidatePriceCache() { _priceCache = null; _priceCacheTime = 0; }
+function invalidatePriceCache() {
+    _priceCache = null;
+    _priceCacheTime = 0;
+    // Re-render active tab if it depends on prices
+    if (currentTab === 'browser') renderBrowser();
+}
 let compareSelectedId = null;
 let arbSearchExactId = null;
 let craftSearchExactId = null;
@@ -388,7 +393,6 @@ function initTabs() {
             if (currentTab === 'loot-buyer') { renderLootCaptures(); loadTrackedTabs(); loadRecentSales(); }
             if (currentTab === 'loot-logger') { showLootLoggerMode('live'); }
             if (currentTab === 'crafting') {
-                // Restore detail view if we had one calculated before switching away
                 if (window._craftLastData && window._craftLastRecipe && window._craftLastItemId) {
                     document.getElementById('craft-settings').style.display = 'flex';
                     document.getElementById('craft-detail-view').style.display = 'block';
@@ -396,6 +400,13 @@ function initTabs() {
                     renderCraftDetail(window._craftLastItemId, window._craftLastRecipe, window._craftLastData);
                 }
             }
+            if (currentTab === 'alerts') loadAlerts();
+            if (currentTab === 'community') { if (typeof loadLeaderboard === 'function') loadLeaderboard(); }
+
+            // Update URL with current tab (shareable deep link)
+            const url = new URL(window.location);
+            url.searchParams.set('tab', currentTab);
+            history.replaceState(null, '', url);
 
             // Close dropdown after selection
             closeAllDropdowns();
@@ -406,6 +417,23 @@ function initTabs() {
     document.addEventListener('click', () => {
         closeAllDropdowns();
     });
+
+    // Restore tab + item from URL on load (shareable deep links)
+    const urlParams = new URLSearchParams(window.location.search);
+    const urlTab = urlParams.get('tab');
+    const urlItem = urlParams.get('item');
+    if (urlTab) {
+        const tabEl = document.querySelector(`.nav-tab[data-tab="${urlTab}"]`);
+        if (tabEl) tabEl.click();
+        // Pre-fill item search if provided
+        if (urlItem) {
+            setTimeout(() => {
+                if (urlTab === 'browser') switchToBrowser(urlItem);
+                else if (urlTab === 'compare') switchToCompare(urlItem);
+                else if (urlTab === 'crafting') switchToCraft(urlItem);
+            }, 300);
+        }
+    }
 }
 
 // ============================================================
@@ -2167,6 +2195,11 @@ function switchToBrowser(itemId) {
             search.value = getFriendlyName(itemId) || itemId;
             browserPage = 1;
             renderBrowser();
+            // Update URL for sharing
+            const url = new URL(window.location);
+            url.searchParams.set('tab', 'browser');
+            url.searchParams.set('item', itemId);
+            history.replaceState(null, '', url);
         }
     }, 100);
 }
@@ -6231,7 +6264,10 @@ function _llRenderFiltered() {
             ${events.length} events &bull; ${totalPlayers} players &bull; ${totalItems} items
             ${totalValue > 0 ? `&bull; <span style="color:var(--accent);">${formatSilver(totalValue)} est. value</span>` : ''}
         </div>
-        ${isDetail ? `<button class="btn-small" onclick="hideLootSessionDetail()">&#x2190; Back</button>` : ''}
+        <div style="display:flex; gap:0.4rem; align-items:center;">
+            <button class="btn-small" onclick="exportLootSession()" title="Export to CSV">CSV</button>
+            ${isDetail ? `<button class="btn-small" onclick="hideLootSessionDetail()">&#x2190; Back</button>` : ''}
+        </div>
     </div>`;
 
     // Search/sort bar
@@ -8978,6 +9014,42 @@ function generateShoppingList(recipe, itemId, priceIndex, effectiveMultiplier) {
     html += `<button class="btn-small" style="margin-top:0.5rem; width:100%;" onclick="navigator.clipboard.writeText(${JSON.stringify(copyLines.join('\n')).replace(/'/g, "\\'")}); showToast('Shopping list copied!', 'success');">Copy Shopping List</button>`;
 
     content.innerHTML = html;
+}
+
+// ===== CSV EXPORT =====
+function exportToCSV(data, filename) {
+    if (!data || data.length === 0) { showToast('No data to export', 'warn'); return; }
+    const headers = Object.keys(data[0]);
+    const csv = [headers.join(',')];
+    for (const row of data) {
+        csv.push(headers.map(h => {
+            const val = row[h] ?? '';
+            const str = String(val).replace(/"/g, '""');
+            return str.includes(',') || str.includes('"') || str.includes('\n') ? `"${str}"` : str;
+        }).join(','));
+    }
+    const blob = new Blob([csv.join('\n')], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename || 'export.csv';
+    a.click();
+    URL.revokeObjectURL(url);
+    showToast(`Exported ${data.length} rows`, 'success');
+}
+
+function exportLootSession() {
+    const events = _llCurrentEvents;
+    if (!events || events.length === 0) { showToast('No loot data to export', 'warn'); return; }
+    const rows = events.map(e => ({
+        timestamp: new Date(e.timestamp).toISOString(),
+        looted_by: e.looted_by_name || '',
+        guild: e.looted_by_guild || '',
+        item: e.item_id || '',
+        quantity: e.quantity || 1,
+        looted_from: e.looted_from_name || ''
+    }));
+    exportToCSV(rows, `loot-session-${new Date().toISOString().slice(0, 10)}.csv`);
 }
 
 // ===== FEEDBACK MODAL =====
