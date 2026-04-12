@@ -5849,13 +5849,14 @@ async function getLootPriceMap(itemIds) {
         const res = await fetch(`${VPS_BASE}/api/batch-prices`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ itemIds: ids })
+            body: JSON.stringify({ itemIds: ids }),
+            signal: AbortSignal.timeout(5000)
         });
         if (res.ok) {
             const data = await res.json();
             if (Object.keys(data).length > 0) return data;
         }
-    } catch { /* fall through to IndexedDB */ }
+    } catch { /* timeout or network error — fall through to IndexedDB */ }
 
     // Fallback: IndexedDB cache (may have stale/outlier NATS data)
     try {
