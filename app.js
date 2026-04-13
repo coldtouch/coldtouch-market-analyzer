@@ -6086,9 +6086,13 @@ function resetChestCaptures() {
 function renderCaptureChips() {
     const chips = document.getElementById('ll-capture-chips');
     if (!chips) return;
+    // Always seed from lootBuyerCaptures (which gets re-sent on WS reconnect from VPS memory)
+    if ((!window._chestCaptures || window._chestCaptures.length === 0) && typeof lootBuyerCaptures !== 'undefined' && lootBuyerCaptures.length > 0) {
+        window._chestCaptures = [...lootBuyerCaptures];
+    }
     const captures = window._chestCaptures || [];
     if (captures.length === 0) {
-        chips.innerHTML = '<span style="font-size:0.75rem; color:var(--text-muted);">No chest captures yet</span>';
+        chips.innerHTML = '<span style="font-size:0.75rem; color:var(--text-muted);">No chest captures yet — open a chest with the client running</span>';
         return;
     }
     chips.innerHTML = captures.map((cap, i) => {
@@ -6520,6 +6524,10 @@ function populateAccountabilityDropdowns() {
             sessionSel.innerHTML = opts;
         }).catch(() => {});
 
+    // Seed from lootBuyerCaptures (re-sent on WS reconnect from VPS)
+    if ((!window._chestCaptures || window._chestCaptures.length === 0) && typeof lootBuyerCaptures !== 'undefined' && lootBuyerCaptures.length > 0) {
+        window._chestCaptures = [...lootBuyerCaptures];
+    }
     const captures = window._chestCaptures || [];
     if (captures.length === 0) {
         captureSel.innerHTML = '<option value="" disabled>No captures yet — open a chest with the client running</option>';
