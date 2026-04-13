@@ -4296,9 +4296,11 @@ async function init() {
         }
     } catch (e) { /* ignore */ }
 
-    // Load VPS cache on startup — only when the selected server matches the VPS server.
-    // If the user switched servers during init (race), or on first load of a non-VPS server,
-    // skip the load so we don't populate the DB with the wrong server's prices.
+    // Load existing IDB data into memory cache first (instant for returning users)
+    await MarketDB.loadFromIdb();
+    await updateDbStatus();
+
+    // Then fetch fresh data from VPS (merges into memory, writes to IDB in background)
     if (getServer() === vpsGameServer) await loadServerCache();
 
     // Evict stale prices older than 24h
