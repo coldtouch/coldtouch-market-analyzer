@@ -2,6 +2,15 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-04-13 — Game Update: Protocol18 Support (v0.6.0)
+
+- **Critical fix:** Albion Online's April 13 patch changed the network protocol from Protocol16 to Protocol18 (GpBinaryV18). The custom data client has been fully updated.
+- **New protocol decoder:** Zigzag varint encoding, little-endian shorts, compressed integers, zero-value types, bit-packed boolean arrays — all decoded correctly.
+- **Dual opcode matching:** Operations shifted +6 in the update; client now handles both old and new codes seamlessly.
+- **Loot event shifted:** OtherGrabbedLoot moved from event 275 to 277.
+- **All features confirmed working:** Chest capture (0 missing), mail sale tracking, market data upload to AODP, loot logger, death events, player location, VPS relay.
+- **Download v0.6.0** from [GitHub Releases](https://github.com/coldtouch/albiondata-client/releases/tag/v0.6.0) — older versions will crash after the game update.
+
 ### 2026-04-12 — Crafting Calculator Revamp
 
 - **Quality selector:** Choose Normal through Masterpiece quality — sell prices now reflect the selected quality instead of always assuming Normal.
