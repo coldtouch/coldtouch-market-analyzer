@@ -1,5 +1,5 @@
 // ============================================================
-// MarketDB – IndexedDB storage layer for Albion market prices
+// MarketDB – Hybrid storage: in-memory Map (fast) + IndexedDB (persistent)
 // ============================================================
 
 const MarketDB = (() => {
@@ -9,6 +9,10 @@ const MarketDB = (() => {
     const META_STORE = 'meta';
 
     let dbPromise = null;
+
+    // === IN-MEMORY CACHE (primary — instant reads) ===
+    const memCache = new Map(); // key → price entry
+    let memLoaded = false;
 
     function open() {
         if (dbPromise) return dbPromise;
@@ -35,101 +39,137 @@ const MarketDB = (() => {
     }
 
     function makeKey(entry) {
-        return `${entry.item_id}_${entry.quality}_${entry.city}`;
+        return `${entry.item_id}_${entry.quality || 1}_${entry.city}`;
     }
 
-    // Parse a market timestamp to ms — handles both "...T00:00:00" (no Z) and "...T00:00:00Z" (UTC)
     function parseTs(d) { return d ? (new Date(d.endsWith('Z') ? d : d + 'Z').getTime() || 0) : 0; }
 
-    async function saveMarketData(entries) {
-        const db = await open();
-        return new Promise((resolve, reject) => {
-            const tx = db.transaction(STORE_NAME, 'readwrite');
-            const store = tx.objectStore(STORE_NAME);
-            const now = Date.now();
-            for (const entry of entries) {
-                if (!entry.item_id || !entry.city) continue;
-                const key = makeKey(entry);
-                const req = store.get(key);
+    // Merge incoming entry with existing (keeps best price per direction)
+    function mergeEntry(existing, entry) {
+        let sellPrice = entry.sell_price_min || 0;
+        let sellDate = entry.sell_price_min_date || '';
+        let buyPrice = entry.buy_price_max || 0;
+        let buyDate = entry.buy_price_max_date || '';
 
-                req.onsuccess = (e) => {
-                    const existing = e.target.result;
-                    let sellPrice = entry.sell_price_min || 0;
-                    let sellDate = entry.sell_price_min_date || '';
-                    let buyPrice = entry.buy_price_max || 0;
-                    let buyDate = entry.buy_price_max_date || '';
-
-                    if (existing) {
-                        // Sell price: use incoming if it has a newer date OR a better (lower non-zero) price
-                        if (sellDate && parseTs(sellDate) >= parseTs(existing.sell_price_min_date || '')) {
-                            // Incoming is newer — use it (even if 0, meaning the order expired)
-                        } else if (sellPrice > 0 && existing.sell_price_min > 0 && sellPrice < existing.sell_price_min) {
-                            // Incoming is a better price — use it
-                        } else {
-                            // Keep existing
-                            sellPrice = existing.sell_price_min;
-                            sellDate = existing.sell_price_min_date;
-                        }
-
-                        // Buy price: use incoming if it has a newer date OR a better (higher) price
-                        if (buyDate && parseTs(buyDate) >= parseTs(existing.buy_price_max_date || '')) {
-                            // Incoming is newer — use it (even if 0)
-                        } else if (buyPrice > 0 && buyPrice > (existing.buy_price_max || 0)) {
-                            // Incoming is a better price — use it
-                        } else {
-                            // Keep existing
-                            buyPrice = existing.buy_price_max;
-                            buyDate = existing.buy_price_max_date;
-                        }
-                    }
-
-                    store.put({
-                        key,
-                        item_id: entry.item_id,
-                        quality: entry.quality || 1,
-                        city: entry.city,
-                        sell_price_min: sellPrice,
-                        sell_price_min_date: sellDate,
-                        buy_price_max: buyPrice,
-                        buy_price_max_date: buyDate,
-                        scan_timestamp: now
-                    });
-                };
+        if (existing) {
+            if (sellDate && parseTs(sellDate) >= parseTs(existing.sell_price_min_date || '')) {
+                // Incoming is newer
+            } else if (sellPrice > 0 && existing.sell_price_min > 0 && sellPrice < existing.sell_price_min) {
+                // Incoming is better price
+            } else {
+                sellPrice = existing.sell_price_min;
+                sellDate = existing.sell_price_min_date;
             }
-            tx.oncomplete = () => resolve();
-            tx.onerror = () => reject(tx.error);
-        });
+
+            if (buyDate && parseTs(buyDate) >= parseTs(existing.buy_price_max_date || '')) {
+                // Incoming is newer
+            } else if (buyPrice > 0 && buyPrice > (existing.buy_price_max || 0)) {
+                // Incoming is better price
+            } else {
+                buyPrice = existing.buy_price_max;
+                buyDate = existing.buy_price_max_date;
+            }
+        }
+
+        return {
+            key: makeKey(entry),
+            item_id: entry.item_id,
+            quality: entry.quality || 1,
+            city: entry.city,
+            sell_price_min: sellPrice,
+            sell_price_min_date: sellDate,
+            buy_price_max: buyPrice,
+            buy_price_max_date: buyDate,
+            scan_timestamp: Date.now()
+        };
+    }
+
+    // Write entries to IndexedDB in background batches (non-blocking)
+    let idbWriteQueue = [];
+    let idbWriteScheduled = false;
+    const IDB_BATCH_SIZE = 3000;
+    const IDB_WRITE_DELAY = 500; // ms between batches
+
+    function scheduleIdbWrite() {
+        if (idbWriteScheduled || idbWriteQueue.length === 0) return;
+        idbWriteScheduled = true;
+        setTimeout(async () => {
+            idbWriteScheduled = false;
+            const batch = idbWriteQueue.splice(0, IDB_BATCH_SIZE);
+            if (batch.length === 0) return;
+            try {
+                const db = await open();
+                await new Promise((resolve, reject) => {
+                    const tx = db.transaction(STORE_NAME, 'readwrite');
+                    const store = tx.objectStore(STORE_NAME);
+                    for (const entry of batch) store.put(entry);
+                    tx.oncomplete = () => resolve();
+                    tx.onerror = () => reject(tx.error);
+                });
+            } catch (e) { /* IDB write failed — memory cache still valid */ }
+            // Schedule next batch if more queued
+            if (idbWriteQueue.length > 0) scheduleIdbWrite();
+        }, IDB_WRITE_DELAY);
+    }
+
+    async function saveMarketData(entries) {
+        const now = Date.now();
+        for (const entry of entries) {
+            if (!entry.item_id || !entry.city) continue;
+            const key = makeKey(entry);
+            const existing = memCache.get(key);
+            const merged = mergeEntry(existing, entry);
+            merged.scan_timestamp = now;
+            memCache.set(key, merged);
+            idbWriteQueue.push(merged);
+        }
+        // Schedule background IDB persist
+        scheduleIdbWrite();
     }
 
     async function getItemPrices(itemId) {
-        const db = await open();
-        return new Promise((resolve, reject) => {
-            const tx = db.transaction(STORE_NAME, 'readonly');
-            const index = tx.objectStore(STORE_NAME).index('item_id');
-            const req = index.getAll(itemId);
-            req.onsuccess = () => resolve(req.result || []);
-            req.onerror = () => reject(req.error);
-        });
+        const results = [];
+        for (const entry of memCache.values()) {
+            if (entry.item_id === itemId) results.push(entry);
+        }
+        return results;
     }
 
     async function getAllPrices() {
-        const db = await open();
-        return new Promise((resolve, reject) => {
-            const tx = db.transaction(STORE_NAME, 'readonly');
-            const req = tx.objectStore(STORE_NAME).getAll();
-            req.onsuccess = () => resolve(req.result || []);
-            req.onerror = () => reject(req.error);
-        });
+        // Return from memory cache (instant)
+        return Array.from(memCache.values());
     }
 
     async function clearAll() {
-        const db = await open();
-        return new Promise((resolve, reject) => {
-            const tx = db.transaction(STORE_NAME, 'readwrite');
-            tx.objectStore(STORE_NAME).clear();
-            tx.oncomplete = () => resolve();
-            tx.onerror = () => reject(tx.error);
-        });
+        memCache.clear();
+        idbWriteQueue = [];
+        try {
+            const db = await open();
+            await new Promise((resolve, reject) => {
+                const tx = db.transaction(STORE_NAME, 'readwrite');
+                tx.objectStore(STORE_NAME).clear();
+                tx.oncomplete = () => resolve();
+                tx.onerror = () => reject(tx.error);
+            });
+        } catch (e) { /* best effort */ }
+    }
+
+    // Load IndexedDB into memory cache on startup (for returning users)
+    async function loadFromIdb() {
+        if (memLoaded) return;
+        try {
+            const db = await open();
+            const entries = await new Promise((resolve, reject) => {
+                const tx = db.transaction(STORE_NAME, 'readonly');
+                const req = tx.objectStore(STORE_NAME).getAll();
+                req.onsuccess = () => resolve(req.result || []);
+                req.onerror = () => reject(req.error);
+            });
+            for (const entry of entries) {
+                memCache.set(entry.key, entry);
+            }
+            memLoaded = true;
+        } catch (e) { /* fresh start */ }
     }
 
     async function setMeta(id, value) {
@@ -153,43 +193,41 @@ const MarketDB = (() => {
     }
 
     async function getStoredItemCount() {
-        const db = await open();
-        return new Promise((resolve, reject) => {
-            const tx = db.transaction(STORE_NAME, 'readonly');
-            const req = tx.objectStore(STORE_NAME).count();
-            req.onsuccess = () => resolve(req.result);
-            req.onerror = () => reject(req.error);
-        });
+        return memCache.size;
     }
 
     async function evictStale(maxAgeMs) {
-        const db = await open();
-        return new Promise((resolve, reject) => {
-            const tx = db.transaction(STORE_NAME, 'readwrite');
-            const store = tx.objectStore(STORE_NAME);
-            const cutoff = Date.now() - maxAgeMs;
-            let evicted = 0;
-            const req = store.openCursor();
-            req.onsuccess = (e) => {
-                const cursor = e.target.result;
-                if (cursor) {
-                    if (cursor.value.scan_timestamp && cursor.value.scan_timestamp < cutoff) {
-                        cursor.delete();
-                        evicted++;
+        const cutoff = Date.now() - maxAgeMs;
+        let evicted = 0;
+        for (const [key, entry] of memCache) {
+            if (entry.scan_timestamp && entry.scan_timestamp < cutoff) {
+                memCache.delete(key);
+                evicted++;
+            }
+        }
+        // Also clean IDB in background
+        if (evicted > 0) {
+            try {
+                const db = await open();
+                const tx = db.transaction(STORE_NAME, 'readwrite');
+                const store = tx.objectStore(STORE_NAME);
+                const req = store.openCursor();
+                req.onsuccess = (e) => {
+                    const cursor = e.target.result;
+                    if (cursor) {
+                        if (cursor.value.scan_timestamp && cursor.value.scan_timestamp < cutoff) cursor.delete();
+                        cursor.continue();
                     }
-                    cursor.continue();
-                }
-            };
-            tx.oncomplete = () => {
-                if (evicted > 0) console.log(`[DB] Evicted ${evicted} stale entries`);
-                resolve(evicted);
-            };
-            tx.onerror = () => reject(tx.error);
-        });
+                };
+            } catch (e) { /* best effort */ }
+        }
+        if (evicted > 0) console.log(`[DB] Evicted ${evicted} stale entries`);
+        return evicted;
     }
 
     return {
         open,
+        loadFromIdb,
         saveMarketData,
         getItemPrices,
         getAllPrices,
