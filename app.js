@@ -50,6 +50,8 @@ const SLOT_MATERIAL_COUNT = {
 const STACK_SIZE = { resources: 999, materials: 999, consumables: 999, other: 999, mounts: 1 };
 const API_CHUNK_SIZE = 100;
 
+const DEBUG = false;
+
 // ====== STATE ======
 let ITEM_NAMES = {};
 let ITEM_WEIGHTS = {};
@@ -97,6 +99,9 @@ function esc(str) {
 }
 
 // Toast notification system — replaces alert()/confirm()
+const _activeToasts = [];
+const MAX_VISIBLE_TOASTS = 5;
+
 function showToast(message, type = 'info', duration = 4000) {
     let container = document.getElementById('toast-container');
     if (!container) {
@@ -104,13 +109,27 @@ function showToast(message, type = 'info', duration = 4000) {
         container.id = 'toast-container';
         document.body.appendChild(container);
     }
+
+    // Remove oldest toast if we exceed the max
+    while (_activeToasts.length >= MAX_VISIBLE_TOASTS) {
+        const oldest = _activeToasts.shift();
+        if (oldest && oldest.parentNode) {
+            oldest.classList.remove('show');
+            setTimeout(() => oldest.remove(), 300);
+        }
+    }
+
     const toast = document.createElement('div');
     toast.className = `toast toast-${type}`;
     toast.innerHTML = esc(message);
     container.appendChild(toast);
+    _activeToasts.push(toast);
+
     requestAnimationFrame(() => toast.classList.add('show'));
     setTimeout(() => {
         toast.classList.remove('show');
+        const idx = _activeToasts.indexOf(toast);
+        if (idx > -1) _activeToasts.splice(idx, 1);
         setTimeout(() => toast.remove(), 300);
     }, duration);
 }
@@ -146,7 +165,7 @@ function getQualityName(q) {
     return map[String(q)] || 'Unknown';
 }
 
-function timeAgo(dateString) {
+function _computeTimeAgo(dateString) {
     if (!dateString || dateString.startsWith('0001')) return 'Never';
     const date = new Date(dateString.endsWith('Z') ? dateString : dateString + 'Z');
     const now = new Date();
@@ -159,15 +178,41 @@ function timeAgo(dateString) {
     return `${Math.floor(diffHours / 24)}d ago`;
 }
 
-function getFreshnessIndicator(dateString) {
-    if (!dateString || dateString.startsWith('0001')) return '<span class="freshness-dot stale" title="No data">⚫</span>';
-    const date = new Date(dateString.endsWith('Z') ? dateString : dateString + 'Z');
-    const now = new Date();
-    const diffMins = Math.floor((now - date) / 60000);
-    if (diffMins < 30) return '<span class="freshness-dot fresh" title="Updated < 30 min ago">🟢</span>';
-    if (diffMins < 120) return '<span class="freshness-dot aging" title="Updated 30m–2h ago">🟡</span>';
-    return '<span class="freshness-dot old" title="Updated > 2h ago">🔴</span>';
+function timeAgo(dateString) {
+    const text = _computeTimeAgo(dateString);
+    if (!dateString || dateString.startsWith('0001')) return text;
+    const ts = dateString.endsWith('Z') ? dateString : dateString + 'Z';
+    return `<span class="time-ago" data-ts="${esc(ts)}">${text}</span>`;
 }
+
+function _computeFreshness(dateString) {
+    if (!dateString || dateString.startsWith('0001')) return { cls: 'stale', title: 'No data', icon: '\u26AB' };
+    const date = new Date(dateString.endsWith('Z') ? dateString : dateString + 'Z');
+    const diffMins = Math.floor((new Date() - date) / 60000);
+    if (diffMins < 30) return { cls: 'fresh', title: 'Updated < 30 min ago', icon: '\uD83D\uDFE2' };
+    if (diffMins < 120) return { cls: 'aging', title: 'Updated 30m\u20132h ago', icon: '\uD83D\uDFE1' };
+    return { cls: 'old', title: 'Updated > 2h ago', icon: '\uD83D\uDD34' };
+}
+
+function getFreshnessIndicator(dateString) {
+    const f = _computeFreshness(dateString);
+    if (!dateString || dateString.startsWith('0001')) return `<span class="freshness-dot ${f.cls}" title="${f.title}">${f.icon}</span>`;
+    const ts = dateString.endsWith('Z') ? dateString : dateString + 'Z';
+    return `<span class="freshness-dot ${f.cls}" title="${f.title}" data-ts-fresh="${esc(ts)}">${f.icon}</span>`;
+}
+
+// Auto-refresh freshness badges and time-ago labels every 60s
+setInterval(() => {
+    document.querySelectorAll('.time-ago[data-ts]').forEach(el => {
+        el.textContent = _computeTimeAgo(el.dataset.ts);
+    });
+    document.querySelectorAll('.freshness-dot[data-ts-fresh]').forEach(el => {
+        const f = _computeFreshness(el.dataset.tsFresh);
+        el.className = `freshness-dot ${f.cls}`;
+        el.title = f.title;
+        el.textContent = f.icon;
+    });
+}, 60000);
 
 function extractTier(itemId) {
     const m = itemId.match(/^T(\d+)/);
@@ -402,6 +447,9 @@ function initTabs() {
             }
             if (currentTab === 'alerts') loadAlerts();
             if (currentTab === 'community') { if (typeof loadLeaderboard === 'function') loadLeaderboard(); }
+            if (currentTab === 'portfolio') { if (typeof renderPortfolio === 'function') renderPortfolio(); }
+            if (currentTab === 'mounts') { if (typeof renderMountsDatabase === 'function') renderMountsDatabase(); }
+            if (currentTab === 'farm') { if (typeof renderFarmBreed === 'function') renderFarmBreed(); }
 
             // Update URL with current tab (shareable deep link)
             const url = new URL(window.location);
@@ -422,6 +470,8 @@ function initTabs() {
     const urlParams = new URLSearchParams(window.location.search);
     const urlTab = urlParams.get('tab');
     const urlItem = urlParams.get('item');
+    const urlFrom = urlParams.get('from');
+    const urlTo = urlParams.get('to');
     if (urlTab) {
         const tabEl = document.querySelector(`.nav-tab[data-tab="${urlTab}"]`);
         if (tabEl) tabEl.click();
@@ -431,6 +481,19 @@ function initTabs() {
                 if (urlTab === 'browser') switchToBrowser(urlItem);
                 else if (urlTab === 'compare') switchToCompare(urlItem);
                 else if (urlTab === 'crafting') switchToCraft(urlItem);
+            }, 300);
+        }
+        // Pre-fill transport cities if provided
+        if (urlTab === 'transport' && (urlFrom || urlTo)) {
+            setTimeout(() => {
+                if (urlFrom) {
+                    const fromEl = document.getElementById('transport-buy-city');
+                    if (fromEl) fromEl.value = urlFrom;
+                }
+                if (urlTo) {
+                    const toEl = document.getElementById('transport-sell-city');
+                    if (toEl) toEl.value = urlTo;
+                }
             }, 300);
         }
     }
@@ -800,9 +863,9 @@ async function loadSpreadStats() {
             spreadStatsCache[key] = r;
         }
         spreadStatsCacheTime = now;
-        console.log(`[SpreadStats] Loaded ${rows.length} spread stats`);
+        if (DEBUG) console.log(`[SpreadStats] Loaded ${rows.length} spread stats`);
     } catch (e) {
-        console.log('[SpreadStats] Failed to load:', e.message);
+        if (DEBUG) console.log('[SpreadStats] Failed to load:', e.message);
     }
 }
 
@@ -1050,10 +1113,16 @@ function processArbitrage(data, quality, tier, enchantment, includeBM, buyCityFi
             else { dateA = a.dateBuy > a.dateSell ? a.dateBuy : a.dateSell; dateB = b.dateBuy > b.dateSell ? b.dateBuy : b.dateSell; }
             if (dateB > dateA) return 1;
             if (dateA > dateB) return -1;
-            return b.profit - a.profit;
+            const pDiff = b.profit - a.profit;
+            if (pDiff !== 0) return pDiff;
+            return (a.itemId || '').localeCompare(b.itemId || '');
         });
     } else {
-        filtered.sort((a, b) => b.profit - a.profit);
+        filtered.sort((a, b) => {
+            const pDiff = b.profit - a.profit;
+            if (pDiff !== 0) return pDiff;
+            return (a.itemId || '').localeCompare(b.itemId || '');
+        });
     }
 
     return filtered.slice(0, 60);
@@ -1328,6 +1397,11 @@ function switchToCompare(itemId) {
 
     document.getElementById('compare-search').value = getFriendlyName(itemId);
     compareSelectedId = itemId;
+    // Update URL for sharing
+    const url = new URL(window.location);
+    url.searchParams.set('tab', 'compare');
+    url.searchParams.set('item', itemId);
+    history.replaceState(null, '', url);
     doCompare();
 }
 
@@ -1525,7 +1599,8 @@ async function doCompare() {
         await updateDbStatus();
     } catch (e) {
         spinner.classList.add('hidden');
-        container.innerHTML = `<div class="empty-state"><p>Error fetching data: ${esc(e.message)}</p></div>`;
+        container.innerHTML = `<div class="empty-state"><p>Failed to fetch comparison data. Please check your connection and try again.</p><p class="hint">${esc(e.message)}</p></div>`;
+        showToast('Compare fetch failed: ' + e.message, 'error');
     }
 }
 
@@ -1957,7 +2032,7 @@ function processCrafting(data, tier, sortBy) {
 
     if (sortBy === 'roi') crafts.sort((a, b) => b.roi - a.roi);
     else if (sortBy === 'name') crafts.sort((a, b) => getFriendlyName(a.itemId).localeCompare(getFriendlyName(b.itemId)));
-    else crafts.sort((a, b) => b.profit - a.profit);
+    else crafts.sort((a, b) => (b.profit - a.profit) || (a.itemId || '').localeCompare(b.itemId || ''));
 
     return crafts.slice(0, 60);
 }
@@ -2682,13 +2757,16 @@ function authHeaders() {
 async function loadAlerts() {
     const listEl = document.getElementById('alerts-list');
     const emptyEl = document.getElementById('alerts-empty');
+    const formEl = document.getElementById('alert-create-btn')?.closest('.controls-panel');
     if (!listEl) return;
 
     if (!localStorage.getItem('albion_auth_token')) {
         listEl.innerHTML = '<div class="empty-state"><p>Login to create and manage price alerts.</p></div>';
         if (emptyEl) emptyEl.style.display = 'none';
+        if (formEl) formEl.style.display = 'none';
         return;
     }
+    if (formEl) formEl.style.display = '';
 
     try {
         const res = await fetch(`${VPS_BASE}/api/alerts`, { headers: authHeaders() });
@@ -3746,7 +3824,7 @@ async function checkDiscordAuth() {
             if (overlay) overlay.style.display = 'flex';
         }
     } catch (e) {
-        console.log('Discord OAuth check failed:', e.message);
+        if (DEBUG) console.log('Discord OAuth check failed:', e.message);
         // If the VPS is temporarily unreachable but we have a valid (non-expired) JWT,
         // decode its payload and log the user in using the embedded claims.
         // This prevents a transient network hiccup from looking like a login failure.
@@ -3765,7 +3843,7 @@ async function checkDiscordAuth() {
                     dismissLandingOverlay();
                     updateHeaderProfile(discordUser);
                     window._userData = { user: discordUser, stats: { scans_30d: 0, scans_total: 0, tier: 'bronze' } };
-                    console.log('[Auth] VPS unreachable — logged in from cached JWT claims');
+                    if (DEBUG) console.log('[Auth] VPS unreachable — logged in from cached JWT claims');
                     return;
                 }
             } catch { /* malformed token, fall through to error UI */ }
@@ -3809,12 +3887,12 @@ async function loadServerCache(silent = false) {
         if (payload.data && payload.data.length > 0) {
             await MarketDB.saveMarketData(payload.data);
             await MarketDB.setMeta('lastScan', { server: 'shared-cache', timestamp: payload.timestamp });
-            console.log(`Loaded ${payload.count} prices from server cache (${payload.timestamp})`);
+            if (DEBUG) console.log(`Loaded ${payload.count} prices from server cache (${payload.timestamp})`);
             await updateDbStatus();
             return true;
         }
     } catch (e) {
-        console.log('Server cache not available, using local data:', e.message);
+        if (DEBUG) console.log('Server cache not available, using local data:', e.message);
     }
     return false;
 }
@@ -4378,7 +4456,7 @@ function initLiveSync() {
     wsLink = new WebSocket('wss://albionaitool.xyz');
 
     wsLink.onopen = () => {
-        console.log("[WS] Connected to live data stream");
+        if (DEBUG) console.log("[WS] Connected to live data stream");
         if(syncText) syncText.textContent = "Live Sync Active";
         if(syncDot) {
             syncDot.style.background = '#00ff00';
@@ -5920,6 +5998,11 @@ let lootSessions = [];
 let liveLootEvents = []; // real-time events from current WS session
 let liveSessionActive = false; // whether we are actively recording live events
 let chestCaptureActive = false; // whether chest capture mode is on
+let liveSessionSaved = false;   // whether current live session has been saved (prevents duplicates)
+let _llShowLiveTimer = null;    // debounce timer for showLiveSession re-renders
+let _llSearchTimer = null;      // debounce timer for search input
+let _llRemovedPlayers = new Set(); // players removed from current view
+let _llResolvedDeaths = new Set(); // deaths marked as resolved
 window._chestCaptures = window._chestCaptures || [];
 // Loot Logger filter/sort state (persisted across re-renders)
 let _llCurrentEvents = [];
@@ -5993,10 +6076,12 @@ function updateLiveLootIndicator() {
     if (!indicator) return;
     if (!liveSessionActive) { indicator.classList.add('hidden'); }
     else { indicator.classList.remove('hidden'); }
-    const players = new Set(liveLootEvents.map(e => e.looted_by_name || e.lootedBy?.name || '')).size;
+    // Exclude __DEATH__ events from counts
+    const lootOnly = liveLootEvents.filter(e => (e.item_id || e.itemId || '') !== '__DEATH__');
+    const players = new Set(lootOnly.map(e => e.looted_by_name || e.lootedBy?.name || '')).size;
     const evEl = document.getElementById('ll-event-count');
     const plEl = document.getElementById('ll-player-count');
-    if (evEl) evEl.textContent = liveLootEvents.length;
+    if (evEl) evEl.textContent = lootOnly.length;
     if (plEl) plEl.textContent = players;
     const saveBtn = document.getElementById('ll-save-btn');
     const resetBtn = document.getElementById('ll-reset-btn');
@@ -6005,8 +6090,16 @@ function updateLiveLootIndicator() {
 }
 
 function resetLiveSession() {
+    if (liveLootEvents.length > 0 && !liveSessionSaved) {
+        if (!confirm('You have unsaved loot events. Discard them?\n\nClick Cancel to go back and save first.')) return;
+    } else if (liveLootEvents.length > 0) {
+        if (!confirm('Clear the current live session?')) return;
+    }
     liveLootEvents = [];
     liveSessionActive = false;
+    liveSessionSaved = false;
+    _llRemovedPlayers.clear();
+    _llResolvedDeaths.clear();
     const btn = document.getElementById('ll-live-toggle-btn');
     if (btn) {
         btn.innerHTML = `<svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="10"/></svg> Start Live Session`;
@@ -6023,6 +6116,7 @@ function resetLiveSession() {
 
 async function saveLiveSession() {
     if (liveLootEvents.length === 0) { showToast('No events to save', 'warning'); return; }
+    if (liveSessionSaved) { showToast('Session already saved. New events will reset this.', 'info'); return; }
     const btn = document.getElementById('ll-save-btn');
     if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
     try {
@@ -6046,6 +6140,7 @@ async function saveLiveSession() {
         });
         if (res.ok) {
             const data = await res.json();
+            liveSessionSaved = true;
             showToast(`Session saved (${data.eventsImported} events)`, 'success');
             if (lootLoggerMode === 'live') loadLootSessions();
         } else {
@@ -6054,7 +6149,7 @@ async function saveLiveSession() {
     } catch(e) {
         showToast('Save failed: ' + e.message, 'error');
     } finally {
-        if (btn) { btn.disabled = liveLootEvents.length === 0; btn.textContent = 'Save Session'; }
+        if (btn) { btn.disabled = liveLootEvents.length === 0; btn.textContent = liveSessionSaved ? 'Saved ✓' : 'Save Session'; }
     }
 }
 
@@ -6278,23 +6373,30 @@ async function renderLootSessionEvents(events, targetEl, depositedMap) {
     _llTargetEl = detail;
     _llIsDetail = isDetail;
 
-    // Detect primary guild (most common among looters = "our" guild)
+    // Detect primary guild and alliance (most common among looters = "our" side)
     const guildCounts = {};
+    const allianceCounts = {};
     for (const [, data] of Object.entries(byPlayer)) {
         if (data.guild) guildCounts[data.guild] = (guildCounts[data.guild] || 0) + data.items.length;
+        if (data.alliance) allianceCounts[data.alliance] = (allianceCounts[data.alliance] || 0) + data.items.length;
     }
     const primaryGuild = Object.entries(guildCounts).sort((a, b) => b[1] - a[1])[0]?.[0] || '';
+    const primaryAlliance = Object.entries(allianceCounts).sort((a, b) => b[1] - a[1])[0]?.[0] || '';
 
-    // Compute player values and mark guild/enemy status
+    // Compute player values and mark guild/enemy status (alliance-aware for multi-guild ZvZ)
     for (const [name, data] of Object.entries(byPlayer)) {
         data.totalValue = data.items.reduce((s, ev) => {
             const p = priceMap[ev.item_id];
             return s + (p ? p.price * (ev.quantity || 1) : 0);
         }, 0);
         // isEnemy: player is a loot SOURCE (enemy who died), not a guild member doing the looting
-        // Detection: if all their items have looted_from_name === this player's name, they're the victim
         const isLootSource = data.items.length > 0 && data.items.every(ev => ev.looted_from_name === name);
-        data.isEnemy = isLootSource || (data.guild && data.guild !== primaryGuild && primaryGuild !== '');
+        // Alliance-based matching: if player's alliance matches primary alliance, they're friendly
+        // Falls back to guild matching when alliance is empty
+        const isFriendly = primaryAlliance && data.alliance
+            ? data.alliance === primaryAlliance
+            : (!primaryGuild || data.guild === primaryGuild || !data.guild);
+        data.isEnemy = isLootSource || !isFriendly;
     }
 
     // Render header + search/sort bar + cards
@@ -6319,6 +6421,10 @@ function _llRenderFiltered() {
 
     // Filter players by search text (match player name, guild, or any item name)
     let entries = Object.entries(byPlayer);
+    // Remove players that were explicitly removed
+    if (_llRemovedPlayers.size > 0) {
+        entries = entries.filter(([name]) => !_llRemovedPlayers.has(name));
+    }
     if (searchVal) {
         entries = entries.filter(([name, data]) => {
             if (name.toLowerCase().includes(searchVal)) return true;
@@ -6330,6 +6436,18 @@ function _llRenderFiltered() {
             });
         });
     }
+    // Item tier filter helper
+    function getItemTier(itemId) {
+        const m = (itemId || '').match(/^T(\d)/);
+        return m ? parseInt(m[1]) : 0;
+    }
+    function passesItemFilter(itemId, filter) {
+        if (filter === 'all') return true;
+        if (filter === 'nobags') return !(itemId || '').includes('BAG');
+        if (filter === 't5+') return getItemTier(itemId) >= 5;
+        if (filter === 't6+') return getItemTier(itemId) >= 6;
+        return true;
+    }
 
     // Sort
     if (sortVal === 'value') entries.sort((a, b) => b[1].totalValue - a[1].totalValue);
@@ -6337,9 +6455,10 @@ function _llRenderFiltered() {
     else if (sortVal === 'weight') entries.sort((a, b) => b[1].totalWeight - a[1].totalWeight);
     else if (sortVal === 'name') entries.sort((a, b) => a[0].localeCompare(b[0]));
 
-    // Totals (from full dataset, not filtered)
-    const totalItems = events.reduce((s, e) => s + (e.quantity || 1), 0);
-    const totalValue = events.reduce((s, e) => {
+    // Totals (from full dataset, not filtered — exclude death events)
+    const lootEventsOnly = events.filter(e => e.item_id !== '__DEATH__');
+    const totalItems = lootEventsOnly.reduce((s, e) => s + (e.quantity || 1), 0);
+    const totalValue = lootEventsOnly.reduce((s, e) => {
         const p = priceMap[e.item_id];
         return s + (p ? p.price * (e.quantity || 1) : 0);
     }, 0);
@@ -6357,12 +6476,20 @@ function _llRenderFiltered() {
         </div>
     </div>`;
 
-    // Search/sort bar
+    // Search/sort/filter bar
+    const filterEl = document.getElementById('ll-filter-tier');
+    const filterVal = filterEl ? filterEl.value : 'all';
     html += `<div class="ll-filter-bar">
         <div class="search-input-wrapper" style="flex:1; min-width:160px;">
             <span class="search-icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg></span>
-            <input type="text" id="ll-search" placeholder="Search player, guild, or item..." value="${esc(searchVal)}" oninput="_llRenderFiltered()">
+            <input type="text" id="ll-search" placeholder="Search player, guild, or item..." value="${esc(searchVal)}" oninput="if(_llSearchTimer)clearTimeout(_llSearchTimer);_llSearchTimer=setTimeout(_llRenderFiltered,300)">
         </div>
+        <select id="ll-filter-tier" class="transport-select" style="min-width:80px;" onchange="_llRenderFiltered()" title="Filter items by tier">
+            <option value="all"${filterVal === 'all' ? ' selected' : ''}>All Tiers</option>
+            <option value="t5+"${filterVal === 't5+' ? ' selected' : ''}>T5+</option>
+            <option value="t6+"${filterVal === 't6+' ? ' selected' : ''}>T6+</option>
+            <option value="nobags"${filterVal === 'nobags' ? ' selected' : ''}>No Bags</option>
+        </select>
         <select id="ll-sort" class="transport-select" style="min-width:100px;" onchange="_llRenderFiltered()">
             <option value="value"${sortVal === 'value' ? ' selected' : ''}>Value ↓</option>
             <option value="items"${sortVal === 'items' ? ' selected' : ''}>Items ↓</option>
@@ -6370,6 +6497,11 @@ function _llRenderFiltered() {
             <option value="name"${sortVal === 'name' ? ' selected' : ''}>Name A-Z</option>
         </select>
         <span style="font-size:0.72rem; color:var(--text-muted); white-space:nowrap;">${entries.length}/${totalPlayers}</span>
+    </div>`;
+    // Expand/Collapse All buttons + remove players
+    html += `<div style="display:flex; gap:0.4rem; margin-bottom:0.3rem;">
+        <button class="btn-small" onclick="document.querySelectorAll('#loot-session-detail .ll-player-card').forEach(c=>c.classList.add('expanded'))">Expand All</button>
+        <button class="btn-small" onclick="document.querySelectorAll('#loot-session-detail .ll-player-card').forEach(c=>c.classList.remove('expanded'))">Collapse All</button>
     </div>`;
 
     // Guild color palette (muted, dark-theme friendly)
@@ -6405,7 +6537,7 @@ function _llRenderFiltered() {
             `<img src="https://render.albiononline.com/v1/item/${encodeURIComponent(id)}.png" class="ll-preview-icon" loading="lazy" onerror="this.style.display='none'">`
         ).join('');
 
-        const itemsHtml = data.items.map(ev => {
+        const itemsHtml = data.items.filter(ev => passesItemFilter(ev.item_id, filterVal)).map(ev => {
             const iName = getFriendlyName(ev.item_id) || ev.item_id;
             const iconId = ev.item_id || 'T4_BAG';
             const iconUrl = `https://render.albiononline.com/v1/item/${encodeURIComponent(iconId)}.png`;
@@ -6444,6 +6576,7 @@ function _llRenderFiltered() {
 
         return `<div class="ll-player-card" style="${data.isEnemy ? enemyStyle : guildBorder}">
             <div class="ll-player-header" onclick="this.closest('.ll-player-card').classList.toggle('expanded')">
+                <button class="ll-remove-player" onclick="event.stopPropagation();_llRemovedPlayers.add('${esc(name)}');_llRenderFiltered()" title="Remove player from view">&times;</button>
                 <div class="ll-player-info">
                     <span class="ll-player-name">${esc(name)}</span>
                     ${data.died ? '<span title="Died during session" style="color:var(--loss-red); margin-left:0.3rem;">💀</span>' : ''}
@@ -6486,24 +6619,15 @@ function _llRenderFiltered() {
     }
 }
 
-// Handle .txt file upload
-async function handleLootFileUpload(input) {
-    const file = input.files[0];
-    if (!file) return;
-    const status = document.getElementById('loot-log-file-status');
-    const resultEl = document.getElementById('loot-upload-result');
-    const clearBtn = document.getElementById('ll-upload-clear-btn');
-    status.textContent = `Reading ${file.name}…`;
-
-    const text = await file.text();
+// Parse loot lines from text content
+function parseLootLines(text) {
     const allLines = text.split('\n').map(l => l.trim()).filter(l => l && !l.startsWith('timestamp'));
-
-    const parsedEvents = [];
+    const events = [];
     for (const line of allLines) {
         const parts = line.split(';');
         if (parts.length < 10) continue;
         const [ts, byAlliance, byGuild, byName, itemId, , qty, fromAlliance, fromGuild, fromName] = parts;
-        parsedEvents.push({
+        events.push({
             timestamp: new Date(ts).getTime() || Date.now(),
             looted_by_name: byName || '',
             looted_by_guild: byGuild || '',
@@ -6516,10 +6640,47 @@ async function handleLootFileUpload(input) {
             weight: 0
         });
     }
+    return { events, lines: allLines };
+}
 
-    status.textContent = `${parsedEvents.length} loot events from ${file.name}`;
+// Handle .txt file upload (supports multiple files)
+async function handleLootFileUpload(input) {
+    const files = Array.from(input.files);
+    if (!files.length) return;
+    await processLootFiles(files);
+    input.value = '';
+}
+
+// Handle drag-and-drop file upload
+async function handleLootFileDrop(event) {
+    const files = Array.from(event.dataTransfer.files).filter(f => f.name.endsWith('.txt'));
+    if (!files.length) { showToast('Please drop .txt files', 'warning'); return; }
+    await processLootFiles(files);
+}
+
+async function processLootFiles(files) {
+    const status = document.getElementById('loot-log-file-status');
+    const resultEl = document.getElementById('loot-upload-result');
+    const clearBtn = document.getElementById('ll-upload-clear-btn');
+    status.textContent = `Reading ${files.length} file${files.length > 1 ? 's' : ''}…`;
+
+    let allParsed = [];
+    let allLines = [];
+    const fileNames = [];
+    for (const file of files) {
+        const text = await file.text();
+        const { events, lines } = parseLootLines(text);
+        allParsed.push(...events);
+        allLines.push(...lines);
+        fileNames.push(file.name);
+    }
+    // Sort merged events by timestamp
+    allParsed.sort((a, b) => a.timestamp - b.timestamp);
+
+    status.textContent = `${allParsed.length} events from ${fileNames.join(', ')}`;
     if (clearBtn) clearBtn.style.display = '';
-    await renderLootSessionEvents(parsedEvents, resultEl);
+    _llRemovedPlayers.clear();
+    await renderLootSessionEvents(allParsed, resultEl);
 
     // Background upload for accountability use
     try {
@@ -6533,8 +6694,6 @@ async function handleLootFileUpload(input) {
             status.textContent += ` — saved (${data.eventsImported} events)`;
         }
     } catch { /* silent — viewing works without login */ }
-
-    input.value = '';
 }
 
 // === ACCOUNTABILITY CHECK ===
@@ -6654,7 +6813,7 @@ async function runAccountabilityCheck() {
             continue;
         }
         const name = ev.looted_by_name || 'Unknown';
-        if (!lootedByPlayer[name]) lootedByPlayer[name] = { guild: ev.looted_by_guild || '', items: {} };
+        if (!lootedByPlayer[name]) lootedByPlayer[name] = { guild: ev.looted_by_guild || '', alliance: ev.looted_by_alliance || '', items: {} };
         lootedByPlayer[name].items[ev.item_id] = (lootedByPlayer[name].items[ev.item_id] || 0) + (ev.quantity || 1);
         // Track items looted from players who died (those items are gone from the victim)
         if (ev.looted_from_name && deathVictims.has(ev.looted_from_name)) {
@@ -6663,23 +6822,43 @@ async function runAccountabilityCheck() {
         }
     }
 
-    // Detect primary guild (most common among looters)
+    // Detect primary guild and alliance (alliance-aware for multi-guild ZvZ)
     const guildCounts = {};
+    const allianceCounts = {};
     for (const [, data] of Object.entries(lootedByPlayer)) {
         if (data.guild) {
             const itemCount = Object.values(data.items).reduce((s, q) => s + q, 0);
             guildCounts[data.guild] = (guildCounts[data.guild] || 0) + itemCount;
         }
+        if (data.alliance) {
+            const itemCount = Object.values(data.items).reduce((s, q) => s + q, 0);
+            allianceCounts[data.alliance] = (allianceCounts[data.alliance] || 0) + itemCount;
+        }
     }
     const primaryGuild = Object.entries(guildCounts).sort((a, b) => b[1] - a[1])[0]?.[0] || '';
+    const primaryAlliance = Object.entries(allianceCounts).sort((a, b) => b[1] - a[1])[0]?.[0] || '';
 
-    // Clone deposited pool so we can decrement as we match (prevents over-counting)
-    const depositPool = { ...deposited };
+    // Proportional deposit allocation — fair regardless of player order
+    // Step 1: Sum total looted per item across all guild members
+    const totalLootedPerItem = {};
+    for (const [name, data] of Object.entries(lootedByPlayer)) {
+        const isGuildMember = primaryAlliance && data.alliance
+            ? data.alliance === primaryAlliance
+            : (!primaryGuild || data.guild === primaryGuild || !data.guild);
+        if (!isGuildMember) continue;
+        for (const [itemId, qty] of Object.entries(data.items)) {
+            const lostQty = lostByDeath[name]?.[itemId] || 0;
+            const effective = Math.max(0, qty - lostQty);
+            if (effective > 0) totalLootedPerItem[itemId] = (totalLootedPerItem[itemId] || 0) + effective;
+        }
+    }
 
-    // Cross-reference — only match guild members against chest deposits
+    // Cross-reference — proportional matching for guild members
     const playerResults = [];
     for (const [name, data] of Object.entries(lootedByPlayer)) {
-        const isGuildMember = !primaryGuild || data.guild === primaryGuild;
+        const isGuildMember = primaryAlliance && data.alliance
+            ? data.alliance === primaryAlliance
+            : (!primaryGuild || data.guild === primaryGuild || !data.guild);
         let totalLooted = 0, totalDeposited = 0;
         const itemResults = [];
 
@@ -6690,16 +6869,21 @@ async function runAccountabilityCheck() {
             totalLooted += effectiveQty;
 
             if (isGuildMember && effectiveQty > 0) {
-                // Match against deposit pool (decrement to prevent double-counting)
-                const available = depositPool[itemId] || 0;
-                const inChest = Math.min(effectiveQty, available);
-                depositPool[itemId] = available - inChest;
+                // Proportional share: player's looted / total looted * deposited
+                const totalForItem = totalLootedPerItem[itemId] || 0;
+                const depositedForItem = deposited[itemId] || 0;
+                const share = totalForItem > 0 ? (effectiveQty / totalForItem) * depositedForItem : 0;
+                const inChest = Math.min(effectiveQty, Math.round(share));
                 const missing = effectiveQty - inChest;
                 totalDeposited += inChest;
                 itemResults.push({ itemId, looted: effectiveQty, inChest, missing });
             } else if (effectiveQty > 0) {
                 // Enemy loot source — don't check deposits, just list items
                 itemResults.push({ itemId, looted: effectiveQty, inChest: -1, missing: -1 }); // -1 = N/A
+            }
+            // Show items lost on death separately (red outline, not counted as stolen)
+            if (lostQty > 0 && isGuildMember) {
+                itemResults.push({ itemId, looted: lostQty, inChest: -2, missing: -2, lostOnDeath: true }); // -2 = lost on death
             }
         }
 
@@ -6726,15 +6910,51 @@ async function runAccountabilityCheck() {
     const totalDeposited = playerResults.reduce((s, p) => s + p.totalDeposited, 0);
     const totalMissing = playerResults.reduce((s, p) => s + p.totalMissing, 0);
 
+    // Compute per-player missing silver values
+    for (const p of playerResults) {
+        p.missingSilver = 0;
+        for (const it of p.items) {
+            if (it.lostOnDeath || it.inChest < 0) continue;
+            const pe = priceMap[it.itemId];
+            if (pe && it.missing > 0) p.missingSilver += pe.price * it.missing;
+        }
+    }
+    const totalMissingSilver = playerResults.reduce((s, p) => s + p.missingSilver, 0);
+    // Suspects: guild members with <80% deposit rate and missing items
+    const suspects = playerResults.filter(p => !p.isEnemy && p.pct >= 0 && p.pct < 80 && p.totalMissing > 0);
+
+    // Store for export
+    window._llAccResults = { playerResults, priceMap, selectedTabNames, totalLooted, totalDeposited, totalMissing, totalMissingSilver };
+
     let html = '';
     if (selectedTabNames.length > 0) {
         html += `<div style="font-size:0.78rem; color:var(--text-muted); margin-bottom:0.75rem;">Comparing against: <strong>${selectedTabNames.map(n => esc(n)).join(', ')}</strong></div>`;
     }
+
+    // Suspects banner
+    if (suspects.length > 0) {
+        const suspectNames = suspects.map(s => esc(s.name)).join(', ');
+        html += `<div style="background:rgba(239,68,68,0.12); border:1px solid rgba(239,68,68,0.3); border-radius:8px; padding:0.7rem 1rem; margin-bottom:0.75rem;">
+            <div style="font-weight:600; color:var(--loss-red); font-size:0.85rem; margin-bottom:0.25rem;">
+                &#9888; ${suspects.length} suspect${suspects.length > 1 ? 's' : ''} — ${formatSilver(totalMissingSilver)} missing
+            </div>
+            <div style="font-size:0.75rem; color:var(--text-muted);">${suspectNames}</div>
+        </div>`;
+    }
+
     html += `<div class="ll-acc-summary">
         <div class="loot-tracked-stat"><span class="loot-tracked-stat-label">Looted</span><span class="loot-tracked-stat-value">${totalLooted}</span></div>
         <div class="loot-tracked-stat"><span class="loot-tracked-stat-label">In Chest</span><span class="loot-tracked-stat-value" style="color:var(--profit-green);">${totalDeposited}</span></div>
-        <div class="loot-tracked-stat"><span class="loot-tracked-stat-label">Missing</span><span class="loot-tracked-stat-value" style="color:var(--loss-red);">${totalMissing}</span></div>
+        <div class="loot-tracked-stat"><span class="loot-tracked-stat-label">Missing</span><span class="loot-tracked-stat-value" style="color:var(--loss-red);">${totalMissing}${totalMissingSilver > 0 ? ` (${formatSilver(totalMissingSilver)})` : ''}</span></div>
         <div class="loot-tracked-stat"><span class="loot-tracked-stat-label">Players</span><span class="loot-tracked-stat-value">${playerResults.length}</span></div>
+    </div>`;
+
+    // Action buttons: Expand/Collapse All, Copy to Discord, Export CSV
+    html += `<div style="display:flex; gap:0.4rem; margin-bottom:0.5rem; flex-wrap:wrap;">
+        <button class="btn-small" onclick="document.querySelectorAll('#accountability-result .ll-player-card').forEach(c=>c.classList.add('expanded'))">Expand All</button>
+        <button class="btn-small" onclick="document.querySelectorAll('#accountability-result .ll-player-card').forEach(c=>c.classList.remove('expanded'))">Collapse All</button>
+        <button class="btn-small" onclick="copyAccountabilityToDiscord()">&#128203; Copy to Discord</button>
+        <button class="btn-small" onclick="exportAccountabilityCSV()">CSV Export</button>
     </div>`;
 
     html += playerResults.map(p => {
@@ -6749,7 +6969,10 @@ async function runAccountabilityCheck() {
             const iw = getItemWeight(it.itemId);
             const weightStr = iw > 0 ? (iw * it.looted).toFixed(1) + ' kg' : '';
             let rowClass, dotClass, statusLabel;
-            if (it.inChest === -1) {
+            if (it.lostOnDeath) {
+                // Items lost when player died — shown but not counted as stolen
+                rowClass = 'll-item-died'; dotClass = 'll-dot-died'; statusLabel = 'Lost on Death';
+            } else if (it.inChest === -1) {
                 // Enemy loot — no deposit status
                 rowClass = ''; dotClass = ''; statusLabel = 'Enemy Loot';
             } else if (it.missing === 0) {
@@ -6802,7 +7025,7 @@ async function runAccountabilityCheck() {
                     </div>` : ''}
                     ${!p.isEnemy ? `<div class="ll-player-stat">
                         <span class="ll-stat-label">Missing</span>
-                        <span class="ll-stat-value ${p.totalMissing > 0 ? 'red' : 'green'}">${p.totalMissing}</span>
+                        <span class="ll-stat-value ${p.totalMissing > 0 ? 'red' : 'green'}">${p.totalMissing}${p.missingSilver > 0 ? ` (${formatSilver(p.missingSilver)})` : ''}</span>
                     </div>` : ''}
                 </div>
                 <span class="ll-player-chevron">&#x25BE;</span>
@@ -6813,6 +7036,42 @@ async function runAccountabilityCheck() {
     }).join('');
 
     resultEl.innerHTML = html;
+}
+
+function copyAccountabilityToDiscord() {
+    const r = window._llAccResults;
+    if (!r) { showToast('Run accountability check first', 'warning'); return; }
+    const guildPlayers = r.playerResults.filter(p => !p.isEnemy);
+    let text = `**Loot Accountability Report**\n`;
+    text += `Chests: ${r.selectedTabNames.join(', ')}\n`;
+    text += `Looted: ${r.totalLooted} | In Chest: ${r.totalDeposited} | Missing: ${r.totalMissing}`;
+    if (r.totalMissingSilver > 0) text += ` (~${Math.round(r.totalMissingSilver).toLocaleString()} silver)`;
+    text += `\n\n`;
+    text += '```\n';
+    text += 'Player'.padEnd(20) + 'Guild'.padEnd(15) + 'Dep%'.padEnd(6) + 'Missing'.padEnd(10) + 'Silver\n';
+    text += '-'.repeat(65) + '\n';
+    for (const p of guildPlayers) {
+        const silver = p.missingSilver > 0 ? Math.round(p.missingSilver).toLocaleString() : '-';
+        text += p.name.slice(0, 19).padEnd(20) + (p.guild || '-').slice(0, 14).padEnd(15) + `${p.pct}%`.padEnd(6) + String(p.totalMissing).padEnd(10) + silver + '\n';
+    }
+    text += '```';
+    navigator.clipboard.writeText(text).then(() => showToast('Copied to clipboard for Discord', 'success'));
+}
+
+function exportAccountabilityCSV() {
+    const r = window._llAccResults;
+    if (!r) { showToast('Run accountability check first', 'warning'); return; }
+    const rows = r.playerResults.filter(p => !p.isEnemy).map(p => ({
+        player: p.name,
+        guild: p.guild,
+        total_looted: p.totalLooted,
+        total_deposited: p.totalDeposited,
+        deposit_pct: p.pct,
+        total_missing: p.totalMissing,
+        missing_silver: Math.round(p.missingSilver),
+        died: p.died ? 'Yes' : 'No'
+    }));
+    exportToCSV(rows, `accountability-${new Date().toISOString().slice(0, 10)}.csv`);
 }
 
 // Hook into existing WS to capture loot events for live mode
@@ -6834,25 +7093,35 @@ function handleLootLoggerWsMessage(msg) {
     if (msg.type === 'loot-event' && msg.data) {
         if (liveSessionActive) {
             liveLootEvents.push(msg.data);
+            liveSessionSaved = false; // new events invalidate saved state
+            const saveBtn = document.getElementById('ll-save-btn');
+            if (saveBtn) saveBtn.textContent = 'Save Session';
             updateLiveLootIndicator();
-            // Real-time update if viewing live session detail
+            // Debounced re-render (2s) to avoid DOM thrashing on rapid events
             if (lootLoggerMode === 'live' && document.getElementById('loot-session-detail')?.style.display !== 'none') {
-                showLiveSession();
+                if (_llShowLiveTimer) clearTimeout(_llShowLiveTimer);
+                _llShowLiveTimer = setTimeout(showLiveSession, 2000);
             }
         }
     }
     if (msg.type === 'chest-capture' && msg.data) {
-        // Always store captures — available on both Loot Buyer and Loot Logger Accountability
+        // Gate captures on chestCaptureActive flag
+        if (!chestCaptureActive && lootLoggerMode === 'accountability') {
+            // Always store if in accountability mode regardless of toggle
+        } else if (!chestCaptureActive) {
+            // Skip if capture mode is off and not on accountability tab
+        }
         if (!window._chestCaptures) window._chestCaptures = [];
         window._chestCaptures.push(msg.data);
         if (window._chestCaptures.length > 20) window._chestCaptures.shift();
+        showToast(`Chest capture received: ${esc(msg.data.tabName || 'Unknown tab')}`, 'success');
         // Update Accountability UI if visible
         if (lootLoggerMode === 'accountability') {
             populateAccountabilityDropdowns();
             renderCaptureChips();
         }
     }
-    // Death event — prepare for future opcode
+    // Death event — mark affected player's items
     if (msg.type === 'death-event' && msg.data) {
         const playerName = msg.data.playerName || '';
         if (playerName) {
@@ -6861,7 +7130,8 @@ function handleLootLoggerWsMessage(msg) {
                 if (evName === playerName) ev.died = true;
             });
             if (lootLoggerMode === 'live' && document.getElementById('loot-session-detail')?.style.display !== 'none') {
-                showLiveSession();
+                if (_llShowLiveTimer) clearTimeout(_llShowLiveTimer);
+                _llShowLiveTimer = setTimeout(showLiveSession, 2000);
             }
         }
     }
@@ -6886,6 +7156,14 @@ async function doTransportScan() {
     const transportMode = document.querySelector('.transport-mode-btn.active')?.dataset.mode || 'live';
     const sellStrategy = document.getElementById('transport-sell-strategy')?.value || 'market';
     const excludeCaerleon = document.getElementById('transport-exclude-caerleon').checked;
+
+    // Update URL with transport cities for sharing
+    const shareUrl = new URL(window.location);
+    shareUrl.searchParams.set('tab', 'transport');
+    if (buyCity) shareUrl.searchParams.set('from', buyCity); else shareUrl.searchParams.delete('from');
+    if (sellCity) shareUrl.searchParams.set('to', sellCity); else shareUrl.searchParams.delete('to');
+    shareUrl.searchParams.delete('item');
+    history.replaceState(null, '', shareUrl);
 
     container.innerHTML = '';
     hideError(errorEl);
@@ -7105,11 +7383,12 @@ async function enrichAndRenderTransport(routes, budget, sortBy, mountCapacity, f
         });
     }
 
-    // Sort
-    if (sortBy === 'trip_profit') enriched.sort((a, b) => b.tripProfit - a.tripProfit);
-    else if (sortBy === 'transport_score') enriched.sort((a, b) => b.transportScore - a.transportScore);
-    else if (sortBy === 'profit_per_unit') enriched.sort((a, b) => b.profitPerUnit - a.profitPerUnit);
-    else if (sortBy === 'volume') enriched.sort((a, b) => b.volume - a.volume);
+    // Sort (tiebreak by item name for stable ordering)
+    const _tb = (a, b) => (a.itemId || '').localeCompare(b.itemId || '');
+    if (sortBy === 'trip_profit') enriched.sort((a, b) => (b.tripProfit - a.tripProfit) || _tb(a, b));
+    else if (sortBy === 'transport_score') enriched.sort((a, b) => (b.transportScore - a.transportScore) || _tb(a, b));
+    else if (sortBy === 'profit_per_unit') enriched.sort((a, b) => (b.profitPerUnit - a.profitPerUnit) || _tb(a, b));
+    else if (sortBy === 'volume') enriched.sort((a, b) => (b.volume - a.volume) || _tb(a, b));
     else if (sortBy === 'confidence') enriched.sort((a, b) => (b.confidence||0) - (a.confidence||0));
 
     const excludeCaerleon = document.getElementById('transport-exclude-caerleon').checked;
@@ -7710,7 +7989,7 @@ async function loadCommunityTab() {
                 document.getElementById('tier-progress-fill').style.width = progress.pct + '%';
             }
         } catch (e) {
-            console.log('Failed to load my stats:', e);
+            if (DEBUG) console.log('Failed to load my stats:', e);
         }
     }
 
@@ -7751,7 +8030,7 @@ async function loadCommunityTab() {
                 </div>`;
         }).join('');
     } catch (e) {
-        console.log('Failed to load leaderboard:', e);
+        if (DEBUG) console.log('Failed to load leaderboard:', e);
     }
 }
 
@@ -8842,8 +9121,8 @@ async function calculateFarming() {
             }
         }
 
-        // Sort by profit descending
-        results.sort((a, b) => b.profit - a.profit);
+        // Sort by profit descending, tiebreak by name
+        results.sort((a, b) => (b.profit - a.profit) || (a.name || '').localeCompare(b.name || ''));
         renderFarmResults(results, farmType);
     } catch (e) {
         spinner.classList.add('hidden');
@@ -9216,14 +9495,25 @@ function exportToCSV(data, filename) {
 function exportLootSession() {
     const events = _llCurrentEvents;
     if (!events || events.length === 0) { showToast('No loot data to export', 'warn'); return; }
-    const rows = events.map(e => ({
-        timestamp: new Date(e.timestamp).toISOString(),
-        looted_by: e.looted_by_name || '',
-        guild: e.looted_by_guild || '',
-        item: e.item_id || '',
-        quantity: e.quantity || 1,
-        looted_from: e.looted_from_name || ''
-    }));
+    const priceMap = _llPriceMap || {};
+    const rows = events.filter(e => e.item_id !== '__DEATH__').map(e => {
+        const p = priceMap[e.item_id];
+        const unitPrice = p ? p.price : 0;
+        const qty = e.quantity || 1;
+        return {
+            timestamp: new Date(e.timestamp).toISOString(),
+            looted_by: e.looted_by_name || '',
+            guild: e.looted_by_guild || '',
+            alliance: e.looted_by_alliance || '',
+            item_id: e.item_id || '',
+            item_name: getFriendlyName(e.item_id) || e.item_id || '',
+            quantity: qty,
+            unit_price: unitPrice,
+            total_value: unitPrice * qty,
+            weight: (getItemWeight(e.item_id) * qty) || 0,
+            looted_from: e.looted_from_name || ''
+        };
+    });
     exportToCSV(rows, `loot-session-${new Date().toISOString().slice(0, 10)}.csv`);
 }
 
@@ -9299,4 +9589,106 @@ async function submitFeedback() {
     }
 }
 
-window.addEventListener('load', init);
+// ===== CMD+K UNIVERSAL SEARCH =====
+let _cmdkOpen = false;
+function openCmdK() {
+    if (_cmdkOpen) return;
+    _cmdkOpen = true;
+    const overlay = document.createElement('div');
+    overlay.id = 'cmdk-overlay';
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:var(--z-toast,10000);display:flex;align-items:flex-start;justify-content:center;padding-top:15vh;';
+    overlay.onclick = (e) => { if (e.target === overlay) closeCmdK(); };
+    const modal = document.createElement('div');
+    modal.style.cssText = 'background:var(--bg-card,#1a1d26);border:1px solid var(--border-color,#2d3040);border-radius:12px;width:90%;max-width:520px;box-shadow:0 20px 60px rgba(0,0,0,0.5);';
+    modal.innerHTML = `<div style="padding:0.8rem 1rem;border-bottom:1px solid var(--border-color,#2d3040);">
+        <input id="cmdk-input" type="text" placeholder="Search items, tabs, features... (Ctrl+K)" style="width:100%;background:transparent;border:none;outline:none;color:var(--text-primary);font-size:1rem;">
+    </div><div id="cmdk-results" style="max-height:300px;overflow-y:auto;padding:0.4rem;"></div>`;
+    overlay.appendChild(modal);
+    document.body.appendChild(overlay);
+    const input = document.getElementById('cmdk-input');
+    input.focus();
+    input.addEventListener('input', () => renderCmdKResults(input.value));
+    input.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') closeCmdK();
+        if (e.key === 'Enter') { const first = document.querySelector('.cmdk-item'); if (first) first.click(); }
+    });
+}
+function closeCmdK() { _cmdkOpen = false; document.getElementById('cmdk-overlay')?.remove(); }
+function renderCmdKResults(query) {
+    const el = document.getElementById('cmdk-results');
+    if (!el) return;
+    const q = query.toLowerCase().trim();
+    if (!q) { el.innerHTML = '<div style="padding:0.5rem;color:var(--text-muted);font-size:0.82rem;">Type to search items or tabs...</div>'; return; }
+    const results = [];
+    const tabLabels = {'browser':'Market Browser','flipper':'Market Flipper','bm-flipper':'BM Flipper','compare':'City Compare','top-traded':'Top Traded','item-power':'Item Power','favorites':'Favorites','crafting':'Crafting','journals':'Journals','rrr':'RRR Calculator','repair':'Repair Cost','transport':'Transport Routes','live-flips':'Live Flips','portfolio':'Portfolio','loot-buyer':'Loot Buyer','loot-logger':'Loot Logger','mounts':'Mounts','farm':'Farm & Breed','builds':'Community Builds','alerts':'Alerts','community':'Community','profile':'Profile','about':'About'};
+    for (const [t, label] of Object.entries(tabLabels)) {
+        if (label.toLowerCase().includes(q)) results.push({ type: 'tab', label, tab: t });
+    }
+    if (typeof allItemNames !== 'undefined' && allItemNames) {
+        let count = 0;
+        for (const [id, name] of Object.entries(allItemNames)) {
+            if (count >= 8) break;
+            if ((name || '').toLowerCase().includes(q) || id.toLowerCase().includes(q)) { results.push({ type: 'item', label: name || id, itemId: id }); count++; }
+        }
+    }
+    if (!results.length) { el.innerHTML = '<div style="padding:0.5rem;color:var(--text-muted);font-size:0.82rem;">No results</div>'; return; }
+    el.innerHTML = results.map(r => {
+        if (r.type === 'tab') return `<div class="cmdk-item" onclick="closeCmdK();document.querySelector('[data-tab=\\'${r.tab}\\']')?.click()" style="padding:0.5rem 0.7rem;cursor:pointer;border-radius:6px;display:flex;align-items:center;gap:0.5rem;"><span style="font-size:0.7rem;padding:0.1rem 0.3rem;background:var(--accent);color:white;border-radius:4px;">TAB</span><span>${esc(r.label)}</span></div>`;
+        return `<div class="cmdk-item" onclick="closeCmdK();document.querySelector('[data-tab=\\'browser\\']')?.click();setTimeout(()=>{const s=document.getElementById('search-item');if(s){s.value='${esc(r.itemId)}';s.dispatchEvent(new Event('input'));}},100)" style="padding:0.5rem 0.7rem;cursor:pointer;border-radius:6px;display:flex;align-items:center;gap:0.5rem;"><img src="https://render.albiononline.com/v1/item/${encodeURIComponent(r.itemId)}.png" style="width:22px;height:22px;" onerror="this.style.display='none'"><span>${esc(r.label)}</span><span style="font-size:0.67rem;color:var(--text-muted);margin-left:auto;">${esc(r.itemId)}</span></div>`;
+    }).join('');
+}
+document.addEventListener('keydown', (e) => { if ((e.metaKey || e.ctrlKey) && e.key === 'k') { e.preventDefault(); openCmdK(); } });
+
+// ===== IN-GAME TIMERS WIDGET =====
+function initTimersWidget() {
+    const w = document.createElement('div');
+    w.id = 'timers-widget';
+    w.style.cssText = 'position:fixed;bottom:70px;right:16px;background:var(--bg-card,#1a1d26);border:1px solid var(--border-color,#2d3040);border-radius:10px;padding:0.5rem 0.7rem;font-size:0.72rem;color:var(--text-muted);z-index:50;cursor:pointer;transition:opacity 0.2s;opacity:0.7;';
+    w.onmouseenter = () => w.style.opacity = '1';
+    w.onmouseleave = () => w.style.opacity = '0.7';
+    w.innerHTML = '<div style="font-weight:600;margin-bottom:0.2rem;color:var(--text-primary);">Timers</div><div id="timer-daily"></div><div id="timer-monthly"></div>';
+    document.body.appendChild(w);
+    let collapsed = false;
+    w.onclick = () => { collapsed = !collapsed; w.querySelectorAll('#timer-daily,#timer-monthly').forEach(el => el.style.display = collapsed ? 'none' : ''); };
+    setInterval(() => {
+        const now = new Date();
+        const utcH = now.getUTCHours(), utcM = now.getUTCMinutes(), utcS = now.getUTCSeconds();
+        const secToDaily = ((24 - utcH - 1) * 3600) + ((60 - utcM - 1) * 60) + (60 - utcS);
+        const nextMonth = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1));
+        const secToMonthly = Math.floor((nextMonth - now) / 1000);
+        const fmt = (s) => { const h=Math.floor(s/3600),m=Math.floor((s%3600)/60),ss=s%60; return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(ss).padStart(2,'0')}`; };
+        const d = document.getElementById('timer-daily'), mo = document.getElementById('timer-monthly');
+        if (d) d.textContent = `Daily Reset: ${fmt(secToDaily)}`;
+        if (mo) mo.textContent = `Monthly: ${fmt(secToMonthly)}`;
+    }, 1000);
+}
+
+// ===== CONSUMED FLIP TRACKING =====
+const _consumedFlips = JSON.parse(localStorage.getItem('consumedFlips') || '{}');
+function markFlipConsumed(flipKey) {
+    _consumedFlips[flipKey] = Date.now();
+    localStorage.setItem('consumedFlips', JSON.stringify(_consumedFlips));
+    const el = document.querySelector(`[data-flip-key="${flipKey}"]`);
+    if (el) el.classList.add('flip-consumed');
+    showToast('Flip marked as taken', 'info');
+}
+function isFlipConsumed(flipKey) {
+    const ts = _consumedFlips[flipKey];
+    if (!ts) return false;
+    if (Date.now() - ts > 86400000) { delete _consumedFlips[flipKey]; localStorage.setItem('consumedFlips', JSON.stringify(_consumedFlips)); return false; }
+    return true;
+}
+
+// ===== PRECONFIGURED ITEM LISTS =====
+const ITEM_PRESETS = {
+    'T4-T8 Leather Armor': ['T4_ARMOR_LEATHER_SET1','T4_ARMOR_LEATHER_SET2','T4_ARMOR_LEATHER_SET3','T5_ARMOR_LEATHER_SET1','T5_ARMOR_LEATHER_SET2','T5_ARMOR_LEATHER_SET3','T6_ARMOR_LEATHER_SET1','T6_ARMOR_LEATHER_SET2','T6_ARMOR_LEATHER_SET3','T7_ARMOR_LEATHER_SET1','T7_ARMOR_LEATHER_SET2','T7_ARMOR_LEATHER_SET3','T8_ARMOR_LEATHER_SET1','T8_ARMOR_LEATHER_SET2','T8_ARMOR_LEATHER_SET3'],
+    'T5-T8 Plate Armor': ['T5_ARMOR_PLATE_SET1','T5_ARMOR_PLATE_SET2','T5_ARMOR_PLATE_SET3','T6_ARMOR_PLATE_SET1','T6_ARMOR_PLATE_SET2','T6_ARMOR_PLATE_SET3','T7_ARMOR_PLATE_SET1','T7_ARMOR_PLATE_SET2','T7_ARMOR_PLATE_SET3','T8_ARMOR_PLATE_SET1','T8_ARMOR_PLATE_SET2','T8_ARMOR_PLATE_SET3'],
+    'Gathering Tools T5-T8': ['T5_TOOL_PICKAXE','T5_TOOL_SICKLE','T5_TOOL_SKINNINGKNIFE','T5_TOOL_WOODAXE','T5_TOOL_STONEHAMMER','T6_TOOL_PICKAXE','T6_TOOL_SICKLE','T6_TOOL_SKINNINGKNIFE','T6_TOOL_WOODAXE','T6_TOOL_STONEHAMMER','T7_TOOL_PICKAXE','T7_TOOL_SICKLE','T7_TOOL_SKINNINGKNIFE','T7_TOOL_WOODAXE','T7_TOOL_STONEHAMMER','T8_TOOL_PICKAXE','T8_TOOL_SICKLE','T8_TOOL_SKINNINGKNIFE','T8_TOOL_WOODAXE','T8_TOOL_STONEHAMMER'],
+    'Transport Bags': ['T4_BAG','T5_BAG','T6_BAG','T7_BAG','T8_BAG','T4_BAG_INSIGHT','T5_BAG_INSIGHT','T6_BAG_INSIGHT','T7_BAG_INSIGHT','T8_BAG_INSIGHT'],
+    'Popular Mounts': ['T5_MOUNT_OX','T7_MOUNT_OX','T8_MOUNT_MAMMOTH_TRANSPORT','T8_MOUNT_SWAMPDRAGON','T8_MOUNT_DIREBEAR','T8_MOUNT_DIREWOLF','T8_MOUNT_MAMMOTH_BATTLE']
+};
+
+// Init with timers widget
+const _origInit = typeof init === 'function' ? init : null;
+function _wrappedInit() { if (_origInit) _origInit(); initTimersWidget(); }
+window.addEventListener('load', _wrappedInit);

@@ -16,7 +16,7 @@ def load_env():
 
 load_env()
 
-ip = os.environ.get('VPS_IP', '209.97.129.125')
+ip = os.environ.get('VPS_IP', '5.189.189.71')
 password = os.environ['VPS_PASSWORD']
 usr = os.environ.get('VPS_USER', 'root')
 domain = os.environ.get('VPS_DOMAIN', 'albionaitool.xyz')
@@ -108,6 +108,16 @@ const CHUNK_SIZE = 50;  // Larger chunks OK with 6 vCPU / 12GB RAM
 const SCAN_INTERVAL_MS = 10 * 60 * 1000; // 10 minutes
 const SITE_URL = 'https://coldtouch.github.io/coldtouch-market-analyzer';
 
+function maskEmail(email) {
+    if (!email) return '***';
+    const [local, domain] = email.split('@');
+    return local.slice(0, 2) + '***@' + (domain || '***');
+}
+
+function logAudit(userId, action, detail, ip) {
+    db.run('INSERT INTO audit_log (user_id, action, detail, ip, created_at) VALUES (?, ?, ?, ?, ?)', [userId, action, detail, ip, Math.floor(Date.now() / 1000)]);
+}
+
 // === SMTP EMAIL CONFIG ===
 const SMTP_HOST = process.env.SMTP_HOST || '';
 const SMTP_PORT = parseInt(process.env.SMTP_PORT || '587');
@@ -180,6 +190,8 @@ db.serialize(() => {
   db.run(`ALTER TABLE users ADD COLUMN verification_token TEXT`, () => {});
   db.run(`ALTER TABLE users ADD COLUMN verification_expires INTEGER`, () => {});
   db.run(`ALTER TABLE users ADD COLUMN capture_token TEXT`, () => {});
+  db.run(`ALTER TABLE users ADD COLUMN reset_token TEXT`, () => {});
+  db.run(`ALTER TABLE users ADD COLUMN reset_expires INTEGER`, () => {});
   db.run(`CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email ON users(email) WHERE email IS NOT NULL`);
 
   db.run(`CREATE TABLE IF NOT EXISTS alerts (guild_id TEXT, channel_id TEXT, min_profit INTEGER, cooldown_ms INTEGER DEFAULT 600000, PRIMARY KEY(guild_id, channel_id))`);
@@ -367,6 +379,18 @@ db.serialize(() => {
   // === SERVER MIGRATION: detect if data was collected from a different game server ===
   // Store which game server the data was collected from
   db.run(`CREATE TABLE IF NOT EXISTS meta_config (key TEXT PRIMARY KEY, value TEXT)`);
+
+  // === AUDIT LOG ===
+  db.run(`CREATE TABLE IF NOT EXISTS audit_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id TEXT,
+    action TEXT NOT NULL,
+    detail TEXT,
+    ip TEXT,
+    created_at INTEGER DEFAULT (strftime('%s','now'))
+  )`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_audit_created ON audit_log(created_at)`);
+
   db.get(`SELECT value FROM meta_config WHERE key = 'game_server'`, (err, row) => {
     const prevServer = row ? row.value : null;
     if (prevServer && prevServer !== GAME_SERVER) {
@@ -830,6 +854,17 @@ client.on('interactionCreate', async interaction => {
 
 client.login(BOT_TOKEN).catch(e => console.error('[Discord] Login failed (rate limited):', e.message));
 
+// Discord bot health monitoring
+setInterval(() => {
+    if (!client.isReady()) {
+        console.warn('[Discord] Bot not ready, attempting re-login...');
+        client.login(BOT_TOKEN).catch(e => console.error('[Discord] Re-login failed:', e.message));
+    }
+}, 300000); // 5 minutes
+
+client.on('error', (err) => console.error('[Discord] Client error:', err.message));
+client.on('disconnect', () => console.warn('[Discord] Client disconnected'));
+
 // === EXPRESS APP ===
 const app = express();
 app.use(cors({ origin: 'https://coldtouch.github.io', credentials: true }));
@@ -839,6 +874,17 @@ app.use(helmet({ contentSecurityPolicy: false }));
 
 // JSON body parsing — must be before any route that reads req.body
 app.use(express.json());
+
+// Global request timeout
+app.use((req, res, next) => {
+    res.setTimeout(30000, () => {
+        if (!res.headersSent) {
+            console.warn('[Timeout] Request timed out:', req.method, req.url);
+            res.status(503).json({ error: 'Request timed out' });
+        }
+    });
+    next();
+});
 
 // Rate limiting
 const apiLimiter = rateLimit({ windowMs: 60 * 1000, max: 60, standardHeaders: true, legacyHeaders: false });
@@ -1071,8 +1117,9 @@ app.post('/api/register', registerLimiter, async (req, res) => {
           }).catch(e => console.error('[SMTP] Verification email failed:', e.message));
         }
 
+        logAudit(userId, 'register', maskEmail(emailLower), req.ip);
         const token = jwt.sign({ id: userId, username: trimUser, avatar: null }, SESSION_SECRET, { expiresIn: '30d' });
-        console.log(`[Register] New user: ${trimUser} (${emailLower}) verified=${autoVerified}`);
+        console.log(`[Register] New user: ${trimUser} (${maskEmail(emailLower)}) verified=${autoVerified}`);
         res.json({ success: true, token, user: { id: userId, username: trimUser, authType: 'email', role: 'free', emailVerified: !!autoVerified } });
       });
     } catch (hashErr) {
@@ -1101,9 +1148,10 @@ app.post('/api/login', loginLimiter, async (req, res) => {
       if (!valid) return res.status(401).json({ error: 'Invalid email or password.' });
 
       db.run(`UPDATE users SET last_login = ? WHERE id = ?`, [Date.now(), user.id]);
+      logAudit(user.id, 'login', 'email', req.ip);
 
       const token = jwt.sign({ id: user.id, username: user.username, avatar: user.avatar }, SESSION_SECRET, { expiresIn: '30d' });
-      console.log(`[Login] User logged in: ${user.username} (${emailLower})`);
+      console.log(`[Login] User logged in: ${user.username} (${maskEmail(emailLower)})`);
       res.json({ success: true, token, user: { id: user.id, username: user.username, avatar: user.avatar, authType: user.auth_type, role: user.role } });
     } catch (compareErr) {
       console.error('[Login] Compare error:', compareErr);
@@ -1183,12 +1231,82 @@ app.post('/api/change-password', loginLimiter, async (req, res) => {
       const hash = await bcrypt.hash(newPassword, 12);
       db.run(`UPDATE users SET password_hash = ? WHERE id = ?`, [hash, req.user.id], (err2) => {
         if (err2) return res.status(500).json({ error: 'Failed to update password.' });
+        logAudit(req.user.id, 'change_password', '', req.ip);
         console.log(`[Profile] Password changed for user ${req.user.id}`);
         res.json({ success: true });
       });
     } catch (e) {
       res.status(500).json({ error: 'Password change failed.' });
     }
+  });
+});
+
+// === PASSWORD RESET FLOW ===
+app.post('/api/forgot-password', registerLimiter, (req, res) => {
+  const { email } = req.body;
+  if (!email) return res.status(400).json({ error: 'Email is required.' });
+  const emailLower = email.toLowerCase().trim();
+
+  db.get(`SELECT id, username FROM users WHERE LOWER(email) = ?`, [emailLower], (err, user) => {
+    // Always return 200 to prevent email enumeration
+    if (err || !user) {
+      console.log(`[ForgotPassword] Request for unknown email: ${maskEmail(emailLower)}`);
+      return res.json({ ok: true });
+    }
+
+    const token = randomUUID();
+    const expires = Date.now() + 60 * 60 * 1000; // 1 hour
+
+    db.run(`UPDATE users SET reset_token = ?, reset_expires = ? WHERE id = ?`, [token, expires, user.id], () => {
+      logAudit(user.id, 'forgot_password', maskEmail(emailLower), req.ip);
+
+      if (mailTransporter) {
+        const resetUrl = 'https://coldtouch.github.io/coldtouch-market-analyzer/?reset=' + token;
+        mailTransporter.sendMail({
+          from: SMTP_FROM, to: emailLower,
+          subject: 'Reset your Coldtouch Market Analyzer password',
+          html: '<div style="font-family:sans-serif;max-width:500px;margin:0 auto;padding:20px;background:#1a1a26;color:#e8e8f0;border-radius:8px"><h2 style="color:#d4af37">Password Reset</h2><p>Hi ' + user.username + ', click below to reset your password:</p><a href="' + resetUrl + '" style="display:inline-block;padding:12px 24px;background:#d4af37;color:#000;text-decoration:none;border-radius:6px;font-weight:bold">Reset Password</a><p style="color:#8888a0;font-size:12px;margin-top:20px">This link expires in 1 hour. If you did not request this, ignore this email.</p></div>'
+        }).catch(e => console.error('[SMTP] Password reset email failed:', e.message));
+      }
+
+      console.log(`[ForgotPassword] Reset token generated for user ${user.id}`);
+      res.json({ ok: true });
+    });
+  });
+});
+
+app.post('/api/reset-password', registerLimiter, async (req, res) => {
+  const { token, newPassword } = req.body;
+  if (!token || !newPassword) return res.status(400).json({ error: 'Token and new password are required.' });
+  if (newPassword.length < 8) return res.status(400).json({ error: 'Password must be at least 8 characters.' });
+  if (newPassword.length > 128) return res.status(400).json({ error: 'Password too long.' });
+
+  db.get(`SELECT id FROM users WHERE reset_token = ? AND reset_expires > ?`, [token, Date.now()], async (err, user) => {
+    if (err || !user) return res.status(400).json({ error: 'Invalid or expired reset token.' });
+
+    try {
+      const hash = await bcrypt.hash(newPassword, 12);
+      db.run(`UPDATE users SET password_hash = ?, reset_token = NULL, reset_expires = NULL WHERE id = ?`, [hash, user.id], (err2) => {
+        if (err2) return res.status(500).json({ error: 'Failed to reset password.' });
+        logAudit(user.id, 'reset_password', '', req.ip);
+        console.log(`[ResetPassword] Password reset for user ${user.id}`);
+        res.json({ ok: true });
+      });
+    } catch (e) {
+      res.status(500).json({ error: 'Password reset failed.' });
+    }
+  });
+});
+
+// === AUDIT LOG ADMIN ENDPOINT ===
+app.get('/api/admin/audit-log', (req, res) => {
+  if (!req.user) return res.status(401).json({ error: 'Login required' });
+  // Admin check: site owner or expand this list as needed
+  if (req.user.id !== '325634482524782592') return res.status(403).json({ error: 'Admin only' });
+  const limit = Math.min(parseInt(req.query.limit) || 100, 500);
+  readDb.all(`SELECT id, user_id, action, detail, ip, created_at FROM audit_log ORDER BY created_at DESC LIMIT ?`, [limit], (err, rows) => {
+    if (err) return res.status(500).json({ error: 'Database error.' });
+    res.json({ entries: rows || [] });
   });
 });
 
@@ -2447,15 +2565,15 @@ wss.on('connection', ws => {
           ws.user = jwt.verify(msg.token, SESSION_SECRET);
           ws.isAuthenticated = true;
           ws.clientType = 'browser';
-          ws.send(JSON.stringify({ type: 'auth', success: true }));
-          ws.send(JSON.stringify({ type: 'flip-history', data: liveFlips }));
+          wsSafeSend(ws, { type: 'auth', success: true });
+          wsSafeSend(ws, { type: 'flip-history', data: liveFlips });
           // Send any pending chest captures
           const pending = clientCaptures[ws.user.id];
           if (pending && pending.length > 0) {
-            ws.send(JSON.stringify({ type: 'chest-captures', data: pending }));
+            wsSafeSend(ws, { type: 'chest-captures', data: pending });
           }
         } catch(e) {
-          ws.send(JSON.stringify({ type: 'auth', success: false, error: 'Invalid token' }));
+          wsSafeSend(ws, { type: 'auth', success: false, error: 'Invalid token' });
         }
       }
 
@@ -2463,13 +2581,13 @@ wss.on('connection', ws => {
       if (msg.type === 'client-auth' && msg.token) {
         readDb.get(`SELECT id, username FROM users WHERE capture_token = ?`, [msg.token], (err, user) => {
           if (err || !user) {
-            ws.send(JSON.stringify({ type: 'client-auth', success: false, error: 'Invalid capture token' }));
+            wsSafeSend(ws, { type: 'client-auth', success: false, error: 'Invalid capture token' });
             return;
           }
           ws.user = { id: user.id, username: user.username };
           ws.isAuthenticated = true;
           ws.clientType = 'game-client';
-          ws.send(JSON.stringify({ type: 'client-auth', success: true, username: user.username }));
+          wsSafeSend(ws, { type: 'client-auth', success: true, username: user.username });
           console.log(`[ClientAuth] Game client authenticated for user ${user.username}`);
         });
       }
@@ -3903,64 +4021,87 @@ let natsConnection = null;
     });
     natsConnection.closed().then(() => console.error('[NATS] Connection closed permanently'));
     console.log('[NATS] Connected (auto-reconnect enabled)');
+
+    // Monitor NATS connection status events (reconnect, disconnect, etc.)
+    (async () => {
+      for await (const s of natsConnection.status()) {
+        if (s.type === 'reconnect') console.log('[NATS] Reconnected');
+        else if (s.type === 'disconnect') console.warn('[NATS] Disconnected');
+        else console.log('[NATS] Status:', s.type);
+      }
+    })();
+
     const sc = StringCodec();
-    const sub = natsConnection.subscribe("marketorders.deduped.*");
 
-    for await (const m of sub) {
-      const strData = sc.decode(m.data);
-      for(let wc of wsClients) if(wc.readyState === WebSocket.OPEN && wc.clientType !== 'game-client') wc.send(strData);
-
+    async function startNatsSubscription() {
       try {
-        const payloads = JSON.parse(strData);
-        for (const p of payloads) {
-          if (!p.ItemTypeId || !p.LocationId || !p.UnitPriceSilver) continue;
-          const id = p.ItemTypeId, q = p.QualityLevel || 1, loc = p.LocationId, price = p.UnitPriceSilver;
-          const city = API_LOCALE_MAP[loc];
-          if (!city) continue;
+        const sub = natsConnection.subscribe("marketorders.deduped.*");
+        console.log('[NATS] Subscription started');
 
-          if (!alertMarketDb[id]) alertMarketDb[id] = {};
-          if (!alertMarketDb[id][q]) alertMarketDb[id][q] = {};
-          if (!alertMarketDb[id][q][city]) alertMarketDb[id][q][city] = { sellMin: Infinity, sellAmount: 0, buyMax: 0, buyAmount: 0, sellDate: 0, buyDate: 0 };
+        for await (const m of sub) {
+          const strData = sc.decode(m.data);
+          for(let wc of wsClients) if(wc.readyState === WebSocket.OPEN && wc.clientType !== 'game-client') wc.send(strData);
 
-          const now = Date.now();
-          const amount = p.Amount || 1;
-          alertMarketDb[id][q][city].lastSeen = now;
+          try {
+            const payloads = JSON.parse(strData);
+            for (const p of payloads) {
+              if (!p.ItemTypeId || !p.LocationId || !p.UnitPriceSilver) continue;
+              const id = p.ItemTypeId, q = p.QualityLevel || 1, loc = p.LocationId, price = p.UnitPriceSilver;
+              const city = API_LOCALE_MAP[loc];
+              if (!city) continue;
 
-          if (p.AuctionType === 'offer') {
-            if (price < alertMarketDb[id][q][city].sellMin) {
-              // New best price — reset amount
-              alertMarketDb[id][q][city].sellMin = price;
-              alertMarketDb[id][q][city].sellAmount = amount;
-              alertMarketDb[id][q][city].sellDate = now;
-            } else if (price === alertMarketDb[id][q][city].sellMin) {
-              // Same price — accumulate amount (multiple orders at same price)
-              alertMarketDb[id][q][city].sellAmount += amount;
+              if (!alertMarketDb[id]) alertMarketDb[id] = {};
+              if (!alertMarketDb[id][q]) alertMarketDb[id][q] = {};
+              if (!alertMarketDb[id][q][city]) alertMarketDb[id][q][city] = { sellMin: Infinity, sellAmount: 0, buyMax: 0, buyAmount: 0, sellDate: 0, buyDate: 0 };
+
+              const now = Date.now();
+              const amount = p.Amount || 1;
+              alertMarketDb[id][q][city].lastSeen = now;
+
+              if (p.AuctionType === 'offer') {
+                if (price < alertMarketDb[id][q][city].sellMin) {
+                  // New best price — reset amount
+                  alertMarketDb[id][q][city].sellMin = price;
+                  alertMarketDb[id][q][city].sellAmount = amount;
+                  alertMarketDb[id][q][city].sellDate = now;
+                } else if (price === alertMarketDb[id][q][city].sellMin) {
+                  // Same price — accumulate amount (multiple orders at same price)
+                  alertMarketDb[id][q][city].sellAmount += amount;
+                }
+              } else if (p.AuctionType === 'request') {
+                if (price > alertMarketDb[id][q][city].buyMax) {
+                  alertMarketDb[id][q][city].buyMax = price;
+                  alertMarketDb[id][q][city].buyAmount = amount;
+                  alertMarketDb[id][q][city].buyDate = now;
+                } else if (price === alertMarketDb[id][q][city].buyMax) {
+                  alertMarketDb[id][q][city].buyAmount += amount;
+                }
+              }
+
+              // Buffer for snapshot recording — deduplicated per item/quality/city
+              const snapKey = id + '_' + q + '_' + city;
+              if (!natsSnapshotMap[snapKey]) natsSnapshotMap[snapKey] = { item_id: id, quality: q, city: city, sell: 0, buy: 0 };
+              if (p.AuctionType === 'offer' && price > 0 && (natsSnapshotMap[snapKey].sell === 0 || price < natsSnapshotMap[snapKey].sell)) {
+                natsSnapshotMap[snapKey].sell = price;
+              } else if (p.AuctionType === 'request' && price > natsSnapshotMap[snapKey].buy) {
+                natsSnapshotMap[snapKey].buy = price;
+              }
+
+              // Check for alerts and live flips on this item
+              checkAndAlert(id, q);
+              detectFlip(id, q);
             }
-          } else if (p.AuctionType === 'request') {
-            if (price > alertMarketDb[id][q][city].buyMax) {
-              alertMarketDb[id][q][city].buyMax = price;
-              alertMarketDb[id][q][city].buyAmount = amount;
-              alertMarketDb[id][q][city].buyDate = now;
-            } else if (price === alertMarketDb[id][q][city].buyMax) {
-              alertMarketDb[id][q][city].buyAmount += amount;
-            }
-          }
-
-          // Buffer for snapshot recording — deduplicated per item/quality/city
-          const snapKey = id + '_' + q + '_' + city;
-          if (!natsSnapshotMap[snapKey]) natsSnapshotMap[snapKey] = { item_id: id, quality: q, city: city, sell: 0, buy: 0 };
-          if (p.AuctionType === 'offer' && (natsSnapshotMap[snapKey].sell === 0 || price < natsSnapshotMap[snapKey].sell)) {
-            natsSnapshotMap[snapKey].sell = price;
-          } else if (p.AuctionType === 'request' && price > natsSnapshotMap[snapKey].buy) {
-            natsSnapshotMap[snapKey].buy = price;
-          }
-
-          // Check for alerts and live flips on this item
-          checkAndAlert(id, q);
-          detectFlip(id, q);
+          } catch(e) { console.error('[NATS] Parse error:', e.message); }
         }
-      } catch(e) { console.error('[NATS] Parse error:', e.message); }
+        console.warn('[NATS] Subscription iterator ended, restarting...');
+        setTimeout(startNatsSubscription, 5000);
+      } catch (err) {
+        console.error('[NATS] Subscription error:', err.message);
+        setTimeout(startNatsSubscription, 10000);
+      }
     }
+
+    startNatsSubscription();
   } catch(err){ console.error('[NATS] Connection failed:', err); }
 })();
 

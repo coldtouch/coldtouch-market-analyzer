@@ -1,0 +1,20 @@
+{
+    "name": "Coldtouch Market Analyzer",
+    "short_name": "Coldtouch",
+    "description": "Albion Online Market Analyzer — flips, transport, loot logger, crafting, and more",
+    "start_url": "/coldtouch-market-analyzer/",
+    "scope": "/coldtouch-market-analyzer/",
+    "display": "standalone",
+    "background_color": "#0f1117",
+    "theme_color": "#6366f1",
+    "icons": [
+        {
+            "src": "og-image.png",
+            "sizes": "512x512",
+            "type": "image/png",
+            "purpose": "any maskable"
+        }
+    ],
+    "categories": ["games", "utilities"],
+    "orientation": "any"
+}

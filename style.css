@@ -29,6 +29,11 @@
     --radius-lg: 12px;
     --shadow: 0 4px 24px rgba(0, 0, 0, 0.4);
     --transition: 0.2s ease;
+    --z-base: 1;
+    --z-dropdown: 100;
+    --z-sticky: 200;
+    --z-modal: 1000;
+    --z-toast: 10000;
 }
 
 * {
@@ -264,7 +269,7 @@ button:disabled, .btn-primary:disabled, .btn-secondary:disabled, .btn-scan-all:d
     border-bottom: 1px solid var(--border-color);
     position: sticky;
     top: 0;
-    z-index: 100;
+    z-index: var(--z-dropdown);
     display: flex;
     align-items: stretch;
 }
@@ -338,7 +343,7 @@ button:disabled, .btn-primary:disabled, .btn-secondary:disabled, .btn-scan-all:d
     border: 1px solid var(--border-color);
     border-radius: 0 0 var(--radius) var(--radius);
     box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
-    z-index: 200;
+    z-index: var(--z-sticky);
     flex-direction: column;
     padding: 0.25rem 0;
 }
@@ -493,7 +498,7 @@ select:focus {
     position: absolute;
     border: 1px solid var(--border-color);
     border-top: none;
-    z-index: 200;
+    z-index: var(--z-sticky);
     top: 100%;
     left: 0;
     right: 0;
@@ -1112,7 +1117,7 @@ select:focus {
 .ll-item-missing:hover { background: rgba(248, 113, 113, 0.09); }
 .ll-item-partial { background: rgba(251, 191, 36, 0.04); }
 .ll-item-partial:hover { background: rgba(251, 191, 36, 0.08); }
-.ll-item-died { opacity: 0.55; }
+.ll-item-died { opacity: 0.65; border-left: 2px solid var(--loss-red); background: rgba(239, 68, 68, 0.04); }
 .ll-item-icon {
     width: 28px;
     height: 28px;
@@ -1135,8 +1140,24 @@ select:focus {
 .ll-dot-deposited { background: var(--profit-green); }
 .ll-dot-missing { background: var(--loss-red); }
 .ll-dot-partial { background: #fbbf24; }
-.ll-dot-died { background: #94a3b8; }
+.ll-dot-died { background: var(--loss-red); opacity: 0.6; }
 .ll-dot-none { background: transparent; border: 1px solid var(--border-color); }
+.ll-remove-player {
+    position: absolute; top: 0.3rem; right: 0.3rem; background: none; border: none;
+    color: var(--text-muted); font-size: 1rem; cursor: pointer; opacity: 0; transition: opacity 0.15s;
+    width: 20px; height: 20px; display: flex; align-items: center; justify-content: center; border-radius: 50%;
+}
+.ll-player-card:hover .ll-remove-player { opacity: 0.7; }
+.ll-remove-player:hover { opacity: 1 !important; color: var(--loss-red); background: rgba(239,68,68,0.1); }
+.ll-player-card { position: relative; }
+.ll-drop-zone {
+    display: flex; align-items: center; padding: 0.6rem 1rem;
+    border: 2px dashed var(--border-color); border-radius: 8px;
+    transition: border-color 0.2s, background 0.2s;
+}
+.ll-drop-zone.dragover {
+    border-color: var(--accent); background: rgba(99, 102, 241, 0.06);
+}
 
 /* Accountability summary box */
 .ll-acc-summary {
@@ -1190,7 +1211,7 @@ select:focus {
     position: fixed;
     top: 1rem;
     right: 1rem;
-    z-index: 10000;
+    z-index: var(--z-toast);
     display: flex;
     flex-direction: column;
     gap: 0.5rem;
@@ -1865,7 +1886,7 @@ select:focus {
     display: flex;
     justify-content: center;
     align-items: center;
-    z-index: 1000;
+    z-index: var(--z-modal);
     backdrop-filter: blur(6px);
 }
 
@@ -3164,7 +3185,7 @@ footer a:hover {
 #landing-overlay {
     position: fixed;
     inset: 0;
-    z-index: 10000;
+    z-index: var(--z-toast);
     background: #05050a;
     display: flex;
     align-items: center;
@@ -3899,6 +3920,12 @@ footer a:hover {
 }
 
 .btn-small-danger:hover { background: rgba(248, 113, 113, 0.1); }
+
+.btn-small-accent:disabled, .btn-small-danger:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+    pointer-events: none;
+}
 
 .profile-msg {
     font-size: 0.78rem;
@@ -4855,5 +4882,18 @@ footer {
     /* Loot Logger mobile */
     .ll-filter-bar { flex-wrap: wrap; }
     .ll-player-card { padding: 0.5rem; }
+}
+
+/* Cmd+K search */
+.cmdk-item:hover { background: rgba(99, 102, 241, 0.1); }
+.cmdk-item:first-child { background: rgba(99, 102, 241, 0.06); }
+
+/* Consumed flip */
+.flip-consumed { opacity: 0.4; position: relative; }
+.flip-consumed::after { content: 'TAKEN'; position: absolute; top: 0.3rem; right: 0.3rem; font-size: 0.6rem; padding: 0.1rem 0.3rem; background: rgba(100,100,100,0.3); color: var(--text-muted); border-radius: 4px; }
+
+/* Disabled buttons */
+.btn-small:disabled, .btn-small-accent:disabled, button:disabled {
+    opacity: 0.5; cursor: not-allowed; pointer-events: none;
 }
 

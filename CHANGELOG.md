@@ -2,6 +2,66 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-04-14 — Full Audit Remediation (70+ items)
+
+**Go Client (v0.7.0):**
+- Cache eviction for playerCache (30-min TTL) and marketOrderCache (10-min TTL) — prevents memory leaks
+- Thread-safe AlbionState with RWMutex — 8 getters/setters, all callers updated across 10 files
+- New `--config-dir` flag with exe-directory fallback for portable config loading
+
+**Backend:**
+- Discord bot health monitoring (5-min isReady check + auto-re-login)
+- NATS subscription wrapped in retry function with reconnect event logging
+- WebSocket auth responses now use backpressure-safe wsSafeSend (6 calls fixed)
+- Express 30s global request timeout middleware
+- NATS price merge guard (price > 0) prevents expired order overwrite
+- Email addresses masked in server logs (`yu***@gmail.com`)
+- Old VPS IP default updated to current Contabo
+- Password reset flow: `/api/forgot-password` + `/api/reset-password` with email token (1h TTL)
+- Audit log table with logAudit() on login, register, password change, password reset
+- Admin audit log endpoint: `GET /api/admin/audit-log`
+
+**Loot Logger Bug Fixes:**
+- Debounced live session re-renders (2s) — no more DOM thrashing on rapid WS events
+- Debounced search input (300ms) — no more full re-render on every keystroke
+- Reset confirmation dialog ("You have unsaved events. Discard?")
+- Duplicate save prevention with "Saved" button state
+- Death events excluded from item/player counts but shown with red outline + "Lost on Death" label
+- Proportional deposit allocation — fair regardless of player iteration order
+- Alliance-based enemy detection for multi-guild ZvZ (falls back to guild matching)
+- CSV export now includes item_name, unit_price, total_value, weight columns
+
+**Loot Logger New Features:**
+- "Suspects" red banner on accountability — flags players with <80% deposit + total missing silver
+- Per-player missing silver value on accountability cards
+- "Copy to Discord" button — formatted markdown table for officers
+- Export accountability CSV (player, guild, deposited%, missing items/silver)
+- Expand All / Collapse All buttons
+- Item tier filters (T5+, T6+, No Bags)
+- Remove individual players from session view
+- Drag-and-drop + multi-file upload with merged results
+- Toast notification when chest captures arrive
+
+**Platform-Wide:**
+- Ctrl/Cmd+K universal search — search items, tabs, and features instantly
+- In-game timers widget (daily reset + monthly countdown)
+- PWA manifest + service worker — app is now installable
+- Shareable URLs with deep linking (?tab=transport&from=Martlock&to=Caerleon)
+- Tab initialization for portfolio, mounts, farm tabs
+- Alerts page UI gated for non-logged-in users
+- Console.log cleanup (9 debug logs gated behind DEBUG flag)
+- Collapsible changelog in About page (500px max-height + "Show All")
+- Freshness badges auto-update every 60s
+- CSS z-index system with custom properties (--z-base through --z-toast)
+- Toast stacking with max 5 visible + auto-eviction
+- Disabled button styles (opacity + cursor)
+- Arbitrage sort tiebreaker (secondary sort by item name)
+- Compare tab error handling with user-friendly messages
+
+**New Features:**
+- Consumed flip tracking — mark flips as taken (24h auto-expire, localStorage)
+- Preconfigured item lists (T4-T8 Leather/Plate/Cloth, Gathering Tools, Bags, Mounts)
+
 ### 2026-04-13 — Game Update: Protocol18 Support (v0.6.0)
 
 - **Critical fix:** Albion Online's April 13 patch changed the network protocol from Protocol16 to Protocol18 (GpBinaryV18). The custom data client has been fully updated.
