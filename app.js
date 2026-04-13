@@ -6278,12 +6278,23 @@ async function renderLootSessionEvents(events, targetEl, depositedMap) {
     _llTargetEl = detail;
     _llIsDetail = isDetail;
 
-    // Compute player values and attach to byPlayer for sorting
+    // Detect primary guild (most common among looters = "our" guild)
+    const guildCounts = {};
     for (const [, data] of Object.entries(byPlayer)) {
+        if (data.guild) guildCounts[data.guild] = (guildCounts[data.guild] || 0) + data.items.length;
+    }
+    const primaryGuild = Object.entries(guildCounts).sort((a, b) => b[1] - a[1])[0]?.[0] || '';
+
+    // Compute player values and mark guild/enemy status
+    for (const [name, data] of Object.entries(byPlayer)) {
         data.totalValue = data.items.reduce((s, ev) => {
             const p = priceMap[ev.item_id];
             return s + (p ? p.price * (ev.quantity || 1) : 0);
         }, 0);
+        // isEnemy: player is a loot SOURCE (enemy who died), not a guild member doing the looting
+        // Detection: if all their items have looted_from_name === this player's name, they're the victim
+        const isLootSource = data.items.length > 0 && data.items.every(ev => ev.looted_from_name === name);
+        data.isEnemy = isLootSource || (data.guild && data.guild !== primaryGuild && primaryGuild !== '');
     }
 
     // Render header + search/sort bar + cards
@@ -6426,12 +6437,18 @@ function _llRenderFiltered() {
             </div>`;
         }).join('');
 
-        return `<div class="ll-player-card" style="${guildBorder}">
+        const enemyStyle = data.isEnemy ? 'border-left: 3px solid var(--loss-red); opacity: 0.75;' : '';
+        const roleTag = data.isEnemy
+            ? '<span style="font-size:0.6rem; padding:0.1rem 0.35rem; background:rgba(239,68,68,0.2); color:var(--loss-red); border-radius:8px; margin-left:0.3rem;">Enemy Loot</span>'
+            : '<span style="font-size:0.6rem; padding:0.1rem 0.35rem; background:rgba(34,197,94,0.2); color:var(--profit-green); border-radius:8px; margin-left:0.3rem;">Guild</span>';
+
+        return `<div class="ll-player-card" style="${data.isEnemy ? enemyStyle : guildBorder}">
             <div class="ll-player-header" onclick="this.closest('.ll-player-card').classList.toggle('expanded')">
                 <div class="ll-player-info">
                     <span class="ll-player-name">${esc(name)}</span>
                     ${data.died ? '<span title="Died during session" style="color:var(--loss-red); margin-left:0.3rem;">💀</span>' : ''}
                     ${data.gotKills ? '<span title="Got kills during session" style="color:var(--profit-green); margin-left:0.2rem;">⚔️</span>' : ''}
+                    ${roleTag}
                     ${data.guild ? `<span class="ll-player-guild" style="color:${guildColorMap[data.guild]}">[${esc(data.guild)}]</span>` : ''}
                 </div>
                 <div class="ll-item-preview">${iconStripHtml}</div>
