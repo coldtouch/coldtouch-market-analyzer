@@ -376,7 +376,7 @@ async function updateDbStatus() {
         if (count > 0) {
             el.classList.add('has-data');
             const timeStr = meta ? timeAgo(new Date(meta.timestamp).toISOString().slice(0, -1)) : 'Unknown';
-            textEl.textContent = `${count.toLocaleString()} prices cached • Last scan: ${timeStr}`;
+            textEl.innerHTML = `${count.toLocaleString()} prices cached &bull; Last scan: ${timeStr}`;
         } else {
             el.classList.remove('has-data');
             textEl.textContent = 'No data scanned';
