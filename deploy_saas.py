@@ -941,6 +941,35 @@ app.use('/api/', resolveUser);
 app.get('/', (req, res) => res.redirect('https://coldtouch.github.io/coldtouch-market-analyzer/'));
 
 // Health check for monitoring
+// === NEWS / STATUS BANNER ===
+// Stored in DB so it persists across restarts and can be updated without redeploying
+app.get('/api/news', (req, res) => {
+  readDb.get(`SELECT value FROM meta_config WHERE key = 'news_banner'`, (err, row) => {
+    if (err || !row) return res.json({ active: false });
+    try {
+      res.json(JSON.parse(row.value));
+    } catch { res.json({ active: false }); }
+  });
+});
+
+// Admin-only: set the news banner (requires auth + admin check)
+app.post('/api/news', requireAuth, (req, res) => {
+  // Only allow the site owner to update
+  if (req.user.id !== '325634482524782592') return res.status(403).json({ error: 'Admin only' });
+  const { message, type, active, link } = req.body;
+  const banner = JSON.stringify({
+    active: active !== false,
+    message: (message || '').slice(0, 300),
+    type: type || 'info', // 'info', 'warning', 'success', 'error'
+    link: (link || '').slice(0, 200),
+    updatedAt: Date.now()
+  });
+  db.run(`INSERT OR REPLACE INTO meta_config (key, value) VALUES ('news_banner', ?)`, [banner], (err) => {
+    if (err) return res.status(500).json({ error: err.message });
+    res.json({ success: true });
+  });
+});
+
 app.get('/health', (req, res) => {
   res.json({
     status: 'ok',

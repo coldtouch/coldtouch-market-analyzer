@@ -3781,6 +3781,24 @@ async function checkDiscordAuth() {
     }
 }
 
+// === NEWS BANNER ===
+async function loadNewsBanner() {
+    try {
+        const res = await fetch(`${VPS_BASE}/api/news`, { signal: AbortSignal.timeout(3000) });
+        if (!res.ok) return;
+        const data = await res.json();
+        const el = document.getElementById('news-banner');
+        if (!el || !data.active || !data.message) { if (el) el.style.display = 'none'; return; }
+        // Don't show if user dismissed this exact message
+        const dismissedKey = 'news_dismissed_' + (data.updatedAt || 0);
+        if (localStorage.getItem(dismissedKey)) { el.style.display = 'none'; return; }
+        const linkHtml = data.link ? ` <a href="${data.link}" target="_blank">Learn more</a>` : '';
+        el.className = `banner-${data.type || 'info'}`;
+        el.innerHTML = `${data.message}${linkHtml}<button class="banner-close" onclick="this.parentElement.style.display='none'; localStorage.setItem('${dismissedKey}','1');">&times;</button>`;
+        el.style.display = '';
+    } catch { /* silent */ }
+}
+
 async function loadServerCache(silent = false) {
     const statusEl = document.querySelector('.db-status-text');
     try {
@@ -4298,6 +4316,7 @@ async function init() {
 
     // Load existing IDB data into memory cache first (instant for returning users)
     await MarketDB.loadFromIdb();
+    loadNewsBanner(); // non-blocking — shows status/news banner if active
     await updateDbStatus();
 
     // Then fetch fresh data from VPS (merges into memory, writes to IDB in background)
