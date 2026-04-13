@@ -2054,11 +2054,11 @@ function buildPriceReference() {
 
 // Initial full cache build on startup (one-time scan of recent data)
 function initPriceRefCache() {
-  const cutoff48h = Date.now() - 48 * 60 * 60 * 1000;
-  console.log('[PriceRefCache] Initial build from last 48h...');
+  const cutoff6h = Date.now() - 6 * 60 * 60 * 1000; // Only last 6h on startup to keep memory low
+  console.log('[PriceRefCache] Initial build from last 6h (incremental updates fill the rest)...');
   statsDb.all(`SELECT item_id, quality, city, AVG(avg_sell) as avg_price, AVG(sample_count) as avg_vol, COUNT(*) as samples
     FROM price_averages WHERE period_start > ? AND avg_sell > 0
-    GROUP BY item_id, quality, city`, [cutoff48h], (err, rows) => {
+    GROUP BY item_id, quality, city`, [cutoff6h], (err, rows) => {
     if (err || !rows) { console.error('[PriceRefCache] Init failed:', err?.message); return; }
     const now = Date.now();
     db.serialize(() => {
