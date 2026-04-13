@@ -2499,6 +2499,26 @@ wss.on('connection', ws => {
         }
       }
 
+      // Death event from game client — store in loot_events with item_id='__DEATH__'
+      if (msg.type === 'death-event' && ws.clientType === 'game-client' && ws.user) {
+        const ev = msg.data;
+        if (!ev || !ev.victimName) return;
+        if (!ws.lootSessionId) {
+          ws.lootSessionId = ws.user.id + '_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
+        }
+        db.run(`INSERT INTO loot_events (user_id, session_id, timestamp, looted_by_name, looted_by_guild, looted_by_alliance, looted_from_name, looted_from_guild, looted_from_alliance, item_id, numeric_id, quantity, weight, is_silver)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '__DEATH__', 0, 0, 0, 0)`,
+          [ws.user.id, ws.lootSessionId, ev.timestamp || Date.now(),
+           ev.killerName || '', ev.killerGuild || '', '',
+           ev.victimName || '', ev.victimGuild || '', '']);
+        // Push to browser
+        for (const wc of wsClients) {
+          if (wc.clientType === 'browser' && wc.isAuthenticated && wc.user && wc.user.id === ws.user.id) {
+            wsSafeSend(wc, { type: 'death-event', data: { ...ev, sessionId: ws.lootSessionId } });
+          }
+        }
+      }
+
       // Chest capture from game client
       if (msg.type === 'chest-capture' && ws.clientType === 'game-client' && ws.user) {
         const capture = msg.data;

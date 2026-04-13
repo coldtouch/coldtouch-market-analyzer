@@ -6239,9 +6239,17 @@ async function renderLootSessionEvents(events, targetEl, depositedMap) {
         return;
     }
 
-    // Build per-player breakdown
+    // Build per-player breakdown + track deaths
     const byPlayer = {};
+    const deathSet = new Set(); // players who died (victim names)
+    const killSet = new Set();  // players who got kills (killer names)
     for (const ev of events) {
+        // Death events: item_id='__DEATH__', looted_by_name=killer, looted_from_name=victim
+        if (ev.item_id === '__DEATH__') {
+            if (ev.looted_from_name) deathSet.add(ev.looted_from_name);
+            if (ev.looted_by_name) killSet.add(ev.looted_by_name);
+            continue; // don't count as loot
+        }
         const name = ev.looted_by_name || 'Unknown';
         if (!byPlayer[name]) byPlayer[name] = {
             guild: ev.looted_by_guild || '', alliance: ev.looted_by_alliance || '',
@@ -6251,6 +6259,11 @@ async function renderLootSessionEvents(events, targetEl, depositedMap) {
         byPlayer[name].totalQty += (ev.quantity || 1);
         const w = ev.weight > 0 ? ev.weight : getItemWeight(ev.item_id) * (ev.quantity || 1);
         byPlayer[name].totalWeight += w;
+    }
+    // Attach death/kill info to players
+    for (const [name, data] of Object.entries(byPlayer)) {
+        data.died = deathSet.has(name);
+        data.gotKills = killSet.has(name);
     }
 
     // Build price map for all item IDs
@@ -6417,6 +6430,8 @@ function _llRenderFiltered() {
             <div class="ll-player-header" onclick="this.closest('.ll-player-card').classList.toggle('expanded')">
                 <div class="ll-player-info">
                     <span class="ll-player-name">${esc(name)}</span>
+                    ${data.died ? '<span title="Died during session" style="color:var(--loss-red); margin-left:0.3rem;">💀</span>' : ''}
+                    ${data.gotKills ? '<span title="Got kills during session" style="color:var(--profit-green); margin-left:0.2rem;">⚔️</span>' : ''}
                     ${data.guild ? `<span class="ll-player-guild" style="color:${guildColorMap[data.guild]}">[${esc(data.guild)}]</span>` : ''}
                 </div>
                 <div class="ll-item-preview">${iconStripHtml}</div>
@@ -6723,6 +6738,20 @@ async function runAccountabilityCheck() {
 
 // Hook into existing WS to capture loot events for live mode
 function handleLootLoggerWsMessage(msg) {
+    if (msg.type === 'death-event' && msg.data) {
+        if (liveSessionActive) {
+            // Store as a special loot event with __DEATH__ marker
+            liveLootEvents.push({
+                timestamp: msg.data.timestamp || Date.now(),
+                looted_by_name: msg.data.killerName || '',
+                looted_by_guild: msg.data.killerGuild || '',
+                looted_from_name: msg.data.victimName || '',
+                looted_from_guild: msg.data.victimGuild || '',
+                item_id: '__DEATH__',
+                quantity: 0
+            });
+        }
+    }
     if (msg.type === 'loot-event' && msg.data) {
         if (liveSessionActive) {
             liveLootEvents.push(msg.data);
