@@ -6643,30 +6643,80 @@ async function runAccountabilityCheck() {
         }
     }
 
-    // Per-player looted inventory
+    // Per-player looted inventory + death tracking
     const lootedByPlayer = {};
+    const deathVictims = new Set(); // players who died (items lost)
+    const lostByDeath = {};        // { playerName: { itemId: qty } } — items looted FROM dead players
     for (const ev of lootEvents) {
+        // Track deaths
+        if (ev.item_id === '__DEATH__') {
+            if (ev.looted_from_name) deathVictims.add(ev.looted_from_name);
+            continue;
+        }
         const name = ev.looted_by_name || 'Unknown';
         if (!lootedByPlayer[name]) lootedByPlayer[name] = { guild: ev.looted_by_guild || '', items: {} };
         lootedByPlayer[name].items[ev.item_id] = (lootedByPlayer[name].items[ev.item_id] || 0) + (ev.quantity || 1);
+        // Track items looted from players who died (those items are gone from the victim)
+        if (ev.looted_from_name && deathVictims.has(ev.looted_from_name)) {
+            if (!lostByDeath[ev.looted_from_name]) lostByDeath[ev.looted_from_name] = {};
+            lostByDeath[ev.looted_from_name][ev.item_id] = (lostByDeath[ev.looted_from_name][ev.item_id] || 0) + (ev.quantity || 1);
+        }
     }
 
-    // Cross-reference
+    // Detect primary guild (most common among looters)
+    const guildCounts = {};
+    for (const [, data] of Object.entries(lootedByPlayer)) {
+        if (data.guild) {
+            const itemCount = Object.values(data.items).reduce((s, q) => s + q, 0);
+            guildCounts[data.guild] = (guildCounts[data.guild] || 0) + itemCount;
+        }
+    }
+    const primaryGuild = Object.entries(guildCounts).sort((a, b) => b[1] - a[1])[0]?.[0] || '';
+
+    // Clone deposited pool so we can decrement as we match (prevents over-counting)
+    const depositPool = { ...deposited };
+
+    // Cross-reference — only match guild members against chest deposits
     const playerResults = [];
     for (const [name, data] of Object.entries(lootedByPlayer)) {
+        const isGuildMember = !primaryGuild || data.guild === primaryGuild;
         let totalLooted = 0, totalDeposited = 0;
         const itemResults = [];
+
         for (const [itemId, qty] of Object.entries(data.items)) {
-            totalLooted += qty;
-            const inChest = Math.min(qty, deposited[itemId] || 0);
-            const missing = qty - inChest;
-            totalDeposited += inChest;
-            itemResults.push({ itemId, looted: qty, inChest, missing });
+            // Subtract items this player lost by dying (can't deposit what you lost)
+            const lostQty = lostByDeath[name]?.[itemId] || 0;
+            const effectiveQty = Math.max(0, qty - lostQty);
+            totalLooted += effectiveQty;
+
+            if (isGuildMember && effectiveQty > 0) {
+                // Match against deposit pool (decrement to prevent double-counting)
+                const available = depositPool[itemId] || 0;
+                const inChest = Math.min(effectiveQty, available);
+                depositPool[itemId] = available - inChest;
+                const missing = effectiveQty - inChest;
+                totalDeposited += inChest;
+                itemResults.push({ itemId, looted: effectiveQty, inChest, missing });
+            } else if (effectiveQty > 0) {
+                // Enemy loot source — don't check deposits, just list items
+                itemResults.push({ itemId, looted: effectiveQty, inChest: -1, missing: -1 }); // -1 = N/A
+            }
         }
-        const pct = totalLooted > 0 ? Math.round(totalDeposited / totalLooted * 100) : 0;
-        playerResults.push({ name, guild: data.guild, totalLooted, totalDeposited, totalMissing: totalLooted - totalDeposited, pct, items: itemResults });
+
+        if (itemResults.length === 0) continue;
+        const pct = isGuildMember && totalLooted > 0 ? Math.round(totalDeposited / totalLooted * 100) : -1;
+        playerResults.push({
+            name, guild: data.guild, totalLooted, totalDeposited,
+            totalMissing: isGuildMember ? totalLooted - totalDeposited : 0,
+            pct, items: itemResults, isEnemy: !isGuildMember,
+            died: deathVictims.has(name)
+        });
     }
-    playerResults.sort((a, b) => a.pct - b.pct);
+    // Guild members sorted by deposit % (worst first), enemies at the end
+    playerResults.sort((a, b) => {
+        if (a.isEnemy !== b.isEnemy) return a.isEnemy ? 1 : -1;
+        return a.pct - b.pct;
+    });
 
     // Build price map
     const allItemIds = new Set(playerResults.flatMap(p => p.items.map(i => i.itemId)));
@@ -6699,7 +6749,10 @@ async function runAccountabilityCheck() {
             const iw = getItemWeight(it.itemId);
             const weightStr = iw > 0 ? (iw * it.looted).toFixed(1) + ' kg' : '';
             let rowClass, dotClass, statusLabel;
-            if (it.missing === 0) {
+            if (it.inChest === -1) {
+                // Enemy loot — no deposit status
+                rowClass = ''; dotClass = ''; statusLabel = 'Enemy Loot';
+            } else if (it.missing === 0) {
                 rowClass = 'll-item-deposited'; dotClass = 'll-dot-deposited'; statusLabel = 'Deposited';
             } else if (it.inChest > 0) {
                 rowClass = 'll-item-partial'; dotClass = 'll-dot-partial'; statusLabel = `${it.inChest}/${it.looted}`;
@@ -6722,26 +6775,35 @@ async function runAccountabilityCheck() {
             return s + (pe ? pe.price * it.looted : 0);
         }, 0);
 
-        return `<div class="ll-player-card">
+        const enemyBorder = p.isEnemy ? 'border-left: 3px solid var(--loss-red); opacity: 0.7;' : '';
+        const roleTag = p.isEnemy
+            ? '<span style="font-size:0.6rem; padding:0.1rem 0.35rem; background:rgba(239,68,68,0.2); color:var(--loss-red); border-radius:8px; margin-left:0.3rem;">Enemy Loot</span>'
+            : '';
+        const deathTag = p.died ? '<span title="Died — lost items" style="color:var(--loss-red); margin-left:0.3rem;">💀</span>' : '';
+
+        return `<div class="ll-player-card" style="${enemyBorder}">
             <div class="ll-player-header" onclick="this.closest('.ll-player-card').classList.toggle('expanded')">
                 <div class="ll-player-avatar">${esc(initials)}</div>
                 <div class="ll-player-info">
-                    <span class="ll-player-name">${esc(p.name)}</span>
+                    <span class="ll-player-name">${esc(p.name)}</span>${deathTag}${roleTag}
                     ${p.guild ? `<span class="ll-player-guild">[${esc(p.guild)}]</span>` : ''}
                 </div>
                 <div class="ll-player-stats">
-                    <div class="ll-player-stat">
+                    ${p.isEnemy ? `<div class="ll-player-stat">
+                        <span class="ll-stat-label">Looted From</span>
+                        <span class="ll-stat-value" style="color:var(--loss-red);">${p.totalLooted} items</span>
+                    </div>` : `<div class="ll-player-stat">
                         <span class="ll-stat-label">Deposited</span>
                         <span class="ll-stat-value ${p.pct >= 80 ? 'green' : p.pct >= 40 ? '' : 'red'}">${p.pct}%</span>
-                    </div>
+                    </div>`}
                     ${playerVal > 0 ? `<div class="ll-player-stat">
                         <span class="ll-stat-label">Value</span>
                         <span class="ll-stat-value accent">${formatSilver(playerVal)}</span>
                     </div>` : ''}
-                    <div class="ll-player-stat">
+                    ${!p.isEnemy ? `<div class="ll-player-stat">
                         <span class="ll-stat-label">Missing</span>
                         <span class="ll-stat-value ${p.totalMissing > 0 ? 'red' : 'green'}">${p.totalMissing}</span>
-                    </div>
+                    </div>` : ''}
                 </div>
                 <span class="ll-player-chevron">&#x25BE;</span>
             </div>
