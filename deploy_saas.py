@@ -221,6 +221,19 @@ db.serialize(() => {
   db.run(`CREATE INDEX IF NOT EXISTS idx_spread_stats_search ON spread_stats(window_days, avg_spread, confidence_score)`);
   db.run(`CREATE INDEX IF NOT EXISTS idx_ss_item_quality ON spread_stats(item_id, quality)`);
 
+  // Pre-aggregated price reference cache — rebuilt incrementally, read by buildPriceReference.
+  // Eliminates the need to scan 21M+ rows in price_averages every 10 minutes.
+  db.run(`CREATE TABLE IF NOT EXISTS price_ref_cache (
+    item_id TEXT NOT NULL,
+    quality INTEGER DEFAULT 1,
+    city TEXT NOT NULL,
+    avg_sell REAL DEFAULT 0,
+    avg_vol REAL DEFAULT 0,
+    sample_count INTEGER DEFAULT 0,
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY(item_id, quality, city)
+  )`);
+
   db.run(`CREATE TABLE IF NOT EXISTS price_averages (
     item_id TEXT NOT NULL,
     quality INTEGER DEFAULT 1,
@@ -1984,49 +1997,90 @@ app.get('/api/transport-routes', (req, res) => {
 let cityPriceRef = {};
 let globalPriceRef = {}; // { "itemId_quality": avgPrice } for outlier detection
 let volumeRef = {};     // { "itemId_quality_city": avg_sample_count } — activity proxy for liquidity flags
-function buildPriceReference() {
-  // Use last 2 days for city reference (recent transaction prices, not week-old inflated data)
-  // Use last 7 days for global reference (outlier detection needs broader sample)
-  const cutoff2d = Date.now() - 2 * 24 * 60 * 60 * 1000;
-  const cutoff7d = Date.now() - 7 * 24 * 60 * 60 * 1000;
+// Incrementally update the pre-aggregated price_ref_cache from recent price_averages data.
+// Only scans the last 2 hours of new data — never touches the full 21M-row table.
+function refreshPriceRefCache() {
+  const cutoff = Date.now() - 2 * 60 * 60 * 1000; // last 2 hours of new data
+  statsDb.all(`SELECT item_id, quality, city, AVG(avg_sell) as avg_price, AVG(sample_count) as avg_vol, COUNT(*) as samples
+    FROM price_averages WHERE period_start > ? AND avg_sell > 0
+    GROUP BY item_id, quality, city`, [cutoff], (err, rows) => {
+    if (err || !rows || rows.length === 0) return;
+    const now = Date.now();
+    db.serialize(() => {
+      db.run('BEGIN');
+      const stmt = db.prepare(`INSERT OR REPLACE INTO price_ref_cache (item_id, quality, city, avg_sell, avg_vol, sample_count, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)`);
+      for (const r of rows) {
+        if (r.avg_price > 0) stmt.run(r.item_id, r.quality, r.city, Math.round(r.avg_price), Math.round(r.avg_vol || 0), r.samples, now);
+      }
+      stmt.finalize();
+      db.run('COMMIT');
+    });
+    console.log(`[PriceRefCache] Updated ${rows.length} entries from last 2h`);
+  });
+}
 
-  // Per-city averages: RECENT (2 days) — what items actually sell for NOW in each city
-  db.all(`SELECT item_id, quality, city, AVG(avg_sell) as avg_price, AVG(sample_count) as avg_vol, COUNT(*) as samples
-    FROM price_averages WHERE period_type IN ('daily','hourly') AND period_start > ? AND avg_sell > 0
-    GROUP BY item_id, quality, city`, [cutoff2d], (err, rows) => {
+// Build in-memory price references from the small pre-aggregated cache table (~100k rows, not 21M).
+function buildPriceReference() {
+  const staleThreshold = Date.now() - 2 * 24 * 60 * 60 * 1000; // ignore entries older than 2 days
+
+  readDb.all(`SELECT item_id, quality, city, avg_sell, avg_vol, sample_count
+    FROM price_ref_cache WHERE updated_at > ? AND avg_sell > 0`, [staleThreshold], (err, rows) => {
     if (err || !rows) return;
-    const cityRef = {}, globalRef = {}, volRef = {};
+    const cityRef = {}, volRef = {};
+    const globalAcc = {}; // accumulator for global averages
     for (const r of rows) {
-      if (r.samples >= 2 && r.avg_price > 0) {
-        cityRef[r.item_id + '_' + r.quality + '_' + r.city] = Math.round(r.avg_price);
+      if (r.sample_count >= 2 && r.avg_sell > 0) {
+        cityRef[r.item_id + '_' + r.quality + '_' + r.city] = Math.round(r.avg_sell);
         volRef[r.item_id + '_' + r.quality + '_' + r.city] = Math.round(r.avg_vol || 0);
-        // Also build global average (across all cities)
         const gk = r.item_id + '_' + r.quality;
-        if (!globalRef[gk]) globalRef[gk] = { sum: 0, cnt: 0 };
-        globalRef[gk].sum += r.avg_price;
-        globalRef[gk].cnt++;
+        if (!globalAcc[gk]) globalAcc[gk] = { sum: 0, cnt: 0 };
+        globalAcc[gk].sum += r.avg_sell;
+        globalAcc[gk].cnt++;
       }
     }
     cityPriceRef = cityRef;
     volumeRef = volRef;
-    console.log(`[PriceRef] City prices (2d): ${Object.keys(cityRef).length}, volume entries: ${Object.keys(volRef).length}`);
 
-    // Global averages use 7 days for broader outlier detection
-    db.all(`SELECT item_id, quality, AVG(avg_sell) as avg_price, COUNT(*) as samples
-      FROM price_averages WHERE period_type IN ('daily','hourly') AND period_start > ? AND avg_sell > 0
-      GROUP BY item_id, quality`, [cutoff7d], (err2, rows2) => {
-      if (err2 || !rows2) return;
-      const gRef = {};
-      for (const r of rows2) {
-        if (r.samples >= 5 && r.avg_price > 0) gRef[r.item_id + '_' + r.quality] = Math.round(r.avg_price);
+    const gRef = {};
+    for (const [gk, acc] of Object.entries(globalAcc)) {
+      if (acc.cnt >= 2) gRef[gk] = Math.round(acc.sum / acc.cnt);
+    }
+    globalPriceRef = gRef;
+
+    console.log(`[PriceRef] City: ${Object.keys(cityRef).length}, Volume: ${Object.keys(volRef).length}, Global: ${Object.keys(gRef).length} (from ${rows.length} cache rows)`);
+  });
+}
+
+// Initial full cache build on startup (one-time scan of recent data)
+function initPriceRefCache() {
+  const cutoff48h = Date.now() - 48 * 60 * 60 * 1000;
+  console.log('[PriceRefCache] Initial build from last 48h...');
+  statsDb.all(`SELECT item_id, quality, city, AVG(avg_sell) as avg_price, AVG(sample_count) as avg_vol, COUNT(*) as samples
+    FROM price_averages WHERE period_start > ? AND avg_sell > 0
+    GROUP BY item_id, quality, city`, [cutoff48h], (err, rows) => {
+    if (err || !rows) { console.error('[PriceRefCache] Init failed:', err?.message); return; }
+    const now = Date.now();
+    db.serialize(() => {
+      db.run('BEGIN');
+      const stmt = db.prepare(`INSERT OR REPLACE INTO price_ref_cache (item_id, quality, city, avg_sell, avg_vol, sample_count, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)`);
+      for (const r of rows) {
+        if (r.avg_price > 0) stmt.run(r.item_id, r.quality, r.city, Math.round(r.avg_price), Math.round(r.avg_vol || 0), r.samples, now);
       }
-      globalPriceRef = gRef;
-      console.log(`[PriceRef] Global averages (7d): ${Object.keys(gRef).length}`);
+      stmt.finalize();
+      db.run('COMMIT');
+      console.log(`[PriceRefCache] Initial build complete: ${rows.length} entries`);
+      // Now build in-memory refs from the cache
+      buildPriceReference();
     });
   });
 }
-setTimeout(buildPriceReference, 15000);
-setInterval(buildPriceReference, 10 * 60 * 1000);
+
+// Startup: build cache from 48h, then read into memory
+setTimeout(initPriceRefCache, 15000);
+// Every 10 min: incrementally update cache with last 2h data, then rebuild in-memory refs
+setInterval(() => { refreshPriceRefCache(); setTimeout(buildPriceReference, 5000); }, 10 * 60 * 1000);
 
 app.get('/api/transport-routes-live', (req, res) => {
   const buyCity = req.query.buy_city || '';
@@ -3270,11 +3324,12 @@ function scheduleVacuumIfNeeded(rowsDeleted) {
 
 // === DATA COMPACTION (runs every 2 hours) ===
 // Three-tier retention:
-//   Tier 1: price_averages hourly  → keep rawRetentionDays (default 3 — was 7, caused 21M rows / 5.3GB)
+//   Tier 1: price_averages hourly  → keep 7 days (full accuracy for analytics)
 //   Tier 2: price_hourly (OHLC)    → keep 30 days
 //   Tier 3: price_averages daily   → keep forever
+// NOTE: Heavy queries now read from pre-aggregated price_ref_cache, not the raw 21M-row table.
 function compactOldData(rawRetentionDays) {
-  const keepRawDays = rawRetentionDays || 3;
+  const keepRawDays = rawRetentionDays || 7;
   const now = Date.now();
   const rawCutoff    = now - keepRawDays * 24 * 60 * 60 * 1000;
   const hourlyCutoff = now - 30 * 24 * 60 * 60 * 1000;
