@@ -1229,6 +1229,7 @@ function buildArbitrageCardDOM(trade) {
 
 function renderArbitrage(trades, isSingleItem = false, targetItemId = null) {
     const container = document.getElementById('arbitrage-results');
+    _lastArbTrades = trades || []; // cache for CSV export
 
     // Scroll results into view so the user sees the new data after re-scan
     if (!targetItemId) container.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
@@ -1381,6 +1382,174 @@ async function doArbScan(targetItemId = null) {
     } catch (e) {
         spinner.classList.add('hidden');
         showError(errorEl, 'Failed to fetch data: ' + e.message);
+    }
+}
+
+// ============================================================
+// UPGRADE FLIPS (cross-enchantment arbitrage)
+// ============================================================
+// Rough rune/soul/relic cost estimate per upgrade level for weapons/armor.
+// These are ballpark numbers — actual costs shift with market prices, so we
+// show them as a conservative estimate and flag results as "gross" in the UI.
+// Tier key → array indexed by target enchantment (1, 2, 3).
+const UPGRADE_MATERIAL_COST = {
+    4: [3000,  15000,  40000],
+    5: [5000,  25000,  70000],
+    6: [10000, 45000, 120000],
+    7: [18000, 80000, 220000],
+    8: [30000,150000, 400000]
+};
+
+function getBaseItemId(itemId) {
+    if (!itemId) return '';
+    return itemId.split('@')[0];
+}
+
+function estimateUpgradeCost(itemId, fromEnch, toEnch) {
+    // Only handle single-step upgrades (N → N+1). Multi-step sums each step.
+    const tierMatch = itemId.match(/^T(\d)/);
+    if (!tierMatch) return null;
+    const tier = parseInt(tierMatch[1]);
+    const costs = UPGRADE_MATERIAL_COST[tier];
+    if (!costs) return null;
+    let total = 0;
+    for (let e = fromEnch + 1; e <= toEnch; e++) {
+        const c = costs[e - 1];
+        if (!c) return null;
+        total += c;
+    }
+    return total;
+}
+
+function processUpgradeFlips(data, opts = {}) {
+    const { minProfit = 10000, minRoi = 5, cityFilter = 'all', quality = 'all' } = opts;
+    // Group prices by (baseId, city, quality) → { enchLevel: entry }
+    const groups = {};
+    for (const entry of data) {
+        if (quality !== 'all' && entry.quality.toString() !== quality) continue;
+        if (cityFilter !== 'all' && entry.city !== cityFilter) continue;
+        if (!entry.sell_price_min || entry.sell_price_min <= 0) continue;
+        const base = getBaseItemId(entry.item_id);
+        const ench = parseInt(extractEnchantment(entry.item_id)) || 0;
+        // Only gear-style items (armor, weapon, bag, tool, cape) are enchantable
+        if (!/^T[3-8]_(ARMOR|HEAD|SHOES|MAIN|2H|OFF|BAG|TOOL|CAPE)/i.test(base)) continue;
+        const key = `${base}|${entry.city}|${entry.quality}`;
+        if (!groups[key]) groups[key] = {};
+        // Keep the cheapest sell offer per (base, city, qual, ench)
+        const existing = groups[key][ench];
+        if (!existing || entry.sell_price_min < existing.sell_price_min) {
+            groups[key][ench] = entry;
+        }
+    }
+
+    const flips = [];
+    for (const [key, byEnch] of Object.entries(groups)) {
+        const levels = Object.keys(byEnch).map(Number).sort((a, b) => a - b);
+        if (levels.length < 2) continue;
+        const [base, city] = key.split('|');
+        // Compare every lower→higher enchantment pair in this city
+        for (let i = 0; i < levels.length - 1; i++) {
+            for (let j = i + 1; j < levels.length; j++) {
+                const low = byEnch[levels[i]];
+                const high = byEnch[levels[j]];
+                if (!low || !high) continue;
+                const buyPrice = low.sell_price_min;
+                const sellPrice = high.sell_price_min;
+                // Sell at instant-sell price of the enchant version (can't know buy order without more data)
+                const upgradeCost = estimateUpgradeCost(base, levels[i], levels[j]);
+                if (upgradeCost == null) continue;
+                const tax = sellPrice * 0.055; // Sell order tax+setup
+                const profit = sellPrice - buyPrice - upgradeCost - tax;
+                const cost = buyPrice + upgradeCost;
+                const roi = cost > 0 ? (profit / cost) * 100 : 0;
+                if (profit < minProfit || roi < minRoi) continue;
+                flips.push({
+                    itemId: high.item_id, // display enchanted version
+                    quality: high.quality,
+                    buyCity: city,
+                    sellCity: city,
+                    buyPrice,
+                    sellPrice,
+                    profit,
+                    roi,
+                    tax,
+                    soTax: tax,
+                    soProfit: profit,
+                    soRoi: roi,
+                    originBuyOrder: low.buy_price_max || 0,
+                    destSellOrder: 0,
+                    dateBuy: low.sell_price_min_date,
+                    dateSell: high.sell_price_min_date,
+                    confidence: null,
+                    consistencyPct: 0,
+                    sampleCount: 0,
+                    isUpgradeFlip: true,
+                    upgradeCost,
+                    fromEnch: levels[i],
+                    toEnch: levels[j],
+                    baseItemId: base
+                });
+            }
+        }
+    }
+    flips.sort((a, b) => b.profit - a.profit);
+    return flips.slice(0, 60);
+}
+
+async function scanUpgradeFlips() {
+    const container = document.getElementById('arbitrage-results');
+    const spinner = document.getElementById('arb-spinner');
+    const errorEl = document.getElementById('arb-error');
+    hideError(errorEl);
+    spinner.classList.remove('hidden');
+    container.innerHTML = '';
+    try {
+        const cachedData = await MarketDB.getAllPrices();
+        spinner.classList.add('hidden');
+        if (cachedData.length === 0) {
+            showError(errorEl, 'No cached data yet — run a normal scan first so price data is available.');
+            return;
+        }
+        const quality = document.getElementById('arb-quality').value;
+        const buyCityFilter = document.getElementById('arb-buy-city').value; // "all" or a city
+        const flips = processUpgradeFlips(cachedData, {
+            minProfit: 10000,
+            minRoi: 5,
+            cityFilter: buyCityFilter,
+            quality
+        });
+        if (flips.length === 0) {
+            container.innerHTML = `<div class="empty-state"><p>No profitable enchantment upgrades found.</p>
+                <p class="hint">Try a broader city filter, or scan more items first. Upgrade costs are estimated — check in-game rune/soul/relic prices before committing.</p></div>`;
+            _lastArbTrades = [];
+            return;
+        }
+        // Reuse the arbitrage card renderer — flag each card with an upgrade badge.
+        renderArbitrage(flips, false);
+        // Decorate each card with the upgrade badge + material cost row
+        flips.forEach((f, idx) => {
+            const cards = container.querySelectorAll('.trade-card');
+            const card = cards[idx + 1]; // +1 because countBar is first child
+            if (!card) return;
+            const nameEl = card.querySelector('.item-name');
+            if (nameEl && !nameEl.querySelector('.upgrade-flip-badge')) {
+                nameEl.insertAdjacentHTML('beforeend', `<span class="upgrade-flip-badge">UPGRADE @${f.fromEnch}→@${f.toEnch}</span>`);
+            }
+            // Insert the upgrade cost row inside the profit section
+            const profitSection = card.querySelector('.profit-section');
+            if (profitSection) {
+                const row = document.createElement('div');
+                row.className = 'profit-row';
+                row.innerHTML = `<span>Upgrade materials (est.):</span><span class="text-red">-${Math.floor(f.upgradeCost).toLocaleString()} 💰</span>`;
+                profitSection.insertBefore(row, profitSection.querySelector('.profit-row.total'));
+            }
+        });
+        // Update count bar to reflect upgrade context
+        const countBar = container.querySelector('.result-count-bar');
+        if (countBar) countBar.innerHTML = `Showing <strong>${flips.length}</strong> enchantment upgrades <span style="font-size:0.7rem; color:var(--text-muted);">• costs estimated • verify rune/soul prices in-game</span>`;
+    } catch (e) {
+        spinner.classList.add('hidden');
+        showError(errorEl, 'Upgrade scan failed: ' + e.message);
     }
 }
 
@@ -2040,6 +2209,7 @@ function processCrafting(data, tier, sortBy) {
 function renderCrafting(crafts) {
     const container = document.getElementById('crafting-results');
     container.innerHTML = '';
+    _lastCraftsRendered = crafts || []; // cache for CSV export
 
     if (crafts.length === 0) {
         container.innerHTML = `<div class="empty-state"><p>No profitable recipes found.</p><p class="hint">Scan the market first, then try again.</p></div>`;
@@ -4229,6 +4399,18 @@ async function init() {
     const farmCalcBtn = document.getElementById('farm-calc-btn');
     if (farmCalcBtn) farmCalcBtn.addEventListener('click', calculateFarming);
 
+    // Loot Logger: session naming, auto-save toggle, draft restore
+    const sessionNameInput = document.getElementById('ll-session-name-input');
+    if (sessionNameInput) sessionNameInput.value = liveSessionName;
+    const autosaveToggle = document.getElementById('ll-autosave-toggle');
+    if (autosaveToggle) {
+        const enabled = localStorage.getItem(LL_AUTOSAVE_KEY) === '1';
+        autosaveToggle.checked = enabled;
+        if (enabled) toggleLiveAutosave(true); // also starts the interval
+    }
+    // Offer to restore a draft if one exists (only for users who already had the toggle on)
+    restoreLiveDraftIfAny();
+
     // Builds Browser
     const buildsLoadBtn = document.getElementById('builds-load-btn');
     if (buildsLoadBtn) buildsLoadBtn.addEventListener('click', () => loadBuilds(false));
@@ -6012,6 +6194,140 @@ let _llDepositedMap = null;
 let _llTargetEl = null;
 let _llIsDetail = false;
 
+// --- Session naming, whitelist, auto-save ---
+const LL_SESSION_NAME_KEY = 'albion_live_session_name';
+const LL_SAVED_NAMES_KEY = 'albion_loot_session_names';    // map { session_id: custom_name }
+const LL_WHITELIST_KEY = 'albion_loot_whitelist';          // array of lowercase strings
+const LL_AUTOSAVE_KEY = 'albion_loot_autosave_enabled';
+const LL_DRAFT_KEY = 'albion_loot_live_draft';             // { events, name, savedAt }
+let liveSessionName = localStorage.getItem(LL_SESSION_NAME_KEY) || '';
+let lootWhitelist = JSON.parse(localStorage.getItem(LL_WHITELIST_KEY) || '[]');
+let _llAutosaveInterval = null;
+
+function onSessionNameInput(val) {
+    liveSessionName = (val || '').trim().slice(0, 80);
+    try { localStorage.setItem(LL_SESSION_NAME_KEY, liveSessionName); } catch {}
+    // Refresh the session list if we're in the live sessions view so the card title updates
+    if (lootLoggerMode === 'live') {
+        // Only re-render the live card header text in place (cheap)
+        const liveCard = document.querySelector('.ll-session-card.active-live .ll-session-title');
+        if (liveCard) {
+            const badge = liveSessionActive
+                ? '<span class="loot-tab-status status-open" style="margin-left:0.4rem;">LIVE</span>'
+                : '<span class="loot-tab-status status-partial" style="margin-left:0.4rem;">PAUSED</span>';
+            liveCard.innerHTML = `${esc(liveSessionName || 'Live Session')}${badge}`;
+        }
+    }
+}
+
+function getSavedSessionNames() {
+    try { return JSON.parse(localStorage.getItem(LL_SAVED_NAMES_KEY) || '{}'); } catch { return {}; }
+}
+function setSavedSessionName(sid, name) {
+    const map = getSavedSessionNames();
+    if (name) map[sid] = name.slice(0, 80);
+    else delete map[sid];
+    try { localStorage.setItem(LL_SAVED_NAMES_KEY, JSON.stringify(map)); } catch {}
+}
+function renameSavedSession(sid) {
+    const current = getSavedSessionNames()[sid] || '';
+    const next = prompt('Rename this loot session:', current);
+    if (next === null) return;
+    setSavedSessionName(sid, next.trim());
+    loadLootSessions();
+}
+
+// --- Whitelist ---
+function openWhitelistModal() {
+    const modal = document.getElementById('whitelist-modal');
+    const input = document.getElementById('whitelist-input');
+    if (!modal || !input) return;
+    input.value = lootWhitelist.join('\n');
+    modal.classList.remove('hidden');
+    setTimeout(() => input.focus(), 20);
+}
+function closeWhitelistModal() {
+    document.getElementById('whitelist-modal')?.classList.add('hidden');
+}
+function saveWhitelist() {
+    const raw = document.getElementById('whitelist-input')?.value || '';
+    lootWhitelist = raw.split('\n').map(s => s.trim().toLowerCase()).filter(Boolean);
+    try { localStorage.setItem(LL_WHITELIST_KEY, JSON.stringify(lootWhitelist)); } catch {}
+    closeWhitelistModal();
+    showToast(lootWhitelist.length ? `Whitelist saved (${lootWhitelist.length} entries)` : 'Whitelist cleared', 'success');
+    // Re-render current view if showing live session
+    if (liveLootEvents.length > 0 && _llTargetEl) showLiveSession();
+}
+function clearWhitelist() {
+    lootWhitelist = [];
+    try { localStorage.removeItem(LL_WHITELIST_KEY); } catch {}
+    const input = document.getElementById('whitelist-input');
+    if (input) input.value = '';
+}
+function isWhitelistedEvent(ev) {
+    if (!lootWhitelist.length) return true;
+    const name = (ev.looted_by_name || ev.lootedBy?.name || '').toLowerCase();
+    const guild = (ev.looted_by_guild || ev.lootedBy?.guild || '').toLowerCase();
+    const alliance = (ev.looted_by_alliance || ev.lootedBy?.alliance || '').toLowerCase();
+    return lootWhitelist.some(w => w && (w === name || w === guild || w === alliance));
+}
+
+// --- Auto-save draft (every 5 min to localStorage) ---
+function toggleLiveAutosave(enabled) {
+    try { localStorage.setItem(LL_AUTOSAVE_KEY, enabled ? '1' : '0'); } catch {}
+    if (_llAutosaveInterval) { clearInterval(_llAutosaveInterval); _llAutosaveInterval = null; }
+    if (enabled) {
+        _llAutosaveInterval = setInterval(saveLiveDraft, 5 * 60 * 1000);
+        showToast('Auto-save draft enabled (every 5 min)', 'info');
+    } else {
+        try { localStorage.removeItem(LL_DRAFT_KEY); } catch {}
+        const st = document.getElementById('ll-autosave-status');
+        if (st) { st.textContent = ''; st.classList.remove('saved'); }
+    }
+}
+function saveLiveDraft() {
+    if (liveLootEvents.length === 0) return;
+    try {
+        localStorage.setItem(LL_DRAFT_KEY, JSON.stringify({
+            events: liveLootEvents,
+            name: liveSessionName,
+            savedAt: Date.now()
+        }));
+        const st = document.getElementById('ll-autosave-status');
+        if (st) {
+            st.textContent = `Draft saved ${new Date().toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}`;
+            st.classList.add('saved');
+        }
+    } catch(e) {
+        console.warn('[loot logger] draft save failed:', e);
+    }
+}
+function restoreLiveDraftIfAny() {
+    try {
+        const raw = localStorage.getItem(LL_DRAFT_KEY);
+        if (!raw) return;
+        const draft = JSON.parse(raw);
+        if (!draft?.events?.length) return;
+        // Only offer if user hasn't already started a new session
+        if (liveLootEvents.length > 0) return;
+        const when = draft.savedAt ? new Date(draft.savedAt).toLocaleString() : 'earlier';
+        if (!confirm(`A loot logger draft from ${when} was auto-saved (${draft.events.length} events${draft.name ? ', "' + draft.name + '"' : ''}). Restore it?`)) {
+            try { localStorage.removeItem(LL_DRAFT_KEY); } catch {}
+            return;
+        }
+        liveLootEvents = draft.events;
+        liveSessionName = draft.name || '';
+        try { localStorage.setItem(LL_SESSION_NAME_KEY, liveSessionName); } catch {}
+        const nameInput = document.getElementById('ll-session-name-input');
+        if (nameInput) nameInput.value = liveSessionName;
+        updateLiveLootIndicator();
+        if (lootLoggerMode === 'live') loadLootSessions();
+        showToast(`Restored ${draft.events.length} events from draft`, 'success');
+    } catch(e) {
+        console.warn('[loot logger] restore draft failed:', e);
+    }
+}
+
 // --- Silver formatting ---
 function formatSilver(n) {
     if (!n || n <= 0) return '—';
@@ -6100,6 +6416,13 @@ function resetLiveSession() {
     liveSessionSaved = false;
     _llRemovedPlayers.clear();
     _llResolvedDeaths.clear();
+    liveSessionName = '';
+    try { localStorage.removeItem(LL_SESSION_NAME_KEY); } catch {}
+    try { localStorage.removeItem(LL_DRAFT_KEY); } catch {}
+    const nameInput = document.getElementById('ll-session-name-input');
+    if (nameInput) nameInput.value = '';
+    const st = document.getElementById('ll-autosave-status');
+    if (st) { st.textContent = ''; st.classList.remove('saved'); }
     const btn = document.getElementById('ll-live-toggle-btn');
     if (btn) {
         btn.innerHTML = `<svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="10"/></svg> Start Live Session`;
@@ -6141,7 +6464,13 @@ async function saveLiveSession() {
         if (res.ok) {
             const data = await res.json();
             liveSessionSaved = true;
-            showToast(`Session saved (${data.eventsImported} events)`, 'success');
+            // Map custom session name to whichever session_id the server assigned.
+            // Server may return `sessionId` or `session_id` depending on version — try both.
+            const sid = data.sessionId || data.session_id;
+            if (sid && liveSessionName) setSavedSessionName(sid, liveSessionName);
+            // Clear the autosave draft — this data is now durable server-side.
+            try { localStorage.removeItem(LL_DRAFT_KEY); } catch {}
+            showToast(`Session saved (${data.eventsImported} events)${liveSessionName ? ` as "${liveSessionName}"` : ''}`, 'success');
             if (lootLoggerMode === 'live') loadLootSessions();
         } else {
             showToast('Save failed — login required', 'error');
@@ -6245,10 +6574,12 @@ async function loadLootSessions() {
             const badge = liveSessionActive
                 ? '<span class="loot-tab-status status-open" style="margin-left:0.4rem;">LIVE</span>'
                 : '<span class="loot-tab-status status-partial" style="margin-left:0.4rem;">PAUSED</span>';
+            const label = liveSessionName ? esc(liveSessionName) : 'Live Session';
+            const wlNote = lootWhitelist.length ? ` <span style="font-size:0.66rem; color:var(--accent);">• whitelist active (${lootWhitelist.length})</span>` : '';
             html += `<div class="ll-session-card active-live" onclick="showLiveSession()">
                 <div class="ll-session-info">
-                    <div class="ll-session-title">Live Session${badge}</div>
-                    <div class="ll-session-meta">${liveLootEvents.length} events &bull; ${players} players</div>
+                    <div class="ll-session-title">${label}${badge}</div>
+                    <div class="ll-session-meta">${liveLootEvents.length} events &bull; ${players} players${wlNote}</div>
                 </div>
             </div>`;
         }
@@ -6258,14 +6589,21 @@ async function loadLootSessions() {
             return;
         }
 
+        const savedNames = getSavedSessionNames();
         html += lootSessions.map(s => {
             const started = new Date(s.started_at).toLocaleString();
             const endedAt = s.ended_at ? new Date(s.ended_at) : null;
             const duration = endedAt ? Math.round((endedAt - new Date(s.started_at)) / 60000) + ' min' : 'ongoing';
             const sid = esc(s.session_id);
+            const customName = savedNames[s.session_id];
+            const titleMain = customName
+                ? `<strong>${esc(customName)}</strong> <span style="font-size:0.68rem; color:var(--text-muted);">${started}</span>`
+                : `${started}`;
             return `<div class="ll-session-card" onclick="showSessionDetail('${sid}')">
                 <div class="ll-session-info">
-                    <div class="ll-session-title">${started} <span style="font-size:0.68rem; color:var(--text-muted);">(${duration})</span></div>
+                    <div class="ll-session-title">${titleMain} <span style="font-size:0.68rem; color:var(--text-muted);">(${duration})</span>
+                        <button class="ll-session-rename-btn" onclick="event.stopPropagation(); renameSavedSession('${sid}')" title="Rename">✏️</button>
+                    </div>
                     <div class="ll-session-meta">${s.event_count} events &bull; ${s.player_count} players</div>
                 </div>
                 <button class="btn-small-danger" style="padding:0.2rem 0.4rem; font-size:0.65rem; flex-shrink:0;" onclick="event.stopPropagation(); deleteLootSession('${sid}', this)" title="Delete">✕</button>
@@ -6284,7 +6622,16 @@ async function loadLootSessions() {
 }
 
 function showLiveSession() {
-    renderLootSessionEvents(liveLootEvents.map(e => ({
+    // Whitelist is applied on the LIVE session view only. Death events always pass
+    // through so "who died" remains accurate; only loot lines get filtered.
+    const source = lootWhitelist.length
+        ? liveLootEvents.filter(e => {
+            const itemId = e.item_id || e.itemId || '';
+            if (itemId === '__DEATH__') return true;
+            return isWhitelistedEvent(e);
+        })
+        : liveLootEvents;
+    renderLootSessionEvents(source.map(e => ({
         looted_by_name: e.looted_by_name || e.lootedBy?.name || '',
         looted_by_guild: e.looted_by_guild || e.lootedBy?.guild || '',
         looted_by_alliance: e.looted_by_alliance || e.lootedBy?.alliance || '',
@@ -9490,6 +9837,107 @@ function exportToCSV(data, filename) {
     a.click();
     URL.revokeObjectURL(url);
     showToast(`Exported ${data.length} rows`, 'success');
+}
+
+// Cache handles for CSV exports (each renderer updates these)
+let _lastCraftsRendered = [];
+let _lastArbTrades = [];
+
+function exportTransportCSV() {
+    if (!lastTransportRoutes || lastTransportRoutes.length === 0) {
+        showToast('Run a scan first — no transport routes to export', 'warn');
+        return;
+    }
+    const rows = lastTransportRoutes.map(r => ({
+        item_id: r.itemId || '',
+        item_name: getFriendlyName(r.itemId) || r.itemId || '',
+        quality: r.quality || 1,
+        buy_city: r.buyCity || '',
+        buy_price: Math.floor(r.buyPrice || 0),
+        sell_city: r.sellCity || '',
+        sell_price: Math.floor(r.sellPrice || 0),
+        profit_per_unit: Math.floor(r.profitPerUnit || r.profit || 0),
+        roi_pct: (r.roi || 0).toFixed ? (r.roi).toFixed(1) : r.roi,
+        weight_per_unit: r.weight || getItemWeight(r.itemId) || 0,
+        volume_per_day: r.dailyVolume || r.volume || '',
+        confidence_pct: r.confidence ?? '',
+        buy_updated: r.dateBuy || '',
+        sell_updated: r.dateSell || ''
+    }));
+    exportToCSV(rows, `transport-routes-${new Date().toISOString().slice(0, 10)}.csv`);
+}
+
+function exportLiveFlipsCSV() {
+    const minProfit = parseInt(document.getElementById('flips-min-profit')?.value) || 50000;
+    const minRoi = parseFloat(document.getElementById('flips-min-roi')?.value) || 3;
+    const cityFilter = document.getElementById('flips-city-filter')?.value || 'all';
+    const typeFilter = document.getElementById('flips-type-filter')?.value || 'all';
+    const filtered = (liveFlipsCache || []).filter(f => {
+        if (f.profit < minProfit || f.roi < minRoi) return false;
+        if (cityFilter !== 'all' && f.buyCity !== cityFilter && f.sellCity !== cityFilter) return false;
+        if (typeFilter !== 'all' && (f.type || 'cross-city') !== typeFilter) return false;
+        return true;
+    });
+    if (filtered.length === 0) { showToast('No flips matching current filters', 'warn'); return; }
+    const rows = filtered.map(f => ({
+        detected_at: new Date(f.detectedAt).toISOString(),
+        item_id: f.itemId || '',
+        item_name: f.name || '',
+        quality: f.quality || 1,
+        type: f.type || 'cross-city',
+        buy_city: f.buyCity || '',
+        buy_price: Math.floor(f.buyPrice || 0),
+        sell_city: f.sellCity || '',
+        sell_price: Math.floor(f.sellPrice || 0),
+        profit: Math.floor(f.profit || 0),
+        roi_pct: f.roi
+    }));
+    exportToCSV(rows, `live-flips-${new Date().toISOString().slice(0, 10)}.csv`);
+}
+
+function exportCraftingCSV() {
+    if (!_lastCraftsRendered || _lastCraftsRendered.length === 0) {
+        showToast('Run a recipe scan first — no crafting data to export', 'warn');
+        return;
+    }
+    const rows = _lastCraftsRendered.map(c => ({
+        item_id: c.itemId || '',
+        item_name: getFriendlyName(c.itemId) || c.itemId || '',
+        quality: c.quality || 1,
+        sell_city: c.sellCity || '',
+        sell_price: Math.floor(c.sellPrice || 0),
+        material_cost: Math.floor(c.matCost || 0),
+        tax: Math.floor(c.tax || 0),
+        station_fee: Math.floor(c.fee || 0),
+        profit: Math.floor(c.profit || 0),
+        roi_pct: (c.roi || 0).toFixed ? (c.roi).toFixed(1) : c.roi,
+        materials: (c.mats || []).map(m => `${m.effectiveQty || m.qty}x ${m.id}@${m.city}`).join('; '),
+        updated: c.updateDate || ''
+    }));
+    exportToCSV(rows, `crafting-recipes-${new Date().toISOString().slice(0, 10)}.csv`);
+}
+
+function exportArbitrageCSV() {
+    if (!_lastArbTrades || _lastArbTrades.length === 0) {
+        showToast('Scan the arbitrage market first — nothing to export', 'warn');
+        return;
+    }
+    const rows = _lastArbTrades.map(t => ({
+        item_id: t.itemId || '',
+        item_name: getFriendlyName(t.itemId) || t.itemId || '',
+        quality: t.quality || 1,
+        buy_city: t.buyCity || '',
+        buy_price: Math.floor(t.buyPrice || 0),
+        sell_city: t.sellCity || '',
+        sell_price: Math.floor(t.sellPrice || 0),
+        profit: Math.floor(t.profit || 0),
+        roi_pct: (t.roi || 0).toFixed ? (t.roi).toFixed(1) : t.roi,
+        confidence_pct: t.confidencePct ?? t.confidence ?? '',
+        upgrade_flip: t.isUpgradeFlip ? 'yes' : '',
+        buy_updated: t.dateBuy || '',
+        sell_updated: t.dateSell || ''
+    }));
+    exportToCSV(rows, `arbitrage-${new Date().toISOString().slice(0, 10)}.csv`);
 }
 
 function exportLootSession() {

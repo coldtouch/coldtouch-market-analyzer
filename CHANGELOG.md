@@ -2,6 +2,32 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-04-15 — Batch 5 Wrap-up: Session Labels, Whitelist, Auto-save, CSV Exports, Upgrade Flips
+
+**Loot Logger:**
+- **Session labels:** name your live session before/after it starts (persisted to localStorage). Custom names show on the session card and on the saved-session list; a ✏️ button on each saved card lets you rename after the fact.
+- **Player whitelist:** optional filter — only show events from names/guilds/alliances you care about. Modal accepts one entry per line; matches name, guild, or alliance (case-insensitive). Death events always pass through.
+- **Auto-save draft:** opt-in toggle writes the in-flight loot log to localStorage every 5 minutes so a crashed tab doesn't lose data. Draft is cleared on successful save or manual reset, and the app offers to restore it on next load.
+
+**CSV Exports (parity across tabs):**
+- Transport Routes — `Export CSV` button next to `FIND ROUTES`, exports current route list with item, quality, cities, prices, profit, ROI, weight, volume, confidence, and data freshness.
+- Live Flips — exports the filtered flip list (respects min profit, ROI, city, and type filters).
+- Crafting — exports the current recipe scan with materials, tax, station fee, profit, and ROI.
+- Arbitrage — exports current cross-city trades, including upgrade-flip markers.
+- Portfolio already exported — unchanged.
+
+**Upgrade Flips (cross-enchantment arbitrage):**
+- New `🔮 Upgrade Flips` button on the Market Flipper tab.
+- Scans cached prices for each gear-style base item, groups by `(base, city, quality)`, and finds every `@N → @N+1` (or multi-step) upgrade where the enchanted sell price covers buy price + estimated rune/soul/relic cost + 5.5% sell-order tax.
+- Reuses the standard trade card with an `UPGRADE @0→@1` badge and a dedicated "Upgrade materials (est.)" row so the cost model is visible.
+- Upgrade costs are tier-banded ballparks — the UI explicitly asks users to verify rune/soul/relic prices in-game before committing silver.
+
+**Infrastructure:**
+- Service worker cache bumped `coldtouch-v2 → v3` so returning users pick up the new app.js on next load.
+- In-website changelog and About tab updated.
+
+---
+
 ### 2026-04-14 — Full Audit Remediation (70+ items)
 
 **Go Client (v0.7.0):**

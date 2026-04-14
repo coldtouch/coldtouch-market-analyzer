@@ -883,6 +883,81 @@ select:focus {
 }
 .ll-live-indicator.hidden { display: none; }
 
+/* Auto-save checkbox */
+.ll-autosave-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    font-size: 0.78rem;
+    color: var(--text-secondary);
+    cursor: pointer;
+    user-select: none;
+}
+.ll-autosave-label input { accent-color: var(--accent); cursor: pointer; }
+
+/* Session name input row */
+.ll-session-name-row {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin: 0.5rem 0 1rem;
+    flex-wrap: wrap;
+}
+.ll-session-name-label {
+    font-size: 0.78rem;
+    color: var(--text-muted);
+    flex-shrink: 0;
+}
+.ll-session-name-input {
+    flex: 1;
+    min-width: 200px;
+    max-width: 420px;
+    background: var(--bg-primary);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    padding: 0.35rem 0.55rem;
+    color: var(--text-primary);
+    font-size: 0.82rem;
+    font-family: inherit;
+}
+.ll-session-name-input:focus {
+    outline: none;
+    border-color: var(--accent);
+}
+.ll-autosave-status {
+    font-size: 0.72rem;
+    color: var(--text-muted);
+    font-style: italic;
+}
+.ll-autosave-status.saved { color: var(--profit-green); }
+
+/* Upgrade flip badge */
+.upgrade-flip-badge {
+    display: inline-block;
+    background: linear-gradient(135deg, rgba(167,139,250,0.2), rgba(236,72,153,0.2));
+    color: #c084fc;
+    border: 1px solid rgba(192,132,252,0.4);
+    padding: 0.08rem 0.4rem;
+    border-radius: 4px;
+    font-size: 0.62rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    margin-left: 0.4rem;
+}
+
+/* Inline rename pencil on session card */
+.ll-session-rename-btn {
+    background: transparent;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    font-size: 0.8rem;
+    padding: 0.1rem 0.3rem;
+    border-radius: 4px;
+    margin-left: 0.3rem;
+}
+.ll-session-rename-btn:hover { background: rgba(255,255,255,0.08); color: var(--text-primary); }
+
 /* Pulsing dot */
 .ll-pulse-dot {
     display: inline-block;

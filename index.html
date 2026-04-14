@@ -594,6 +594,8 @@
                     </select>
                 </div>
                 <button id="arb-scan-btn" class="btn-primary">Scan Markets</button>
+                <button id="arb-upgrade-btn" class="btn-secondary" onclick="scanUpgradeFlips()" title="Find enchantment upgrade opportunities (buy base → sell enchanted)">🔮 Upgrade Flips</button>
+                <button id="arb-export-btn" class="btn-secondary" onclick="exportArbitrageCSV()" title="Export current results as CSV">Export CSV</button>
             </div>
             <div class="loading-state hidden" id="arb-spinner">
                 <div class="spinner"></div>
@@ -755,6 +757,7 @@
                         </select>
                     </div>
                     <button id="craft-scan-btn" class="btn-primary">Scan All Recipes</button>
+                    <button id="craft-export-btn" class="btn-secondary" onclick="exportCraftingCSV()" title="Export current recipes as CSV">Export CSV</button>
                 </div>
                 <div class="results-grid" id="crafting-results"></div>
             </div>
@@ -965,6 +968,7 @@
                         </select>
                     </div>
                     <button id="transport-scan-btn" class="btn-scan" style="height:38px; padding:0 1.5rem; font-size:0.85rem;">FIND ROUTES</button>
+                    <button id="transport-export-btn" class="btn-secondary" style="height:38px; padding:0 1rem; font-size:0.85rem;" onclick="exportTransportCSV()" title="Export current results as CSV">Export CSV</button>
                 </div>
             </div>
             <div id="transport-spinner" class="spinner hidden"></div>
@@ -1488,6 +1492,7 @@
                         <input type="checkbox" id="flips-desktop-notify-toggle" style="accent-color:var(--accent);"> Desktop notifications
                     </label>
                     <span id="flips-stats" style="font-size:0.75rem; color:var(--text-muted); margin-left:auto;"></span>
+                    <button id="flips-export-btn" class="btn-secondary" style="height:30px; padding:0 0.75rem; font-size:0.75rem;" onclick="exportLiveFlipsCSV()" title="Export filtered flips as CSV">Export CSV</button>
                     <div id="flips-connection-status" style="font-size:0.75rem; color:var(--text-muted);">
                         Connecting...
                     </div>
@@ -1926,6 +1931,16 @@
                     <h2 class="about-heading">Changelog</h2>
                     <div id="changelog-wrapper" style="max-height: 500px; overflow-y: auto; position: relative;">
                     <div class="changelog-list">
+                        <div class="changelog-entry">
+                            <div class="changelog-date">April 15, 2026</div>
+                            <div class="changelog-title">Batch 5 Wrap-up: Session Labels, Whitelist, Auto-save, CSV Exports, Upgrade Flips</div>
+                            <ul>
+                                <li><strong>Loot Logger:</strong> name your live sessions and rename saved ones; optional player/guild/alliance whitelist filters events you care about; opt-in auto-save writes a localStorage draft every 5 min so a crashed tab doesn&rsquo;t lose data.</li>
+                                <li><strong>CSV Exports everywhere:</strong> Transport, Live Flips, Crafting, and Arbitrage now have an Export CSV button that respects the current filters. Portfolio export was already live.</li>
+                                <li><strong>&#128302; Upgrade Flips:</strong> new button on the Market Flipper tab finds enchantment upgrades (@0&rarr;@1, @1&rarr;@2, &hellip;) where the higher-enchant sell price covers buy price + estimated rune/soul/relic cost + 5.5% sell-order tax. Upgrade material costs are tier-banded ballparks &mdash; verify rune prices in-game before committing silver.</li>
+                                <li><strong>Service worker cache bumped v2 &rarr; v3</strong> so returning users pick up the new app.js on next load. Hard refresh (Ctrl+Shift+R) once if you see stale UI.</li>
+                            </ul>
+                        </div>
                         <div class="changelog-entry">
                             <div class="changelog-date">April 14, 2026</div>
                             <div class="changelog-title">Full Audit: 70+ Fixes &amp; Features</div>
@@ -2720,10 +2735,20 @@
                     </button>
                     <button id="ll-save-btn" class="btn-small" onclick="saveLiveSession()" disabled>Save Session</button>
                     <button id="ll-reset-btn" class="btn-small" onclick="resetLiveSession()" disabled>New Session</button>
+                    <button class="btn-small" onclick="openWhitelistModal()" title="Filter live sessions by player/guild/alliance">Whitelist</button>
+                    <label class="ll-autosave-label" title="Save a local draft every 5 minutes so you don't lose data if the tab crashes">
+                        <input type="checkbox" id="ll-autosave-toggle" onchange="toggleLiveAutosave(this.checked)"> Auto-save draft
+                    </label>
                     <div id="ll-live-indicator" class="ll-live-indicator hidden">
                         <span class="ll-pulse-dot"></span>
                         LIVE &mdash; <span id="ll-event-count">0</span> events, <span id="ll-player-count">0</span> players
                     </div>
+                </div>
+                <!-- Session name field -->
+                <div class="ll-session-name-row">
+                    <label for="ll-session-name-input" class="ll-session-name-label">Session label:</label>
+                    <input type="text" id="ll-session-name-input" class="ll-session-name-input" placeholder="e.g. Dungeon run with Alpha 2026-04-15" maxlength="80" oninput="onSessionNameInput(this.value)">
+                    <span id="ll-autosave-status" class="ll-autosave-status"></span>
                 </div>
 
                 <!-- Mode tabs -->
@@ -2813,6 +2838,23 @@
     </button>
 
     <!-- ====== FEEDBACK MODAL ====== -->
+    <!-- Whitelist modal for loot logger -->
+    <div id="whitelist-modal" class="modal hidden" onclick="if(event.target===this)closeWhitelistModal()">
+        <div class="modal-content" style="max-width:520px;">
+            <button class="close-btn" onclick="closeWhitelistModal()">&times;</button>
+            <h2 style="color:var(--accent); margin:0 0 0.5rem; font-size:1.1rem;">Loot Logger Whitelist</h2>
+            <p style="color:var(--text-secondary); font-size:0.82rem; margin:0 0 0.75rem;">
+                Only show events where the looter's <strong>name</strong>, <strong>guild</strong>, or <strong>alliance</strong> matches one of these entries.
+                One entry per line. Matching is case-insensitive. Leave blank to show everyone.
+            </p>
+            <textarea id="whitelist-input" style="width:100%; min-height:140px; background:var(--bg-primary); border:1px solid var(--border-color); border-radius:6px; padding:0.5rem; color:var(--text-primary); font-family:inherit; font-size:0.85rem; resize:vertical;" placeholder="Coldtouch&#10;MyGuildName&#10;OurAlliance"></textarea>
+            <div style="display:flex; gap:0.5rem; margin-top:0.75rem; justify-content:flex-end;">
+                <button class="btn-small" onclick="clearWhitelist()">Clear</button>
+                <button class="btn-small-accent" onclick="saveWhitelist()">Save</button>
+            </div>
+        </div>
+    </div>
+
     <div id="feedback-modal" class="modal hidden">
         <div class="modal-content feedback-modal-content">
             <button class="close-btn" onclick="closeFeedbackModal()">&times;</button>
