@@ -2,6 +2,19 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-04-16 — Recent Sales → Discord
+
+- **Copy Recent Sales to Discord** — new 📋 button next to the Recent
+  Sales heading on the Loot Buyer tab. Routes through the standard
+  copy-preview modal so you can trim or edit before it hits your
+  guild chat. Output format: summary line with total silver and
+  auto-matched count, followed by a monospace table of the last 15
+  sales (item · qty · price/ea · total).
+
+Service worker cache bumped `v12` → `v13`.
+
+---
+
 ### 2026-04-16 — Tracked tabs summary + sort
 
 - **Portfolio-style summary header** at the top of the tracked tabs

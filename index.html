@@ -1945,6 +1945,14 @@
                     <div class="changelog-list">
                         <div class="changelog-entry">
                             <div class="changelog-date">April 16, 2026</div>
+                            <div class="changelog-title">Copy Recent Sales to Discord</div>
+                            <ul>
+                                <li><strong>Recent Sales &rarr; 📋 Discord</strong> &mdash; new button on the Loot Buyer tab copies the last 15 sales as a formatted table (item / qty / price / total) with total silver + auto-match count summary. Goes through the edit-preview modal so you can trim before sharing.</li>
+                                <li>Service worker cache bumped v12 &rarr; v13.</li>
+                            </ul>
+                        </div>
+                        <div class="changelog-entry">
+                            <div class="changelog-date">April 16, 2026</div>
                             <div class="changelog-title">Tracked tabs summary + sort</div>
                             <ul>
                                 <li><strong>Summary header</strong> at the top of tracked tabs &mdash; total tabs, Open/Partial/Sold breakdown, aggregate Paid / Revenue / Net across all tabs.</li>
@@ -2821,7 +2829,10 @@
 
             <!-- ====== RECENT SALES (from in-game mail) ====== -->
             <div id="loot-sales-section" style="margin-top:2rem;">
-                <h3 style="color:var(--text-primary); margin:0 0 0.75rem 0; font-size:1rem;">Recent Sales <span style="font-size:0.72rem; color:var(--text-muted); font-weight:normal;">(auto-detected from in-game mail)</span></h3>
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.75rem; gap:0.5rem; flex-wrap:wrap;">
+                    <h3 style="color:var(--text-primary); margin:0; font-size:1rem;">Recent Sales <span style="font-size:0.72rem; color:var(--text-muted); font-weight:normal;">(auto-detected from in-game mail)</span></h3>
+                    <button class="btn-small" onclick="copyRecentSalesToDiscord()" title="Copy recent sales list for Discord (preview before copy)">&#128203; Discord</button>
+                </div>
                 <div id="loot-recent-sales"></div>
             </div>
 

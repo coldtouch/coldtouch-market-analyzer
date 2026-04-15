@@ -6073,6 +6073,36 @@ async function loadRecentSales() {
     } catch(e) { /* silent */ }
 }
 
+// Copy the last N recent sales to Discord, using the copy-preview modal so
+// the user can trim the list or edit prices before it hits their guild chat.
+function copyRecentSalesToDiscord() {
+    const sales = window._recentSales || [];
+    if (sales.length === 0) {
+        showToast('No sales detected yet — open your in-game mailbox with the client running', 'warn');
+        return;
+    }
+    // Take the most recent 15 to keep the message compact
+    const slice = sales.slice(0, 15);
+    const totalSilver = slice.reduce((s, x) => s + ((x.total || (x.price * (x.amount || 1))) || 0), 0);
+    const matchedCount = slice.filter(s => s.matchedTabId).length;
+    const lines = [];
+    lines.push(`**Recent Sales** (last ${slice.length} from in-game mail)`);
+    lines.push(`Total: **${formatSilver(totalSilver)}**${matchedCount > 0 ? ` · ${matchedCount} auto-matched to tracked tabs` : ''}`);
+    lines.push('');
+    lines.push('```');
+    lines.push('Item'.padEnd(32) + 'Qty'.padEnd(6) + 'Price/ea'.padEnd(12) + 'Total');
+    lines.push('-'.repeat(65));
+    for (const s of slice) {
+        const name = (getFriendlyName(s.itemId) || s.itemId || 'Unknown').slice(0, 31).padEnd(32);
+        const qty = String(s.amount || 1).padEnd(6);
+        const price = (s.price || 0).toLocaleString().padEnd(12);
+        const total = ((s.total || (s.price * (s.amount || 1))) || 0).toLocaleString();
+        lines.push(name + qty + price + total);
+    }
+    lines.push('```');
+    openCopyPreview('Preview — Recent Sales', lines.join('\n'), 'Recent sales copied');
+}
+
 function renderRecentSales() {
     let container = document.getElementById('loot-recent-sales');
     if (!container) return;
