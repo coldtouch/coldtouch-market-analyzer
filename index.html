@@ -1945,6 +1945,17 @@
                     <div class="changelog-list">
                         <div class="changelog-entry">
                             <div class="changelog-date">April 16, 2026</div>
+                            <div class="changelog-title">Recent sales search, shortcut hint, bug fixes</div>
+                            <ul>
+                                <li><strong>Recent Sales search</strong> &mdash; filter the feed by item or city.</li>
+                                <li><strong>Shortcut hint chip</strong> on Loot Logger session view &mdash; discover keyboard shortcuts without opening the help modal.</li>
+                                <li><strong>Bug fix:</strong> <code>renderRecentSales</code> referenced undefined <code>getItemIcon</code>, now uses the CDN URL fallback.</li>
+                                <li><strong>Bug fix:</strong> <code>timeAgo</code> expected ISO string but WS pushes gave a ms number &mdash; normalized.</li>
+                                <li>Service worker cache bumped v15 &rarr; v16.</li>
+                            </ul>
+                        </div>
+                        <div class="changelog-entry">
+                            <div class="changelog-date">April 16, 2026</div>
                             <div class="changelog-title">Profile lifetime stats, Copy All preview, sales CSV</div>
                             <ul>
                                 <li><strong>Profile &rarr; Loot Lifetime Stats</strong> &mdash; totals across all saved sessions + tracked tabs (sessions, events, tabs, paid, revenue, net profit).</li>
@@ -2881,9 +2892,12 @@
 
             <!-- ====== RECENT SALES (from in-game mail) ====== -->
             <div id="loot-sales-section" style="margin-top:2rem;">
-                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.75rem; gap:0.5rem; flex-wrap:wrap;">
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.5rem; gap:0.5rem; flex-wrap:wrap;">
                     <h3 style="color:var(--text-primary); margin:0; font-size:1rem;">Recent Sales <span style="font-size:0.72rem; color:var(--text-muted); font-weight:normal;">(auto-detected from in-game mail)</span></h3>
                     <button class="btn-small" onclick="copyRecentSalesToDiscord()" title="Copy recent sales list for Discord (preview before copy)">&#128203; Discord</button>
+                </div>
+                <div style="margin-bottom:0.5rem;">
+                    <input type="text" id="loot-sales-search" placeholder="Filter sales by item name or city..." oninput="renderRecentSales()" class="sale-form-input" style="font-size:0.82rem; width:100%; max-width:400px;">
                 </div>
                 <div id="loot-recent-sales"></div>
             </div>

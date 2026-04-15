@@ -6224,13 +6224,27 @@ function renderRecentSales() {
         container.innerHTML = '<div style="color:var(--text-muted); font-size:0.78rem; padding:0.5rem;">No sales detected yet. Open your in-game mailbox while the client is running.</div>';
         return;
     }
-    container.innerHTML = sales.slice(0, 10).map(s => {
+    // Filter by search query (matches item id, friendly name, or city)
+    const q = (document.getElementById('loot-sales-search')?.value || '').toLowerCase().trim();
+    const filtered = q ? sales.filter(s => {
+        const name = (getFriendlyName(s.itemId) || s.itemId || '').toLowerCase();
+        const id = (s.itemId || '').toLowerCase();
+        const city = (s.location || '').toLowerCase();
+        return name.includes(q) || id.includes(q) || city.includes(q);
+    }) : sales;
+    if (filtered.length === 0) {
+        container.innerHTML = `<div style="color:var(--text-muted); font-size:0.78rem; padding:0.5rem;">No sales match "${esc(q)}". Clear the filter to see all ${sales.length} sale${sales.length !== 1 ? 's' : ''}.</div>`;
+        return;
+    }
+    container.innerHTML = filtered.slice(0, 10).map(s => {
         const name = s.itemId || 'Unknown';
-        const icon = getItemIcon ? getItemIcon(name) : '';
+        const icon = (typeof getItemIcon === 'function') ? getItemIcon(name) : `https://render.albiononline.com/v1/item/${encodeURIComponent(name)}.png`;
         const qty = s.amount || 1;
         const price = (s.price || 0).toLocaleString();
         const total = (s.total || 0).toLocaleString();
-        const ago = timeAgo ? timeAgo(s.receivedAt) : '';
+        // receivedAt can be ISO string (from /api/sale-notifications) or ms number (from WS push) — normalize
+        const agoInput = typeof s.receivedAt === 'number' ? new Date(s.receivedAt).toISOString() : (s.receivedAt || '');
+        const ago = agoInput && typeof timeAgo === 'function' ? timeAgo(agoInput) : '';
         const matched = s.matchedTabId ? `<span style="color:var(--profit-green); font-size:0.68rem;"> (auto-matched)</span>` : '';
         const typeLabel = s.orderType === 'EXPIRED' ? '<span style="color:var(--loss-red); font-size:0.68rem;">EXPIRED</span>' : '';
         return `<div class="sale-notif-card">
@@ -7775,6 +7789,11 @@ function _llRenderFiltered() {
         </select>
         <span style="font-size:0.72rem; color:var(--text-muted); white-space:nowrap;">${entries.length}/${totalPlayers}</span>
     </div>`;
+    // Small hint so users discover keyboard shortcuts (A11) without opening the help
+    html += `<div class="ll-shortcut-hint">
+        <kbd>?</kbd> shortcuts · <kbd>E</kbd> expand · <kbd>C</kbd> collapse · <kbd>F</kbd> search
+    </div>`;
+
     // Item filter chips (Phase 5 G11) — multi-select, layered on top of the tier dropdown
     const chipDef = [
         { id: 't6+', label: 'T6+' },

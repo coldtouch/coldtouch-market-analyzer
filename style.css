@@ -1444,6 +1444,34 @@ select:focus {
     border-left: 2px solid rgba(236, 72, 153, 0.45);
 }
 
+/* A11: on-page keyboard shortcut hint chip */
+.ll-shortcut-hint {
+    display: inline-flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+    align-items: center;
+    font-size: 0.68rem;
+    color: var(--text-muted);
+    margin-bottom: 0.45rem;
+    padding: 0.2rem 0.1rem;
+    opacity: 0.6;
+    transition: opacity 0.15s ease;
+}
+.ll-shortcut-hint:hover { opacity: 1; }
+.ll-shortcut-hint kbd {
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-color);
+    border-bottom-width: 2px;
+    border-radius: 3px;
+    padding: 0.05rem 0.35rem;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.7rem;
+    color: var(--accent);
+    line-height: 1;
+    min-width: 0.9rem;
+    text-align: center;
+}
+
 /* A11: shortcut help modal rows */
 .ll-shortcut-row {
     display: flex;

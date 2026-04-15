@@ -2,6 +2,25 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-04-16 — Recent sales search, shortcut hint, two bug fixes
+
+- **Recent sales search** — filter the Loot Buyer sales feed by item
+  name, item id, or city. Empty-state message shows the total count
+  when nothing matches.
+- **Shortcut hint on Loot Logger** — small subtle chip above the
+  filter chips: `? shortcuts · E expand · C collapse · F search`.
+  Discoverable without cluttering the view; fades in on hover.
+- **Bug fix:** `renderRecentSales` was calling `getItemIcon` without
+  a typeof guard — threw ReferenceError when the feed rendered.
+  Now falls back to the standard Albion Online CDN icon URL.
+- **Bug fix:** `timeAgo` was being passed a ms number from WS pushes
+  but expects an ISO string — threw "startsWith is not a function".
+  Normalizer handles both now.
+
+Service worker cache bumped `v15` → `v16`.
+
+---
+
 ### 2026-04-16 — Profile lifetime stats, Copy All Trips preview, sales history CSV
 
 - **Profile: Loot Lifetime Stats card** — new section on the Profile
