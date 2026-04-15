@@ -6265,12 +6265,23 @@ function renderTrackedTabCard(tab) {
     // Progress: if purchase price set, use revenue/cost ratio. Otherwise use items sold / total items.
     const totalItems = tab.totalQuantity || tab.itemCount || 1;
     const itemsSold = tab.saleRecords || 0;
-    const progressPct = tab.purchasePrice > 0
-        ? Math.min(100, Math.round(tab.revenueSoFar / tab.purchasePrice * 100))
-        : Math.min(100, Math.round(itemsSold / totalItems * 100));
-    const progressColor = progressPct >= 100 ? 'var(--profit-green)' : progressPct >= 50 ? '#fbbf24' : 'var(--accent)';
+    // Unbounded progress (can exceed 100%) so we know how far past break-even a tab went
+    const rawProgressPct = tab.purchasePrice > 0
+        ? Math.round(tab.revenueSoFar / tab.purchasePrice * 100)
+        : Math.round(itemsSold / totalItems * 100);
+    const progressPct = Math.min(100, rawProgressPct);
+    const progressColor = rawProgressPct >= 100 ? 'var(--profit-green)' : rawProgressPct >= 50 ? '#fbbf24' : 'var(--accent)';
     const statusClass = tab.status === 'sold' ? 'status-sold' : tab.status === 'partial' ? 'status-partial' : 'status-open';
     const date = new Date(tab.purchasedAt).toLocaleDateString();
+    // Days-held badge: gives a feel for stale tabs
+    const daysHeld = Math.max(0, Math.floor((Date.now() - (tab.purchasedAt || Date.now())) / 86400000));
+    let ageBadge = '';
+    if (tab.status !== 'sold' && daysHeld >= 1) {
+        const isStale = daysHeld > 14;
+        ageBadge = `<span class="loot-tab-age-badge${isStale ? ' stale' : ''}" title="Days since purchase">${daysHeld}d</span>`;
+    }
+    // Break-even tick on the progress bar (at 100% position, only shown when there IS a purchase price)
+    const showBreakEvenTick = tab.purchasePrice > 0;
 
     return `<div class="loot-tracked-card" onclick="toggleTrackedTabDetail(${tab.id}, this)">
         <div class="loot-tracked-header">
@@ -6278,6 +6289,7 @@ function renderTrackedTabCard(tab) {
                 <span class="loot-card-title">${esc(tab.tabName)}</span>
                 ${tab.city ? `<span class="loot-tab-badge">${esc(tab.city)}</span>` : ''}
                 <span class="loot-tab-status ${statusClass}">${tab.status}</span>
+                ${ageBadge}
             </div>
             <span style="font-size:0.72rem; color:var(--text-muted); flex-shrink:0;">${date}</span>
         </div>
@@ -6296,11 +6308,12 @@ function renderTrackedTabCard(tab) {
             </div>
             <div class="loot-tracked-stat">
                 <span class="loot-tracked-stat-label">Sold</span>
-                <span class="loot-tracked-stat-value">${itemsSold}/${totalItems} (${progressPct}%)</span>
+                <span class="loot-tracked-stat-value">${itemsSold}/${totalItems} (${rawProgressPct}%)</span>
             </div>
         </div>
-        <div class="loot-tracked-progress-bar">
+        <div class="loot-tracked-progress-bar" title="${showBreakEvenTick ? `Break-even at ${tab.purchasePrice.toLocaleString()}s` : 'No purchase price set'}">
             <div class="loot-tracked-progress-fill" style="width:${progressPct}%; background:${progressColor};"></div>
+            ${showBreakEvenTick ? '<span class="loot-tracked-break-even-tick" title="Break-even"></span>' : ''}
         </div>
         <div class="loot-tracked-detail" id="loot-tracked-detail-${tab.id}" style="display:none;"></div>
     </div>`;

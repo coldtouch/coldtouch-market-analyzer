@@ -5621,15 +5621,42 @@ footer {
 }
 
 .loot-tracked-progress-bar {
-    height: 4px;
+    height: 5px;
     background: var(--bg-elevated);
     border-radius: 2px;
-    overflow: hidden;
+    overflow: visible; /* allow the break-even tick to render a bit above */
+    position: relative;
+    margin-bottom: 0.2rem;
 }
 .loot-tracked-progress-fill {
     height: 100%;
     border-radius: 2px;
     transition: width 0.3s ease;
+}
+/* Break-even tick marker at the 100% position on the progress bar */
+.loot-tracked-break-even-tick {
+    position: absolute;
+    right: 0;
+    top: -2px;
+    bottom: -2px;
+    width: 2px;
+    background: var(--accent);
+    box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.25);
+    pointer-events: none;
+}
+/* Days-held age badge on tab card header */
+.loot-tab-age-badge {
+    font-size: 0.62rem;
+    padding: 0.08rem 0.4rem;
+    border-radius: 8px;
+    background: var(--bg-elevated);
+    color: var(--text-muted);
+    font-weight: 700;
+    letter-spacing: 0.02em;
+}
+.loot-tab-age-badge.stale {
+    background: rgba(239, 68, 68, 0.15);
+    color: var(--loss-red);
 }
 
 /* Small inline badges for city and status */

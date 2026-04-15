@@ -2,6 +2,23 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-04-16 — Tracked tab polish: days-held badge + break-even tick
+
+- **Days-held badge** on open / partial tracked tabs — at a glance you
+  see how long a tab has been sitting without fully selling. Shows
+  `Nd` next to the status badge. Tabs older than 14 days get a red
+  "stale" variant. Sold tabs don't show the badge (no urgency).
+- **Break-even tick** on tab progress bars — small gold vertical
+  marker at the 100% position so you can see at-a-glance whether
+  revenue has crossed the purchase price. The progress bar itself is
+  still capped at 100% width (visual sanity) but the percentage text
+  now shows unbounded values so you can tell a tab at 180% apart
+  from one at 100%.
+
+Service worker cache bumped `v17` → `v18`.
+
+---
+
 ### 2026-04-16 — About shortcuts card + session .txt export
 
 - **Keyboard Shortcuts reference** on the About tab — a clean two-
