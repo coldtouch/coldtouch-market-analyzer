@@ -1945,6 +1945,16 @@
                     <div class="changelog-list">
                         <div class="changelog-entry">
                             <div class="changelog-date">April 16, 2026</div>
+                            <div class="changelog-title">Profile lifetime stats, Copy All preview, sales CSV</div>
+                            <ul>
+                                <li><strong>Profile &rarr; Loot Lifetime Stats</strong> &mdash; totals across all saved sessions + tracked tabs (sessions, events, tabs, paid, revenue, net profit).</li>
+                                <li><strong>Copy All Trips</strong> now routes through the edit-preview modal like every other Discord copy flow.</li>
+                                <li><strong>Tracked tab sales history</strong> &mdash; sort picker (Newest / Oldest / Highest $ / Lowest $) + per-tab CSV export.</li>
+                                <li>Service worker cache bumped v14 &rarr; v15.</li>
+                            </ul>
+                        </div>
+                        <div class="changelog-entry">
+                            <div class="changelog-date">April 16, 2026</div>
                             <div class="changelog-title">Loot Buyer chips, per-trip Discord, global shortcuts</div>
                             <ul>
                                 <li><strong>Filter chips</strong> on the captured items list (T6+/T7+/T8+/Weapons/Bags/Equipment only). Stacks with search, persists across captures.</li>
@@ -2660,6 +2670,38 @@
                         <div class="profile-stat-item">
                             <span class="profile-stat-value" id="profile-tier-text">Bronze</span>
                             <span class="profile-stat-label">Current Tier</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Loot lifetime stats (populated async from /api/loot-sessions + /api/loot-tabs) -->
+                <div class="profile-card" id="profile-loot-stats-card" style="display:none;">
+                    <h3 class="profile-card-title">📦 Loot Lifetime Stats</h3>
+                    <p style="color:var(--text-secondary); font-size:0.78rem; margin:0 0 0.75rem;">Totals aggregated from your saved loot sessions and tracked loot-buyer tabs.</p>
+                    <div class="profile-stats-grid" id="profile-loot-stats-grid">
+                        <div class="profile-stat-item">
+                            <span class="profile-stat-value" id="prof-loot-sessions">0</span>
+                            <span class="profile-stat-label">Loot Sessions</span>
+                        </div>
+                        <div class="profile-stat-item">
+                            <span class="profile-stat-value" id="prof-loot-events">0</span>
+                            <span class="profile-stat-label">Total Events</span>
+                        </div>
+                        <div class="profile-stat-item">
+                            <span class="profile-stat-value" id="prof-loot-tabs">0</span>
+                            <span class="profile-stat-label">Tabs Bought</span>
+                        </div>
+                        <div class="profile-stat-item">
+                            <span class="profile-stat-value" id="prof-loot-paid">—</span>
+                            <span class="profile-stat-label">Total Paid</span>
+                        </div>
+                        <div class="profile-stat-item">
+                            <span class="profile-stat-value" id="prof-loot-revenue">—</span>
+                            <span class="profile-stat-label">Total Revenue</span>
+                        </div>
+                        <div class="profile-stat-item">
+                            <span class="profile-stat-value" id="prof-loot-net">—</span>
+                            <span class="profile-stat-label">Net Profit</span>
                         </div>
                     </div>
                 </div>

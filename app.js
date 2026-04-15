@@ -4944,9 +4944,52 @@ function initProfileTab() {
     renderProfile(window._userData);
 }
 
+// Profile: lifetime loot stats — aggregates from /api/loot-sessions + /api/loot-tabs
+async function _loadLootLifetimeStats() {
+    const card = document.getElementById('profile-loot-stats-card');
+    if (!card) return;
+    if (!localStorage.getItem('albion_auth_token') && !discordUser) {
+        card.style.display = 'none';
+        return;
+    }
+    try {
+        const [sessionsRes, tabsRes] = await Promise.all([
+            fetch(`${VPS_BASE}/api/loot-sessions`, { headers: authHeaders() }).then(r => r.ok ? r.json() : null).catch(() => null),
+            fetch(`${VPS_BASE}/api/loot-tabs`, { headers: authHeaders() }).then(r => r.ok ? r.json() : null).catch(() => null)
+        ]);
+        const sessions = sessionsRes?.sessions || [];
+        const tabs = tabsRes?.tabs || [];
+        // Only show the card when there's actually data to show
+        if (sessions.length === 0 && tabs.length === 0) {
+            card.style.display = 'none';
+            return;
+        }
+        card.style.display = '';
+        const totalEvents = sessions.reduce((s, x) => s + (x.event_count || 0), 0);
+        const totalPaid = tabs.reduce((s, t) => s + (t.purchasePrice || 0), 0);
+        const totalRev = tabs.reduce((s, t) => s + (t.revenueSoFar || 0), 0);
+        const netProfit = totalRev - totalPaid;
+        const set = (id, val, colorClass) => {
+            const el = document.getElementById(id);
+            if (!el) return;
+            el.textContent = val;
+            if (colorClass) el.style.color = colorClass;
+        };
+        set('prof-loot-sessions', sessions.length.toLocaleString());
+        set('prof-loot-events', totalEvents.toLocaleString());
+        set('prof-loot-tabs', tabs.length.toLocaleString());
+        set('prof-loot-paid', totalPaid > 0 ? formatSilver(totalPaid) : '—', 'var(--loss-red)');
+        set('prof-loot-revenue', totalRev > 0 ? formatSilver(totalRev) : '—', 'var(--accent)');
+        set('prof-loot-net', (netProfit === 0 ? '—' : (netProfit > 0 ? '+' : '') + formatSilver(Math.abs(netProfit))), netProfit >= 0 ? 'var(--profit-green)' : 'var(--loss-red)');
+    } catch { /* silent */ }
+}
+
 function renderProfile(data) {
     const user = data.user;
     const stats = data.stats || {};
+
+    // Kick off async loot lifetime stats (safe if it fails — card stays hidden)
+    _loadLootLifetimeStats();
 
     // Avatar
     const avatarEl = document.getElementById('profile-avatar');
@@ -6021,14 +6064,11 @@ function renderSellPlan(data, container) {
         ${noDataHtml}
     `;
 
-    // Wire up Copy All button using safe JS (no inline string interpolation)
+    // Wire up Copy All button — routes through the copy-preview modal for edits
     const copyAllBtn = document.getElementById('sell-copy-all-btn');
     if (copyAllBtn) {
         copyAllBtn.addEventListener('click', () => {
-            navigator.clipboard.writeText(allCopyText).then(() => {
-                copyAllBtn.textContent = 'Copied!';
-                setTimeout(() => { copyAllBtn.textContent = 'Copy All Trips'; }, 2000);
-            });
+            openCopyPreview('Preview — Full Sell Plan', allCopyText, 'Full sell plan copied');
         });
     }
 }
@@ -6274,10 +6314,62 @@ async function toggleTrackedTabDetail(tabId, cardEl) {
     }
 }
 
+// Re-render a single tab detail with a new sort order (no re-fetch)
+function _onSalesSortChange(tabId, sort) {
+    try { localStorage.setItem('albion_tab_sales_sort', sort); } catch {}
+    const tab = window['_trackedTab_' + tabId];
+    if (!tab) return;
+    const detail = document.getElementById(`loot-tracked-detail-${tabId}`);
+    if (!detail) return;
+    detail.innerHTML = renderTrackedTabDetail(tab);
+}
+
+// Export a single tab's sales history as CSV
+function exportTabSalesCSV(tabId) {
+    const tab = window['_trackedTab_' + tabId];
+    if (!tab) { showToast('Tab data not loaded — re-expand the card', 'warn'); return; }
+    const sales = tab.sales || [];
+    if (sales.length === 0) { showToast('No sales to export for this tab', 'warn'); return; }
+    const rows = sales.map(s => ({
+        sold_at: new Date(s.sold_at).toISOString(),
+        item_id: s.item_id || '',
+        item_name: getFriendlyName(s.item_id) || s.item_id || '',
+        quality: s.quality || 1,
+        quantity: s.quantity || 1,
+        sale_price: Math.floor(s.sale_price || 0),
+        total: Math.floor((s.sale_price || 0) * (s.quantity || 1))
+    }));
+    const safeName = (tab.tabName || 'tab').replace(/[^a-z0-9]+/gi, '-').toLowerCase().slice(0, 30);
+    exportToCSV(rows, `sales-${safeName}-${new Date().toISOString().slice(0, 10)}.csv`);
+}
+
 function renderTrackedTabDetail(tab) {
-    const salesHtml = tab.sales.length === 0
+    // Stash the tab on window so the CSV export can read it without re-fetching
+    window['_trackedTab_' + tab.id] = tab;
+    // Honor sort preference for sales history (per-user, persists across reloads)
+    const salesSort = localStorage.getItem('albion_tab_sales_sort') || 'newest';
+    const sales = [...(tab.sales || [])];
+    if (salesSort === 'newest') sales.sort((a, b) => +new Date(b.sold_at) - +new Date(a.sold_at));
+    else if (salesSort === 'oldest') sales.sort((a, b) => +new Date(a.sold_at) - +new Date(b.sold_at));
+    else if (salesSort === 'price-desc') sales.sort((a, b) => (b.sale_price * b.quantity) - (a.sale_price * a.quantity));
+    else if (salesSort === 'price-asc') sales.sort((a, b) => (a.sale_price * a.quantity) - (b.sale_price * b.quantity));
+
+    const salesHeader = sales.length > 0 ? `
+        <div style="display:flex; justify-content:space-between; align-items:center; margin:0.5rem 0 0.25rem;">
+            <span style="font-size:0.72rem; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.04em; font-weight:600;">Sales history (${sales.length})</span>
+            <div style="display:flex; gap:0.4rem; align-items:center;" onclick="event.stopPropagation()">
+                <select onchange="_onSalesSortChange(${tab.id}, this.value)" class="transport-select" style="height:26px; font-size:0.72rem; padding:0 0.4rem;">
+                    <option value="newest"${salesSort === 'newest' ? ' selected' : ''}>Newest</option>
+                    <option value="oldest"${salesSort === 'oldest' ? ' selected' : ''}>Oldest</option>
+                    <option value="price-desc"${salesSort === 'price-desc' ? ' selected' : ''}>Highest $</option>
+                    <option value="price-asc"${salesSort === 'price-asc' ? ' selected' : ''}>Lowest $</option>
+                </select>
+                <button class="btn-small" onclick="event.stopPropagation(); exportTabSalesCSV(${tab.id})" title="Download this tab's sales history as CSV">CSV</button>
+            </div>
+        </div>` : '';
+    const salesHtml = sales.length === 0
         ? '<p style="color:var(--text-muted); font-size:0.8rem; margin:0.5rem 0;">No sales recorded yet.</p>'
-        : tab.sales.map(s => {
+        : salesHeader + sales.map(s => {
             const name = (typeof ITEM_NAMES !== 'undefined' && ITEM_NAMES[s.item_id]) || s.item_id;
             const qualLabel = s.quality > 1 ? ` q${s.quality}` : '';
             const total = (s.sale_price * s.quantity).toLocaleString();

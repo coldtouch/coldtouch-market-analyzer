@@ -2,6 +2,26 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-04-16 — Profile lifetime stats, Copy All Trips preview, sales history CSV
+
+- **Profile: Loot Lifetime Stats card** — new section on the Profile
+  tab showing totals across all your saved loot sessions and tracked
+  loot-buyer tabs: session count, event count, tabs bought, total
+  paid, total revenue, net profit. Hidden when there's no data.
+- **Copy All Trips → preview modal** — the aggregated sell-plan copy
+  button now routes through the same edit-preview modal as the
+  individual trip copies and every other Discord flow. Consistent
+  pattern everywhere.
+- **Tracked tab sales history — sort + CSV** — inside each tracked
+  tab's expanded detail, sales history now has a sort picker (Newest
+  / Oldest / Highest $ / Lowest $, persisted to localStorage) and a
+  CSV export button that downloads just that tab's sales as
+  `sales-{tab-name}-{date}.csv`.
+
+Service worker cache bumped `v14` → `v15`.
+
+---
+
 ### 2026-04-16 — Phase 1 chips, per-trip Discord, global shortcuts
 
 - **Phase 1 filter chips on captured item list** — new multi-select
