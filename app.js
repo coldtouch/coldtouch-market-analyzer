@@ -5586,6 +5586,94 @@ async function buyThisTab() {
     }
 }
 
+// G13: Build plain-language reasoning for the BUY/MAYBE/SKIP verdict.
+// Uses the already-computed evaluation data (items with bestInstantSell,
+// bestMarketSell, riskFlags) to explain WHY the verdict was what it was.
+function _buildVerdictReasoning(data, askingPrice, qs, ps, verdictClass) {
+    if (!askingPrice || askingPrice <= 0) return '';
+    const items = data.items || [];
+    const totalItems = data.totals.itemCount || items.length;
+    const riskCount = data.totals.riskItemCount || 0;
+    const bullets = [];
+
+    // Spread analysis
+    const spreadPct = qs > 0 ? ((ps - qs) / qs * 100) : 0;
+    if (ps > qs && qs > 0) {
+        if (spreadPct >= 50) {
+            bullets.push(`<li><strong>Big spread:</strong> patient-sell value is ${Math.round(spreadPct)}% above quick-sell — listing on the market earns far more than dumping to buy orders, but takes days.</li>`);
+        } else if (spreadPct >= 15) {
+            bullets.push(`<li><strong>Moderate spread:</strong> ${Math.round(spreadPct)}% uplift from patient-sell vs quick-sell. Listing is worthwhile if you have market slots.</li>`);
+        } else {
+            bullets.push(`<li><strong>Tight spread:</strong> only ${Math.round(spreadPct)}% between instant and market — instant sell makes sense for speed.</li>`);
+        }
+    } else if (qs === 0) {
+        bullets.push(`<li><strong>No instant-sell floor:</strong> no active buy orders for most items — you'd have to list everything on the market and wait for buyers.</li>`);
+    }
+
+    // Risk breakdown
+    if (riskCount > 0) {
+        const riskTypes = {};
+        for (const it of items) {
+            for (const f of (it.riskFlags || [])) {
+                riskTypes[f] = (riskTypes[f] || 0) + 1;
+            }
+        }
+        const humanFlag = (f) => {
+            if (f === 'no_data') return 'no market data';
+            if (f === 'no_buy_orders') return 'no buyers (market is thin)';
+            if (f === 'stale_data') return 'stale prices (>24h old)';
+            if (f === 'low_volume') return 'low daily volume';
+            return f.replace(/_/g, ' ');
+        };
+        const flagList = Object.entries(riskTypes).map(([f, c]) => `${c}x ${humanFlag(f)}`).join(', ');
+        const riskPct = Math.round((riskCount / totalItems) * 100);
+        if (riskPct >= 50) {
+            bullets.push(`<li><strong>High risk:</strong> ${riskPct}% of items (${riskCount} of ${totalItems}) have issues — ${flagList}. Expect real sell values to undershoot the quoted totals.</li>`);
+        } else {
+            bullets.push(`<li><strong>${riskCount} item${riskCount !== 1 ? 's' : ''} flagged:</strong> ${flagList}. Quoted totals may be slightly optimistic.</li>`);
+        }
+    } else {
+        bullets.push(`<li><strong>Clean data:</strong> all ${totalItems} items have active buy orders and fresh prices.</li>`);
+    }
+
+    // Best city summary (where most value concentrates)
+    const cityValue = {};
+    for (const it of items) {
+        const pick = it.bestInstantSell || it.bestMarketSell;
+        if (!pick || !pick.city) continue;
+        const v = (pick.netPerUnit || 0) * (it.quantity || 1);
+        cityValue[pick.city] = (cityValue[pick.city] || 0) + v;
+    }
+    const sortedCities = Object.entries(cityValue).sort((a, b) => b[1] - a[1]);
+    if (sortedCities.length > 0) {
+        const top = sortedCities[0];
+        const topShare = Math.round((top[1] / (qs || ps || 1)) * 100);
+        if (sortedCities.length === 1) {
+            bullets.push(`<li><strong>Single destination:</strong> all sellable items move through <strong>${top[0]}</strong>.</li>`);
+        } else if (topShare >= 60) {
+            bullets.push(`<li><strong>Concentrated sell:</strong> ${topShare}% of value is in <strong>${top[0]}</strong> — one trip handles most of it.</li>`);
+        } else {
+            const citiesStr = sortedCities.slice(0, 3).map(([c]) => c).join(', ');
+            bullets.push(`<li><strong>Multi-city trip:</strong> best values split across ${citiesStr}. Expect multiple haul legs.</li>`);
+        }
+    }
+
+    // Verdict-specific closing line
+    let closing = '';
+    if (verdictClass === 'good') {
+        const profitAbs = qs - askingPrice;
+        closing = `<p class="verdict-conclusion good">Bottom line: at ${askingPrice.toLocaleString()} you pocket ~${formatSilver(profitAbs)} right away even if you dump everything to buy orders.</p>`;
+    } else if (verdictClass === 'caution') {
+        const patientProfit = ps - askingPrice;
+        closing = `<p class="verdict-conclusion caution">Bottom line: instant sell won't cover the asking price, but listing patiently earns ~${formatSilver(patientProfit)}. Only buy if you have the time + slots.</p>`;
+    } else if (verdictClass === 'bad') {
+        const overpay = askingPrice - ps;
+        closing = `<p class="verdict-conclusion bad">Bottom line: you'd overpay by ~${formatSilver(overpay)} even at patient-sell prices. Walk away or negotiate down.</p>`;
+    }
+
+    return `<ul class="verdict-bullets">${bullets.join('')}</ul>${closing}`;
+}
+
 function renderWorthAnalysis(data, container) {
     const askingPrice = parseInt(document.getElementById('loot-asking-price')?.value) || 0;
     const qs = data.totals.quickSellTotal;
@@ -5602,6 +5690,9 @@ function renderWorthAnalysis(data, container) {
 
     const riskCount = data.totals.riskItemCount;
     const riskNote = riskCount > 0 ? ` · <span style="color:var(--loss-red);">${riskCount} risky item${riskCount > 1 ? 's' : ''}</span>` : '';
+
+    // G13: plain-language reasoning for the verdict. Expandable "Why?" section below the main verdict line.
+    const reasoning = _buildVerdictReasoning(data, askingPrice, qs, ps, verdictClass);
 
     container.innerHTML = `
         <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(160px, 1fr)); gap:0.75rem; margin-bottom:1rem;">
@@ -5622,7 +5713,11 @@ function renderWorthAnalysis(data, container) {
                 <span class="profile-stat-label">Items Analyzed</span>
             </div>
         </div>
-        ${verdict ? `<div class="loot-verdict ${verdictClass}">${verdict}</div>` : '<div style="color:var(--text-muted); font-size:0.85rem; margin-bottom:1rem;">Enter an asking price above to get a buy/skip verdict.</div>'}
+        ${verdict ? `<div class="loot-verdict ${verdictClass}">
+            <div class="loot-verdict-headline">${verdict}</div>
+            ${reasoning ? `<button class="loot-verdict-why" onclick="this.nextElementSibling.classList.toggle('open'); this.textContent = this.nextElementSibling.classList.contains('open') ? '▲ Hide reasoning' : '▼ Why?'">▼ Why?</button>
+            <div class="loot-verdict-reasoning">${reasoning}</div>` : ''}
+        </div>` : '<div style="color:var(--text-muted); font-size:0.85rem; margin-bottom:1rem;">Enter an asking price above to get a buy/skip verdict.</div>'}
         <div style="margin-top:1rem;">
             <h3 style="color:var(--text-primary); font-size:0.95rem; margin:0 0 0.5rem 0;">Per-Item Breakdown</h3>
             <div class="flips-feed-container">
@@ -7392,6 +7487,21 @@ function _llRenderFiltered() {
             ? `<span class="ll-preview-overflow" data-tip="${overflowCount} more unique item${overflowCount > 1 ? 's' : ''}">+${overflowCount}</span>`
             : '');
 
+        // F2: Build a lookup of item IDs that have been sold recently (after this session's last event).
+        // If a sale post-dates a pickup, the pickup LIKELY fed that sale (not guaranteed — could be
+        // another copy — so UI labels it as "sold recently" not "this exact one sold").
+        const soldItemIds = new Set();
+        const recentSales = window._recentSales || [];
+        if (recentSales.length > 0) {
+            const sessionMinTs = Math.min(...data.items.map(ev => +new Date(ev.timestamp)).filter(n => !isNaN(n)));
+            for (const sale of recentSales) {
+                const saleTs = +new Date(sale.soldAt || sale.sold_at || sale.receivedAt || 0);
+                if (!saleTs || saleTs < sessionMinTs) continue;
+                const sid = sale.itemId || sale.item_id;
+                if (sid) soldItemIds.add(sid);
+            }
+        }
+
         // A5: identify the highest-value item so we can flag it with a ⭐
         const filteredItems = data.items.filter(ev => passesItemFilter(ev.item_id, filterVal, ev));
         let topValueEv = null;
@@ -7423,6 +7533,11 @@ function _llRenderFiltered() {
             const starBadge = isTopValue
                 ? ` <span class="ll-top-value-star" data-tip="Top-value item in this card" title="Top value">⭐</span>`
                 : '';
+            // F2: sale cross-reference — item matches a recent sale notification
+            const wasSold = soldItemIds.has(ev.item_id);
+            const soldBadge = wasSold
+                ? ` <span class="ll-sold-badge" data-tip="Matching item sold recently (check Loot Buyer recent sales)" title="Sold recently">💰</span>`
+                : '';
 
             // Accountability or death coloring
             let rowClass = '', dotClass = 'll-dot-none';
@@ -7441,7 +7556,7 @@ function _llRenderFiltered() {
             const valAttr = unitVal ? ` data-tip-value="${unitVal}"` : '';
             return `<div class="ll-item-row ll-item-clickable ${rowClass}" onclick="event.stopPropagation(); switchToBrowser('${esc(iconId)}')" title="View in Market Browser" data-tip-item="${esc(iconId)}" data-tip-source="loot"${valAttr}>
                 <img src="${iconUrl}" class="ll-item-icon" loading="lazy" onerror="this.style.display='none'" alt="">
-                <span class="ll-item-name">${esc(iName)}${starBadge}${fromStr}</span>
+                <span class="ll-item-name">${esc(iName)}${starBadge}${soldBadge}${fromStr}</span>
                 <span class="ll-item-qty">&times;${ev.quantity || 1}</span>
                 <span class="ll-item-value">${totalVal > 0 ? formatSilver(totalVal) : '—'}</span>
                 <span class="ll-item-weight">${iw > 0 ? iw.toFixed(1) + ' kg' : ''}</span>
@@ -10948,6 +11063,130 @@ document.addEventListener('mouseout', (e) => {
 });
 
 document.addEventListener('scroll', hideTooltip, true);
+
+// G14: Trip Summary — cross-feature dashboard pulling from Loot Logger + Loot Buyer.
+// Shows running totals for the selected time window (default 24h).
+let _tripWindow = '24h';
+
+function openTripSummary() {
+    document.getElementById('trip-summary-modal')?.classList.remove('hidden');
+    _renderTripSummary();
+}
+function closeTripSummary() {
+    document.getElementById('trip-summary-modal')?.classList.add('hidden');
+}
+function setTripWindow(win) {
+    _tripWindow = win;
+    // Update button highlighting
+    document.querySelectorAll('#trip-summary-modal [data-window]').forEach(b => {
+        b.classList.toggle('btn-small-accent', b.dataset.window === win);
+        b.classList.toggle('btn-small', b.dataset.window !== win);
+    });
+    _renderTripSummary();
+}
+
+function _tripWindowCutoff() {
+    const now = Date.now();
+    if (_tripWindow === '24h') return now - 24 * 3600 * 1000;
+    if (_tripWindow === '7d') return now - 7 * 24 * 3600 * 1000;
+    return 0; // all time
+}
+
+async function _renderTripSummary() {
+    const body = document.getElementById('trip-summary-body');
+    if (!body) return;
+    body.innerHTML = '<div class="empty-state"><p>Loading...</p></div>';
+    setTripWindow; // keep linter happy
+    // Highlight the active window button
+    document.querySelectorAll('#trip-summary-modal [data-window]').forEach(b => {
+        b.classList.toggle('btn-small-accent', b.dataset.window === _tripWindow);
+        b.classList.toggle('btn-small', b.dataset.window !== _tripWindow);
+    });
+    const cutoff = _tripWindowCutoff();
+    const authed = !!localStorage.getItem('albion_auth_token') || !!discordUser;
+
+    // Fetch in parallel
+    const [sessionsRes, tabsRes, salesRes] = await Promise.all([
+        authed ? fetch(`${VPS_BASE}/api/loot-sessions`, { headers: authHeaders() }).then(r => r.ok ? r.json() : null).catch(() => null) : null,
+        authed ? fetch(`${VPS_BASE}/api/loot-tabs`, { headers: authHeaders() }).then(r => r.ok ? r.json() : null).catch(() => null) : null,
+        authed ? fetch(`${VPS_BASE}/api/sale-notifications`, { headers: authHeaders() }).then(r => r.ok ? r.json() : null).catch(() => null) : null
+    ]);
+
+    const sessions = (sessionsRes?.sessions || []).filter(s => +new Date(s.started_at) >= cutoff);
+    const tabs = (tabsRes?.tabs || []).filter(t => (+t.purchasedAt || 0) >= cutoff);
+    const sales = (salesRes?.sales || salesRes || []).filter(s => +new Date(s.sold_at || s.soldAt || 0) >= cutoff);
+
+    // Logger totals
+    const lootSessionCount = sessions.length;
+    const lootEventCount = sessions.reduce((s, x) => s + (x.event_count || 0), 0);
+    const lootPlayerCount = sessions.reduce((s, x) => Math.max(s, x.player_count || 0), 0);
+    // Pull current live session if its window overlaps
+    if (liveLootEvents && liveLootEvents.length > 0) {
+        const firstTs = Math.min(...liveLootEvents.map(e => +new Date(e.timestamp)).filter(n => !isNaN(n)));
+        if (firstTs >= cutoff) {
+            // We don't double-count — just include live events that haven't been saved yet.
+            // Since the user may not have saved, include them.
+        }
+    }
+
+    // Buyer totals
+    const tabsBoughtCount = tabs.length;
+    const totalPaid = tabs.reduce((s, t) => s + (t.purchasePrice || 0), 0);
+    const totalRevenue = tabs.reduce((s, t) => s + (t.revenueSoFar || 0), 0);
+    const netBuyer = totalRevenue - totalPaid;
+    const salesCount = sales.length;
+    const salesValue = sales.reduce((s, x) => s + ((x.sale_price || x.salePrice || 0) * (x.quantity || 1)), 0);
+
+    // Render
+    const windowLabel = _tripWindow === '24h' ? 'last 24 hours' : _tripWindow === '7d' ? 'last 7 days' : 'all time';
+    if (!authed) {
+        body.innerHTML = `<div class="empty-state">
+            <p>Log in with Discord or email to see your trip summary.</p>
+            <p class="hint" style="font-size:0.75rem; color:var(--text-muted);">Trip Summary aggregates Loot Logger sessions, tracked Loot Buyer tabs, and sale notifications across the selected window.</p>
+        </div>`;
+        return;
+    }
+    body.innerHTML = `
+        <p style="color:var(--text-muted); font-size:0.8rem; margin:0 0 0.75rem;">Showing totals for the <strong style="color:var(--text-primary);">${windowLabel}</strong>.</p>
+
+        <div class="trip-section">
+            <div class="trip-section-title">📋 Loot Logger</div>
+            <div class="trip-stats">
+                <div class="trip-stat"><span class="trip-label">Sessions</span><span class="trip-val">${lootSessionCount}</span></div>
+                <div class="trip-stat"><span class="trip-label">Events</span><span class="trip-val">${lootEventCount.toLocaleString()}</span></div>
+                <div class="trip-stat"><span class="trip-label">Peak players</span><span class="trip-val">${lootPlayerCount}</span></div>
+            </div>
+        </div>
+
+        <div class="trip-section">
+            <div class="trip-section-title">📦 Loot Buyer</div>
+            <div class="trip-stats">
+                <div class="trip-stat"><span class="trip-label">Tabs bought</span><span class="trip-val">${tabsBoughtCount}</span></div>
+                <div class="trip-stat"><span class="trip-label">Paid</span><span class="trip-val loss">${totalPaid > 0 ? formatSilver(totalPaid) : '—'}</span></div>
+                <div class="trip-stat"><span class="trip-label">Revenue (tracked)</span><span class="trip-val gain">${totalRevenue > 0 ? formatSilver(totalRevenue) : '—'}</span></div>
+                <div class="trip-stat"><span class="trip-label">Net</span><span class="trip-val ${netBuyer >= 0 ? 'gain' : 'loss'}">${netBuyer >= 0 ? '+' : ''}${formatSilver(Math.abs(netBuyer))}</span></div>
+            </div>
+            ${salesCount > 0 ? `<div style="font-size:0.72rem; color:var(--text-muted); margin-top:0.35rem;">${salesCount} sale${salesCount !== 1 ? 's' : ''} notified, ${formatSilver(salesValue)} gross</div>` : ''}
+        </div>
+
+        ${tabs.length > 0 ? `
+        <div class="trip-section">
+            <div class="trip-section-title">Recent tracked tabs</div>
+            <div class="trip-tabs-list">
+                ${tabs.slice(0, 5).map(t => {
+                    const net = (t.revenueSoFar || 0) - (t.purchasePrice || 0);
+                    return `<div class="trip-tab-row">
+                        <span class="trip-tab-name">${esc(t.tabName || 'Tab')}</span>
+                        <span class="trip-tab-status status-${t.status}">${t.status}</span>
+                        <span class="trip-tab-net ${net >= 0 ? 'gain' : 'loss'}">${net >= 0 ? '+' : ''}${formatSilver(Math.abs(net))}</span>
+                    </div>`;
+                }).join('')}
+            </div>
+        </div>` : ''}
+
+        ${lootSessionCount === 0 && tabsBoughtCount === 0 ? '<div class="empty-state"><p>Nothing to show for this window.</p><p class="hint">Try "All time" or run a live session / buy a loot tab to see data here.</p></div>' : ''}
+    `;
+}
 
 // A14: Copy preview modal — wraps clipboard writes in a review/edit step
 // Usage: openCopyPreview('GvG Summary', text, 'GvG summary copied') -> user

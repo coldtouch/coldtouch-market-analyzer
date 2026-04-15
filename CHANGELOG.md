@@ -2,6 +2,33 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-04-16 — Trip Summary, verdict reasoning, sale cross-reference
+
+- **Trip Summary (G14)** — new menu entry in the Loot Tools dropdown.
+  Opens a modal dashboard pulling from both features: loot sessions
+  (count, events, peak players), tracked loot tabs (count, paid,
+  revenue, net), recent sale notifications. Window picker switches
+  between last 24h / last 7d / all time. Recent tracked tabs list with
+  status badges. Graceful empty states when you're not logged in or
+  have no data in the window.
+- **Verdict reasoning (G13)** — the BUY/MAYBE/SKIP line on the Loot
+  Buyer analysis now has a `▼ Why?` button. Expand it for plain-
+  language reasoning: spread analysis (instant vs market), risk
+  breakdown (stale data / no buyers / low volume / etc. with item
+  counts), best destination city, and a bottom-line conclusion tuned
+  to the verdict ("you'd overpay by ~X silver" for SKIP, "pocket ~X
+  right away" for BUY, etc.).
+- **Sale cross-reference (F2)** — items in the Loot Logger session
+  view now get a 💰 badge if a matching item appears in your recent
+  sale notifications feed (and the sale post-dates the pickup). Soft
+  indicator: "matching item sold recently" — we can't know for certain
+  it was *this exact copy*, but it helps officers eyeball which gear
+  from a session turned into actual silver.
+
+Service worker cache bumped `v7` → `v8`.
+
+---
+
 ### 2026-04-16 — Session UX batch: auto-naming, inline rename, copy preview
 
 Three small wins aimed at the friction points you hit most when running a

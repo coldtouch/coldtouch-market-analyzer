@@ -356,6 +356,7 @@
                 <div class="nav-dropdown">
                     <button class="nav-tab" data-tab="loot-buyer">Loot Buyer</button>
                     <button class="nav-tab" data-tab="loot-logger">Loot Logger</button>
+                    <button class="nav-tab nav-tab-action" onclick="event.preventDefault(); openTripSummary(); this.closest('.nav-dropdown')?.classList.remove('show');" title="Today's running totals from Loot Logger + Loot Buyer">📊 Trip Summary</button>
                 </div>
             </div>
             <!-- Game Tools group -->
@@ -1943,6 +1944,16 @@
                     <div class="changelog-list">
                         <div class="changelog-entry">
                             <div class="changelog-date">April 16, 2026</div>
+                            <div class="changelog-title">Trip Summary, verdict reasoning, sale cross-reference</div>
+                            <ul>
+                                <li><strong>📊 Trip Summary</strong> in the Loot Tools dropdown &mdash; cross-feature dashboard with 24h / 7d / all-time window picker pulling sessions, tracked tabs, revenue, and recent sales.</li>
+                                <li><strong>▼ Why?</strong> on BUY/MAYBE/SKIP verdicts &mdash; expands to plain-language reasoning about spread, risk, best city, and bottom-line outcome.</li>
+                                <li><strong>💰 Sale cross-reference</strong> &mdash; Loot Logger item rows flag when a matching item shows up in your Recent Sales feed post-pickup.</li>
+                                <li>Service worker cache bumped v7 &rarr; v8.</li>
+                            </ul>
+                        </div>
+                        <div class="changelog-entry">
+                            <div class="changelog-date">April 16, 2026</div>
                             <div class="changelog-title">Session UX: auto-naming, inline rename, copy preview</div>
                             <ul>
                                 <li><strong>💡 Auto-name</strong> button next to the session label &mdash; suggests names like <code>Alpha vs Evil &middot; Apr 16</code> from detected guild + top enemy + first-event date.</li>
@@ -2896,6 +2907,24 @@
     </button>
 
     <!-- ====== FEEDBACK MODAL ====== -->
+    <!-- Trip Summary modal — cross-feature daily dashboard (G14) -->
+    <div id="trip-summary-modal" class="modal hidden" onclick="if(event.target===this)closeTripSummary()">
+        <div class="modal-content" style="max-width:720px;">
+            <button class="close-btn" onclick="closeTripSummary()">&times;</button>
+            <div style="display:flex; align-items:center; justify-content:space-between; gap:0.5rem; margin-bottom:0.75rem; flex-wrap:wrap;">
+                <h2 style="color:var(--accent); margin:0; font-size:1.15rem;">📊 Trip Summary</h2>
+                <div style="display:flex; gap:0.4rem;">
+                    <button class="btn-small" data-window="24h" onclick="setTripWindow('24h')">Last 24h</button>
+                    <button class="btn-small" data-window="7d" onclick="setTripWindow('7d')">Last 7d</button>
+                    <button class="btn-small" data-window="all" onclick="setTripWindow('all')">All time</button>
+                </div>
+            </div>
+            <div id="trip-summary-body">
+                <div class="empty-state"><p>Loading...</p></div>
+            </div>
+        </div>
+    </div>
+
     <!-- Copy preview modal — reusable, lets user review/edit before clipboard -->
     <div id="copy-preview-modal" class="modal hidden" onclick="if(event.target===this)closeCopyPreviewModal()">
         <div class="modal-content" style="max-width:640px;">

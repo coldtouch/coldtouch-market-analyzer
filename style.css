@@ -968,6 +968,126 @@ select:focus {
     color: var(--accent);
 }
 
+/* G13: Verdict reasoning expansion */
+.loot-verdict-headline {
+    font-size: 1rem;
+    font-weight: 700;
+}
+.loot-verdict-why {
+    display: inline-block;
+    margin-top: 0.4rem;
+    background: transparent;
+    border: 1px solid currentColor;
+    color: inherit;
+    padding: 0.2rem 0.55rem;
+    border-radius: 4px;
+    font-size: 0.72rem;
+    cursor: pointer;
+    opacity: 0.7;
+    font-weight: 600;
+    transition: opacity 0.1s ease, background 0.1s ease;
+}
+.loot-verdict-why:hover { opacity: 1; background: rgba(255, 255, 255, 0.05); }
+.loot-verdict-reasoning {
+    display: none;
+    margin-top: 0.55rem;
+    padding-top: 0.55rem;
+    border-top: 1px dashed currentColor;
+    font-size: 0.8rem;
+    font-weight: 400;
+    color: var(--text-primary);
+    opacity: 0.95;
+}
+.loot-verdict-reasoning.open { display: block; }
+.verdict-bullets {
+    margin: 0 0 0.5rem;
+    padding-left: 1.2rem;
+    list-style: disc;
+}
+.verdict-bullets li {
+    margin-bottom: 0.3rem;
+    line-height: 1.4;
+}
+.verdict-conclusion {
+    margin: 0.5rem 0 0;
+    padding: 0.4rem 0.6rem;
+    border-radius: 6px;
+    font-size: 0.82rem;
+    font-weight: 500;
+}
+.verdict-conclusion.good { background: rgba(74, 222, 128, 0.08); color: var(--profit-green); }
+.verdict-conclusion.caution { background: rgba(251, 191, 36, 0.08); color: #fbbf24; }
+.verdict-conclusion.bad { background: rgba(239, 68, 68, 0.08); color: var(--loss-red); }
+
+/* G14: Trip Summary modal */
+.trip-section {
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius);
+    padding: 0.6rem 0.8rem;
+    margin-bottom: 0.7rem;
+}
+.trip-section-title {
+    font-size: 0.8rem;
+    font-weight: 700;
+    color: var(--accent);
+    margin-bottom: 0.45rem;
+}
+.trip-stats {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+    gap: 0.5rem;
+}
+.trip-stat {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+    padding: 0.2rem 0.35rem;
+    border-right: 1px solid var(--border-color);
+}
+.trip-stat:last-child { border-right: none; }
+.trip-label {
+    font-size: 0.64rem;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    font-weight: 600;
+}
+.trip-val {
+    font-size: 1rem;
+    font-weight: 700;
+    color: var(--text-primary);
+    line-height: 1.1;
+}
+.trip-val.gain { color: var(--profit-green); }
+.trip-val.loss { color: var(--loss-red); }
+.trip-tabs-list { display: flex; flex-direction: column; gap: 0.3rem; }
+.trip-tab-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0.3rem 0.5rem;
+    background: var(--bg-elevated);
+    border-radius: 4px;
+    font-size: 0.78rem;
+}
+.trip-tab-name { font-weight: 500; color: var(--text-primary); flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.trip-tab-status {
+    font-size: 0.62rem;
+    padding: 0.08rem 0.4rem;
+    border-radius: 8px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    font-weight: 700;
+    margin: 0 0.5rem;
+}
+.trip-tab-status.status-open { background: rgba(212, 175, 55, 0.15); color: var(--accent); }
+.trip-tab-status.status-partial { background: rgba(251, 191, 36, 0.15); color: #fbbf24; }
+.trip-tab-status.status-sold { background: rgba(74, 222, 128, 0.15); color: var(--profit-green); }
+.trip-tab-net { font-weight: 700; }
+.trip-tab-net.gain { color: var(--profit-green); }
+.trip-tab-net.loss { color: var(--loss-red); }
+
 /* A10: Inline rename input (appears inside session card title) */
 .ll-inline-rename-input {
     background: var(--bg-primary);
@@ -1044,6 +1164,17 @@ select:focus {
     font-size: 0.62rem;
     color: var(--text-muted);
     margin-top: 0.15rem;
+}
+
+/* F2: Sale cross-reference badge */
+.ll-sold-badge {
+    display: inline-block;
+    font-size: 0.75rem;
+    margin-left: 0.15rem;
+    cursor: help;
+    vertical-align: middle;
+    line-height: 1;
+    filter: drop-shadow(0 0 3px rgba(74, 222, 128, 0.4));
 }
 
 /* G5: Friendly-fire + A5: Top-value star */
