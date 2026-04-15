@@ -2,6 +2,59 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-04-16 — Loot Tools Phases 2-5: Deaths, Crafters, Cross-links, Combo A
+
+Five phases landed in a single day. Highlights below; full phase-by-phase
+detail in LOOT_ROADMAP.md.
+
+**Phase 2 — Death tracking v1:**
+Every session view now has a Deaths section above the player cards.
+For each death we reconstruct "what they died with" by aggregating
+every loot event where `looted_from_name === victim` — the stuff
+picked up off the corpse. Card shows victim, killer, timestamp,
+friendly/enemy side badge, estimated value, up to 8 corpse items,
+and top 3 looters. Click **Filter** to narrow the main view to that
+death's loot chain. Click **📋 Discord** for a formatted report.
+Honest caveat surfaced in UI: items left unlooted / looted by
+players outside capture range aren't counted.
+
+**Phase 3 — Crafter attribution:**
+Wired end-to-end for chest captures (Loot Buyer). The Go client
+already reads `CrafterName` off equipment packets; frontend
+renderLootItemRows now reads it and pushes it to the hover tooltip
+so you see "Crafted by X" on every piece of gear you captured. Loot
+drops (Loot Logger) continue to show "Unknown — looted" — game
+protocol limitation, not a bug.
+
+**Phase 4 — Cross-feature integrations:**
+- Session detail → **✓ Accountability** button jumps to
+  Accountability with the session pre-selected
+- Accountability suspects banner → **💰 Value missing items**
+  loads the aggregated missing items into Loot Buyer and runs the
+  worth analysis so you see current market values
+- Chest capture chip → **📦 Track** fast-path posts directly to
+  `/api/loot-tab/save` without running Phase 1 eval (for "I already
+  bought this, just let me log sales")
+
+**Phase 5 — Combo A (QoL):**
+- **Whitelist presets** in the Loot Logger whitelist modal: one
+  click adds your primary guild / alliance / character name, auto-
+  detected from the current session's most-common values
+- **Item filter chips** above the player cards (multi-select):
+  `T6+ / T7+ / T8+ / 🗡 Weapons / 🎒 Bags / 💎 >100k`. Tier chips are
+  exclusive (one min-tier), category chips stack. Active chips get
+  a gold pill, and a `✕ clear` pill appears when any are on.
+- **Discord copy templates** — both the session Copy button and the
+  accountability Copy button now show a dropdown:
+  - Session: *GvG Summary*, *Top Looters*, *Deaths Report*
+  - Accountability: *Accountability table* (existing), *Regear Report*
+    (new, per-player missing items with silver values)
+
+Service worker cache bumped `v4` → `v5`. Hard refresh if you see stale
+UI. See LOOT_ROADMAP.md for the v2 roadmap picks that were deferred.
+
+---
+
 ### 2026-04-16 — Loot Tools Phase 1: New Section + Visual Overhaul
 
 **New "Loot Tools" navigation group:**

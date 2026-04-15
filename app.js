@@ -6236,6 +6236,7 @@ let _llPrimaryGuild = '';          // most-common guild among looters (= "our" s
 let _llPrimaryAlliance = '';
 let _llDeathFilterVictim = null;   // when set, restricts view to that death's chain
 let _llCurrentSessionId = null;    // session_id when viewing a saved session, null for live
+let _llActiveChips = new Set();    // Phase 5 item filter chips (multi-select)
 
 // --- Session naming, whitelist, auto-save ---
 const LL_SESSION_NAME_KEY = 'albion_live_session_name';
@@ -6306,6 +6307,52 @@ function clearWhitelist() {
     try { localStorage.removeItem(LL_WHITELIST_KEY); } catch {}
     const input = document.getElementById('whitelist-input');
     if (input) input.value = '';
+}
+
+// Auto-detect primary guild/alliance from the current events so presets work
+// even if the session hasn't been rendered yet (user opens the modal first).
+function _detectPrimaryGuildAlliance() {
+    let guild = _llPrimaryGuild;
+    let alliance = _llPrimaryAlliance;
+    if (!guild || !alliance) {
+        const gCount = {}, aCount = {};
+        for (const ev of liveLootEvents) {
+            if (ev.item_id === '__DEATH__') continue;
+            const g = ev.looted_by_guild || '';
+            const a = ev.looted_by_alliance || '';
+            if (g) gCount[g] = (gCount[g] || 0) + 1;
+            if (a) aCount[a] = (aCount[a] || 0) + 1;
+        }
+        if (!guild) guild = Object.entries(gCount).sort((a, b) => b[1] - a[1])[0]?.[0] || '';
+        if (!alliance) alliance = Object.entries(aCount).sort((a, b) => b[1] - a[1])[0]?.[0] || '';
+    }
+    return { guild, alliance };
+}
+
+function applyWhitelistPreset(kind) {
+    const input = document.getElementById('whitelist-input');
+    if (!input) return;
+    const existing = input.value.split('\n').map(s => s.trim()).filter(Boolean);
+    const add = (v) => { if (v && !existing.some(e => e.toLowerCase() === v.toLowerCase())) existing.push(v); };
+    if (kind === 'guild') {
+        const { guild } = _detectPrimaryGuildAlliance();
+        if (!guild) { showToast('No guild detected in current session — start a live session or load one first', 'warn'); return; }
+        add(guild);
+        showToast(`Added "${guild}" to whitelist`, 'success');
+    } else if (kind === 'alliance') {
+        const { alliance } = _detectPrimaryGuildAlliance();
+        if (!alliance) { showToast('No alliance detected — start a live session or load one first', 'warn'); return; }
+        add(alliance);
+        showToast(`Added "${alliance}" to whitelist`, 'success');
+    } else if (kind === 'me') {
+        // Try to infer the user's character name from discord profile or saved logs
+        const myName = (discordUser?.username) || localStorage.getItem('albion_character_name') || prompt('Enter your in-game character name:', '');
+        if (!myName) return;
+        try { localStorage.setItem('albion_character_name', myName); } catch {}
+        add(myName);
+        showToast(`Added "${myName}" to whitelist`, 'success');
+    }
+    input.value = existing.join('\n');
 }
 function isWhitelistedEvent(ev) {
     if (!lootWhitelist.length) return true;
@@ -7021,13 +7068,58 @@ function _llRenderFiltered() {
         const m = (itemId || '').match(/^T(\d)/);
         return m ? parseInt(m[1]) : 0;
     }
-    function passesItemFilter(itemId, filter) {
-        if (filter === 'all') return true;
-        if (filter === 'nobags') return !(itemId || '').includes('BAG');
-        if (filter === 't5+') return getItemTier(itemId) >= 5;
-        if (filter === 't6+') return getItemTier(itemId) >= 6;
+    function _llIsWeapon(itemId) {
+        return /^T\d_(MAIN|2H|OFF)_/i.test(itemId || '');
+    }
+    function _llIsBag(itemId) {
+        return /^T\d_BAG/i.test(itemId || '');
+    }
+    function _llPassesChips(itemId, ev) {
+        if (_llActiveChips.size === 0) return true;
+        // Tier chips (t5+ / t6+ / t7+ / t8+) are exclusive — highest wins
+        const tierChips = ['t8+', 't7+', 't6+', 't5+'].filter(c => _llActiveChips.has(c));
+        if (tierChips.length > 0) {
+            const minTier = parseInt(tierChips[0][1]); // first element is highest
+            if (getItemTier(itemId) < minTier) return false;
+        }
+        // Category chips (additive — AND with tier filter)
+        if (_llActiveChips.has('weapons') && !_llIsWeapon(itemId)) return false;
+        if (_llActiveChips.has('bags') && !_llIsBag(itemId)) return false;
+        if (_llActiveChips.has('high-value')) {
+            const p = priceMap[itemId];
+            const total = p ? p.price * (ev?.quantity || 1) : 0;
+            if (total < 100000) return false;
+        }
         return true;
     }
+    function passesItemFilter(itemId, filter, ev) {
+        // Dropdown filter first (backwards compat)
+        if (filter !== 'all') {
+            if (filter === 'nobags' && (itemId || '').includes('BAG')) return false;
+            if (filter === 't5+' && getItemTier(itemId) < 5) return false;
+            if (filter === 't6+' && getItemTier(itemId) < 6) return false;
+        }
+        // Then chip filter
+        return _llPassesChips(itemId, ev);
+    }
+    function _llToggleChip(chip) {
+        // Tier chips are exclusive among themselves (only one min-tier makes sense)
+        if (['t5+', 't6+', 't7+', 't8+'].includes(chip)) {
+            const wasActive = _llActiveChips.has(chip);
+            ['t5+', 't6+', 't7+', 't8+'].forEach(c => _llActiveChips.delete(c));
+            if (!wasActive) _llActiveChips.add(chip);
+        } else {
+            if (_llActiveChips.has(chip)) _llActiveChips.delete(chip);
+            else _llActiveChips.add(chip);
+        }
+        _llRenderFiltered();
+    }
+    function _llClearChips() {
+        _llActiveChips.clear();
+        _llRenderFiltered();
+    }
+    window._llToggleChip = _llToggleChip;
+    window._llClearChips = _llClearChips;
 
     // Sort
     if (sortVal === 'value') entries.sort((a, b) => b[1].totalValue - a[1].totalValue);
@@ -7082,6 +7174,14 @@ function _llRenderFiltered() {
             <div class="ll-summary-value">${fmtDuration(durMs)}</div>
         </div>
         <div class="ll-summary-actions">
+            <div class="ll-discord-dropdown">
+                <button class="btn-small" onclick="this.nextElementSibling.classList.toggle('open')" title="Copy session to Discord">📋 Discord ▾</button>
+                <div class="ll-discord-menu">
+                    <button onclick="this.parentElement.classList.remove('open'); copySessionDiscord('summary')">GvG Summary</button>
+                    <button onclick="this.parentElement.classList.remove('open'); copySessionDiscord('topLooters')">Top Looters</button>
+                    <button onclick="this.parentElement.classList.remove('open'); copySessionDiscord('deaths')">Deaths Report</button>
+                </div>
+            </div>
             <button class="btn-small" onclick="exportLootSession()" title="Export to CSV">CSV</button>
             ${_llCurrentSessionId
                 ? `<button class="btn-small-accent" onclick="runAccountabilityForSession('${esc(_llCurrentSessionId)}')" title="Cross-reference this session against chest deposits">✓ Accountability</button>`
@@ -7115,6 +7215,24 @@ function _llRenderFiltered() {
         </select>
         <span style="font-size:0.72rem; color:var(--text-muted); white-space:nowrap;">${entries.length}/${totalPlayers}</span>
     </div>`;
+    // Item filter chips (Phase 5 G11) — multi-select, layered on top of the tier dropdown
+    const chipDef = [
+        { id: 't6+', label: 'T6+' },
+        { id: 't7+', label: 'T7+' },
+        { id: 't8+', label: 'T8+' },
+        { id: 'weapons', label: '🗡 Weapons' },
+        { id: 'bags', label: '🎒 Bags' },
+        { id: 'high-value', label: '💎 >100k' }
+    ];
+    const chipHtml = chipDef.map(c => {
+        const active = _llActiveChips.has(c.id);
+        return `<button class="ll-filter-chip${active ? ' active' : ''}" onclick="_llToggleChip('${c.id}')" data-chip="${c.id}">${c.label}</button>`;
+    }).join('');
+    const chipClearHtml = _llActiveChips.size > 0
+        ? `<button class="ll-filter-chip ll-chip-clear" onclick="_llClearChips()" title="Clear all item filters">✕ clear</button>`
+        : '';
+    html += `<div class="ll-filter-chips">${chipHtml}${chipClearHtml}</div>`;
+
     // Expand/Collapse All buttons + remove players
     html += `<div style="display:flex; gap:0.4rem; margin-bottom:0.3rem;">
         <button class="btn-small" onclick="document.querySelectorAll('#loot-session-detail .ll-player-card').forEach(c=>c.classList.add('expanded'))">Expand All</button>
@@ -7161,7 +7279,7 @@ function _llRenderFiltered() {
             ? `<span class="ll-preview-overflow" data-tip="${overflowCount} more unique item${overflowCount > 1 ? 's' : ''}">+${overflowCount}</span>`
             : '');
 
-        const itemsHtml = data.items.filter(ev => passesItemFilter(ev.item_id, filterVal)).map(ev => {
+        const itemsHtml = data.items.filter(ev => passesItemFilter(ev.item_id, filterVal, ev)).map(ev => {
             const iName = getFriendlyName(ev.item_id) || ev.item_id;
             const iconId = ev.item_id || 'T4_BAG';
             const iconUrl = `https://render.albiononline.com/v1/item/${encodeURIComponent(iconId)}.png`;
@@ -7646,11 +7764,17 @@ async function runAccountabilityCheck() {
         <div class="loot-tracked-stat"><span class="loot-tracked-stat-label">Players</span><span class="loot-tracked-stat-value">${playerResults.length}</span></div>
     </div>`;
 
-    // Action buttons: Expand/Collapse All, Copy to Discord, Export CSV
+    // Action buttons: Expand/Collapse All, Copy to Discord (template dropdown), Export CSV
     html += `<div style="display:flex; gap:0.4rem; margin-bottom:0.5rem; flex-wrap:wrap;">
         <button class="btn-small" onclick="document.querySelectorAll('#accountability-result .ll-player-card').forEach(c=>c.classList.add('expanded'))">Expand All</button>
         <button class="btn-small" onclick="document.querySelectorAll('#accountability-result .ll-player-card').forEach(c=>c.classList.remove('expanded'))">Collapse All</button>
-        <button class="btn-small" onclick="copyAccountabilityToDiscord()">&#128203; Copy to Discord</button>
+        <div class="ll-discord-dropdown">
+            <button class="btn-small" onclick="this.nextElementSibling.classList.toggle('open')">&#128203; Discord ▾</button>
+            <div class="ll-discord-menu">
+                <button onclick="this.parentElement.classList.remove('open'); copyAccountabilityToDiscord('table')">Accountability table</button>
+                <button onclick="this.parentElement.classList.remove('open'); copyAccountabilityToDiscord('regear')">Regear report</button>
+            </div>
+        </div>
         <button class="btn-small" onclick="exportAccountabilityCSV()">CSV Export</button>
     </div>`;
 
@@ -7735,24 +7859,127 @@ async function runAccountabilityCheck() {
     resultEl.innerHTML = html;
 }
 
-function copyAccountabilityToDiscord() {
+function copyAccountabilityToDiscord(template) {
     const r = window._llAccResults;
     if (!r) { showToast('Run accountability check first', 'warning'); return; }
     const guildPlayers = r.playerResults.filter(p => !p.isEnemy);
-    let text = `**Loot Accountability Report**\n`;
-    text += `Chests: ${r.selectedTabNames.join(', ')}\n`;
-    text += `Looted: ${r.totalLooted} | In Chest: ${r.totalDeposited} | Missing: ${r.totalMissing}`;
-    if (r.totalMissingSilver > 0) text += ` (~${Math.round(r.totalMissingSilver).toLocaleString()} silver)`;
-    text += `\n\n`;
-    text += '```\n';
-    text += 'Player'.padEnd(20) + 'Guild'.padEnd(15) + 'Dep%'.padEnd(6) + 'Missing'.padEnd(10) + 'Silver\n';
-    text += '-'.repeat(65) + '\n';
-    for (const p of guildPlayers) {
-        const silver = p.missingSilver > 0 ? Math.round(p.missingSilver).toLocaleString() : '-';
-        text += p.name.slice(0, 19).padEnd(20) + (p.guild || '-').slice(0, 14).padEnd(15) + `${p.pct}%`.padEnd(6) + String(p.totalMissing).padEnd(10) + silver + '\n';
+    let text = '';
+    const tmpl = template || 'table';
+    if (tmpl === 'regear') {
+        // Regear report: per-player missing items with silver value
+        text = `**Regear Report**\n`;
+        text += `Session: ${r.selectedTabNames.join(', ')}\n`;
+        text += `Total owed: ~${Math.round(r.totalMissingSilver).toLocaleString()} silver across ${guildPlayers.filter(p => p.totalMissing > 0).length} player(s)\n\n`;
+        for (const p of guildPlayers) {
+            if (p.totalMissing <= 0) continue;
+            text += `**${p.name}**${p.guild ? ` [${p.guild}]` : ''} — ${p.totalMissing} item${p.totalMissing !== 1 ? 's' : ''}${p.missingSilver > 0 ? `, ~${Math.round(p.missingSilver).toLocaleString()} silver` : ''}${p.died ? ' 💀 (died)' : ''}\n`;
+            for (const it of (p.items || [])) {
+                if (it.missing <= 0) continue;
+                const name = getFriendlyName(it.itemId) || it.itemId;
+                text += `  • ${it.missing}x ${name}\n`;
+            }
+        }
+        text += `\n_Note: values shown are current market estimates, not the price paid._`;
+    } else {
+        // Default table
+        text = `**Loot Accountability Report**\n`;
+        text += `Chests: ${r.selectedTabNames.join(', ')}\n`;
+        text += `Looted: ${r.totalLooted} | In Chest: ${r.totalDeposited} | Missing: ${r.totalMissing}`;
+        if (r.totalMissingSilver > 0) text += ` (~${Math.round(r.totalMissingSilver).toLocaleString()} silver)`;
+        text += `\n\n`;
+        text += '```\n';
+        text += 'Player'.padEnd(20) + 'Guild'.padEnd(15) + 'Dep%'.padEnd(6) + 'Missing'.padEnd(10) + 'Silver\n';
+        text += '-'.repeat(65) + '\n';
+        for (const p of guildPlayers) {
+            const silver = p.missingSilver > 0 ? Math.round(p.missingSilver).toLocaleString() : '-';
+            text += p.name.slice(0, 19).padEnd(20) + (p.guild || '-').slice(0, 14).padEnd(15) + `${p.pct}%`.padEnd(6) + String(p.totalMissing).padEnd(10) + silver + '\n';
+        }
+        text += '```';
     }
-    text += '```';
-    navigator.clipboard.writeText(text).then(() => showToast('Copied to clipboard for Discord', 'success'));
+    navigator.clipboard.writeText(text).then(() => showToast(`Copied ${tmpl === 'regear' ? 'regear report' : 'accountability table'}`, 'success'));
+}
+
+// Phase 5 G9: Session view Discord templates
+// Pulls from the cached render state (_llCurrentEvents, _llCurrentByPlayer, _llDeaths, _llPriceMap)
+function copySessionDiscord(template) {
+    if (!_llCurrentEvents || _llCurrentEvents.length === 0) {
+        showToast('No session loaded', 'warning');
+        return;
+    }
+    const events = _llCurrentEvents;
+    const byPlayer = _llCurrentByPlayer;
+    const priceMap = _llPriceMap;
+    const deaths = _llDeaths || [];
+    const lootEventsOnly = events.filter(e => e.item_id !== '__DEATH__');
+    const totalItems = lootEventsOnly.reduce((s, e) => s + (e.quantity || 1), 0);
+    const totalValue = lootEventsOnly.reduce((s, e) => {
+        const p = priceMap[e.item_id];
+        return s + (p ? p.price * (e.quantity || 1) : 0);
+    }, 0);
+    const tsNums = events.map(e => +new Date(e.timestamp)).filter(n => !isNaN(n));
+    const durMs = tsNums.length > 1 ? Math.max(...tsNums) - Math.min(...tsNums) : 0;
+    const fmtDur = (ms) => {
+        const s = Math.floor(ms / 1000);
+        const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60);
+        return h > 0 ? `${h}h ${m}m` : `${m}m`;
+    };
+    // Build looter ranking (guild members only, excluding loot sources/enemies)
+    const ranked = Object.entries(byPlayer)
+        .filter(([, d]) => !d.isEnemy)
+        .sort((a, b) => (b[1].totalValue || 0) - (a[1].totalValue || 0));
+    let text = '';
+    if (template === 'summary') {
+        const sessionLabel = liveSessionName || 'Session';
+        text = `**${sessionLabel} — GvG Summary**\n`;
+        text += `Duration: ${fmtDur(durMs)} · Players: ${Object.keys(byPlayer).length} · Events: ${events.length}\n`;
+        text += `Items looted: ${totalItems.toLocaleString()} · Est. value: **${formatSilver(totalValue)}**\n`;
+        text += `Deaths: ${deaths.length}`;
+        const friendlyDeaths = deaths.filter(d => d.wasFriendly).length;
+        const enemyDeaths = deaths.length - friendlyDeaths;
+        if (deaths.length > 0) text += ` (${friendlyDeaths} friendly, ${enemyDeaths} enemy)`;
+        text += `\n\n__Top 3 looters:__\n`;
+        for (const [name, d] of ranked.slice(0, 3)) {
+            text += `• **${name}**${d.guild ? ` [${d.guild}]` : ''} — ${formatSilver(d.totalValue || 0)} (${d.items.length} items)\n`;
+        }
+    } else if (template === 'topLooters') {
+        text = `**Top Looters — ${liveSessionName || 'Session'}**\n`;
+        text += `Est. total value: **${formatSilver(totalValue)}** over ${fmtDur(durMs)}\n\n`;
+        text += '```\n';
+        text += 'Rank  Player                Guild           Items   Value\n';
+        text += '-'.repeat(65) + '\n';
+        ranked.slice(0, 15).forEach(([name, d], i) => {
+            const rank = String(i + 1).padEnd(6);
+            const nm = name.slice(0, 20).padEnd(22);
+            const gl = (d.guild || '-').slice(0, 14).padEnd(16);
+            const itm = String(d.items.length).padEnd(8);
+            const val = d.totalValue > 0 ? formatSilver(d.totalValue) : '-';
+            text += `${rank}${nm}${gl}${itm}${val}\n`;
+        });
+        text += '```';
+    } else if (template === 'deaths') {
+        if (deaths.length === 0) {
+            text = '**No deaths recorded in this session.**';
+        } else {
+            text = `**Deaths Report — ${liveSessionName || 'Session'}**\n`;
+            text += `${deaths.length} death${deaths.length !== 1 ? 's' : ''} · Est. value moved: **${formatSilver(deaths.reduce((s, d) => s + d.estimatedValue, 0))}**\n\n`;
+            for (const d of deaths) {
+                const when = d.timestamp ? new Date(d.timestamp).toLocaleTimeString() : '—';
+                text += `${d.wasFriendly ? '⚔' : '💀'} **${d.victim}**${d.victimGuild ? ` [${d.victimGuild}]` : ''} died to **${d.killer || 'unknown'}** at ${when}\n`;
+                text += `  ~${formatSilver(d.estimatedValue)} recovered off corpse`;
+                if (d.lootedBy.length > 0) {
+                    const top = d.lootedBy.slice(0, 2).map(l => `${l.name} (${l.items})`).join(', ');
+                    text += ` by ${top}${d.lootedBy.length > 2 ? ` +${d.lootedBy.length - 2} more` : ''}`;
+                }
+                text += `\n`;
+            }
+            text += `\n_Shows items picked up off corpses by tracked players. Unlooted items not counted._`;
+        }
+    } else {
+        showToast('Unknown template', 'error');
+        return;
+    }
+    navigator.clipboard.writeText(text).then(() => showToast(`Copied ${template === 'summary' ? 'GvG summary' : template === 'topLooters' ? 'top looters list' : 'deaths report'}`, 'success'))
+        .catch(() => showToast('Copy failed', 'error'));
 }
 
 function exportAccountabilityCSV() {
@@ -10580,6 +10807,16 @@ document.addEventListener('mouseout', (e) => {
 });
 
 document.addEventListener('scroll', hideTooltip, true);
+
+// Close any open Discord-template dropdown when clicking outside
+document.addEventListener('click', (e) => {
+    const openMenus = document.querySelectorAll('.ll-discord-menu.open');
+    if (openMenus.length === 0) return;
+    for (const menu of openMenus) {
+        const dropdown = menu.closest('.ll-discord-dropdown');
+        if (!dropdown?.contains(e.target)) menu.classList.remove('open');
+    }
+});
 
 // Init with timers widget
 const _origInit = typeof init === 'function' ? init : null;

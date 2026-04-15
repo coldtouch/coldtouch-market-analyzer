@@ -931,6 +931,83 @@ select:focus {
 }
 .ll-autosave-status.saved { color: var(--profit-green); }
 
+/* Discord template dropdown (Phase 5 G9) */
+.ll-discord-dropdown {
+    position: relative;
+    display: inline-block;
+}
+.ll-discord-menu {
+    display: none;
+    position: absolute;
+    top: calc(100% + 4px);
+    right: 0;
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    box-shadow: 0 6px 24px rgba(0, 0, 0, 0.55);
+    min-width: 180px;
+    z-index: 100;
+    padding: 0.25rem;
+}
+.ll-discord-menu.open { display: block; }
+.ll-discord-menu button {
+    display: block;
+    width: 100%;
+    background: transparent;
+    border: none;
+    color: var(--text-primary);
+    padding: 0.45rem 0.7rem;
+    text-align: left;
+    cursor: pointer;
+    font-size: 0.78rem;
+    border-radius: 4px;
+    transition: background 0.1s ease;
+}
+.ll-discord-menu button:hover {
+    background: var(--bg-elevated);
+    color: var(--accent);
+}
+
+/* Item filter chips (Phase 5 G11) */
+.ll-filter-chips {
+    display: flex;
+    gap: 0.35rem;
+    flex-wrap: wrap;
+    align-items: center;
+    margin-bottom: 0.5rem;
+    padding: 0 0.2rem;
+}
+.ll-filter-chip {
+    font-size: 0.72rem;
+    padding: 0.25rem 0.65rem;
+    background: var(--bg-elevated);
+    color: var(--text-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: 20px;
+    cursor: pointer;
+    transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease;
+    font-weight: 500;
+    white-space: nowrap;
+}
+.ll-filter-chip:hover {
+    border-color: var(--accent);
+    color: var(--text-primary);
+}
+.ll-filter-chip.active {
+    background: var(--accent);
+    color: #000;
+    border-color: var(--accent);
+    font-weight: 700;
+}
+.ll-filter-chip.ll-chip-clear {
+    color: var(--loss-red);
+    border-color: rgba(239, 68, 68, 0.3);
+}
+.ll-filter-chip.ll-chip-clear:hover {
+    background: rgba(239, 68, 68, 0.1);
+    border-color: var(--loss-red);
+}
+
 /* Deaths section (Phase 2) */
 .ll-deaths-section {
     margin-bottom: 1rem;

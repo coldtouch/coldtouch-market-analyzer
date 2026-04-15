@@ -1943,6 +1943,19 @@
                     <div class="changelog-list">
                         <div class="changelog-entry">
                             <div class="changelog-date">April 16, 2026</div>
+                            <div class="changelog-title">Loot Tools Phases 2-5: Deaths, Crafters, Cross-links, Combo A</div>
+                            <ul>
+                                <li><strong>Death tracking:</strong> every session view now has a Deaths section above the player cards showing who died, to whom, when, and estimated silver recovered off the corpse. Click <em>Filter</em> to narrow to one death's loot chain, or &#128203; Discord to copy a formatted report.</li>
+                                <li><strong>Crafter attribution:</strong> hover any chest-captured item to see who crafted it. For pure loot drops, still shows &quot;Unknown &mdash; looted&quot; (game protocol limitation).</li>
+                                <li><strong>Cross-feature shortcuts:</strong> session &rarr; accountability, accountability suspects &rarr; Loot Buyer (value missing items), chest capture &rarr; track directly (skip Phase 1 eval).</li>
+                                <li><strong>Whitelist presets:</strong> one-click &quot;My guild only&quot;, &quot;My alliance only&quot;, &quot;Just me&quot; in the whitelist modal &mdash; auto-detected from the current session.</li>
+                                <li><strong>Item filter chips:</strong> multi-select T6+ / T7+ / T8+ / Weapons / Bags / &gt;100k above the session view. Tier chips are exclusive, category chips stack.</li>
+                                <li><strong>Discord copy templates:</strong> session Copy dropdown gets GvG Summary / Top Looters / Deaths Report. Accountability Copy gets a new Regear Report template.</li>
+                                <li>Service worker cache bumped v4 &rarr; v5. Hard refresh if needed.</li>
+                            </ul>
+                        </div>
+                        <div class="changelog-entry">
+                            <div class="changelog-date">April 16, 2026</div>
                             <div class="changelog-title">Loot Tools Phase 1: New Section + Visual Overhaul</div>
                             <ul>
                                 <li><strong>New &quot;Loot Tools&quot; nav group:</strong> Loot Buyer and Loot Logger promoted out of Trading into their own top-level menu.</li>
@@ -2870,6 +2883,12 @@
                 Only show events where the looter's <strong>name</strong>, <strong>guild</strong>, or <strong>alliance</strong> matches one of these entries.
                 One entry per line. Matching is case-insensitive. Leave blank to show everyone.
             </p>
+            <div style="display:flex; gap:0.35rem; flex-wrap:wrap; margin-bottom:0.5rem;">
+                <span style="font-size:0.7rem; color:var(--text-muted); margin-right:0.2rem; align-self:center;">Quick presets:</span>
+                <button class="btn-small" onclick="applyWhitelistPreset('guild')" title="Auto-fill from most-common guild in current session">My guild only</button>
+                <button class="btn-small" onclick="applyWhitelistPreset('alliance')" title="Auto-fill from most-common alliance in current session">My alliance only</button>
+                <button class="btn-small" onclick="applyWhitelistPreset('me')" title="Fill with just your character name">Just me</button>
+            </div>
             <textarea id="whitelist-input" style="width:100%; min-height:140px; background:var(--bg-primary); border:1px solid var(--border-color); border-radius:6px; padding:0.5rem; color:var(--text-primary); font-family:inherit; font-size:0.85rem; resize:vertical;" placeholder="Coldtouch&#10;MyGuildName&#10;OurAlliance"></textarea>
             <div style="display:flex; gap:0.5rem; margin-top:0.75rem; justify-content:flex-end;">
                 <button class="btn-small" onclick="clearWhitelist()">Clear</button>
