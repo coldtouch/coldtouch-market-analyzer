@@ -931,6 +931,170 @@ select:focus {
 }
 .ll-autosave-status.saved { color: var(--profit-green); }
 
+/* Deaths section (Phase 2) */
+.ll-deaths-section {
+    margin-bottom: 1rem;
+}
+.ll-deaths-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.6rem;
+    padding: 0.4rem 0.6rem;
+    margin-bottom: 0.4rem;
+    flex-wrap: wrap;
+}
+.ll-deaths-title {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.92rem;
+    font-weight: 700;
+    color: var(--text-primary);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+.ll-deaths-count {
+    background: var(--bg-elevated);
+    color: var(--text-primary);
+    padding: 0.1rem 0.45rem;
+    border-radius: 10px;
+    font-size: 0.72rem;
+    font-weight: 700;
+}
+.ll-deaths-friendly {
+    color: var(--loss-red);
+    font-size: 0.7rem;
+    text-transform: none;
+    letter-spacing: normal;
+    font-weight: 500;
+}
+.ll-deaths-enemy {
+    color: var(--profit-green);
+    font-size: 0.7rem;
+    text-transform: none;
+    letter-spacing: normal;
+    font-weight: 500;
+}
+.ll-death-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-left-width: 4px;
+    border-radius: var(--radius);
+    margin-bottom: 0.5rem;
+    padding: 0.6rem 0.85rem;
+    transition: border-color var(--transition), box-shadow var(--transition);
+}
+.ll-death-friendly { border-left-color: var(--loss-red); }
+.ll-death-enemy { border-left-color: var(--profit-green); }
+.ll-death-card.active-filter {
+    box-shadow: 0 0 0 2px var(--accent);
+    background: rgba(212, 175, 55, 0.04);
+}
+.ll-death-top {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 0.6rem;
+    flex-wrap: wrap;
+    margin-bottom: 0.4rem;
+}
+.ll-death-title {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    flex-wrap: wrap;
+    font-size: 0.88rem;
+    color: var(--text-primary);
+}
+.ll-death-icon { font-size: 1.05rem; }
+.ll-death-victim { font-weight: 700; }
+.ll-death-sep { color: var(--text-muted); font-size: 0.78rem; }
+.ll-death-killer { color: var(--text-secondary); }
+.ll-death-time { color: var(--text-muted); font-size: 0.72rem; margin-left: 0.15rem; }
+.ll-death-badge {
+    font-size: 0.58rem;
+    padding: 0.1rem 0.4rem;
+    border-radius: 8px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    font-weight: 700;
+    background: rgba(160, 160, 184, 0.15);
+    color: var(--text-muted);
+    margin-left: 0.2rem;
+}
+.ll-death-friendly .ll-death-badge {
+    background: rgba(239, 68, 68, 0.15);
+    color: var(--loss-red);
+}
+.ll-death-enemy .ll-death-badge {
+    background: rgba(74, 222, 128, 0.15);
+    color: var(--profit-green);
+}
+.ll-death-value {
+    font-weight: 700;
+    font-size: 1rem;
+    white-space: nowrap;
+    flex-shrink: 0;
+}
+.ll-death-value.loss { color: var(--loss-red); }
+.ll-death-value.gain { color: var(--profit-green); }
+.ll-death-middle {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    justify-content: space-between;
+    margin-bottom: 0.35rem;
+    flex-wrap: wrap;
+}
+.ll-death-items {
+    display: flex;
+    gap: 3px;
+    flex-wrap: wrap;
+    align-items: center;
+    flex: 1;
+    min-width: 0;
+}
+.ll-death-item {
+    width: 36px;
+    height: 36px;
+    image-rendering: pixelated;
+    flex-shrink: 0;
+    border-radius: 4px;
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    background: var(--bg-elevated);
+    transition: transform 0.1s ease, border-color 0.15s ease;
+}
+.ll-death-item:hover {
+    transform: scale(1.15);
+    border-color: var(--accent);
+    z-index: 2;
+    position: relative;
+}
+.ll-death-actions {
+    display: flex;
+    gap: 0.35rem;
+    flex-shrink: 0;
+}
+.ll-death-looters {
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+    padding-top: 0.4rem;
+    border-top: 1px dashed var(--border-color);
+}
+.ll-death-looters-label {
+    color: var(--text-muted);
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    margin-right: 0.3rem;
+}
+@media (max-width: 600px) {
+    .ll-death-top { flex-direction: column; gap: 0.3rem; }
+    .ll-death-value { align-self: flex-end; }
+    .ll-death-item { width: 32px; height: 32px; }
+}
+
 /* Session summary strip */
 .ll-summary-strip {
     display: flex;

@@ -6195,6 +6195,10 @@ let _llPriceMap = {};
 let _llDepositedMap = null;
 let _llTargetEl = null;
 let _llIsDetail = false;
+let _llDeaths = [];               // computed death timeline for current session
+let _llPrimaryGuild = '';          // most-common guild among looters (= "our" side)
+let _llPrimaryAlliance = '';
+let _llDeathFilterVictim = null;   // when set, restricts view to that death's chain
 
 // --- Session naming, whitelist, auto-save ---
 const LL_SESSION_NAME_KEY = 'albion_live_session_name';
@@ -6672,6 +6676,179 @@ function clearLootUpload() {
     document.getElementById('ll-upload-clear-btn').style.display = 'none';
 }
 
+// === DEATH TIMELINE (Phase 2) ===
+// Reconstruct "died with" info from the loot stream. The death packet itself
+// carries no equipment (protocol limitation), but every loot event that
+// follows where `looted_from_name === victim` is definitionally something
+// looted off that victim's corpse. We attribute the corpse items to the death.
+function buildDeathTimeline(events, byPlayer, priceMap, primaryGuild, primaryAlliance) {
+    const deaths = [];
+    // Index loot events by victim name for O(1) lookup
+    const lootByVictim = new Map();
+    for (const ev of events) {
+        if (ev.item_id === '__DEATH__') continue;
+        const victim = ev.looted_from_name;
+        if (!victim) continue;
+        if (!lootByVictim.has(victim)) lootByVictim.set(victim, []);
+        lootByVictim.get(victim).push(ev);
+    }
+    for (const ev of events) {
+        if (ev.item_id !== '__DEATH__') continue;
+        const victim = ev.looted_from_name || '';
+        const killer = ev.looted_by_name || '';
+        if (!victim) continue;
+        const deathTs = +new Date(ev.timestamp) || 0;
+        // Attribute every loot event off this victim to the death.
+        // Events can happen slightly before the death marker (packet ordering),
+        // so we take all corpse loots regardless of timestamp but prefer post-death.
+        const allCorpseLoots = lootByVictim.get(victim) || [];
+        const lootedItems = allCorpseLoots.slice();  // copy
+        // Aggregate by looter
+        const byLooter = {};
+        let estimatedValue = 0;
+        for (const li of lootedItems) {
+            const lname = li.looted_by_name || 'Unknown';
+            if (!byLooter[lname]) byLooter[lname] = { name: lname, items: 0, silver: 0, guild: li.looted_by_guild || '' };
+            byLooter[lname].items += (li.quantity || 1);
+            const p = priceMap[li.item_id];
+            if (p && p.price > 0) {
+                const value = p.price * (li.quantity || 1);
+                byLooter[lname].silver += value;
+                estimatedValue += value;
+            }
+        }
+        // Determine if victim was "ours" or "theirs" — mirrors isFriendly logic
+        const victimData = byPlayer[victim];
+        const victimGuild = victimData?.guild || ev.looted_from_guild || '';
+        const victimAlliance = victimData?.alliance || ev.looted_from_alliance || '';
+        const wasVictimFriendly = primaryAlliance && victimAlliance
+            ? victimAlliance === primaryAlliance
+            : (primaryGuild && victimGuild === primaryGuild);
+        deaths.push({
+            victim,
+            victimGuild,
+            victimAlliance,
+            killer,
+            killerGuild: ev.looted_by_guild || '',
+            timestamp: deathTs,
+            lootedItems,
+            estimatedValue,
+            lootedBy: Object.values(byLooter).sort((a, b) => b.silver - a.silver || b.items - a.items),
+            wasFriendly: !!wasVictimFriendly
+        });
+    }
+    // Sort newest-first — most recent death shows at top
+    deaths.sort((a, b) => b.timestamp - a.timestamp);
+    return deaths;
+}
+
+function renderDeathsSection(deaths) {
+    if (!deaths || deaths.length === 0) return '';
+    const filterActive = _llDeathFilterVictim !== null;
+    const friendlyCount = deaths.filter(d => d.wasFriendly).length;
+    const enemyCount = deaths.length - friendlyCount;
+    const header = `<div class="ll-deaths-header">
+        <div class="ll-deaths-title">
+            <span style="font-size:1.1rem;">☠</span>
+            Deaths <span class="ll-deaths-count">${deaths.length}</span>
+            ${friendlyCount > 0 ? `<span class="ll-deaths-friendly">${friendlyCount} friendly</span>` : ''}
+            ${enemyCount > 0 ? `<span class="ll-deaths-enemy">${enemyCount} enemy</span>` : ''}
+        </div>
+        ${filterActive ? `<button class="btn-small" onclick="clearDeathFilter()">&times; Clear filter (${esc(_llDeathFilterVictim)})</button>` : ''}
+    </div>`;
+    const cards = deaths.map(d => {
+        const safeVictim = esc(d.victim);
+        const sideClass = d.wasFriendly ? 'll-death-friendly' : 'll-death-enemy';
+        const sideIcon = d.wasFriendly ? '⚔' : '💀';
+        const sideLabel = d.wasFriendly ? 'friendly' : 'enemy';
+        const when = d.timestamp ? new Date(d.timestamp).toLocaleTimeString() : '—';
+        // Item preview strip (up to 8 unique items)
+        const seen = new Set();
+        const uniqueItems = [];
+        for (const li of d.lootedItems) {
+            if (li.item_id && !seen.has(li.item_id)) {
+                seen.add(li.item_id);
+                uniqueItems.push(li);
+            }
+        }
+        const previewHtml = uniqueItems.slice(0, 8).map(li => {
+            const valEntry = _llPriceMap[li.item_id];
+            const valAttr = valEntry && valEntry.price > 0 ? ` data-tip-value="${Math.floor(valEntry.price)}"` : '';
+            return `<img src="https://render.albiononline.com/v1/item/${encodeURIComponent(li.item_id)}.png" class="ll-death-item" data-tip-item="${esc(li.item_id)}" data-tip-source="loot"${valAttr} loading="lazy" onerror="this.style.display='none'" alt="">`;
+        }).join('') + (uniqueItems.length > 8 ? `<span class="ll-preview-overflow" data-tip="${uniqueItems.length - 8} more unique">+${uniqueItems.length - 8}</span>` : '');
+        const looters = d.lootedBy.slice(0, 3).map(l =>
+            `${esc(l.name)} <span style="color:var(--text-muted);">(${l.items} item${l.items !== 1 ? 's' : ''}${l.silver > 0 ? ', ' + formatSilver(l.silver) : ''})</span>`
+        ).join(', ');
+        const extra = d.lootedBy.length > 3 ? ` <span style="color:var(--text-muted);">+${d.lootedBy.length - 3} more</span>` : '';
+        return `<div class="ll-death-card ${sideClass}${filterActive && _llDeathFilterVictim === d.victim ? ' active-filter' : ''}">
+            <div class="ll-death-top">
+                <div class="ll-death-title">
+                    <span class="ll-death-icon">${sideIcon}</span>
+                    <span class="ll-death-victim">${safeVictim}</span>
+                    <span class="ll-death-sep">died to</span>
+                    <span class="ll-death-killer">${esc(d.killer) || 'unknown'}</span>
+                    <span class="ll-death-time">at ${esc(when)}</span>
+                    <span class="ll-death-badge">${sideLabel}</span>
+                </div>
+                <div class="ll-death-value ${d.wasFriendly ? 'loss' : 'gain'}">${d.estimatedValue > 0 ? formatSilver(d.estimatedValue) : '—'}</div>
+            </div>
+            <div class="ll-death-middle">
+                <div class="ll-death-items">${previewHtml || '<span style="color:var(--text-muted); font-size:0.75rem; font-style:italic;">No items recovered off corpse</span>'}</div>
+                <div class="ll-death-actions">
+                    <button class="btn-small" onclick="filterByDeath('${safeVictim}')" title="Filter main view to this death's loot chain">Filter</button>
+                    <button class="btn-small" onclick="copyDeathReport('${safeVictim}', ${d.timestamp})" title="Copy death report for Discord">📋 Discord</button>
+                </div>
+            </div>
+            ${d.lootedBy.length > 0 ? `<div class="ll-death-looters"><span class="ll-death-looters-label">Recovered by:</span> ${looters}${extra}</div>` : ''}
+        </div>`;
+    }).join('');
+    return `<div class="ll-deaths-section">${header}${cards}</div>`;
+}
+
+function filterByDeath(victim) {
+    _llDeathFilterVictim = (_llDeathFilterVictim === victim) ? null : victim;
+    _llRenderFiltered();
+}
+function clearDeathFilter() {
+    _llDeathFilterVictim = null;
+    _llRenderFiltered();
+}
+
+function copyDeathReport(victim, timestamp) {
+    const d = _llDeaths.find(x => x.victim === victim && x.timestamp === timestamp);
+    if (!d) { showToast('Death record not found', 'error'); return; }
+    const lines = [];
+    lines.push(`**${d.wasFriendly ? '⚔ Friendly death' : '💀 Enemy kill'}**`);
+    lines.push(`**${d.victim}**${d.victimGuild ? ` [${d.victimGuild}]` : ''} died to **${d.killer || 'unknown'}**${d.killerGuild ? ` [${d.killerGuild}]` : ''}`);
+    lines.push(`at ${d.timestamp ? new Date(d.timestamp).toLocaleString() : 'unknown time'}`);
+    lines.push(`Est. value recovered: **${d.estimatedValue > 0 ? formatSilver(d.estimatedValue) : 'unknown'}**`);
+    if (d.lootedBy.length > 0) {
+        lines.push('');
+        lines.push('__Recovered by:__');
+        for (const l of d.lootedBy) {
+            lines.push(`• ${l.name}${l.guild ? ` [${l.guild}]` : ''} — ${l.items} item${l.items !== 1 ? 's' : ''}${l.silver > 0 ? `, ${formatSilver(l.silver)}` : ''}`);
+        }
+    }
+    if (d.lootedItems.length > 0) {
+        lines.push('');
+        lines.push('__Items off corpse:__');
+        const byItem = {};
+        for (const li of d.lootedItems) {
+            const key = li.item_id;
+            if (!byItem[key]) byItem[key] = 0;
+            byItem[key] += (li.quantity || 1);
+        }
+        for (const [itemId, qty] of Object.entries(byItem)) {
+            lines.push(`• ${qty}x ${getFriendlyName(itemId) || itemId}`);
+        }
+    }
+    lines.push('');
+    lines.push('_Note: shows items picked up off the corpse by tracked players. Items left unlooted or looted by players outside capture range are not counted._');
+    navigator.clipboard.writeText(lines.join('\n'))
+        .then(() => showToast('Death report copied', 'success'))
+        .catch(() => showToast('Copy failed', 'error'));
+}
+
 async function renderLootSessionEvents(events, targetEl, depositedMap) {
     // depositedMap: optional { itemId: qty } for accountability coloring
     const isDetail = !targetEl;
@@ -6748,6 +6925,13 @@ async function renderLootSessionEvents(events, targetEl, depositedMap) {
         data.isEnemy = isLootSource || !isFriendly;
     }
 
+    // Compute death timeline for this session (used by _llRenderFiltered)
+    _llPrimaryGuild = primaryGuild;
+    _llPrimaryAlliance = primaryAlliance;
+    _llDeaths = buildDeathTimeline(events, byPlayer, priceMap, primaryGuild, primaryAlliance);
+    // Reset death filter when loading a new session
+    _llDeathFilterVictim = null;
+
     // Render header + search/sort bar + cards
     _llRenderFiltered();
 }
@@ -6773,6 +6957,14 @@ function _llRenderFiltered() {
     // Remove players that were explicitly removed
     if (_llRemovedPlayers.size > 0) {
         entries = entries.filter(([name]) => !_llRemovedPlayers.has(name));
+    }
+    // Death filter: only show players who looted FROM the selected victim (or the victim themselves)
+    if (_llDeathFilterVictim) {
+        const victim = _llDeathFilterVictim;
+        entries = entries.filter(([name, data]) => {
+            if (name === victim) return true;
+            return data.items.some(ev => ev.looted_from_name === victim);
+        });
     }
     if (searchVal) {
         entries = entries.filter(([name, data]) => {
@@ -6855,6 +7047,9 @@ function _llRenderFiltered() {
             ${isDetail ? `<button class="btn-small" onclick="hideLootSessionDetail()">&#x2190; Back</button>` : ''}
         </div>
     </div>`;
+
+    // Deaths section (above player cards)
+    html += renderDeathsSection(_llDeaths);
 
     // Search/sort/filter bar
     const filterEl = document.getElementById('ll-filter-tier');
