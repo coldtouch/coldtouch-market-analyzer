@@ -968,6 +968,23 @@ select:focus {
     color: var(--accent);
 }
 
+/* A10: Inline rename input (appears inside session card title) */
+.ll-inline-rename-input {
+    background: var(--bg-primary);
+    border: 1px solid var(--accent);
+    border-radius: 4px;
+    padding: 0.25rem 0.45rem;
+    color: var(--text-primary);
+    font-size: 0.85rem;
+    font-family: inherit;
+    min-width: 220px;
+    max-width: 360px;
+    outline: none;
+}
+.ll-inline-rename-input:focus {
+    box-shadow: 0 0 0 2px rgba(212, 175, 55, 0.25);
+}
+
 /* G3: Heatmap timeline */
 .ll-timeline-wrap {
     background: var(--bg-card);

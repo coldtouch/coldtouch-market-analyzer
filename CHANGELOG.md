@@ -2,6 +2,31 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-04-16 — Session UX batch: auto-naming, inline rename, copy preview
+
+Three small wins aimed at the friction points you hit most when running a
+session.
+
+- **Auto-session-naming** (G7) — a new `💡 Auto-name` button next to the
+  session label input. Detects the primary guild (most common among
+  looters) and the most common enemy guild (from loot sources), pairs
+  them with the session's first-event date, and suggests a name like
+  `Alpha vs Evil · Apr 16`. Falls back gracefully to just the date if
+  no guilds are detected yet.
+- **Inline rename** (A10) — clicking the ✏️ on a saved session card now
+  turns the title into an editable input in-place instead of firing a
+  browser `prompt()`. Enter saves, Esc cancels, blur saves. Keystrokes
+  don't trigger the Loot Logger keyboard shortcuts.
+- **Copy preview modal** (A14) — every "Copy to Discord" flow (session
+  summary, top looters, deaths report, accountability table, regear
+  report, individual death report) now routes through a preview modal.
+  Text is pre-populated and editable; you review / tweak, then click
+  the Copy button. Esc closes the preview. Character count shown live.
+
+Service worker cache bumped `v6` → `v7`.
+
+---
+
 ### 2026-04-16 — Loot Tools polish: timeline, friendly-fire, top-value, shortcuts
 
 Four small-but-useful additions for the Loot Logger session view:

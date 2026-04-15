@@ -1943,6 +1943,16 @@
                     <div class="changelog-list">
                         <div class="changelog-entry">
                             <div class="changelog-date">April 16, 2026</div>
+                            <div class="changelog-title">Session UX: auto-naming, inline rename, copy preview</div>
+                            <ul>
+                                <li><strong>💡 Auto-name</strong> button next to the session label &mdash; suggests names like <code>Alpha vs Evil &middot; Apr 16</code> from detected guild + top enemy + first-event date.</li>
+                                <li><strong>Inline session rename</strong> &mdash; clicking ✏️ on a saved session now edits in-place. Enter saves, Esc cancels.</li>
+                                <li><strong>Copy preview modal</strong> &mdash; every Copy-to-Discord flow (session templates, death reports, accountability, regear) now shows a preview you can edit before the text hits your clipboard.</li>
+                                <li>Service worker cache bumped v6 &rarr; v7.</li>
+                            </ul>
+                        </div>
+                        <div class="changelog-entry">
+                            <div class="changelog-date">April 16, 2026</div>
                             <div class="changelog-title">Loot Tools polish: timeline, friendly-fire, top-value, shortcuts</div>
                             <ul>
                                 <li><strong>Heatmap timeline</strong> above session player cards &mdash; visual density of events over time with 💀 markers on deaths.</li>
@@ -2795,6 +2805,7 @@
                 <div class="ll-session-name-row">
                     <label for="ll-session-name-input" class="ll-session-name-label">Session label:</label>
                     <input type="text" id="ll-session-name-input" class="ll-session-name-input" placeholder="e.g. Dungeon run with Alpha 2026-04-15" maxlength="80" oninput="onSessionNameInput(this.value)">
+                    <button class="btn-small" onclick="applySessionNameSuggestion()" title="Auto-fill based on this session's primary guild, enemy, and date">&#128161; Auto-name</button>
                     <span id="ll-autosave-status" class="ll-autosave-status"></span>
                 </div>
 
@@ -2885,6 +2896,23 @@
     </button>
 
     <!-- ====== FEEDBACK MODAL ====== -->
+    <!-- Copy preview modal — reusable, lets user review/edit before clipboard -->
+    <div id="copy-preview-modal" class="modal hidden" onclick="if(event.target===this)closeCopyPreviewModal()">
+        <div class="modal-content" style="max-width:640px;">
+            <button class="close-btn" onclick="closeCopyPreviewModal()">&times;</button>
+            <h2 id="copy-preview-title" style="color:var(--accent); margin:0 0 0.5rem; font-size:1.05rem;">Preview — Copy to Discord</h2>
+            <p style="color:var(--text-secondary); font-size:0.78rem; margin:0 0 0.75rem;">Review and edit before copying. Markdown formatting is preserved.</p>
+            <textarea id="copy-preview-text" style="width:100%; min-height:260px; background:var(--bg-primary); border:1px solid var(--border-color); border-radius:6px; padding:0.6rem 0.75rem; color:var(--text-primary); font-family:ui-monospace, SFMono-Regular, Menlo, monospace; font-size:0.78rem; resize:vertical; line-height:1.4;"></textarea>
+            <div style="display:flex; gap:0.5rem; margin-top:0.75rem; justify-content:space-between; align-items:center; flex-wrap:wrap;">
+                <span id="copy-preview-charcount" style="font-size:0.72rem; color:var(--text-muted);"></span>
+                <div style="display:flex; gap:0.5rem;">
+                    <button class="btn-small" onclick="closeCopyPreviewModal()">Cancel</button>
+                    <button class="btn-small-accent" id="copy-preview-confirm-btn" onclick="confirmCopyPreview()">📋 Copy</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- Whitelist modal for loot logger -->
     <div id="whitelist-modal" class="modal hidden" onclick="if(event.target===this)closeWhitelistModal()">
         <div class="modal-content" style="max-width:520px;">

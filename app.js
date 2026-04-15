@@ -6248,6 +6248,44 @@ let liveSessionName = localStorage.getItem(LL_SESSION_NAME_KEY) || '';
 let lootWhitelist = JSON.parse(localStorage.getItem(LL_WHITELIST_KEY) || '[]');
 let _llAutosaveInterval = null;
 
+// G7: Suggest an auto-name based on session data. Pure function — returns a
+// sensible string or '' if there's not enough info. Pattern: "{Day} — {OurGuild} vs {TopEnemy}"
+// Falls back to just the date when guilds are unknown.
+function suggestSessionName() {
+    const events = liveLootEvents;
+    if (!events || events.length === 0) return '';
+    const { guild } = _detectPrimaryGuildAlliance();
+    // Most common enemy guild = most common guild among looted-FROM names
+    const enemyCount = {};
+    for (const ev of events) {
+        if (ev.item_id === '__DEATH__') continue;
+        const eg = ev.looted_from_guild || '';
+        if (eg && eg !== guild) enemyCount[eg] = (enemyCount[eg] || 0) + 1;
+    }
+    const topEnemy = Object.entries(enemyCount).sort((a, b) => b[1] - a[1])[0]?.[0] || '';
+    const tsNums = events.map(e => +new Date(e.timestamp)).filter(n => !isNaN(n));
+    const firstTs = tsNums.length ? Math.min(...tsNums) : Date.now();
+    const d = new Date(firstTs);
+    const datePart = d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+    let name = datePart;
+    if (guild) name = `${guild}`;
+    if (guild && topEnemy) name = `${guild} vs ${topEnemy}`;
+    else if (topEnemy) name = `vs ${topEnemy}`;
+    return `${name} · ${datePart}`.slice(0, 80);
+}
+
+function applySessionNameSuggestion() {
+    const suggestion = suggestSessionName();
+    if (!suggestion) {
+        showToast('Not enough session data to suggest a name yet', 'warn');
+        return;
+    }
+    const input = document.getElementById('ll-session-name-input');
+    if (input) input.value = suggestion;
+    onSessionNameInput(suggestion);
+    showToast(`Suggested: ${suggestion}`, 'success');
+}
+
 function onSessionNameInput(val) {
     liveSessionName = (val || '').trim().slice(0, 80);
     try { localStorage.setItem(LL_SESSION_NAME_KEY, liveSessionName); } catch {}
@@ -6273,7 +6311,37 @@ function setSavedSessionName(sid, name) {
     else delete map[sid];
     try { localStorage.setItem(LL_SAVED_NAMES_KEY, JSON.stringify(map)); } catch {}
 }
+// A10: Inline rename — replace the old prompt() with an in-DOM editable field.
+// Click the ✏️ on a session card → title becomes an input → Enter saves, Esc cancels.
 function renameSavedSession(sid) {
+    const btn = document.querySelector(`[onclick*="renameSavedSession('${sid}')"]`);
+    if (!btn) { _fallbackPromptRename(sid); return; }
+    const card = btn.closest('.ll-session-card');
+    const titleEl = card?.querySelector('.ll-session-title');
+    if (!card || !titleEl) { _fallbackPromptRename(sid); return; }
+    // Save original HTML so Esc can restore it
+    const originalHtml = titleEl.innerHTML;
+    const current = getSavedSessionNames()[sid] || '';
+    titleEl.innerHTML = `<input type="text" class="ll-inline-rename-input" value="${esc(current)}" placeholder="Session name (blank to remove)" maxlength="80">`;
+    const input = titleEl.querySelector('input');
+    input.focus();
+    input.select();
+    const commit = () => {
+        const val = input.value.trim();
+        setSavedSessionName(sid, val);
+        loadLootSessions();
+    };
+    const cancel = () => { titleEl.innerHTML = originalHtml; };
+    input.addEventListener('keydown', (e) => {
+        e.stopPropagation(); // don't trigger global shortcut handler
+        if (e.key === 'Enter') { e.preventDefault(); commit(); }
+        else if (e.key === 'Escape') { e.preventDefault(); cancel(); }
+    });
+    input.addEventListener('blur', commit);
+    input.addEventListener('click', (e) => e.stopPropagation()); // don't open the session detail
+}
+
+function _fallbackPromptRename(sid) {
     const current = getSavedSessionNames()[sid] || '';
     const next = prompt('Rename this loot session:', current);
     if (next === null) return;
@@ -6974,9 +7042,7 @@ function copyDeathReport(victim, timestamp) {
     }
     lines.push('');
     lines.push('_Note: shows items picked up off the corpse by tracked players. Items left unlooted or looted by players outside capture range are not counted._');
-    navigator.clipboard.writeText(lines.join('\n'))
-        .then(() => showToast('Death report copied', 'success'))
-        .catch(() => showToast('Copy failed', 'error'));
+    openCopyPreview(`Preview — ${d.victim}'s Death`, lines.join('\n'), 'Death report copied');
 }
 
 async function renderLootSessionEvents(events, targetEl, depositedMap) {
@@ -7966,7 +8032,9 @@ function copyAccountabilityToDiscord(template) {
         }
         text += '```';
     }
-    navigator.clipboard.writeText(text).then(() => showToast(`Copied ${tmpl === 'regear' ? 'regear report' : 'accountability table'}`, 'success'));
+    const title = tmpl === 'regear' ? 'Preview — Regear Report' : 'Preview — Accountability Table';
+    const success = tmpl === 'regear' ? 'Regear report copied' : 'Accountability table copied';
+    openCopyPreview(title, text, success);
 }
 
 // Phase 5 G9: Session view Discord templates
@@ -8048,8 +8116,9 @@ function copySessionDiscord(template) {
         showToast('Unknown template', 'error');
         return;
     }
-    navigator.clipboard.writeText(text).then(() => showToast(`Copied ${template === 'summary' ? 'GvG summary' : template === 'topLooters' ? 'top looters list' : 'deaths report'}`, 'success'))
-        .catch(() => showToast('Copy failed', 'error'));
+    const titleMap = { summary: 'GvG Summary', topLooters: 'Top Looters', deaths: 'Deaths Report' };
+    const successMap = { summary: 'GvG summary copied', topLooters: 'Top looters copied', deaths: 'Deaths report copied' };
+    openCopyPreview(`Preview — ${titleMap[template] || 'Session'}`, text, successMap[template] || 'Copied');
 }
 
 function exportAccountabilityCSV() {
@@ -10637,6 +10706,8 @@ document.addEventListener('keydown', function(e) {
     if (e.key !== 'Escape') return;
     const feedback = document.getElementById('feedback-modal');
     const whitelist = document.getElementById('whitelist-modal');
+    const copyPreview = document.getElementById('copy-preview-modal');
+    if (copyPreview && !copyPreview.classList.contains('hidden')) { closeCopyPreviewModal(); return; }
     if (feedback && !feedback.classList.contains('hidden')) { closeFeedbackModal(); return; }
     if (whitelist && !whitelist.classList.contains('hidden')) { closeWhitelistModal(); return; }
 });
@@ -10877,6 +10948,39 @@ document.addEventListener('mouseout', (e) => {
 });
 
 document.addEventListener('scroll', hideTooltip, true);
+
+// A14: Copy preview modal — wraps clipboard writes in a review/edit step
+// Usage: openCopyPreview('GvG Summary', text, 'GvG summary copied') -> user
+// reviews, edits if needed, clicks Copy → toast with the success message.
+let _copyPreviewSuccessMsg = '';
+function openCopyPreview(title, text, successMsg) {
+    const modal = document.getElementById('copy-preview-modal');
+    const ta = document.getElementById('copy-preview-text');
+    const t = document.getElementById('copy-preview-title');
+    const cc = document.getElementById('copy-preview-charcount');
+    if (!modal || !ta) return;
+    _copyPreviewSuccessMsg = successMsg || 'Copied to clipboard';
+    if (t) t.textContent = title || 'Preview — Copy to Discord';
+    ta.value = text || '';
+    if (cc) cc.textContent = `${ta.value.length} characters`;
+    ta.oninput = () => { if (cc) cc.textContent = `${ta.value.length} characters`; };
+    modal.classList.remove('hidden');
+    setTimeout(() => ta.focus(), 20);
+}
+function closeCopyPreviewModal() {
+    document.getElementById('copy-preview-modal')?.classList.add('hidden');
+}
+function confirmCopyPreview() {
+    const ta = document.getElementById('copy-preview-text');
+    if (!ta) return;
+    const text = ta.value;
+    navigator.clipboard.writeText(text)
+        .then(() => {
+            showToast(_copyPreviewSuccessMsg, 'success');
+            closeCopyPreviewModal();
+        })
+        .catch(() => showToast('Copy failed', 'error'));
+}
 
 // Close any open Discord-template dropdown when clicking outside
 document.addEventListener('click', (e) => {
