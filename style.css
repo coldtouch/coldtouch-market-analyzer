@@ -1279,6 +1279,103 @@ select:focus {
     margin-top: 0.15rem;
 }
 
+/* D2: Loot Logger mode pills */
+.ll-mode-pills {
+    display: flex;
+    gap: 0.4rem;
+    margin: 0 0 1rem;
+    padding: 0.3rem;
+    background: var(--bg-elevated);
+    border-radius: 10px;
+    width: fit-content;
+    flex-wrap: wrap;
+}
+.ll-mode-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.45rem;
+    background: transparent;
+    border: none;
+    color: var(--text-secondary);
+    padding: 0.45rem 0.9rem;
+    border-radius: 7px;
+    cursor: pointer;
+    font-size: 0.82rem;
+    font-weight: 500;
+    font-family: inherit;
+    transition: background 0.14s ease, color 0.14s ease;
+    min-height: 34px;
+}
+.ll-mode-pill:hover { color: var(--text-primary); background: rgba(255, 255, 255, 0.03); }
+.ll-mode-pill.active {
+    background: var(--accent);
+    color: #000;
+    font-weight: 700;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+}
+.ll-mode-pill.active:hover { background: var(--accent); color: #000; }
+.ll-mode-icon { font-size: 0.95rem; line-height: 1; }
+.ll-mode-label { line-height: 1; }
+.ll-mode-count {
+    background: rgba(0, 0, 0, 0.25);
+    color: inherit;
+    font-size: 0.66rem;
+    padding: 0.12rem 0.45rem;
+    border-radius: 10px;
+    font-weight: 700;
+    line-height: 1.1;
+    min-width: 1.2rem;
+    text-align: center;
+}
+.ll-mode-pill:not(.active) .ll-mode-count {
+    background: var(--bg-card);
+    color: var(--accent);
+}
+@media (max-width: 520px) {
+    .ll-mode-pills { width: 100%; }
+    .ll-mode-pill { flex: 1; justify-content: center; padding: 0.45rem 0.5rem; }
+    .ll-mode-label { font-size: 0.75rem; }
+}
+
+/* D6: Loot Logger landing cards (empty-state) */
+.ll-landing {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 0.75rem;
+    margin: 0.5rem 0 1rem;
+}
+.ll-landing-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius);
+    padding: 1rem;
+    cursor: pointer;
+    transition: border-color 0.15s ease, background 0.15s ease, transform 0.1s ease;
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+}
+.ll-landing-card:hover {
+    border-color: var(--accent);
+    background: rgba(212, 175, 55, 0.04);
+    transform: translateY(-1px);
+}
+.ll-landing-card .ll-landing-icon {
+    font-size: 1.5rem;
+    line-height: 1;
+    margin-bottom: 0.1rem;
+}
+.ll-landing-card .ll-landing-title {
+    font-weight: 700;
+    font-size: 0.88rem;
+    color: var(--text-primary);
+}
+.ll-landing-card .ll-landing-desc {
+    font-size: 0.74rem;
+    color: var(--text-muted);
+    line-height: 1.35;
+}
+
 /* G12: Favorite badge on Loot Logger + Loot Buyer item rows */
 .ll-fav-badge {
     display: inline-block;

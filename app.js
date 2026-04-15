@@ -6594,9 +6594,21 @@ function formatSilver(n) {
 }
 
 // --- Price map for loot values (VPS scan data, fallback to IndexedDB) ---
+// E4: Memoize results by the sorted item-id signature + 5-min TTL so repeated
+// renders of the same session don't refetch. Cleared on saveLiveSession and
+// when events change (new item ids invalidate the cache naturally).
+const _LL_PRICE_CACHE_TTL = 5 * 60 * 1000;
+const _llPriceCache = new Map(); // key -> { map, ts }
 async function getLootPriceMap(itemIds) {
     const ids = [...itemIds].filter(Boolean);
     if (ids.length === 0) return {};
+
+    // Cache hit check
+    const key = ids.slice().sort().join('|');
+    const cached = _llPriceCache.get(key);
+    if (cached && (Date.now() - cached.ts) < _LL_PRICE_CACHE_TTL) {
+        return cached.map;
+    }
 
     // Try VPS batch lookup first (fresh scan data, no outliers)
     try {
@@ -6608,7 +6620,15 @@ async function getLootPriceMap(itemIds) {
         });
         if (res.ok) {
             const data = await res.json();
-            if (Object.keys(data).length > 0) return data;
+            if (Object.keys(data).length > 0) {
+                _llPriceCache.set(key, { map: data, ts: Date.now() });
+                // Bound cache size — keep at most 20 unique session signatures
+                if (_llPriceCache.size > 20) {
+                    const firstKey = _llPriceCache.keys().next().value;
+                    _llPriceCache.delete(firstKey);
+                }
+                return data;
+            }
         }
     } catch { /* timeout or network error — fall through to IndexedDB */ }
 
@@ -6624,6 +6644,11 @@ async function getLootPriceMap(itemIds) {
             } else if (p.sell_price_min < existing.price) {
                 map[p.item_id] = { price: p.sell_price_min, city: p.city || '' };
             }
+        }
+        _llPriceCache.set(key, { map, ts: Date.now() });
+        if (_llPriceCache.size > 20) {
+            const firstKey = _llPriceCache.keys().next().value;
+            _llPriceCache.delete(firstKey);
         }
         return map;
     } catch { return {}; }
@@ -6671,6 +6696,8 @@ function resetLiveSession() {
     liveLootEvents = [];
     liveSessionActive = false;
     liveSessionSaved = false;
+    _liveEventWarnedAt = 0;
+    _liveEventDropCounter = 0;
     _llRemovedPlayers.clear();
     _llResolvedDeaths.clear();
     liveSessionName = '';
@@ -6765,6 +6792,7 @@ function resetChestCaptures() {
 }
 
 function renderCaptureChips() {
+    _updateLootLoggerModePillCounts();
     const chips = document.getElementById('ll-capture-chips');
     if (!chips) return;
     // Always seed from lootBuyerCaptures (which gets re-sent on WS reconnect from VPS memory)
@@ -6786,15 +6814,30 @@ function renderCaptureChips() {
 }
 
 // --- Mode switching ---
+// D2: Update the live/accountability pill counters.
+// Live: saved sessions count + 1 if a live session is in-progress.
+// Accountability: number of chest captures available to cross-reference.
+function _updateLootLoggerModePillCounts() {
+    const liveCount = (lootSessions?.length || 0) + (liveLootEvents?.length > 0 ? 1 : 0);
+    const accCount = (window._chestCaptures?.length || lootBuyerCaptures?.length || 0);
+    const lEl = document.getElementById('ll-mode-count-live');
+    const aEl = document.getElementById('ll-mode-count-acc');
+    if (lEl) { lEl.textContent = liveCount > 0 ? String(liveCount) : ''; lEl.style.display = liveCount > 0 ? '' : 'none'; }
+    if (aEl) { aEl.textContent = accCount > 0 ? String(accCount) : ''; aEl.style.display = accCount > 0 ? '' : 'none'; }
+}
+
 function showLootLoggerMode(mode) {
     lootLoggerMode = mode;
     document.querySelectorAll('.loot-log-mode').forEach(el => el.style.display = 'none');
     document.getElementById('loot-log-live').style.display = mode === 'live' ? '' : 'none';
     document.getElementById('loot-log-upload').style.display = mode === 'upload' ? '' : 'none';
     document.getElementById('loot-log-accountability').style.display = mode === 'accountability' ? '' : 'none';
-    document.getElementById('loot-log-live-btn').className = mode === 'live' ? 'btn-small-accent' : 'btn-small';
-    document.getElementById('loot-log-upload-btn').className = mode === 'upload' ? 'btn-small-accent' : 'btn-small';
-    document.getElementById('loot-log-acc-btn').className = mode === 'accountability' ? 'btn-small-accent' : 'btn-small';
+    // D2: Pill active class
+    for (const [id, m] of [['loot-log-live-btn', 'live'], ['loot-log-upload-btn', 'upload'], ['loot-log-acc-btn', 'accountability']]) {
+        const el = document.getElementById(id);
+        if (el) el.classList.toggle('active', mode === m);
+    }
+    _updateLootLoggerModePillCounts();
     if (mode === 'live') {
         const token = localStorage.getItem('albion_auth_token');
         if (!token && !discordUser) {
@@ -6842,11 +6885,32 @@ async function loadLootSessions() {
         }
 
         if (lootSessions.length === 0 && liveLootEvents.length === 0) {
-            list.innerHTML = '<div class="empty-state"><p>No loot sessions yet. Start a live session with the Coldtouch client, or upload a log file.</p></div>';
+            // D6: onboarding landing cards instead of a flat empty state
+            list.innerHTML = `<div class="empty-state" style="padding:0.75rem 0 1rem;">
+                <p style="margin:0 0 0.75rem;">No loot sessions yet. Pick how you want to get started:</p>
+                <div class="ll-landing">
+                    <div class="ll-landing-card" onclick="document.querySelector('[data-tab=loot-buyer]')?.click(); setTimeout(()=>document.getElementById('client-download-link')?.scrollIntoView({behavior:'smooth',block:'center'}), 200);" title="Download the Go client to capture events live in-game">
+                        <div class="ll-landing-icon">🎮</div>
+                        <div class="ll-landing-title">Start a live session</div>
+                        <div class="ll-landing-desc">Run the Coldtouch Go client while playing — PvP events stream in real time.</div>
+                    </div>
+                    <div class="ll-landing-card" onclick="showLootLoggerMode('upload')" title="Upload a .txt file from ao-loot-logger">
+                        <div class="ll-landing-icon">📥</div>
+                        <div class="ll-landing-title">Upload a log file</div>
+                        <div class="ll-landing-desc">Already have a .txt from ao-loot-logger? Drop it here (or anywhere on the page).</div>
+                    </div>
+                    <div class="ll-landing-card" onclick="showLootLoggerMode('accountability')" title="Cross-reference loot against chest deposits">
+                        <div class="ll-landing-icon">✓</div>
+                        <div class="ll-landing-title">Run accountability</div>
+                        <div class="ll-landing-desc">Compare a session against guild chest deposits to flag who didn't pay in.</div>
+                    </div>
+                </div>
+            </div>`;
             return;
         }
 
         const savedNames = getSavedSessionNames();
+        _updateLootLoggerModePillCounts();
         html += lootSessions.map(s => {
             const started = new Date(s.started_at).toLocaleString();
             const endedAt = s.ended_at ? new Date(s.ended_at) : null;
@@ -8264,12 +8328,35 @@ function exportAccountabilityCSV() {
     exportToCSV(rows, `accountability-${new Date().toISOString().slice(0, 10)}.csv`);
 }
 
+// E8: Bounded live event queue. Hard cap = 10k events. When we cross 9k we
+// warn the user to save + reset, and keep accepting. When we actually hit
+// 10k we drop the oldest event and surface a "dropping oldest" toast once
+// per bucket-of-100 so chat-spam doesn't flood toasts.
+const LIVE_EVENT_CAP = 10000;
+const LIVE_EVENT_WARN_THRESHOLD = 9000;
+let _liveEventWarnedAt = 0;
+let _liveEventDropCounter = 0;
+function _pushLiveEvent(ev) {
+    liveLootEvents.push(ev);
+    if (liveLootEvents.length === LIVE_EVENT_WARN_THRESHOLD && _liveEventWarnedAt < LIVE_EVENT_WARN_THRESHOLD) {
+        _liveEventWarnedAt = LIVE_EVENT_WARN_THRESHOLD;
+        showToast(`Live session approaching ${LIVE_EVENT_CAP.toLocaleString()} events — Save Session soon to avoid dropped data`, 'warn');
+    }
+    if (liveLootEvents.length > LIVE_EVENT_CAP) {
+        liveLootEvents.shift(); // drop oldest
+        _liveEventDropCounter++;
+        if (_liveEventDropCounter === 1 || _liveEventDropCounter % 100 === 0) {
+            showToast(`Event queue at ${LIVE_EVENT_CAP.toLocaleString()} cap — oldest events are being dropped. Save now.`, 'error');
+        }
+    }
+}
+
 // Hook into existing WS to capture loot events for live mode
 function handleLootLoggerWsMessage(msg) {
     if (msg.type === 'death-event' && msg.data) {
         if (liveSessionActive) {
             // Store as a special loot event with __DEATH__ marker
-            liveLootEvents.push({
+            _pushLiveEvent({
                 timestamp: msg.data.timestamp || Date.now(),
                 looted_by_name: msg.data.killerName || '',
                 looted_by_guild: msg.data.killerGuild || '',
@@ -8282,7 +8369,7 @@ function handleLootLoggerWsMessage(msg) {
     }
     if (msg.type === 'loot-event' && msg.data) {
         if (liveSessionActive) {
-            liveLootEvents.push(msg.data);
+            _pushLiveEvent(msg.data);
             liveSessionSaved = false; // new events invalidate saved state
             const saveBtn = document.getElementById('ll-save-btn');
             if (saveBtn) saveBtn.textContent = 'Save Session';

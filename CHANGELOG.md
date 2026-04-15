@@ -2,6 +2,34 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-04-16 — Mode pills, landing cards, bounded event queue, price cache
+
+- **Loot Logger mode pills (D2)** — replaces the three flat mode
+  buttons with a proper pill bar in a rounded background container.
+  Active mode pops in accent gold; inactive pills are subtle. Each
+  pill shows a badge count when relevant:
+  - `Sessions (N)` — saved + live session count
+  - `Accountability (N)` — chest captures available for cross-reference
+  Updates live as sessions load and captures arrive.
+- **Landing cards (D6)** — the "no sessions yet" empty state now shows
+  three onboarding cards: 🎮 Start a live session · 📥 Upload a log
+  file · ✓ Run accountability. Cards are clickable and route into the
+  right mode. Much friendlier than a flat line of text.
+- **Bounded event queue (E8)** — live sessions used to grow the
+  `liveLootEvents` array without limit. Now capped at 10,000 events.
+  At 9k we fire a warning toast ("save session soon"); at 10k we drop
+  the oldest event and surface a toast every 100 drops so the user
+  knows data is being lost. Counters reset on save/reset.
+- **Price map memoization (E4)** — `getLootPriceMap` now caches
+  results keyed by the sorted item-id signature for 5 minutes. Same
+  session re-rendered (filter changes, sort changes, chip toggles) no
+  longer refetches `/api/batch-prices` repeatedly. Cache bound to 20
+  unique signatures with LRU eviction.
+
+Service worker cache bumped `v9` → `v10`.
+
+---
+
 ### 2026-04-16 — Session compare, favorite items highlight, global drop zone
 
 - **Compare Sessions (G2)** — new menu entry in the Loot Tools dropdown.

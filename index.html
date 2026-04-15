@@ -1945,6 +1945,17 @@
                     <div class="changelog-list">
                         <div class="changelog-entry">
                             <div class="changelog-date">April 16, 2026</div>
+                            <div class="changelog-title">Mode pills, landing cards, bounded event queue, price cache</div>
+                            <ul>
+                                <li><strong>Loot Logger mode pills</strong> &mdash; Sessions / Upload / Accountability now pill-style with badge counts (<code>Sessions (12)</code>, <code>Accountability (3)</code>).</li>
+                                <li><strong>Landing cards</strong> &mdash; empty state shows three onboarding cards: 🎮 Start a live session · 📥 Upload a log · ✓ Run accountability.</li>
+                                <li><strong>Bounded live queue</strong> &mdash; live sessions capped at 10k events with save warnings at 9k to prevent runaway memory.</li>
+                                <li><strong>Price-map memoization</strong> &mdash; same session re-rendered (filter toggles, sorts) no longer refetches prices. 5-min TTL cache.</li>
+                                <li>Service worker cache bumped v9 &rarr; v10.</li>
+                            </ul>
+                        </div>
+                        <div class="changelog-entry">
+                            <div class="changelog-date">April 16, 2026</div>
                             <div class="changelog-title">Session compare, favorite items, global drop zone</div>
                             <ul>
                                 <li><strong>⚖ Compare Sessions</strong> in the Loot Tools dropdown &mdash; pick two saved sessions, see events / items / players / deaths / duration / value side-by-side with gain/loss deltas + top looters per side.</li>
@@ -2832,10 +2843,22 @@
                 </div>
 
                 <!-- Mode tabs -->
-                <div style="display:flex; gap:0.5rem; margin-bottom:1rem; flex-wrap:wrap;">
-                    <button class="btn-small-accent" onclick="showLootLoggerMode('live')" id="loot-log-live-btn">Sessions</button>
-                    <button class="btn-small" onclick="showLootLoggerMode('upload')" id="loot-log-upload-btn">Upload File</button>
-                    <button class="btn-small" onclick="showLootLoggerMode('accountability')" id="loot-log-acc-btn">Accountability</button>
+                <!-- D2: Mode pills with badge counts -->
+                <div class="ll-mode-pills" role="tablist">
+                    <button class="ll-mode-pill active" role="tab" onclick="showLootLoggerMode('live')" id="loot-log-live-btn" title="View live + saved loot sessions">
+                        <span class="ll-mode-icon">📋</span>
+                        <span class="ll-mode-label">Sessions</span>
+                        <span class="ll-mode-count" id="ll-mode-count-live"></span>
+                    </button>
+                    <button class="ll-mode-pill" role="tab" onclick="showLootLoggerMode('upload')" id="loot-log-upload-btn" title="Upload a .txt log file from the ao-loot-logger or Go client">
+                        <span class="ll-mode-icon">📥</span>
+                        <span class="ll-mode-label">Upload File</span>
+                    </button>
+                    <button class="ll-mode-pill" role="tab" onclick="showLootLoggerMode('accountability')" id="loot-log-acc-btn" title="Cross-reference a session against chest deposits">
+                        <span class="ll-mode-icon">✓</span>
+                        <span class="ll-mode-label">Accountability</span>
+                        <span class="ll-mode-count" id="ll-mode-count-acc"></span>
+                    </button>
                 </div>
 
                 <!-- SESSIONS MODE -->
