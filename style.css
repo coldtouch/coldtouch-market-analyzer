@@ -1279,6 +1279,32 @@ select:focus {
     margin-top: 0.15rem;
 }
 
+/* Loot Buyer: tracked tabs summary header */
+.loot-tracked-summary {
+    display: flex;
+    gap: 0.75rem;
+    align-items: stretch;
+    flex-wrap: wrap;
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius);
+    padding: 0.65rem 0.85rem;
+    margin-bottom: 0.75rem;
+}
+.loot-tracked-summary .ll-summary-stat { border-right: 1px solid var(--border-color); padding: 0.1rem 0.6rem; }
+.loot-tracked-summary .ll-summary-stat:nth-last-child(2) { border-right: none; }
+.loot-tracked-summary .ll-summary-actions {
+    margin-left: auto;
+    display: flex;
+    gap: 0.4rem;
+    align-items: center;
+}
+@media (max-width: 600px) {
+    .loot-tracked-summary { gap: 0.4rem; }
+    .loot-tracked-summary .ll-summary-stat { padding: 0.1rem 0.35rem; }
+    .loot-tracked-summary .ll-summary-actions { margin-left: 0; width: 100%; justify-content: flex-end; border-top: 1px solid var(--border-color); padding-top: 0.4rem; }
+}
+
 /* D2: Loot Logger mode pills */
 .ll-mode-pills {
     display: flex;

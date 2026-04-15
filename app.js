@@ -5962,6 +5962,8 @@ function renderSellPlan(data, container) {
 
 // ====== LOOT TAB LIFECYCLE TRACKER ======
 
+// Cache the last-fetched tabs so sort-order changes don't need a refetch
+let _lastTrackedTabs = [];
 async function loadTrackedTabs() {
     if (!localStorage.getItem('albion_auth_token')) return;
     const list = document.getElementById('loot-tracked-list');
@@ -5978,13 +5980,81 @@ async function loadTrackedTabs() {
 
         if (!data.tabs || data.tabs.length === 0) {
             list.innerHTML = '';
+            _lastTrackedTabs = [];
+            _renderTrackedTabsHeader([]);
             if (empty) empty.style.display = '';
             return;
         }
-        list.innerHTML = data.tabs.map(tab => renderTrackedTabCard(tab)).join('');
+        _lastTrackedTabs = data.tabs;
+        _renderTrackedTabsList();
     } catch(e) {
         list.innerHTML = `<div class="empty-state"><p>Failed to load tracked tabs: ${esc(e.message)}</p></div>`;
     }
+}
+
+// Compute net profit per tab once so sort doesn't recalculate each comparison
+function _netForTab(t) { return (t.revenueSoFar || 0) - (t.purchasePrice || 0); }
+
+function _renderTrackedTabsList() {
+    const list = document.getElementById('loot-tracked-list');
+    if (!list) return;
+    const tabs = [..._lastTrackedTabs];
+    const sort = localStorage.getItem('albion_buyer_sort') || 'newest';
+    if (sort === 'oldest') tabs.sort((a, b) => (a.purchasedAt || 0) - (b.purchasedAt || 0));
+    else if (sort === 'profit-desc') tabs.sort((a, b) => _netForTab(b) - _netForTab(a));
+    else if (sort === 'profit-asc') tabs.sort((a, b) => _netForTab(a) - _netForTab(b));
+    else if (sort === 'open-first') tabs.sort((a, b) => {
+        const order = { open: 0, partial: 1, sold: 2 };
+        const oa = order[a.status] ?? 99; const ob = order[b.status] ?? 99;
+        return oa - ob || (b.purchasedAt || 0) - (a.purchasedAt || 0);
+    });
+    else tabs.sort((a, b) => (b.purchasedAt || 0) - (a.purchasedAt || 0)); // newest default
+    _renderTrackedTabsHeader(tabs);
+    list.innerHTML = tabs.map(tab => renderTrackedTabCard(tab)).join('');
+}
+
+// Summary header: totals across all tracked tabs + sort picker
+function _renderTrackedTabsHeader(tabs) {
+    let header = document.getElementById('loot-tracked-header');
+    if (!header) {
+        const list = document.getElementById('loot-tracked-list');
+        if (!list || !list.parentElement) return;
+        header = document.createElement('div');
+        header.id = 'loot-tracked-header';
+        list.parentElement.insertBefore(header, list);
+    }
+    if (!tabs || tabs.length === 0) { header.innerHTML = ''; return; }
+    const totalPaid = tabs.reduce((s, t) => s + (t.purchasePrice || 0), 0);
+    const totalRev = tabs.reduce((s, t) => s + (t.revenueSoFar || 0), 0);
+    const totalNet = totalRev - totalPaid;
+    const openCount = tabs.filter(t => t.status === 'open').length;
+    const partialCount = tabs.filter(t => t.status === 'partial').length;
+    const soldCount = tabs.filter(t => t.status === 'sold').length;
+    const currentSort = localStorage.getItem('albion_buyer_sort') || 'newest';
+    header.innerHTML = `
+        <div class="loot-tracked-summary">
+            <div class="ll-summary-stat"><div class="ll-summary-label">Tabs</div><div class="ll-summary-value">${tabs.length}</div></div>
+            <div class="ll-summary-stat"><div class="ll-summary-label">Open · Partial · Sold</div><div class="ll-summary-value">${openCount} · ${partialCount} · ${soldCount}</div></div>
+            <div class="ll-summary-stat"><div class="ll-summary-label">Paid</div><div class="ll-summary-value loss">${formatSilver(totalPaid)}</div></div>
+            <div class="ll-summary-stat"><div class="ll-summary-label">Revenue</div><div class="ll-summary-value accent">${formatSilver(totalRev)}</div></div>
+            <div class="ll-summary-stat"><div class="ll-summary-label">Net</div><div class="ll-summary-value ${totalNet >= 0 ? '' : 'loss'}" style="${totalNet >= 0 ? 'color:var(--profit-green);' : ''}">${totalNet >= 0 ? '+' : ''}${formatSilver(Math.abs(totalNet))}</div></div>
+            <div class="ll-summary-actions">
+                <label style="font-size:0.7rem; color:var(--text-muted); align-self:center;">Sort</label>
+                <select id="loot-tracked-sort" onchange="_onTrackedTabsSortChange(this.value)" class="transport-select" style="height:30px; font-size:0.78rem;">
+                    <option value="newest"${currentSort === 'newest' ? ' selected' : ''}>Newest</option>
+                    <option value="oldest"${currentSort === 'oldest' ? ' selected' : ''}>Oldest</option>
+                    <option value="profit-desc"${currentSort === 'profit-desc' ? ' selected' : ''}>Highest profit</option>
+                    <option value="profit-asc"${currentSort === 'profit-asc' ? ' selected' : ''}>Lowest profit</option>
+                    <option value="open-first"${currentSort === 'open-first' ? ' selected' : ''}>Open first</option>
+                </select>
+            </div>
+        </div>
+    `;
+}
+
+function _onTrackedTabsSortChange(val) {
+    try { localStorage.setItem('albion_buyer_sort', val); } catch {}
+    _renderTrackedTabsList();
 }
 
 async function loadRecentSales() {

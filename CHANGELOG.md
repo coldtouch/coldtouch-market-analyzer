@@ -2,6 +2,22 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-04-16 — Tracked tabs summary + sort
+
+- **Portfolio-style summary header** at the top of the tracked tabs
+  list: total tab count, Open/Partial/Sold breakdown, aggregate
+  Paid / Revenue / Net across every tab you're tracking. Answers
+  "am I up or down on loot trading overall?" without clicking into
+  individual cards.
+- **Sort picker** — `Newest / Oldest / Highest profit / Lowest profit
+  / Open first`. Stored in localStorage so your preferred sort
+  persists across reloads. Sort re-renders client-side without
+  hitting the backend.
+
+Service worker cache bumped `v11` → `v12`.
+
+---
+
 ### 2026-04-16 — Loot Buyer landing + preference persistence
 
 - **Loot Buyer empty-state cards (A6)** — the "no chest captures yet"
