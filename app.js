@@ -6952,6 +6952,52 @@ async function getLootPriceMap(itemIds) {
     } catch { return {}; }
 }
 
+// === Live Session state (E3: consolidated access) ================================
+// The underlying flags are kept as top-level globals (see ~line 6609 and 8654) for
+// backward-compat with the large surface of existing code. The helpers below give
+// new code a canonical snapshot + reset path without a risky rename-everything pass:
+//   - liveSessionState()          — read-only snapshot of every flag
+//   - resetLiveSessionFlags()     — clears every flag; used inside resetLiveSession
+//   - live session properties:
+//       active       — whether we're actively recording (liveSessionActive)
+//       saved        — whether the current queue has been pushed to backend (liveSessionSaved)
+//       name         — user-editable label (liveSessionName)
+//       events       — the rolling event array (liveLootEvents)
+//       eventCount   — convenience, events.length
+//       sessionId    — server-assigned id when viewing a saved session (_llCurrentSessionId)
+//       autosaveOn   — whether the draft-to-localStorage interval is live (_llAutosaveInterval)
+//       warnedAt     — last event-count threshold we toasted at (_liveEventWarnedAt)
+//       droppedCount — count of events dropped due to the 10k cap (_liveEventDropCounter)
+// ====================================================================================
+function liveSessionState() {
+    return {
+        active: liveSessionActive,
+        saved: liveSessionSaved,
+        name: liveSessionName,
+        events: liveLootEvents,
+        eventCount: liveLootEvents.length,
+        sessionId: _llCurrentSessionId,
+        autosaveOn: !!_llAutosaveInterval,
+        warnedAt: _liveEventWarnedAt,
+        droppedCount: _liveEventDropCounter
+    };
+}
+
+function resetLiveSessionFlags() {
+    liveLootEvents = [];
+    liveSessionActive = false;
+    liveSessionSaved = false;
+    liveSessionName = '';
+    _liveEventWarnedAt = 0;
+    _liveEventDropCounter = 0;
+    if (_llAutosaveInterval) { clearInterval(_llAutosaveInterval); _llAutosaveInterval = null; }
+    try { localStorage.removeItem(LL_SESSION_NAME_KEY); } catch {}
+    try { localStorage.removeItem(LL_DRAFT_KEY); } catch {}
+}
+
+// Expose for dev-tools debugging without touching production call paths
+window.liveSessionState = liveSessionState;
+
 // --- Live session controls ---
 function toggleLiveSession() {
     liveSessionActive = !liveSessionActive;
@@ -6991,16 +7037,10 @@ function resetLiveSession() {
     } else if (liveLootEvents.length > 0) {
         if (!confirm('Clear the current live session?')) return;
     }
-    liveLootEvents = [];
-    liveSessionActive = false;
-    liveSessionSaved = false;
-    _liveEventWarnedAt = 0;
-    _liveEventDropCounter = 0;
+    // E3: single source of truth for flag reset (clears state + localStorage)
+    resetLiveSessionFlags();
     _llRemovedPlayers.clear();
     _llResolvedDeaths.clear();
-    liveSessionName = '';
-    try { localStorage.removeItem(LL_SESSION_NAME_KEY); } catch {}
-    try { localStorage.removeItem(LL_DRAFT_KEY); } catch {}
     const nameInput = document.getElementById('ll-session-name-input');
     if (nameInput) nameInput.value = '';
     const st = document.getElementById('ll-autosave-status');
