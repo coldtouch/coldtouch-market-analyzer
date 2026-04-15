@@ -2,6 +2,32 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-04-16 — Loot Tools polish: timeline, friendly-fire, top-value, shortcuts
+
+Four small-but-useful additions for the Loot Logger session view:
+
+- **Heatmap timeline** above the player cards. Divides the session into
+  30 buckets and draws a bar chart of event density, with 💀 markers
+  sitting on top of any bucket where someone died. Hover for time range
+  and event count. Gives you a visual "shape" of the fight at a glance.
+- **Friendly-fire detection** (🤝 badge) on item rows where the looter
+  and the corpse belong to the same guild. Surfaces cases where an
+  allied player looted a guildmate's corpse — usually benign, but
+  worth knowing for accountability. Rows also get a subtle pink left
+  border.
+- **Top-value ⭐** on the priciest item in each player card (only when
+  the value is meaningful — >10k silver). Row gets a soft gold
+  background wash so it's easy to spot the carry item.
+- **Keyboard shortcuts** on the Loot Logger tab:
+  `E` expand all, `C` collapse all, `F` focus search,
+  `W` open whitelist, `?` show help modal, `Esc` close modal /
+  clear death filter. Shortcuts don't fire while typing in a text
+  field.
+
+Service worker cache bumped `v5` → `v6`.
+
+---
+
 ### 2026-04-16 — Loot Tools Phases 2-5: Deaths, Crafters, Cross-links, Combo A
 
 Five phases landed in a single day. Highlights below; full phase-by-phase

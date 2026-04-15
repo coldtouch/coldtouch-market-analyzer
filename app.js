@@ -6828,6 +6828,50 @@ function buildDeathTimeline(events, byPlayer, priceMap, primaryGuild, primaryAll
     return deaths;
 }
 
+// G3: Heatmap timeline above the player cards. Divides the session duration
+// into N buckets, rendering event density as bar height. Deaths get a red dot
+// above their bucket so you can see at a glance when things went sideways.
+function renderSessionTimeline(events, deaths) {
+    if (!events || events.length < 2) return ''; // not enough data for a timeline
+    const tsNums = events.map(e => +new Date(e.timestamp)).filter(n => !isNaN(n));
+    if (tsNums.length < 2) return '';
+    const minTs = Math.min(...tsNums);
+    const maxTs = Math.max(...tsNums);
+    const span = maxTs - minTs;
+    if (span < 10000) return ''; // less than 10s range — skip
+    const BUCKETS = 30;
+    const bucketMs = span / BUCKETS;
+    const counts = new Array(BUCKETS).fill(0);
+    const deathFlag = new Array(BUCKETS).fill(false);
+    for (const ev of events) {
+        const t = +new Date(ev.timestamp);
+        if (isNaN(t)) continue;
+        let idx = Math.floor((t - minTs) / bucketMs);
+        if (idx >= BUCKETS) idx = BUCKETS - 1;
+        if (idx < 0) idx = 0;
+        if (ev.item_id === '__DEATH__') deathFlag[idx] = true;
+        else counts[idx]++;
+    }
+    const maxCount = Math.max(1, ...counts);
+    const fmtTime = (ts) => new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const bars = counts.map((c, i) => {
+        const pct = (c / maxCount) * 100;
+        const bucketStart = minTs + i * bucketMs;
+        const bucketEnd = bucketStart + bucketMs;
+        const label = `${fmtTime(bucketStart)}\u2013${fmtTime(bucketEnd)} \u2022 ${c} event${c !== 1 ? 's' : ''}${deathFlag[i] ? ' \u2022 \ud83d\udc80 death' : ''}`;
+        return `<div class="ll-timeline-bar${deathFlag[i] ? ' has-death' : ''}${c === 0 ? ' empty' : ''}" style="height:${Math.max(pct, c > 0 ? 6 : 2)}%;" data-tip="${esc(label)}"></div>`;
+    }).join('');
+    return `<div class="ll-timeline-wrap">
+        <div class="ll-timeline-label">Session timeline</div>
+        <div class="ll-timeline">${bars}</div>
+        <div class="ll-timeline-axis">
+            <span>${fmtTime(minTs)}</span>
+            <span>${fmtTime(minTs + span / 2)}</span>
+            <span>${fmtTime(maxTs)}</span>
+        </div>
+    </div>`;
+}
+
 function renderDeathsSection(deaths) {
     if (!deaths || deaths.length === 0) return '';
     const filterActive = _llDeathFilterVictim !== null;
@@ -7190,6 +7234,9 @@ function _llRenderFiltered() {
         </div>
     </div>`;
 
+    // G3: heatmap timeline (above deaths + player cards)
+    html += renderSessionTimeline(events, _llDeaths);
+
     // Deaths section (above player cards)
     html += renderDeathsSection(_llDeaths);
 
@@ -7279,15 +7326,36 @@ function _llRenderFiltered() {
             ? `<span class="ll-preview-overflow" data-tip="${overflowCount} more unique item${overflowCount > 1 ? 's' : ''}">+${overflowCount}</span>`
             : '');
 
-        const itemsHtml = data.items.filter(ev => passesItemFilter(ev.item_id, filterVal, ev)).map(ev => {
+        // A5: identify the highest-value item so we can flag it with a ⭐
+        const filteredItems = data.items.filter(ev => passesItemFilter(ev.item_id, filterVal, ev));
+        let topValueEv = null;
+        let topValueAmount = 0;
+        for (const ev of filteredItems) {
+            if (ev.item_id === '__DEATH__') continue;
+            const pe = priceMap[ev.item_id];
+            const tv = pe ? pe.price * (ev.quantity || 1) : 0;
+            if (tv > topValueAmount) { topValueAmount = tv; topValueEv = ev; }
+        }
+        const itemsHtml = filteredItems.map(ev => {
             const iName = getFriendlyName(ev.item_id) || ev.item_id;
             const iconId = ev.item_id || 'T4_BAG';
             const iconUrl = `https://render.albiononline.com/v1/item/${encodeURIComponent(iconId)}.png`;
             const iw = ev.weight > 0 ? ev.weight : getItemWeight(ev.item_id) * (ev.quantity || 1);
             const priceEntry = priceMap[ev.item_id];
             const totalVal = priceEntry ? priceEntry.price * (ev.quantity || 1) : 0;
+            // G5: friendly-fire detection — same guild looted from a player in the same guild
+            const isFriendlyFire = ev.looted_from_guild && ev.looted_by_guild && ev.looted_from_guild === ev.looted_by_guild;
+            const ffBadge = isFriendlyFire
+                ? ` <span class="ll-ff-badge" data-tip="Friendly fire: same guild looted a guild member's corpse" title="Friendly fire">🤝</span>`
+                : '';
             const fromStr = ev.looted_from_name
-                ? `<span style="font-size:0.67rem; color:var(--text-muted); margin-left:0.2rem;">from ${esc(ev.looted_from_name)}</span>`
+                ? `<span style="font-size:0.67rem; color:var(--text-muted); margin-left:0.2rem;">from ${esc(ev.looted_from_name)}${ffBadge}</span>`
+                : (ffBadge ? `<span style="margin-left:0.2rem;">${ffBadge}</span>` : '');
+
+            // A5: top-value star — only if this row is the priciest AND the value is meaningful (> 10k)
+            const isTopValue = topValueEv === ev && topValueAmount >= 10000;
+            const starBadge = isTopValue
+                ? ` <span class="ll-top-value-star" data-tip="Top-value item in this card" title="Top value">⭐</span>`
                 : '';
 
             // Accountability or death coloring
@@ -7300,12 +7368,14 @@ function _llRenderFiltered() {
                 else if (inChest >= (ev.quantity || 1)) { rowClass = 'll-item-deposited'; dotClass = 'll-dot-deposited'; }
                 else { rowClass = 'll-item-partial'; dotClass = 'll-dot-partial'; }
             }
+            if (isTopValue) rowClass += ' ll-item-top-value';
+            if (isFriendlyFire) rowClass += ' ll-item-ff';
 
             const unitVal = priceEntry && priceEntry.price > 0 ? Math.floor(priceEntry.price) : '';
             const valAttr = unitVal ? ` data-tip-value="${unitVal}"` : '';
             return `<div class="ll-item-row ll-item-clickable ${rowClass}" onclick="event.stopPropagation(); switchToBrowser('${esc(iconId)}')" title="View in Market Browser" data-tip-item="${esc(iconId)}" data-tip-source="loot"${valAttr}>
                 <img src="${iconUrl}" class="ll-item-icon" loading="lazy" onerror="this.style.display='none'" alt="">
-                <span class="ll-item-name">${esc(iName)}${fromStr}</span>
+                <span class="ll-item-name">${esc(iName)}${starBadge}${fromStr}</span>
                 <span class="ll-item-qty">&times;${ev.quantity || 1}</span>
                 <span class="ll-item-value">${totalVal > 0 ? formatSilver(totalVal) : '—'}</span>
                 <span class="ll-item-weight">${iw > 0 ? iw.toFixed(1) + ' kg' : ''}</span>
@@ -10815,6 +10885,70 @@ document.addEventListener('click', (e) => {
     for (const menu of openMenus) {
         const dropdown = menu.closest('.ll-discord-dropdown');
         if (!dropdown?.contains(e.target)) menu.classList.remove('open');
+    }
+});
+
+// A11: Loot Logger keyboard shortcuts
+// Only fire when the Loot Logger tab is active, no modal is open, and the
+// user isn't typing into a form field.
+function _llShowShortcutHelp() {
+    const modal = document.createElement('div');
+    modal.id = 'll-shortcut-help';
+    modal.className = 'modal';
+    modal.onclick = (e) => { if (e.target === modal) modal.remove(); };
+    modal.innerHTML = `
+        <div class="modal-content" style="max-width:420px;">
+            <button class="close-btn" onclick="this.closest('.modal').remove()">&times;</button>
+            <h2 style="color:var(--accent); margin:0 0 0.75rem; font-size:1.1rem;">Loot Logger Shortcuts</h2>
+            <div class="ll-shortcut-row"><kbd>E</kbd><span>Expand all player cards</span></div>
+            <div class="ll-shortcut-row"><kbd>C</kbd><span>Collapse all player cards</span></div>
+            <div class="ll-shortcut-row"><kbd>F</kbd><span>Focus the search box</span></div>
+            <div class="ll-shortcut-row"><kbd>W</kbd><span>Open whitelist modal</span></div>
+            <div class="ll-shortcut-row"><kbd>Esc</kbd><span>Close any open modal / clear death filter</span></div>
+            <div class="ll-shortcut-row"><kbd>?</kbd><span>Show this help</span></div>
+            <p style="font-size:0.72rem; color:var(--text-muted); margin:0.75rem 0 0;">Shortcuts don't fire while typing in a text field.</p>
+        </div>`;
+    document.body.appendChild(modal);
+}
+
+document.addEventListener('keydown', (e) => {
+    // Skip when focused on an input/textarea/contenteditable, or modifier combos
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    const t = e.target;
+    if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return;
+    // Only active on Loot Logger tab
+    if (typeof currentTab !== 'undefined' && currentTab !== 'loot-logger') return;
+    // Skip if any other modal is open (Esc already handled elsewhere)
+    const anyModalOpen = Array.from(document.querySelectorAll('.modal')).some(m => !m.classList.contains('hidden'));
+    if (anyModalOpen && e.key !== 'Escape') return;
+
+    switch (e.key) {
+        case '?':
+        case '/': // some layouts surface ? as shift+/ — treat plain / as help too
+            if (e.key === '/' && !e.shiftKey) return;
+            e.preventDefault();
+            _llShowShortcutHelp();
+            break;
+        case 'e':
+        case 'E':
+            e.preventDefault();
+            document.querySelectorAll('#loot-session-detail .ll-player-card, #accountability-result .ll-player-card').forEach(c => c.classList.add('expanded'));
+            break;
+        case 'c':
+        case 'C':
+            e.preventDefault();
+            document.querySelectorAll('#loot-session-detail .ll-player-card, #accountability-result .ll-player-card').forEach(c => c.classList.remove('expanded'));
+            break;
+        case 'f':
+        case 'F':
+            e.preventDefault();
+            document.getElementById('ll-search')?.focus();
+            break;
+        case 'w':
+        case 'W':
+            e.preventDefault();
+            if (typeof openWhitelistModal === 'function') openWhitelistModal();
+            break;
     }
 });
 

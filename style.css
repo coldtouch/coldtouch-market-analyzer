@@ -968,6 +968,107 @@ select:focus {
     color: var(--accent);
 }
 
+/* G3: Heatmap timeline */
+.ll-timeline-wrap {
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius);
+    padding: 0.4rem 0.7rem 0.3rem;
+    margin-bottom: 0.75rem;
+}
+.ll-timeline-label {
+    font-size: 0.62rem;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    font-weight: 600;
+    margin-bottom: 0.25rem;
+}
+.ll-timeline {
+    display: flex;
+    align-items: flex-end;
+    height: 40px;
+    gap: 2px;
+}
+.ll-timeline-bar {
+    flex: 1;
+    background: linear-gradient(to top, var(--accent), rgba(212, 175, 55, 0.55));
+    min-height: 2px;
+    border-radius: 2px 2px 0 0;
+    transition: filter 0.12s ease, transform 0.1s ease;
+    cursor: default;
+}
+.ll-timeline-bar:hover {
+    filter: brightness(1.3);
+    transform: scaleY(1.08);
+    transform-origin: bottom center;
+}
+.ll-timeline-bar.empty {
+    background: var(--bg-elevated);
+    opacity: 0.45;
+}
+.ll-timeline-bar.has-death {
+    position: relative;
+    background: linear-gradient(to top, var(--loss-red), rgba(248, 113, 113, 0.55));
+}
+.ll-timeline-bar.has-death::before {
+    content: '💀';
+    position: absolute;
+    top: -16px;
+    left: 50%;
+    transform: translateX(-50%);
+    font-size: 0.7rem;
+    line-height: 1;
+    pointer-events: none;
+}
+.ll-timeline-axis {
+    display: flex;
+    justify-content: space-between;
+    font-size: 0.62rem;
+    color: var(--text-muted);
+    margin-top: 0.15rem;
+}
+
+/* G5: Friendly-fire + A5: Top-value star */
+.ll-ff-badge,
+.ll-top-value-star {
+    display: inline-block;
+    font-size: 0.75rem;
+    margin-left: 0.15rem;
+    cursor: help;
+    vertical-align: middle;
+    line-height: 1;
+}
+.ll-item-top-value {
+    background: linear-gradient(to right, rgba(212, 175, 55, 0.08), transparent 60%);
+}
+.ll-item-ff {
+    border-left: 2px solid rgba(236, 72, 153, 0.45);
+}
+
+/* A11: shortcut help modal rows */
+.ll-shortcut-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0.3rem 0;
+    border-bottom: 1px solid var(--border-color);
+    font-size: 0.82rem;
+}
+.ll-shortcut-row:last-of-type { border-bottom: none; }
+.ll-shortcut-row kbd {
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-color);
+    border-bottom-width: 2px;
+    border-radius: 4px;
+    padding: 0.1rem 0.5rem;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.78rem;
+    color: var(--accent);
+    min-width: 1.5rem;
+    text-align: center;
+}
+
 /* Item filter chips (Phase 5 G11) */
 .ll-filter-chips {
     display: flex;
