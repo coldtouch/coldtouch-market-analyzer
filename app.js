@@ -7258,13 +7258,21 @@ async function loadLootSessions() {
             const titleMain = customName
                 ? `<strong>${esc(customName)}</strong> <span style="font-size:0.68rem; color:var(--text-muted);">${started}</span>`
                 : `${started}`;
-            return `<div class="ll-session-card" onclick="showSessionDetail('${sid}')">
+            // G4: shared indicator + share button
+            const isShared = !!s.public_token;
+            const sharedBadge = isShared
+                ? `<span class="ll-session-shared-badge" title="This session has a public share link">🔗 shared</span>`
+                : '';
+            const tokenArg = isShared ? `'${esc(s.public_token)}'` : 'null';
+            return `<div class="ll-session-card${isShared ? ' is-shared' : ''}" onclick="showSessionDetail('${sid}')">
                 <div class="ll-session-info">
                     <div class="ll-session-title">${titleMain} <span style="font-size:0.68rem; color:var(--text-muted);">(${duration})</span>
                         <button class="ll-session-rename-btn" onclick="event.stopPropagation(); renameSavedSession('${sid}')" title="Rename session" aria-label="Rename session">✏️</button>
+                        ${sharedBadge}
                     </div>
                     <div class="ll-session-meta">${s.event_count} events &bull; ${s.player_count} players</div>
                 </div>
+                <button class="btn-small" style="padding:0.35rem 0.55rem; font-size:0.8rem; flex-shrink:0; min-width:32px; min-height:32px;" onclick="event.stopPropagation(); openShareSessionModal('${sid}', ${tokenArg})" title="Share this session" aria-label="Share session">🔗</button>
                 <button class="btn-small-danger" style="padding:0.35rem 0.55rem; font-size:0.8rem; flex-shrink:0; min-width:32px; min-height:32px;" onclick="event.stopPropagation(); deleteLootSession('${sid}', this)" title="Delete session" aria-label="Delete session">✕</button>
             </div>`;
         }).join('');
@@ -11717,6 +11725,167 @@ function renderCompareStats(a, b, labelA, labelB) {
             </div>
         </div>
     `;
+}
+
+// === G4: Share session (public read-only URLs) ===
+let _shareCurrentSessionId = null;
+let _shareCurrentToken = null;
+
+function _shareUrlForToken(token) {
+    return `${window.location.origin}${window.location.pathname}?share=${encodeURIComponent(token)}`;
+}
+
+function openShareSessionModal(sessionId, existingToken) {
+    _shareCurrentSessionId = sessionId;
+    _shareCurrentToken = existingToken || null;
+    document.getElementById('share-session-modal')?.classList.remove('hidden');
+    _renderShareSessionBody();
+}
+
+function closeShareSessionModal() {
+    document.getElementById('share-session-modal')?.classList.add('hidden');
+    _shareCurrentSessionId = null;
+    _shareCurrentToken = null;
+}
+
+function _renderShareSessionBody() {
+    const body = document.getElementById('share-session-body');
+    if (!body) return;
+    if (_shareCurrentToken) {
+        const url = _shareUrlForToken(_shareCurrentToken);
+        body.innerHTML = `
+            <div style="background:var(--bg-elevated); border:1px solid var(--border-color); border-radius:6px; padding:0.6rem 0.8rem; margin-bottom:0.75rem;">
+                <div style="font-size:0.7rem; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.04em; margin-bottom:0.25rem;">Public URL</div>
+                <div style="display:flex; gap:0.5rem; align-items:center;">
+                    <input type="text" id="share-url-input" readonly value="${esc(url)}" style="flex:1; background:var(--bg-primary); border:1px solid var(--border-color); border-radius:4px; padding:0.4rem 0.5rem; color:var(--text-primary); font-family:ui-monospace, SFMono-Regular, Menlo, monospace; font-size:0.76rem;">
+                    <button class="btn-small-accent" onclick="_copyShareUrl()">📋 Copy</button>
+                </div>
+            </div>
+            <p style="font-size:0.78rem; color:var(--text-secondary); margin:0 0 0.75rem;">
+                Anyone with this link can view the session's events + per-player breakdown. They can't edit, delete, or see your other sessions.
+            </p>
+            <div style="display:flex; gap:0.5rem; justify-content:flex-end;">
+                <button class="btn-small" onclick="closeShareSessionModal()">Close</button>
+                <button class="btn-small-danger" onclick="_revokeShare()">Revoke link</button>
+            </div>`;
+    } else {
+        body.innerHTML = `
+            <p style="font-size:0.82rem; color:var(--text-primary); margin:0 0 0.75rem;">
+                This session isn't shared yet. Click below to generate a public URL.
+            </p>
+            <div style="display:flex; gap:0.5rem; justify-content:flex-end;">
+                <button class="btn-small" onclick="closeShareSessionModal()">Cancel</button>
+                <button class="btn-small-accent" onclick="_createShare()">🔗 Create share link</button>
+            </div>`;
+    }
+}
+
+async function _createShare() {
+    if (!_shareCurrentSessionId) return;
+    try {
+        const res = await fetch(`${VPS_BASE}/api/loot-session/${encodeURIComponent(_shareCurrentSessionId)}/share`, {
+            method: 'POST',
+            headers: authHeaders()
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Share failed');
+        _shareCurrentToken = data.token;
+        _renderShareSessionBody();
+        showToast('Share link created', 'success');
+        // Refresh session list so the shared badge updates
+        if (lootLoggerMode === 'live') loadLootSessions();
+    } catch(e) {
+        showToast('Failed to share: ' + e.message, 'error');
+    }
+}
+
+async function _revokeShare() {
+    if (!_shareCurrentSessionId) return;
+    if (!confirm('Revoke the share link? Anyone with the old link will get a 404.')) return;
+    try {
+        const res = await fetch(`${VPS_BASE}/api/loot-session/${encodeURIComponent(_shareCurrentSessionId)}/unshare`, {
+            method: 'POST',
+            headers: authHeaders()
+        });
+        if (!res.ok) {
+            const data = await res.json();
+            throw new Error(data.error || 'Revoke failed');
+        }
+        _shareCurrentToken = null;
+        _renderShareSessionBody();
+        showToast('Share link revoked', 'success');
+        if (lootLoggerMode === 'live') loadLootSessions();
+    } catch(e) {
+        showToast('Failed to revoke: ' + e.message, 'error');
+    }
+}
+
+function _copyShareUrl() {
+    const input = document.getElementById('share-url-input');
+    if (!input) return;
+    navigator.clipboard.writeText(input.value)
+        .then(() => showToast('Share URL copied to clipboard', 'success'))
+        .catch(() => { input.select(); showToast('Press Ctrl+C to copy', 'info'); });
+}
+
+// G4: if the URL has ?share=xxx, fetch + render the public session view.
+// Runs on load before any login check so guild members without accounts can view.
+async function _handlePublicShareLoad() {
+    const params = new URLSearchParams(window.location.search);
+    const token = params.get('share');
+    if (!token) return;
+    try {
+        const res = await fetch(`${VPS_BASE}/api/public/loot-session/${encodeURIComponent(token)}`);
+        if (!res.ok) {
+            const data = await res.json();
+            _renderPublicShareError(data.error || 'Failed to load shared session');
+            return;
+        }
+        const data = await res.json();
+        _renderPublicShareView(data);
+    } catch(e) {
+        _renderPublicShareError('Network error loading shared session');
+    }
+}
+
+function _renderPublicShareError(msg) {
+    const overlay = document.createElement('div');
+    overlay.id = 'public-share-overlay';
+    overlay.innerHTML = `
+        <div class="public-share-box">
+            <h2>Shared session unavailable</h2>
+            <p>${esc(msg)}</p>
+            <p style="font-size:0.78rem; color:var(--text-muted); margin-top:0.5rem;">The link may have been revoked.</p>
+            <a href="${window.location.pathname}" class="btn-small-accent" style="display:inline-block; margin-top:0.75rem; text-decoration:none;">Continue to Coldtouch</a>
+        </div>`;
+    document.body.appendChild(overlay);
+}
+
+function _renderPublicShareView(data) {
+    const overlay = document.createElement('div');
+    overlay.id = 'public-share-overlay';
+    overlay.innerHTML = `
+        <div class="public-share-banner">
+            <span>🔗 Viewing a shared loot session — read-only</span>
+            <a href="${window.location.pathname}" class="btn-small">Continue to Coldtouch &rarr;</a>
+        </div>
+        <div class="public-share-container" id="public-share-container"></div>`;
+    document.body.appendChild(overlay);
+    // Reuse renderLootSessionEvents to produce the full session view
+    const target = document.getElementById('public-share-container');
+    // Set target + flags so the shared renderer writes into our overlay container
+    _llTargetEl = target;
+    _llIsDetail = true;
+    renderLootSessionEvents(data.events || [], target, null).catch(e => {
+        target.innerHTML = `<div class="empty-state"><p>Failed to render shared session: ${esc(e.message)}</p></div>`;
+    });
+}
+
+// Trigger on page load — runs once after DOM is ready
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', _handlePublicShareLoad);
+} else {
+    _handlePublicShareLoad();
 }
 
 // G14: Trip Summary — cross-feature dashboard pulling from Loot Logger + Loot Buyer.

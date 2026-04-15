@@ -2,6 +2,39 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-04-16 — Shareable session URLs (G4) + E3 state consolidation
+
+**G4 — Shareable read-only session URLs:**
+- Click the 🔗 icon on any saved session card to generate a public
+  URL like `albionaitool.xyz/?share=abc123`
+- Anyone with the link views the session in a read-only overlay —
+  no login required. They see the full per-player breakdown, death
+  section, heatmap timeline, tooltips, everything.
+- A subtle `🔗 shared` badge on your session card shows the link is
+  active. Revoke any time with one click in the same modal; old URLs
+  immediately 404.
+- Backend: new `loot_session_shares` table with unique token column,
+  3 new endpoints (`POST /api/loot-session/:id/share`,
+  `POST /api/loot-session/:id/unshare`,
+  `GET /api/public/loot-session/:token`)
+- The public endpoint is unauthenticated but only exposes the
+  session_id owner decided to share — no user_id, no other sessions.
+- Events capped at 5000 per public response so a huge session can't
+  be used to hammer the backend.
+
+**E3 — live-session state consolidation (internal):**
+- New `liveSessionState()` snapshot helper returns a single object
+  with all 9 live-session flags (active, saved, name, events,
+  eventCount, sessionId, autosaveOn, warnedAt, droppedCount)
+- New `resetLiveSessionFlags()` helper for the reset path
+- `resetLiveSession()` now delegates to the helper — removed ~10
+  lines of duplicate clearing logic
+- Rollback checkpoint tagged at `pre-e3-refactor`
+
+Service worker cache bumped `v18` → `v19`.
+
+---
+
 ### 2026-04-16 — Tracked tab polish: days-held badge + break-even tick
 
 - **Days-held badge** on open / partial tracked tabs — at a glance you

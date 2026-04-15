@@ -347,6 +347,18 @@ db.serialize(() => {
   db.run(`CREATE INDEX IF NOT EXISTS idx_loot_events_user_session ON loot_events(user_id, session_id)`);
   db.run(`CREATE INDEX IF NOT EXISTS idx_loot_events_session ON loot_events(session_id, timestamp)`);
 
+  // === LOOT SESSION SHARE TOKENS (G4) ===
+  // Maps a session_id to an unauthenticated public-view token. One row per
+  // shared session; removing the row revokes sharing. The session_id owner
+  // is stashed so we can enforce "only the session owner can share/unshare".
+  db.run(`CREATE TABLE IF NOT EXISTS loot_session_shares (
+    session_id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    public_token TEXT NOT NULL UNIQUE,
+    created_at INTEGER NOT NULL
+  )`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_loot_session_shares_token ON loot_session_shares(public_token)`);
+
   // === ANALYTICS TABLES ===
   db.run(`CREATE TABLE IF NOT EXISTS price_analytics (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1798,14 +1810,83 @@ app.get('/api/sale-notifications', requireAuth, (req, res) => {
 
 // === LOOT LOGGER API ===
 
-// List loot sessions for the current user
+// List loot sessions for the current user (LEFT JOIN share tokens for G4 indicator)
 app.get('/api/loot-sessions', requireAuth, (req, res) => {
-  db.all(`SELECT session_id, MIN(timestamp) as started_at, MAX(timestamp) as ended_at, COUNT(*) as event_count,
-    COUNT(DISTINCT looted_by_name) as player_count
-    FROM loot_events WHERE user_id = ? GROUP BY session_id ORDER BY started_at DESC LIMIT 50`,
+  db.all(`SELECT e.session_id,
+      MIN(e.timestamp) as started_at,
+      MAX(e.timestamp) as ended_at,
+      COUNT(*) as event_count,
+      COUNT(DISTINCT e.looted_by_name) as player_count,
+      s.public_token as public_token
+    FROM loot_events e
+    LEFT JOIN loot_session_shares s ON s.session_id = e.session_id AND s.user_id = e.user_id
+    WHERE e.user_id = ?
+    GROUP BY e.session_id
+    ORDER BY started_at DESC
+    LIMIT 50`,
     [req.user.id], (err, rows) => {
       if (err) return res.status(500).json({ error: err.message });
       res.json({ sessions: rows || [] });
+    });
+});
+
+// G4: Generate/refresh a share token for a session the user owns.
+// Idempotent per session — re-calling returns the existing token (so sharing
+// the same link repeatedly doesn't churn tokens). To rotate, call unshare first.
+app.post('/api/loot-session/:sessionId/share', requireAuth, (req, res) => {
+  const sessionId = req.params.sessionId;
+  // Verify the session belongs to this user before minting a token
+  db.get(`SELECT 1 FROM loot_events WHERE session_id = ? AND user_id = ? LIMIT 1`,
+    [sessionId, req.user.id], (err, row) => {
+      if (err) return res.status(500).json({ error: err.message });
+      if (!row) return res.status(404).json({ error: 'Session not found.' });
+      // Check if a token already exists — return it
+      db.get(`SELECT public_token FROM loot_session_shares WHERE session_id = ?`,
+        [sessionId], (err2, existing) => {
+          if (err2) return res.status(500).json({ error: err2.message });
+          if (existing && existing.public_token) {
+            return res.json({ token: existing.public_token, created: false });
+          }
+          // Mint a URL-safe random token (24 bytes → 32 base64url chars)
+          const token = require('crypto').randomBytes(24).toString('base64url');
+          db.run(`INSERT INTO loot_session_shares (session_id, user_id, public_token, created_at) VALUES (?, ?, ?, ?)`,
+            [sessionId, req.user.id, token, Date.now()], function(err3) {
+              if (err3) return res.status(500).json({ error: err3.message });
+              res.json({ token, created: true });
+            });
+        });
+    });
+});
+
+// G4: Revoke a share token (delete the share row — session data untouched)
+app.post('/api/loot-session/:sessionId/unshare', requireAuth, (req, res) => {
+  const sessionId = req.params.sessionId;
+  db.run(`DELETE FROM loot_session_shares WHERE session_id = ? AND user_id = ?`,
+    [sessionId, req.user.id], function(err) {
+      if (err) return res.status(500).json({ error: err.message });
+      res.json({ success: true, revoked: this.changes });
+    });
+});
+
+// G4: Public read-only view — unauthenticated, token-based access.
+// Returns session metadata + events without exposing the owner's user_id.
+// Clamped to 5000 events per session to keep public responses bounded.
+app.get('/api/public/loot-session/:token', (req, res) => {
+  const token = req.params.token;
+  if (!token || token.length < 8 || token.length > 64) {
+    return res.status(400).json({ error: 'Invalid token.' });
+  }
+  db.get(`SELECT session_id, created_at FROM loot_session_shares WHERE public_token = ?`,
+    [token], (err, share) => {
+      if (err) return res.status(500).json({ error: err.message });
+      if (!share) return res.status(404).json({ error: 'Session not found or no longer shared.' });
+      db.all(`SELECT timestamp, looted_by_name, looted_by_guild, looted_by_alliance,
+        looted_from_name, looted_from_guild, looted_from_alliance, item_id, quantity, weight
+        FROM loot_events WHERE session_id = ? ORDER BY timestamp ASC LIMIT 5000`,
+        [share.session_id], (err2, rows) => {
+          if (err2) return res.status(500).json({ error: err2.message });
+          res.json({ sessionId: share.session_id, sharedAt: share.created_at, events: rows || [] });
+        });
     });
 });
 

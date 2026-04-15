@@ -1970,6 +1970,17 @@
                     <div class="changelog-list">
                         <div class="changelog-entry">
                             <div class="changelog-date">April 16, 2026</div>
+                            <div class="changelog-title">🔗 Shareable session URLs + E3 state consolidation</div>
+                            <ul>
+                                <li><strong>Shareable session links (G4)</strong> &mdash; click the 🔗 on any saved session to generate a public URL. Guildmates view the full read-only session without logging in. Revoke any time.</li>
+                                <li><strong>🔗 shared badge</strong> on session cards highlights which sessions currently have an active link.</li>
+                                <li>Backend: new <code>loot_session_shares</code> table + 3 endpoints. Unauth endpoint exposes only what you chose to share — no user_id, no other sessions.</li>
+                                <li>Internal: E3 live-session state consolidation &mdash; <code>liveSessionState()</code> snapshot helper + <code>resetLiveSessionFlags()</code>. No user-visible change.</li>
+                                <li>Service worker cache bumped v18 &rarr; v19.</li>
+                            </ul>
+                        </div>
+                        <div class="changelog-entry">
+                            <div class="changelog-date">April 16, 2026</div>
                             <div class="changelog-title">Tracked tab polish: days-held + break-even tick</div>
                             <ul>
                                 <li><strong>Days-held badge</strong> on open/partial tracked tabs &mdash; <code>Nd</code> next to the status. Tabs &gt;14 days get a red "stale" variant.</li>
@@ -3122,6 +3133,20 @@
             </div>
             <button class="btn-small-accent" onclick="runSessionCompare()">Compare</button>
             <div id="session-compare-body" style="margin-top:1rem;"></div>
+        </div>
+    </div>
+
+    <!-- G4: Share session modal -->
+    <div id="share-session-modal" class="modal hidden" onclick="if(event.target===this)closeShareSessionModal()">
+        <div class="modal-content" style="max-width:560px;">
+            <button class="close-btn" onclick="closeShareSessionModal()">&times;</button>
+            <h2 style="color:var(--accent); margin:0 0 0.5rem; font-size:1.1rem;">🔗 Share Session</h2>
+            <p style="color:var(--text-secondary); font-size:0.8rem; margin:0 0 0.75rem;">
+                Generate a public link anyone can view — no login required. Revoke any time.
+            </p>
+            <div id="share-session-body">
+                <div class="empty-state"><p>Loading...</p></div>
+            </div>
         </div>
     </div>
 
