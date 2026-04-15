@@ -5397,7 +5397,9 @@ function renderLootItemRows(items) {
         const iw = getItemWeight(item.itemId);
         const totalW = iw * (item.quantity || 1);
         const weightStr = totalW > 0 ? `<span class="loot-item-weight">${totalW.toFixed(1)} kg</span>` : '';
-        const crafterAttr = item.crafter ? ` data-tip-crafter="${esc(item.crafter)}"` : '';
+        // Accept both server-side naming conventions (Go: crafterName, legacy: crafter)
+        const crafter = item.crafterName || item.crafter || '';
+        const crafterAttr = crafter ? ` data-tip-crafter="${esc(crafter)}"` : '';
         const qAttr = item.quality ? ` data-tip-quality="${item.quality}"` : '';
         return `<div class="loot-item-row" onclick="toggleLootItemDetail(this, '${safeId}', ${item.quality || 1})" style="cursor:pointer;" data-tip-item="${safeId}" data-tip-source="chest"${qAttr}${crafterAttr}>
             <img src="${iconUrl}" class="loot-item-icon" loading="lazy" onerror="this.style.display='none'" alt="">
