@@ -1945,6 +1945,15 @@
                     <div class="changelog-list">
                         <div class="changelog-entry">
                             <div class="changelog-date">April 16, 2026</div>
+                            <div class="changelog-title">Loot Buyer landing + preference persistence</div>
+                            <ul>
+                                <li><strong>Loot Buyer empty-state cards</strong> &mdash; three clickable onboarding cards (capture in-game / add manually / jump to Loot Logger) replace the old flat empty message.</li>
+                                <li><strong>Sort, filter, and chip preferences persist across reloads</strong> &mdash; the Loot Logger session view remembers your last workflow.</li>
+                                <li>Service worker cache bumped v10 &rarr; v11.</li>
+                            </ul>
+                        </div>
+                        <div class="changelog-entry">
+                            <div class="changelog-date">April 16, 2026</div>
                             <div class="changelog-title">Mode pills, landing cards, bounded event queue, price cache</div>
                             <ul>
                                 <li><strong>Loot Logger mode pills</strong> &mdash; Sessions / Upload / Accountability now pill-style with badge counts (<code>Sessions (12)</code>, <code>Accountability (3)</code>).</li>
@@ -2717,10 +2726,26 @@
             <!-- Captured chests notification area -->
             <div id="loot-captures-area" style="margin-bottom:1rem;">
                 <div id="loot-captures-list"></div>
-                <div id="loot-no-captures" class="empty-state" style="padding:2rem;">
-                    <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" stroke-width="1.5" style="margin-bottom:0.5rem;"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>
-                    <p>No chest captures yet</p>
-                    <p class="hint">Open a chest in-game with the <a href="#" onclick="document.querySelector('[data-tab=profile]').click();" style="color:var(--accent);">Coldtouch Data Client</a> running, or add items manually below.</p>
+                <div id="loot-no-captures" class="empty-state" style="padding:1.25rem 0 0.5rem;">
+                    <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" stroke-width="1.5" style="margin:0 auto 0.5rem; display:block;"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>
+                    <p style="margin:0 0 0.75rem;">No chest captures yet. Pick how you want to get started:</p>
+                    <div class="ll-landing">
+                        <div class="ll-landing-card" onclick="document.querySelector('[data-tab=profile]')?.click();" title="Download the Go client to capture chests live in-game">
+                            <div class="ll-landing-icon">🎮</div>
+                            <div class="ll-landing-title">Capture chests in-game</div>
+                            <div class="ll-landing-desc">Run the Coldtouch client, open any chest — items stream here automatically.</div>
+                        </div>
+                        <div class="ll-landing-card" onclick="document.getElementById('loot-manual-toggle')?.click(); setTimeout(()=>document.getElementById('loot-manual-form')?.scrollIntoView({behavior:'smooth', block:'center'}), 100);" title="Enter items manually without the client">
+                            <div class="ll-landing-icon">✍</div>
+                            <div class="ll-landing-title">Add items manually</div>
+                            <div class="ll-landing-desc">Type in items yourself — handy for quick value checks without running the client.</div>
+                        </div>
+                        <div class="ll-landing-card" onclick="document.querySelector('[data-tab=loot-logger]')?.click();" title="View loot you've already tracked">
+                            <div class="ll-landing-icon">📋</div>
+                            <div class="ll-landing-title">Jump to Loot Logger</div>
+                            <div class="ll-landing-desc">Review past loot sessions, deaths, and accountability reports.</div>
+                        </div>
+                    </div>
                 </div>
             </div>
 

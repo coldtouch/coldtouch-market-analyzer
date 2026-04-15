@@ -6335,7 +6335,13 @@ let _llPrimaryGuild = '';          // most-common guild among looters (= "our" s
 let _llPrimaryAlliance = '';
 let _llDeathFilterVictim = null;   // when set, restricts view to that death's chain
 let _llCurrentSessionId = null;    // session_id when viewing a saved session, null for live
-let _llActiveChips = new Set();    // Phase 5 item filter chips (multi-select)
+// Phase 5 item filter chips (multi-select) — hydrated from localStorage so user choices persist
+let _llActiveChips = new Set((() => {
+    try { return JSON.parse(localStorage.getItem('albion_ll_chips') || '[]'); } catch { return []; }
+})());
+function _persistChips() {
+    try { localStorage.setItem('albion_ll_chips', JSON.stringify(Array.from(_llActiveChips))); } catch {}
+}
 
 // --- Session naming, whitelist, auto-save ---
 const LL_SESSION_NAME_KEY = 'albion_live_session_name';
@@ -7309,7 +7315,13 @@ function _llRenderFiltered() {
     const searchEl = document.getElementById('ll-search');
     const sortEl = document.getElementById('ll-sort');
     const searchVal = searchEl ? searchEl.value.toLowerCase().trim() : '';
-    const sortVal = sortEl ? sortEl.value : 'value';
+    // Persist last-used sort across reloads
+    let sortVal = sortEl ? sortEl.value : '';
+    if (!sortVal) {
+        try { sortVal = localStorage.getItem('albion_ll_sort') || 'value'; } catch { sortVal = 'value'; }
+    } else {
+        try { localStorage.setItem('albion_ll_sort', sortVal); } catch {}
+    }
 
     // Filter players by search text (match player name, guild, or any item name)
     let entries = Object.entries(byPlayer);
@@ -7385,10 +7397,12 @@ function _llRenderFiltered() {
             if (_llActiveChips.has(chip)) _llActiveChips.delete(chip);
             else _llActiveChips.add(chip);
         }
+        _persistChips();
         _llRenderFiltered();
     }
     function _llClearChips() {
         _llActiveChips.clear();
+        _persistChips();
         _llRenderFiltered();
     }
     window._llToggleChip = _llToggleChip;
@@ -7471,7 +7485,12 @@ function _llRenderFiltered() {
 
     // Search/sort/filter bar
     const filterEl = document.getElementById('ll-filter-tier');
-    const filterVal = filterEl ? filterEl.value : 'all';
+    let filterVal = filterEl ? filterEl.value : '';
+    if (!filterVal) {
+        try { filterVal = localStorage.getItem('albion_ll_filter') || 'all'; } catch { filterVal = 'all'; }
+    } else {
+        try { localStorage.setItem('albion_ll_filter', filterVal); } catch {}
+    }
     html += `<div class="ll-filter-bar">
         <div class="search-input-wrapper" style="flex:1; min-width:160px;">
             <span class="search-icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg></span>

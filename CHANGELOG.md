@@ -2,6 +2,22 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-04-16 — Loot Buyer landing + preference persistence
+
+- **Loot Buyer empty-state cards (A6)** — the "no chest captures yet"
+  panel now mirrors the Loot Logger landing: three clickable cards
+  (🎮 capture in-game · ✍ add items manually · 📋 jump to Loot Logger).
+  Each card is self-explanatory and wired to the relevant tab/action.
+- **Sort + filter preferences persist across reloads** — the Loot
+  Logger session view remembers your last-used sort (`value/items/
+  weight/name`), tier filter (`All/T5+/T6+/No Bags`), and active chip
+  set (`T6+`, `🗡 Weapons`, `💎 >100k`, etc.) in localStorage. Reload
+  the page and your workflow is right back where you left it.
+
+Service worker cache bumped `v10` → `v11`.
+
+---
+
 ### 2026-04-16 — Mode pills, landing cards, bounded event queue, price cache
 
 - **Loot Logger mode pills (D2)** — replaces the three flat mode
