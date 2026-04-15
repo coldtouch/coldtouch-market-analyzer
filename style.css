@@ -1201,6 +1201,23 @@ select:focus {
 .trip-tab-net.gain { color: var(--profit-green); }
 .trip-tab-net.loss { color: var(--loss-red); }
 
+/* G4 follow-up: shared-sessions banner above session list */
+.ll-shared-banner {
+    background: rgba(212, 175, 55, 0.1);
+    border: 1px solid rgba(212, 175, 55, 0.3);
+    border-radius: var(--radius);
+    padding: 0.55rem 0.85rem;
+    margin-bottom: 0.75rem;
+    font-size: 0.82rem;
+    color: var(--text-primary);
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    flex-wrap: wrap;
+}
+.ll-shared-banner strong { color: var(--accent); }
+.ll-shared-banner-hint { color: var(--text-muted); font-size: 0.72rem; }
+
 /* G6: Per-player trend line on Loot Logger player cards */
 .ll-player-trend {
     display: block;

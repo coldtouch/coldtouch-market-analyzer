@@ -7207,6 +7207,14 @@ async function loadLootSessions() {
         lootSessions = data.sessions || [];
 
         let html = '';
+        // G4 follow-up: banner when any sessions have active share links
+        const sharedCount = lootSessions.filter(s => !!s.public_token).length;
+        if (sharedCount > 0) {
+            html += `<div class="ll-shared-banner" title="Manage each share link from its session card">
+                🔗 <strong>${sharedCount}</strong> of your session${sharedCount !== 1 ? 's are' : ' is'} shared publicly
+                <span class="ll-shared-banner-hint">— anyone with the link can view</span>
+            </div>`;
+        }
         // Show live session card if events are accumulated
         if (liveLootEvents.length > 0) {
             const players = new Set(liveLootEvents.map(e => e.looted_by_name || e.lootedBy?.name || '')).size;
