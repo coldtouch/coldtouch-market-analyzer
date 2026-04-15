@@ -2,6 +2,22 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-04-16 — About shortcuts card + session .txt export
+
+- **Keyboard Shortcuts reference** on the About tab — a clean two-
+  column card listing every shortcut (Ctrl+K, Ctrl+Shift+T,
+  Ctrl+Shift+C, Esc, and the Loot Logger-specific E/C/F/W/?). Each
+  shortcut shows a proper keycap-styled `<kbd>` next to its description.
+- **Export session as `.txt`** — the session summary strip now has
+  a `.txt` button next to the existing CSV button. Exports in the
+  exact 10-column ao-loot-logger format so you can upload the file
+  into other tools or save it as a long-term archive. Death events
+  are filtered out of the .txt (same as the official format).
+
+Service worker cache bumped `v16` → `v17`.
+
+---
+
 ### 2026-04-16 — Recent sales search, shortcut hint, two bug fixes
 
 - **Recent sales search** — filter the Loot Buyer sales feed by item

@@ -7749,6 +7749,7 @@ function _llRenderFiltered() {
                 </div>
             </div>
             <button class="btn-small" onclick="exportLootSession()" title="Export to CSV">CSV</button>
+            <button class="btn-small" onclick="exportLootSessionTxt()" title="Export as .txt in ao-loot-logger format">.txt</button>
             ${_llCurrentSessionId
                 ? `<button class="btn-small-accent" onclick="runAccountabilityForSession('${esc(_llCurrentSessionId)}')" title="Cross-reference this session against chest deposits">✓ Accountability</button>`
                 : ''}
@@ -11193,6 +11194,39 @@ function exportArbitrageCSV() {
         sell_updated: t.dateSell || ''
     }));
     exportToCSV(rows, `arbitrage-${new Date().toISOString().slice(0, 10)}.csv`);
+}
+
+// Export the currently viewed session as an ao-loot-logger compatible .txt file.
+// Format: 10 semicolon-delimited columns with header row — exact match so
+// re-uploading round-trips cleanly.
+function exportLootSessionTxt() {
+    const events = _llCurrentEvents;
+    if (!events || events.length === 0) { showToast('No session data to export', 'warn'); return; }
+    const header = 'timestamp_utc;looted_by__alliance;looted_by__guild;looted_by__name;item_id;item_name;quantity;looted_from__alliance;looted_from__guild;looted_from__name';
+    const rows = events.filter(e => e.item_id !== '__DEATH__').map(e => {
+        const ts = new Date(e.timestamp || Date.now()).toISOString();
+        const byA = e.looted_by_alliance || '';
+        const byG = e.looted_by_guild || '';
+        const byN = e.looted_by_name || '';
+        const itemId = e.item_id || '';
+        const itemName = getFriendlyName(itemId) || itemId;
+        const qty = e.quantity || 1;
+        const frA = e.looted_from_alliance || '';
+        const frG = e.looted_from_guild || '';
+        const frN = e.looted_from_name || '';
+        return [ts, byA, byG, byN, itemId, itemName, qty, frA, frG, frN].join(';');
+    });
+    if (rows.length === 0) { showToast('Session only contains deaths — nothing to export in .txt format', 'warn'); return; }
+    const content = header + '\n' + rows.join('\n');
+    const blob = new Blob([content], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    const slug = (liveSessionName || 'loot-session').replace(/[^a-z0-9]+/gi, '-').toLowerCase().slice(0, 40);
+    a.download = `${slug}-${new Date().toISOString().slice(0, 10)}.txt`;
+    a.click();
+    URL.revokeObjectURL(url);
+    showToast(`Exported ${rows.length} events as .txt`, 'success');
 }
 
 function exportLootSession() {

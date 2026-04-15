@@ -1938,11 +1938,45 @@
                     </div>
                 </div>
 
+                <!-- Keyboard Shortcuts Reference -->
+                <div class="about-section">
+                    <h2 class="about-heading">Keyboard Shortcuts</h2>
+                    <p style="color:var(--text-secondary); font-size:0.85rem; margin:0 0 1rem;">
+                        Power-user shortcuts for faster navigation. Shortcuts don't fire while typing in a text field.
+                    </p>
+                    <div class="shortcuts-grid">
+                        <div class="shortcut-group">
+                            <h3 class="shortcut-group-title">Global (any tab)</h3>
+                            <div class="shortcut-row"><kbd>Ctrl+K</kbd><span>Open command palette (items + tabs search)</span></div>
+                            <div class="shortcut-row"><kbd>Ctrl+Shift+T</kbd><span>Open Trip Summary</span></div>
+                            <div class="shortcut-row"><kbd>Ctrl+Shift+C</kbd><span>Open Compare Sessions</span></div>
+                            <div class="shortcut-row"><kbd>Esc</kbd><span>Close any open modal</span></div>
+                        </div>
+                        <div class="shortcut-group">
+                            <h3 class="shortcut-group-title">Loot Logger tab</h3>
+                            <div class="shortcut-row"><kbd>?</kbd><span>Show loot logger help</span></div>
+                            <div class="shortcut-row"><kbd>E</kbd><span>Expand all player cards</span></div>
+                            <div class="shortcut-row"><kbd>C</kbd><span>Collapse all player cards</span></div>
+                            <div class="shortcut-row"><kbd>F</kbd><span>Focus the search box</span></div>
+                            <div class="shortcut-row"><kbd>W</kbd><span>Open the whitelist modal</span></div>
+                        </div>
+                    </div>
+                </div>
+
                 <!-- Changelog Section -->
                 <div class="about-section">
                     <h2 class="about-heading">Changelog</h2>
                     <div id="changelog-wrapper" style="max-height: 500px; overflow-y: auto; position: relative;">
                     <div class="changelog-list">
+                        <div class="changelog-entry">
+                            <div class="changelog-date">April 16, 2026</div>
+                            <div class="changelog-title">Shortcuts reference card + session .txt export</div>
+                            <ul>
+                                <li><strong>About tab:</strong> new Keyboard Shortcuts reference card with every shortcut in one place (global + Loot Logger specific).</li>
+                                <li><strong>Session <code>.txt</code> export</strong> in ao-loot-logger format &mdash; round-trips cleanly with other tools.</li>
+                                <li>Service worker cache bumped v16 &rarr; v17.</li>
+                            </ul>
+                        </div>
                         <div class="changelog-entry">
                             <div class="changelog-date">April 16, 2026</div>
                             <div class="changelog-title">Recent sales search, shortcut hint, bug fixes</div>
