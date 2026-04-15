@@ -6627,6 +6627,7 @@ let _llPrimaryGuild = '';          // most-common guild among looters (= "our" s
 let _llPrimaryAlliance = '';
 let _llDeathFilterVictim = null;   // when set, restricts view to that death's chain
 let _llCurrentSessionId = null;    // session_id when viewing a saved session, null for live
+let _llPlayerTrends = {};          // G6: per-player cross-session stats, keyed by name
 // Phase 5 item filter chips (multi-select) — hydrated from localStorage so user choices persist
 let _llActiveChips = new Set((() => {
     try { return JSON.parse(localStorage.getItem('albion_ll_chips') || '[]'); } catch { return []; }
@@ -7634,6 +7635,25 @@ async function renderLootSessionEvents(events, targetEl, depositedMap) {
     _llPrimaryGuild = primaryGuild;
     _llPrimaryAlliance = primaryAlliance;
     _llDeaths = buildDeathTimeline(events, byPlayer, priceMap, primaryGuild, primaryAlliance);
+    // G6: fetch per-player trends across all of this user's saved sessions
+    // (fire-and-forget — if it's slow, we re-render when it arrives)
+    _llPlayerTrends = {};
+    const playerNames = Object.keys(byPlayer);
+    if (playerNames.length > 0 && localStorage.getItem('albion_auth_token')) {
+        fetch(`${VPS_BASE}/api/player-trends-bulk`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', ...authHeaders() },
+            body: JSON.stringify({ names: playerNames })
+        })
+        .then(r => r.ok ? r.json() : null)
+        .then(d => {
+            if (d?.trends) {
+                _llPlayerTrends = d.trends;
+                _llRenderFiltered();
+            }
+        })
+        .catch(() => { /* silent — card just won't show trends */ });
+    }
     // Reset death filter when loading a new session
     _llDeathFilterVictim = null;
 
@@ -8019,6 +8039,21 @@ function _llRenderFiltered() {
             roleTag = '<span style="font-size:0.6rem; padding:0.1rem 0.35rem; background:rgba(160,160,184,0.18); color:var(--text-muted); border-radius:8px; margin-left:0.3rem;">Unknown</span>';
         }
 
+        // G6: per-player trend line (only shown if we have data for this name)
+        const trend = _llPlayerTrends[name];
+        let trendLine = '';
+        if (trend && trend.sessionCount > 1) {
+            const parts = [];
+            parts.push(`${trend.sessionCount} session${trend.sessionCount !== 1 ? 's' : ''}`);
+            if (trend.itemsTotal > 0) parts.push(`${trend.itemsTotal.toLocaleString()} items lifetime`);
+            if (trend.deaths > 0) parts.push(`💀 ${trend.deaths}`);
+            if (trend.lastSeen) {
+                const days = Math.floor((Date.now() - trend.lastSeen) / 86400000);
+                if (days >= 1) parts.push(`last seen ${days}d ago`);
+            }
+            trendLine = `<div class="ll-player-trend" title="Aggregated across all of your saved loot sessions">📊 ${parts.join(' · ')}</div>`;
+        }
+
         return `<div class="${cardClass}">
             <div class="ll-player-header" onclick="this.closest('.ll-player-card').classList.toggle('expanded')">
                 <button class="ll-remove-player" onclick="event.stopPropagation();_llRemovedPlayers.add('${esc(name)}');_llRenderFiltered()" title="Remove player from view" aria-label="Remove ${esc(name)} from view">&times;</button>
@@ -8028,6 +8063,7 @@ function _llRenderFiltered() {
                     ${data.gotKills ? '<span title="Got kills during session" style="color:var(--profit-green); margin-left:0.2rem;">⚔️</span>' : ''}
                     ${roleTag}
                     ${data.guild ? `<span class="ll-player-guild" style="color:${guildColorMap[data.guild]}">[${esc(data.guild)}]</span>` : ''}
+                    ${trendLine}
                 </div>
                 <div class="ll-item-preview">${iconStripHtml}</div>
                 <div class="ll-player-stats">

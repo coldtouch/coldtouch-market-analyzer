@@ -1201,6 +1201,17 @@ select:focus {
 .trip-tab-net.gain { color: var(--profit-green); }
 .trip-tab-net.loss { color: var(--loss-red); }
 
+/* G6: Per-player trend line on Loot Logger player cards */
+.ll-player-trend {
+    display: block;
+    font-size: 0.66rem;
+    color: var(--text-muted);
+    margin-top: 0.2rem;
+    letter-spacing: 0.01em;
+    line-height: 1.35;
+    width: 100%;
+}
+
 /* G4: Shared session badge + public-share overlay */
 .ll-session-shared-badge {
     font-size: 0.62rem;

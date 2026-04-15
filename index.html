@@ -1970,6 +1970,16 @@
                     <div class="changelog-list">
                         <div class="changelog-entry">
                             <div class="changelog-date">April 16, 2026</div>
+                            <div class="changelog-title">📊 Per-player trends across saved sessions (G6)</div>
+                            <ul>
+                                <li>Every player card now shows a compact lifetime trend line when the player has appeared in 2+ of your saved sessions: <em>"📊 8 sessions &middot; 1,250 items lifetime &middot; 💀 3 &middot; last seen 2d ago"</em>.</li>
+                                <li>Great for officer-level context &mdash; who's a consistent contributor, who's a recurring enemy, how recently someone was last seen.</li>
+                                <li>New backend endpoint <code>POST /api/player-trends-bulk</code> aggregates stats in one roundtrip per session.</li>
+                                <li>Service worker cache bumped v19 &rarr; v20.</li>
+                            </ul>
+                        </div>
+                        <div class="changelog-entry">
+                            <div class="changelog-date">April 16, 2026</div>
                             <div class="changelog-title">🔗 Shareable session URLs + E3 state consolidation</div>
                             <ul>
                                 <li><strong>Shareable session links (G4)</strong> &mdash; click the 🔗 on any saved session to generate a public URL. Guildmates view the full read-only session without logging in. Revoke any time.</li>

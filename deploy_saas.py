@@ -1868,6 +1868,56 @@ app.post('/api/loot-session/:sessionId/unshare', requireAuth, (req, res) => {
     });
 });
 
+// G6: Bulk per-player trends across the user's saved sessions.
+// POST { names: ["Coldtouch","Ally2",...] } → { "Coldtouch": {stats}, ... }
+// Used by the session view to inject trend data into each player card in one roundtrip.
+app.post('/api/player-trends-bulk', requireAuth, (req, res) => {
+  const { names } = req.body;
+  if (!Array.isArray(names) || names.length === 0) {
+    return res.status(400).json({ error: 'names[] required' });
+  }
+  // Clamp input size
+  const cleaned = names.filter(n => typeof n === 'string' && n.length > 0 && n.length <= 64).slice(0, 200);
+  if (cleaned.length === 0) return res.json({ trends: {} });
+  // Single aggregation: per player, count distinct sessions, items, deaths, last seen
+  const placeholders = cleaned.map(() => '?').join(',');
+  const sql = `
+    SELECT looted_by_name as name,
+           COUNT(DISTINCT session_id) as session_count,
+           SUM(CASE WHEN item_id != '__DEATH__' THEN quantity ELSE 0 END) as items_total,
+           SUM(CASE WHEN item_id = '__DEATH__' AND looted_from_name = looted_by_name THEN 0 ELSE 0 END) as _unused,
+           MAX(timestamp) as last_seen
+    FROM loot_events
+    WHERE user_id = ? AND looted_by_name IN (${placeholders}) AND item_id != '__DEATH__'
+    GROUP BY looted_by_name`;
+  // Separately count deaths (where the player was the VICTIM, not the looter)
+  const deathsSql = `
+    SELECT looted_from_name as name, COUNT(*) as deaths
+    FROM loot_events
+    WHERE user_id = ? AND item_id = '__DEATH__' AND looted_from_name IN (${placeholders})
+    GROUP BY looted_from_name`;
+  db.all(sql, [req.user.id, ...cleaned], (err, rows) => {
+    if (err) return res.status(500).json({ error: err.message });
+    db.all(deathsSql, [req.user.id, ...cleaned], (err2, deathRows) => {
+      if (err2) return res.status(500).json({ error: err2.message });
+      const trends = {};
+      for (const r of rows || []) {
+        trends[r.name] = {
+          sessionCount: r.session_count || 0,
+          itemsTotal: r.items_total || 0,
+          deaths: 0,
+          lastSeen: r.last_seen || 0
+        };
+      }
+      for (const d of deathRows || []) {
+        if (trends[d.name]) trends[d.name].deaths = d.deaths;
+        else trends[d.name] = { sessionCount: 0, itemsTotal: 0, deaths: d.deaths, lastSeen: 0 };
+      }
+      res.json({ trends });
+    });
+  });
+});
+
 // G4: Public read-only view — unauthenticated, token-based access.
 // Returns session metadata + events without exposing the owner's user_id.
 // Clamped to 5000 events per session to keep public responses bounded.

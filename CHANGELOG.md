@@ -2,6 +2,32 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-04-16 — Per-player trends (G6)
+
+Every player card in the Loot Logger session view now shows a compact
+cross-session trend line when the player has appeared in more than one
+of your saved sessions:
+
+> `📊 8 sessions · 1,250 items lifetime · 💀 3 · last seen 2d ago`
+
+Great for officers: glance at a player card and see "this guildmate has
+looted with us 15 times, died twice total, last seen yesterday" — or
+for enemies, see "this scout has ganked us 4 times this week."
+
+**Backend:** new endpoint `POST /api/player-trends-bulk` aggregates
+sessions, items, deaths, and last-seen timestamp across the authed
+user's saved `loot_events`. Input capped at 200 names and 64 chars
+per name so it can't be abused. One roundtrip per session view.
+
+**Frontend:** `_llPlayerTrends` map populates async after
+`renderLootSessionEvents` kicks off, triggers a re-render when the
+response arrives so trends fade in without blocking the initial paint.
+Threshold of 2+ sessions avoids cluttering cards for one-time appearances.
+
+Service worker cache bumped `v19` → `v20`.
+
+---
+
 ### 2026-04-16 — Shareable session URLs (G4) + E3 state consolidation
 
 **G4 — Shareable read-only session URLs:**
