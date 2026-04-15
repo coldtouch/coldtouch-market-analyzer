@@ -5350,7 +5350,13 @@ function selectLootCaptureUI(titleText, items) {
     window._lootSelectedItems = items;
     window._lootSelectedTitle = titleText;
 
-    // Build a single collapsible card with summary, search, and expandable item grid
+    // Restore chip state from localStorage (persists across captures)
+    const savedChips = (() => {
+        try { return JSON.parse(localStorage.getItem('albion_buyer_chips') || '[]'); } catch { return []; }
+    })();
+    window._lootSelectedChips = new Set(savedChips);
+
+    // Build a single collapsible card with summary, search, chips, and expandable item grid
     list.innerHTML = `
         <div class="loot-items-card expanded">
             <div class="loot-items-header" onclick="this.parentElement.classList.toggle('expanded')">
@@ -5364,30 +5370,95 @@ function selectLootCaptureUI(titleText, items) {
                 <div class="loot-items-search-wrap">
                     <input type="text" id="loot-items-search" class="sale-form-input" placeholder="Search items in this tab..." style="font-size:0.8rem;">
                 </div>
+                <div class="ll-filter-chips" id="loot-buyer-chips" onclick="event.stopPropagation();"></div>
                 <div id="loot-items-rows">
                     ${renderLootItemRows(items)}
                 </div>
             </div>
         </div>`;
+    _renderLootBuyerChips();
+    _applyLootBuyerFilter();
 
-    // Wire search filter
+    // Wire search filter (chip-aware)
     const searchInput = document.getElementById('loot-items-search');
-    if (searchInput) {
-        searchInput.addEventListener('input', () => {
-            const q = searchInput.value.toLowerCase().trim();
-            const filtered = q ? items.filter(item => {
-                const name = (getFriendlyName(item.itemId) || item.itemId).toLowerCase();
-                const id = item.itemId.toLowerCase();
-                return name.includes(q) || id.includes(q);
-            }) : items;
-            document.getElementById('loot-items-rows').innerHTML = renderLootItemRows(filtered);
-            // Update count in header
-            const statsEl = list.querySelector('.loot-items-stats');
-            if (statsEl) {
-                const eq = filtered.filter(it => it.isEquipment).length;
-                statsEl.textContent = `${filtered.length}/${items.length} items` + (q ? ' (filtered)' : ` \u2022 ${eq}\u2694 ${filtered.length - eq}\uD83D\uDCE6`);
-            }
-        });
+    if (searchInput) searchInput.addEventListener('input', _applyLootBuyerFilter);
+}
+
+// Phase 1 filter chips — same UX as the Loot Logger chips
+function _getLootBuyerChipDef() {
+    return [
+        { id: 't6+', label: 'T6+' },
+        { id: 't7+', label: 'T7+' },
+        { id: 't8+', label: 'T8+' },
+        { id: 'weapons', label: '🗡 Weapons' },
+        { id: 'bags', label: '🎒 Bags' },
+        { id: 'equipment', label: '⚔ Equipment only' }
+    ];
+}
+function _renderLootBuyerChips() {
+    const container = document.getElementById('loot-buyer-chips');
+    if (!container) return;
+    const active = window._lootSelectedChips || new Set();
+    const chipHtml = _getLootBuyerChipDef().map(c => {
+        return `<button class="ll-filter-chip${active.has(c.id) ? ' active' : ''}" onclick="event.stopPropagation(); _toggleLootBuyerChip('${c.id}')" data-chip="${c.id}">${c.label}</button>`;
+    }).join('');
+    const clearHtml = active.size > 0
+        ? `<button class="ll-filter-chip ll-chip-clear" onclick="event.stopPropagation(); _clearLootBuyerChips()" title="Clear item filters">✕ clear</button>`
+        : '';
+    container.innerHTML = chipHtml + clearHtml;
+}
+function _toggleLootBuyerChip(chip) {
+    const active = window._lootSelectedChips || new Set();
+    // Tier chips are mutually exclusive
+    if (['t6+', 't7+', 't8+'].includes(chip)) {
+        const wasActive = active.has(chip);
+        ['t6+', 't7+', 't8+'].forEach(c => active.delete(c));
+        if (!wasActive) active.add(chip);
+    } else {
+        if (active.has(chip)) active.delete(chip);
+        else active.add(chip);
+    }
+    window._lootSelectedChips = active;
+    try { localStorage.setItem('albion_buyer_chips', JSON.stringify(Array.from(active))); } catch {}
+    _renderLootBuyerChips();
+    _applyLootBuyerFilter();
+}
+function _clearLootBuyerChips() {
+    window._lootSelectedChips = new Set();
+    try { localStorage.removeItem('albion_buyer_chips'); } catch {}
+    _renderLootBuyerChips();
+    _applyLootBuyerFilter();
+}
+function _applyLootBuyerFilter() {
+    const items = window._lootSelectedItems || [];
+    const rows = document.getElementById('loot-items-rows');
+    if (!rows) return;
+    const searchInput = document.getElementById('loot-items-search');
+    const q = (searchInput?.value || '').toLowerCase().trim();
+    const active = window._lootSelectedChips || new Set();
+    const getTier = (id) => { const m = (id || '').match(/^T(\d)/); return m ? parseInt(m[1]) : 0; };
+    const isWeapon = (id) => /^T\d_(MAIN|2H|OFF)_/i.test(id || '');
+    const isBag = (id) => /^T\d_BAG/i.test(id || '');
+    const filtered = items.filter(item => {
+        const name = (getFriendlyName(item.itemId) || item.itemId).toLowerCase();
+        if (q && !name.includes(q) && !item.itemId.toLowerCase().includes(q)) return false;
+        const tierChips = ['t8+', 't7+', 't6+'].filter(c => active.has(c));
+        if (tierChips.length > 0) {
+            const minTier = parseInt(tierChips[0][1]);
+            if (getTier(item.itemId) < minTier) return false;
+        }
+        if (active.has('weapons') && !isWeapon(item.itemId)) return false;
+        if (active.has('bags') && !isBag(item.itemId)) return false;
+        if (active.has('equipment') && !item.isEquipment) return false;
+        return true;
+    });
+    rows.innerHTML = renderLootItemRows(filtered);
+    // Update header count
+    const statsEl = document.querySelector('.loot-items-stats');
+    if (statsEl) {
+        const eq = filtered.filter(it => it.isEquipment).length;
+        const filterActive = q || active.size > 0;
+        statsEl.textContent = `${filtered.length}/${items.length} items` + (filterActive ? ' (filtered)' : ` \u2022 ${eq}\u2694 ${filtered.length - eq}\uD83D\uDCE6`);
     }
 }
 
@@ -5819,14 +5890,16 @@ function buildSellPlan(items) {
     return { trips: sortedTrips, noData, suggestedRoute: orderedRoute.length > 1 ? orderedRoute : null };
 }
 
-// Copy text for a single trip (called from inline button via dataset id)
+// Copy text for a single trip — routes through the copy-preview modal so
+// users can tweak the text (add notes, trim items) before it hits clipboard.
 function copySellTrip(tripId) {
     const el = document.getElementById(tripId);
     if (!el) return;
-    navigator.clipboard.writeText(el.dataset.copytext || '').then(() => {
-        const btn = el.querySelector('.loot-copy-btn');
-        if (btn) { btn.textContent = 'Copied!'; setTimeout(() => { btn.textContent = 'Copy List'; }, 2000); }
-    });
+    const text = el.dataset.copytext || '';
+    if (!text) { showToast('Nothing to copy', 'warn'); return; }
+    const titleEl = el.querySelector('.sell-trip-title');
+    const tripTitle = titleEl?.textContent?.trim() || 'Sell Trip';
+    openCopyPreview(`Preview — ${tripTitle}`, text, `${tripTitle} copied`);
 }
 
 function renderSellPlan(data, container) {
@@ -11690,10 +11763,27 @@ function _llShowShortcutHelp() {
             <div class="ll-shortcut-row"><kbd>W</kbd><span>Open whitelist modal</span></div>
             <div class="ll-shortcut-row"><kbd>Esc</kbd><span>Close any open modal / clear death filter</span></div>
             <div class="ll-shortcut-row"><kbd>?</kbd><span>Show this help</span></div>
+            <div class="ll-shortcut-row" style="border-top:1px dashed var(--border-color); margin-top:0.4rem; padding-top:0.55rem;"><kbd>Ctrl+Shift+T</kbd><span>Trip Summary (any tab)</span></div>
+            <div class="ll-shortcut-row"><kbd>Ctrl+Shift+C</kbd><span>Compare Sessions (any tab)</span></div>
             <p style="font-size:0.72rem; color:var(--text-muted); margin:0.75rem 0 0;">Shortcuts don't fire while typing in a text field.</p>
         </div>`;
     document.body.appendChild(modal);
 }
+
+// Global cross-tab shortcuts — work anywhere in the app
+document.addEventListener('keydown', (e) => {
+    // Ctrl+Shift+T opens Trip Summary, Ctrl+Shift+C opens Compare Sessions
+    if (!(e.ctrlKey || e.metaKey) || !e.shiftKey) return;
+    const t = e.target;
+    if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+    if (e.key === 'T' || e.key === 't') {
+        e.preventDefault();
+        if (typeof openTripSummary === 'function') openTripSummary();
+    } else if (e.key === 'C' || e.key === 'c') {
+        e.preventDefault();
+        if (typeof openSessionCompare === 'function') openSessionCompare();
+    }
+});
 
 document.addEventListener('keydown', (e) => {
     // Skip when focused on an input/textarea/contenteditable, or modifier combos

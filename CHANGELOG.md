@@ -2,6 +2,27 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-04-16 — Phase 1 chips, per-trip Discord, global shortcuts
+
+- **Phase 1 filter chips on captured item list** — new multi-select
+  chip bar above the items grid: `T6+ / T7+ / T8+ / 🗡 Weapons /
+  🎒 Bags / ⚔ Equipment only`. Tier chips mutually exclusive, category
+  chips stack, clear pill appears when any chip is active. Chip state
+  persists in localStorage across captures so your workflow is stable.
+  The existing search bar and chips filter together (AND logic).
+- **Per-trip Discord copy (Phase 2)** — the existing `Copy List` button
+  on each sell-plan trip card now routes through the same edit-preview
+  modal the other Discord copies use. You can trim the list or add a
+  note ("for X buyer in Caerleon") before it lands in clipboard.
+- **Global shortcuts `Ctrl+Shift+T` and `Ctrl+Shift+C`** — open Trip
+  Summary and Compare Sessions from any tab. Works anywhere outside
+  of text inputs. Added to the in-app shortcut help (`?` key) under a
+  dedicated section.
+
+Service worker cache bumped `v13` → `v14`.
+
+---
+
 ### 2026-04-16 — Recent Sales → Discord
 
 - **Copy Recent Sales to Discord** — new 📋 button next to the Recent
