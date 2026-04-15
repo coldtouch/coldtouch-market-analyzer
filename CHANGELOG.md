@@ -2,6 +2,28 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-04-16 — Session compare, favorite items highlight, global drop zone
+
+- **Compare Sessions (G2)** — new menu entry in the Loot Tools dropdown.
+  Pick two saved sessions from dropdowns, click Compare, see them
+  side-by-side: events, items, players, deaths, duration, est. value
+  — all with gain/loss deltas. Top 3 looters per session shown below
+  the stat table.
+- **Favorite items highlight (G12)** — items that appear in any of
+  your Favorites lists now get a 📌 badge on both Loot Logger and
+  Loot Buyer item rows. Loot Buyer rows also get a subtle gold left
+  border accent. Uses the existing `albion_favorites` localStorage
+  key — no new storage.
+- **Global drop zone (F4)** — drag a `.txt` loot log onto any page
+  and a full-screen overlay invites you to drop. Releases into the
+  Loot Logger upload pipeline regardless of which tab you're on. The
+  existing Loot Logger drop zone still works as-is for
+  upload-tab-specific use.
+
+Service worker cache bumped `v8` → `v9`.
+
+---
+
 ### 2026-04-16 — Trip Summary, verdict reasoning, sale cross-reference
 
 - **Trip Summary (G14)** — new menu entry in the Loot Tools dropdown.

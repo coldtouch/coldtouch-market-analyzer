@@ -357,6 +357,7 @@
                     <button class="nav-tab" data-tab="loot-buyer">Loot Buyer</button>
                     <button class="nav-tab" data-tab="loot-logger">Loot Logger</button>
                     <button class="nav-tab nav-tab-action" onclick="event.preventDefault(); openTripSummary(); this.closest('.nav-dropdown')?.classList.remove('show');" title="Today's running totals from Loot Logger + Loot Buyer">📊 Trip Summary</button>
+                    <button class="nav-tab nav-tab-action" onclick="event.preventDefault(); openSessionCompare(); this.closest('.nav-dropdown')?.classList.remove('show');" title="Pick two saved sessions and see them side-by-side">⚖ Compare Sessions</button>
                 </div>
             </div>
             <!-- Game Tools group -->
@@ -1944,6 +1945,16 @@
                     <div class="changelog-list">
                         <div class="changelog-entry">
                             <div class="changelog-date">April 16, 2026</div>
+                            <div class="changelog-title">Session compare, favorite items, global drop zone</div>
+                            <ul>
+                                <li><strong>⚖ Compare Sessions</strong> in the Loot Tools dropdown &mdash; pick two saved sessions, see events / items / players / deaths / duration / value side-by-side with gain/loss deltas + top looters per side.</li>
+                                <li><strong>📌 Favorite items</strong> &mdash; items in any of your Favorites lists now show a pin badge on both Loot Logger and Loot Buyer item rows.</li>
+                                <li><strong>Global drop zone</strong> &mdash; drag a .txt loot log anywhere on the page and a full-screen drop target appears. Files import into Loot Logger automatically.</li>
+                                <li>Service worker cache bumped v8 &rarr; v9.</li>
+                            </ul>
+                        </div>
+                        <div class="changelog-entry">
+                            <div class="changelog-date">April 16, 2026</div>
                             <div class="changelog-title">Trip Summary, verdict reasoning, sale cross-reference</div>
                             <ul>
                                 <li><strong>📊 Trip Summary</strong> in the Loot Tools dropdown &mdash; cross-feature dashboard with 24h / 7d / all-time window picker pulling sessions, tracked tabs, revenue, and recent sales.</li>
@@ -2907,6 +2918,36 @@
     </button>
 
     <!-- ====== FEEDBACK MODAL ====== -->
+    <!-- F4: Page-wide drop overlay for .txt loot log imports -->
+    <div id="global-drop-overlay" class="hidden">
+        <div class="global-drop-box">
+            <div style="font-size:2rem; margin-bottom:0.5rem;">📥</div>
+            <div class="global-drop-title">Drop loot log</div>
+            <div class="global-drop-sub">.txt file from ao-loot-logger or Go client</div>
+        </div>
+    </div>
+
+    <!-- Session Compare modal (G2) -->
+    <div id="session-compare-modal" class="modal hidden" onclick="if(event.target===this)closeSessionCompare()">
+        <div class="modal-content" style="max-width:880px;">
+            <button class="close-btn" onclick="closeSessionCompare()">&times;</button>
+            <h2 style="color:var(--accent); margin:0 0 0.5rem; font-size:1.1rem;">⚖ Compare Sessions</h2>
+            <p style="color:var(--text-secondary); font-size:0.78rem; margin:0 0 0.75rem;">Pick two saved sessions to see their stats side-by-side with deltas.</p>
+            <div style="display:grid; grid-template-columns:1fr 1fr; gap:0.75rem; margin-bottom:0.75rem;">
+                <div>
+                    <label style="font-size:0.72rem; color:var(--text-muted); display:block; margin-bottom:0.25rem;">Session A</label>
+                    <select id="compare-session-a" class="transport-select" style="width:100%;"><option value="">-- pick --</option></select>
+                </div>
+                <div>
+                    <label style="font-size:0.72rem; color:var(--text-muted); display:block; margin-bottom:0.25rem;">Session B</label>
+                    <select id="compare-session-b" class="transport-select" style="width:100%;"><option value="">-- pick --</option></select>
+                </div>
+            </div>
+            <button class="btn-small-accent" onclick="runSessionCompare()">Compare</button>
+            <div id="session-compare-body" style="margin-top:1rem;"></div>
+        </div>
+    </div>
+
     <!-- Trip Summary modal — cross-feature daily dashboard (G14) -->
     <div id="trip-summary-modal" class="modal hidden" onclick="if(event.target===this)closeTripSummary()">
         <div class="modal-content" style="max-width:720px;">

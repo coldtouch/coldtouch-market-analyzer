@@ -5392,6 +5392,7 @@ function selectLootCaptureUI(titleText, items) {
 }
 
 function renderLootItemRows(items) {
+    const favs = getAllFavoriteItemIds();
     return items.map((item, i) => {
         const qualName = item.quality > 1 ? ` q${item.quality}` : '';
         const iconUrl = `https://render.albiononline.com/v1/item/${encodeURIComponent(item.itemId)}.png?quality=${item.quality}`;
@@ -5404,9 +5405,12 @@ function renderLootItemRows(items) {
         const crafter = item.crafterName || item.crafter || '';
         const crafterAttr = crafter ? ` data-tip-crafter="${esc(crafter)}"` : '';
         const qAttr = item.quality ? ` data-tip-quality="${item.quality}"` : '';
-        return `<div class="loot-item-row" onclick="toggleLootItemDetail(this, '${safeId}', ${item.quality || 1})" style="cursor:pointer;" data-tip-item="${safeId}" data-tip-source="chest"${qAttr}${crafterAttr}>
+        const isFav = favs.has(item.itemId);
+        const favBadge = isFav ? ' <span class="ll-fav-badge" title="In your favorites" data-tip="In your favorites list">📌</span>' : '';
+        const favClass = isFav ? ' loot-item-favorite' : '';
+        return `<div class="loot-item-row${favClass}" onclick="toggleLootItemDetail(this, '${safeId}', ${item.quality || 1})" style="cursor:pointer;" data-tip-item="${safeId}" data-tip-source="chest"${qAttr}${crafterAttr}>
             <img src="${iconUrl}" class="loot-item-icon" loading="lazy" onerror="this.style.display='none'" alt="">
-            <span class="loot-item-name">${esc(name)}${qualName}</span>
+            <span class="loot-item-name">${esc(name)}${qualName}${favBadge}</span>
             ${weightStr}
             <span class="loot-item-qty">x${item.quantity}</span>
         </div>`;
@@ -7502,6 +7506,9 @@ function _llRenderFiltered() {
             }
         }
 
+        // G12: cache the favorites lookup outside the map so it's computed once per player card
+        const favs = getAllFavoriteItemIds();
+
         // A5: identify the highest-value item so we can flag it with a ⭐
         const filteredItems = data.items.filter(ev => passesItemFilter(ev.item_id, filterVal, ev));
         let topValueEv = null;
@@ -7538,6 +7545,11 @@ function _llRenderFiltered() {
             const soldBadge = wasSold
                 ? ` <span class="ll-sold-badge" data-tip="Matching item sold recently (check Loot Buyer recent sales)" title="Sold recently">💰</span>`
                 : '';
+            // G12: favorite item badge
+            const isFavorite = favs.has(ev.item_id);
+            const favBadge = isFavorite
+                ? ` <span class="ll-fav-badge" data-tip="In your favorites list" title="Favorite">📌</span>`
+                : '';
 
             // Accountability or death coloring
             let rowClass = '', dotClass = 'll-dot-none';
@@ -7556,7 +7568,7 @@ function _llRenderFiltered() {
             const valAttr = unitVal ? ` data-tip-value="${unitVal}"` : '';
             return `<div class="ll-item-row ll-item-clickable ${rowClass}" onclick="event.stopPropagation(); switchToBrowser('${esc(iconId)}')" title="View in Market Browser" data-tip-item="${esc(iconId)}" data-tip-source="loot"${valAttr}>
                 <img src="${iconUrl}" class="ll-item-icon" loading="lazy" onerror="this.style.display='none'" alt="">
-                <span class="ll-item-name">${esc(iName)}${starBadge}${soldBadge}${fromStr}</span>
+                <span class="ll-item-name">${esc(iName)}${starBadge}${favBadge}${soldBadge}${fromStr}</span>
                 <span class="ll-item-qty">&times;${ev.quantity || 1}</span>
                 <span class="ll-item-value">${totalVal > 0 ? formatSilver(totalVal) : '—'}</span>
                 <span class="ll-item-weight">${iw > 0 ? iw.toFixed(1) + ' kg' : ''}</span>
@@ -9402,6 +9414,26 @@ function renderItemPowerResults(results) {
 // FAVORITES SYSTEM
 // ============================================================
 const FAV_STORAGE_KEY = 'albion_favorites';
+
+// G12: Aggregate all favorited item IDs across every user list → Set for O(1) lookup.
+// Used by Loot Buyer + Loot Logger to highlight items the user has previously starred.
+let _favoriteItemIds = null;
+function getAllFavoriteItemIds() {
+    if (_favoriteItemIds) return _favoriteItemIds;
+    const set = new Set();
+    try {
+        const lists = JSON.parse(localStorage.getItem(FAV_STORAGE_KEY) || '{}');
+        for (const name of Object.keys(lists)) {
+            for (const item of (lists[name].items || [])) {
+                const id = typeof item === 'string' ? item : (item?.itemId || item?.id);
+                if (id) set.add(id);
+            }
+        }
+    } catch {}
+    _favoriteItemIds = set;
+    return set;
+}
+function _invalidateFavoriteCache() { _favoriteItemIds = null; }
 let favCurrentItems = [];
 let favSearchExactId = null;
 
@@ -9440,6 +9472,7 @@ function saveFavoriteList() {
         created: Date.now()
     };
     localStorage.setItem(FAV_STORAGE_KEY, JSON.stringify(lists));
+    _invalidateFavoriteCache();
 
     loadFavoriteLists();
 
@@ -9466,6 +9499,7 @@ function deleteFavoriteList() {
     const lists = JSON.parse(localStorage.getItem(FAV_STORAGE_KEY) || '{}');
     delete lists[name];
     localStorage.setItem(FAV_STORAGE_KEY, JSON.stringify(lists));
+    _invalidateFavoriteCache();
 
     loadFavoriteLists();
 
@@ -11064,6 +11098,150 @@ document.addEventListener('mouseout', (e) => {
 
 document.addEventListener('scroll', hideTooltip, true);
 
+// G2: Session Compare — pick two saved sessions, show them side-by-side with deltas.
+async function openSessionCompare() {
+    document.getElementById('session-compare-modal')?.classList.remove('hidden');
+    document.getElementById('session-compare-body').innerHTML = '';
+    await _populateSessionCompareDropdowns();
+}
+function closeSessionCompare() {
+    document.getElementById('session-compare-modal')?.classList.add('hidden');
+}
+async function _populateSessionCompareDropdowns() {
+    const a = document.getElementById('compare-session-a');
+    const b = document.getElementById('compare-session-b');
+    if (!a || !b) return;
+    const savedNames = getSavedSessionNames();
+    const fmt = (s) => {
+        const started = new Date(s.started_at).toLocaleString();
+        const label = savedNames[s.session_id] || started;
+        return `<option value="${esc(s.session_id)}">${esc(label)} (${s.event_count || 0} events)</option>`;
+    };
+    try {
+        const res = await fetch(`${VPS_BASE}/api/loot-sessions`, { headers: authHeaders() });
+        if (!res.ok) throw new Error('fetch failed');
+        const data = await res.json();
+        const sessions = data.sessions || [];
+        if (sessions.length < 2) {
+            document.getElementById('session-compare-body').innerHTML = '<div class="empty-state"><p>Need at least 2 saved sessions to compare. Save some sessions first.</p></div>';
+        }
+        a.innerHTML = '<option value="">-- pick --</option>' + sessions.map(fmt).join('');
+        b.innerHTML = '<option value="">-- pick --</option>' + sessions.map(fmt).join('');
+        // Sensible defaults: latest two sessions
+        if (sessions.length >= 1) a.value = sessions[0].session_id;
+        if (sessions.length >= 2) b.value = sessions[1].session_id;
+    } catch (e) {
+        document.getElementById('session-compare-body').innerHTML = `<div class="empty-state"><p>Couldn't load sessions (login required).</p></div>`;
+    }
+}
+async function _fetchSessionStats(sessionId) {
+    const res = await fetch(`${VPS_BASE}/api/loot-session/${encodeURIComponent(sessionId)}`, { headers: authHeaders() });
+    if (!res.ok) throw new Error('fetch failed');
+    const data = await res.json();
+    const events = data.events || [];
+    const lootOnly = events.filter(e => e.item_id !== '__DEATH__');
+    const deaths = events.filter(e => e.item_id === '__DEATH__');
+    const players = new Set(lootOnly.map(e => e.looted_by_name)).size;
+    const items = lootOnly.reduce((s, e) => s + (e.quantity || 1), 0);
+    // Value estimate using the cached price map from the current session if available,
+    // otherwise skip (we don't want to block comparison on a fresh price fetch)
+    const priceMap = _llPriceMap || {};
+    const value = lootOnly.reduce((s, e) => {
+        const p = priceMap[e.item_id];
+        return s + (p ? p.price * (e.quantity || 1) : 0);
+    }, 0);
+    const tsNums = events.map(e => +new Date(e.timestamp)).filter(n => !isNaN(n));
+    const duration = tsNums.length > 1 ? Math.max(...tsNums) - Math.min(...tsNums) : 0;
+    // Top 3 looters by item count
+    const perPlayer = {};
+    for (const ev of lootOnly) {
+        const n = ev.looted_by_name || 'Unknown';
+        if (!perPlayer[n]) perPlayer[n] = { items: 0, value: 0, guild: ev.looted_by_guild || '' };
+        perPlayer[n].items += (ev.quantity || 1);
+        const p = priceMap[ev.item_id];
+        if (p) perPlayer[n].value += p.price * (ev.quantity || 1);
+    }
+    const ranked = Object.entries(perPlayer).sort((a, b) => b[1].value - a[1].value || b[1].items - a[1].items).slice(0, 3);
+    return { events: events.length, players, items, value, deaths: deaths.length, duration, topLooters: ranked };
+}
+async function runSessionCompare() {
+    const aId = document.getElementById('compare-session-a').value;
+    const bId = document.getElementById('compare-session-b').value;
+    const body = document.getElementById('session-compare-body');
+    if (!aId || !bId) { body.innerHTML = '<div class="empty-state"><p>Pick both sessions first.</p></div>'; return; }
+    if (aId === bId) { body.innerHTML = '<div class="empty-state"><p>Pick two different sessions.</p></div>'; return; }
+    body.innerHTML = '<div class="empty-state"><p>Loading...</p></div>';
+    try {
+        const [statsA, statsB] = await Promise.all([_fetchSessionStats(aId), _fetchSessionStats(bId)]);
+        const savedNames = getSavedSessionNames();
+        const a = document.getElementById('compare-session-a');
+        const b = document.getElementById('compare-session-b');
+        const labelA = savedNames[aId] || a.options[a.selectedIndex]?.textContent || 'Session A';
+        const labelB = savedNames[bId] || b.options[b.selectedIndex]?.textContent || 'Session B';
+        body.innerHTML = renderCompareStats(statsA, statsB, labelA, labelB);
+    } catch (e) {
+        body.innerHTML = `<div class="empty-state"><p>Failed to load: ${esc(e.message)}</p></div>`;
+    }
+}
+function renderCompareStats(a, b, labelA, labelB) {
+    const delta = (va, vb) => {
+        if (va === vb) return '<span class="compare-delta same">=</span>';
+        const diff = vb - va;
+        const cls = diff > 0 ? 'gain' : 'loss';
+        const arrow = diff > 0 ? '▲' : '▼';
+        return `<span class="compare-delta ${cls}">${arrow} ${Math.abs(diff).toLocaleString()}</span>`;
+    };
+    const deltaSilver = (va, vb) => {
+        if (va === vb || (va === 0 && vb === 0)) return '<span class="compare-delta same">=</span>';
+        const diff = vb - va;
+        const cls = diff > 0 ? 'gain' : 'loss';
+        const arrow = diff > 0 ? '▲' : '▼';
+        return `<span class="compare-delta ${cls}">${arrow} ${formatSilver(Math.abs(diff))}</span>`;
+    };
+    const fmtDur = (ms) => {
+        const s = Math.floor(ms / 1000);
+        const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60);
+        return h > 0 ? `${h}h ${m}m` : `${m}m`;
+    };
+    const rows = [
+        ['Events', a.events, b.events, delta(a.events, b.events)],
+        ['Items looted', a.items, b.items, delta(a.items, b.items)],
+        ['Unique players', a.players, b.players, delta(a.players, b.players)],
+        ['Deaths', a.deaths, b.deaths, delta(a.deaths, b.deaths)],
+        ['Duration', fmtDur(a.duration), fmtDur(b.duration), ''],
+        ['Est. value', a.value > 0 ? formatSilver(a.value) : '—', b.value > 0 ? formatSilver(b.value) : '—', (a.value > 0 && b.value > 0) ? deltaSilver(a.value, b.value) : '']
+    ];
+    const topList = (list) => list.length > 0
+        ? `<ol class="compare-top-list">${list.map(([n, d]) => `<li><strong>${esc(n)}</strong>${d.guild ? ` [${esc(d.guild)}]` : ''} <span style="color:var(--text-muted); font-size:0.72rem;">— ${d.items} items${d.value > 0 ? `, ${formatSilver(d.value)}` : ''}</span></li>`).join('')}</ol>`
+        : '<p style="color:var(--text-muted); font-size:0.75rem;">None</p>';
+    return `
+        <div class="compare-headers">
+            <div class="compare-header-a">${esc(labelA)}</div>
+            <div class="compare-header-b">${esc(labelB)}</div>
+        </div>
+        <table class="compare-stats-table">
+            <tbody>
+                ${rows.map(([label, va, vb, d]) => `<tr>
+                    <th>${label}</th>
+                    <td>${va.toLocaleString ? va.toLocaleString() : va}</td>
+                    <td>${vb.toLocaleString ? vb.toLocaleString() : vb}</td>
+                    <td class="compare-delta-cell">${d || ''}</td>
+                </tr>`).join('')}
+            </tbody>
+        </table>
+        <div class="compare-top-grid">
+            <div>
+                <div class="compare-subhead">Top looters — ${esc(labelA)}</div>
+                ${topList(a.topLooters)}
+            </div>
+            <div>
+                <div class="compare-subhead">Top looters — ${esc(labelB)}</div>
+                ${topList(b.topLooters)}
+            </div>
+        </div>
+    `;
+}
+
 // G14: Trip Summary — cross-feature dashboard pulling from Loot Logger + Loot Buyer.
 // Shows running totals for the selected time window (default 24h).
 let _tripWindow = '24h';
@@ -11220,6 +11398,63 @@ function confirmCopyPreview() {
         })
         .catch(() => showToast('Copy failed', 'error'));
 }
+
+// F4: Page-wide drag-and-drop for .txt loot logs. Works from any tab.
+// Routes the dropped files to handleLootFileDrop() and switches to the Loot
+// Logger tab + upload mode so user sees the import result.
+let _dragCounter = 0;
+function _isTxtDrag(e) {
+    const types = Array.from(e.dataTransfer?.types || []);
+    return types.includes('Files');
+}
+document.addEventListener('dragenter', (e) => {
+    if (!_isTxtDrag(e)) return;
+    _dragCounter++;
+    const overlay = document.getElementById('global-drop-overlay');
+    if (overlay) overlay.classList.remove('hidden');
+});
+document.addEventListener('dragover', (e) => {
+    if (_isTxtDrag(e)) e.preventDefault(); // required to allow drop
+});
+document.addEventListener('dragleave', (e) => {
+    if (!_isTxtDrag(e)) return;
+    _dragCounter--;
+    if (_dragCounter <= 0) {
+        _dragCounter = 0;
+        document.getElementById('global-drop-overlay')?.classList.add('hidden');
+    }
+});
+document.addEventListener('drop', (e) => {
+    const overlay = document.getElementById('global-drop-overlay');
+    if (overlay) overlay.classList.add('hidden');
+    _dragCounter = 0;
+    if (!_isTxtDrag(e)) return;
+    const files = Array.from(e.dataTransfer.files || []).filter(f => f.name.toLowerCase().endsWith('.txt'));
+    if (files.length === 0) return;
+    // Don't override existing drop zones (they already have handlers that stopPropagation)
+    const target = e.target;
+    if (target && target.closest && target.closest('#ll-drop-zone')) return;
+    e.preventDefault();
+    // Switch to Loot Logger upload mode and feed the file list
+    document.querySelector('[data-tab="loot-logger"]')?.click();
+    setTimeout(() => {
+        if (typeof showLootLoggerMode === 'function') showLootLoggerMode('upload');
+        // Reuse the existing file-list processor via handleLootFileUpload-equivalent
+        if (typeof processLootFiles === 'function') {
+            processLootFiles(files);
+        } else {
+            // Fallback: inject into the hidden input
+            const input = document.getElementById('loot-log-file-input');
+            if (input) {
+                const dt = new DataTransfer();
+                for (const f of files) dt.items.add(f);
+                input.files = dt.files;
+                input.dispatchEvent(new Event('change', { bubbles: true }));
+            }
+        }
+        showToast(`Importing ${files.length} file${files.length !== 1 ? 's' : ''}...`, 'info');
+    }, 120);
+});
 
 // Close any open Discord-template dropdown when clicking outside
 document.addEventListener('click', (e) => {
