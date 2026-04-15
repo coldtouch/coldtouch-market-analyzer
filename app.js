@@ -5397,8 +5397,10 @@ function renderLootItemRows(items) {
         const iw = getItemWeight(item.itemId);
         const totalW = iw * (item.quantity || 1);
         const weightStr = totalW > 0 ? `<span class="loot-item-weight">${totalW.toFixed(1)} kg</span>` : '';
-        return `<div class="loot-item-row" onclick="toggleLootItemDetail(this, '${safeId}', ${item.quality || 1})" style="cursor:pointer;">
-            <img src="${iconUrl}" class="loot-item-icon" loading="lazy" onerror="this.style.display='none'">
+        const crafterAttr = item.crafter ? ` data-tip-crafter="${esc(item.crafter)}"` : '';
+        const qAttr = item.quality ? ` data-tip-quality="${item.quality}"` : '';
+        return `<div class="loot-item-row" onclick="toggleLootItemDetail(this, '${safeId}', ${item.quality || 1})" style="cursor:pointer;" data-tip-item="${safeId}" data-tip-source="chest"${qAttr}${crafterAttr}>
+            <img src="${iconUrl}" class="loot-item-icon" loading="lazy" onerror="this.style.display='none'" alt="">
             <span class="loot-item-name">${esc(name)}${qualName}</span>
             ${weightStr}
             <span class="loot-item-qty">x${item.quantity}</span>
@@ -6602,11 +6604,11 @@ async function loadLootSessions() {
             return `<div class="ll-session-card" onclick="showSessionDetail('${sid}')">
                 <div class="ll-session-info">
                     <div class="ll-session-title">${titleMain} <span style="font-size:0.68rem; color:var(--text-muted);">(${duration})</span>
-                        <button class="ll-session-rename-btn" onclick="event.stopPropagation(); renameSavedSession('${sid}')" title="Rename">✏️</button>
+                        <button class="ll-session-rename-btn" onclick="event.stopPropagation(); renameSavedSession('${sid}')" title="Rename session" aria-label="Rename session">✏️</button>
                     </div>
                     <div class="ll-session-meta">${s.event_count} events &bull; ${s.player_count} players</div>
                 </div>
-                <button class="btn-small-danger" style="padding:0.2rem 0.4rem; font-size:0.65rem; flex-shrink:0;" onclick="event.stopPropagation(); deleteLootSession('${sid}', this)" title="Delete">✕</button>
+                <button class="btn-small-danger" style="padding:0.35rem 0.55rem; font-size:0.8rem; flex-shrink:0; min-width:32px; min-height:32px;" onclick="event.stopPropagation(); deleteLootSession('${sid}', this)" title="Delete session" aria-label="Delete session">✕</button>
             </div>`;
         }).join('');
         list.innerHTML = html;
@@ -6802,22 +6804,53 @@ function _llRenderFiltered() {
     else if (sortVal === 'weight') entries.sort((a, b) => b[1].totalWeight - a[1].totalWeight);
     else if (sortVal === 'name') entries.sort((a, b) => a[0].localeCompare(b[0]));
 
-    // Totals (from full dataset, not filtered — exclude death events)
+    // Totals (from full dataset, not filtered — exclude death events for count/value)
     const lootEventsOnly = events.filter(e => e.item_id !== '__DEATH__');
+    const deathEvents = events.filter(e => e.item_id === '__DEATH__');
     const totalItems = lootEventsOnly.reduce((s, e) => s + (e.quantity || 1), 0);
     const totalValue = lootEventsOnly.reduce((s, e) => {
         const p = priceMap[e.item_id];
         return s + (p ? p.price * (e.quantity || 1) : 0);
     }, 0);
     const totalPlayers = Object.keys(byPlayer).length;
+    const totalDeaths = deathEvents.length;
+    // Duration: first to last timestamp across all events
+    const tsNums = events.map(e => +new Date(e.timestamp)).filter(n => !isNaN(n));
+    const durMs = tsNums.length > 1 ? Math.max(...tsNums) - Math.min(...tsNums) : 0;
+    const fmtDuration = (ms) => {
+        if (ms <= 0) return '—';
+        const s = Math.floor(ms / 1000);
+        const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60);
+        return h > 0 ? `${h}h ${m}m` : `${m}m ${s % 60}s`;
+    };
 
-    // Header
-    let html = `<div class="ll-viewer-header">
-        <div style="font-size:0.82rem; color:var(--text-muted);">
-            ${events.length} events &bull; ${totalPlayers} players &bull; ${totalItems} items
-            ${totalValue > 0 ? `&bull; <span style="color:var(--accent);">${formatSilver(totalValue)} est. value</span>` : ''}
+    // Summary stat strip (new, above existing viewer header)
+    let html = `<div class="ll-summary-strip">
+        <div class="ll-summary-stat">
+            <div class="ll-summary-label">Events</div>
+            <div class="ll-summary-value">${events.length}</div>
         </div>
-        <div style="display:flex; gap:0.4rem; align-items:center;">
+        <div class="ll-summary-stat">
+            <div class="ll-summary-label">Players</div>
+            <div class="ll-summary-value">${totalPlayers}</div>
+        </div>
+        <div class="ll-summary-stat">
+            <div class="ll-summary-label">Items looted</div>
+            <div class="ll-summary-value">${totalItems.toLocaleString()}</div>
+        </div>
+        <div class="ll-summary-stat">
+            <div class="ll-summary-label">Est. value</div>
+            <div class="ll-summary-value accent">${totalValue > 0 ? formatSilver(totalValue) : '—'}</div>
+        </div>
+        <div class="ll-summary-stat" ${totalDeaths > 0 ? 'data-tip="Players who died during this session"' : ''}>
+            <div class="ll-summary-label">Deaths</div>
+            <div class="ll-summary-value ${totalDeaths > 0 ? 'loss' : ''}">${totalDeaths > 0 ? `💀 ${totalDeaths}` : '0'}</div>
+        </div>
+        <div class="ll-summary-stat">
+            <div class="ll-summary-label">Duration</div>
+            <div class="ll-summary-value">${fmtDuration(durMs)}</div>
+        </div>
+        <div class="ll-summary-actions">
             <button class="btn-small" onclick="exportLootSession()" title="Export to CSV">CSV</button>
             ${isDetail ? `<button class="btn-small" onclick="hideLootSessionDetail()">&#x2190; Back</button>` : ''}
         </div>
@@ -6871,7 +6904,7 @@ function _llRenderFiltered() {
         const guildBorder = data.guild && guildColorMap[data.guild]
             ? `border-left: 3px solid ${guildColorMap[data.guild]};` : '';
 
-        // Item icon preview strip (all unique items)
+        // Item icon preview strip (all unique items, capped at 10 with "+N more")
         const seenIds = new Set();
         const previewIcons = [];
         for (const ev of data.items) {
@@ -6880,9 +6913,16 @@ function _llRenderFiltered() {
                 previewIcons.push(ev.item_id);
             }
         }
-        const iconStripHtml = previewIcons.map(id =>
-            `<img src="https://render.albiononline.com/v1/item/${encodeURIComponent(id)}.png" class="ll-preview-icon" loading="lazy" onerror="this.style.display='none'">`
-        ).join('');
+        const PREVIEW_CAP = 10;
+        const visiblePreview = previewIcons.slice(0, PREVIEW_CAP);
+        const overflowCount = Math.max(0, previewIcons.length - PREVIEW_CAP);
+        const iconStripHtml = visiblePreview.map(id => {
+            const priceEntry = priceMap[id];
+            const valAttr = priceEntry && priceEntry.price > 0 ? ` data-tip-value="${Math.floor(priceEntry.price)}"` : '';
+            return `<img src="https://render.albiononline.com/v1/item/${encodeURIComponent(id)}.png" class="ll-preview-icon" data-tip-item="${esc(id)}" data-tip-source="loot"${valAttr} loading="lazy" onerror="this.style.display='none'" alt="${esc(getFriendlyName(id) || id)}">`;
+        }).join('') + (overflowCount > 0
+            ? `<span class="ll-preview-overflow" data-tip="${overflowCount} more unique item${overflowCount > 1 ? 's' : ''}">+${overflowCount}</span>`
+            : '');
 
         const itemsHtml = data.items.filter(ev => passesItemFilter(ev.item_id, filterVal)).map(ev => {
             const iName = getFriendlyName(ev.item_id) || ev.item_id;
@@ -6906,8 +6946,10 @@ function _llRenderFiltered() {
                 else { rowClass = 'll-item-partial'; dotClass = 'll-dot-partial'; }
             }
 
-            return `<div class="ll-item-row ll-item-clickable ${rowClass}" onclick="event.stopPropagation(); switchToBrowser('${esc(iconId)}')" title="View in Market Browser">
-                <img src="${iconUrl}" class="ll-item-icon" loading="lazy" onerror="this.style.display='none'">
+            const unitVal = priceEntry && priceEntry.price > 0 ? Math.floor(priceEntry.price) : '';
+            const valAttr = unitVal ? ` data-tip-value="${unitVal}"` : '';
+            return `<div class="ll-item-row ll-item-clickable ${rowClass}" onclick="event.stopPropagation(); switchToBrowser('${esc(iconId)}')" title="View in Market Browser" data-tip-item="${esc(iconId)}" data-tip-source="loot"${valAttr}>
+                <img src="${iconUrl}" class="ll-item-icon" loading="lazy" onerror="this.style.display='none'" alt="">
                 <span class="ll-item-name">${esc(iName)}${fromStr}</span>
                 <span class="ll-item-qty">&times;${ev.quantity || 1}</span>
                 <span class="ll-item-value">${totalVal > 0 ? formatSilver(totalVal) : '—'}</span>
@@ -6916,14 +6958,23 @@ function _llRenderFiltered() {
             </div>`;
         }).join('');
 
-        const enemyStyle = data.isEnemy ? 'border-left: 3px solid var(--loss-red); opacity: 0.75;' : '';
-        const roleTag = data.isEnemy
-            ? '<span style="font-size:0.6rem; padding:0.1rem 0.35rem; background:rgba(239,68,68,0.2); color:var(--loss-red); border-radius:8px; margin-left:0.3rem;">Enemy Loot</span>'
-            : '<span style="font-size:0.6rem; padding:0.1rem 0.35rem; background:rgba(34,197,94,0.2); color:var(--profit-green); border-radius:8px; margin-left:0.3rem;">Guild</span>';
+        // Card class + role tag: enemy (red), friendly with known guild (green), unknown (grey)
+        let cardClass = 'll-player-card';
+        let roleTag;
+        if (data.isEnemy) {
+            cardClass += ' ll-card-enemy';
+            roleTag = '<span style="font-size:0.6rem; padding:0.1rem 0.35rem; background:rgba(239,68,68,0.2); color:var(--loss-red); border-radius:8px; margin-left:0.3rem;">Enemy Loot</span>';
+        } else if (data.guild) {
+            cardClass += ' ll-card-friendly';
+            roleTag = '<span style="font-size:0.6rem; padding:0.1rem 0.35rem; background:rgba(34,197,94,0.2); color:var(--profit-green); border-radius:8px; margin-left:0.3rem;">Guild</span>';
+        } else {
+            cardClass += ' ll-card-unknown';
+            roleTag = '<span style="font-size:0.6rem; padding:0.1rem 0.35rem; background:rgba(160,160,184,0.18); color:var(--text-muted); border-radius:8px; margin-left:0.3rem;">Unknown</span>';
+        }
 
-        return `<div class="ll-player-card" style="${data.isEnemy ? enemyStyle : guildBorder}">
+        return `<div class="${cardClass}">
             <div class="ll-player-header" onclick="this.closest('.ll-player-card').classList.toggle('expanded')">
-                <button class="ll-remove-player" onclick="event.stopPropagation();_llRemovedPlayers.add('${esc(name)}');_llRenderFiltered()" title="Remove player from view">&times;</button>
+                <button class="ll-remove-player" onclick="event.stopPropagation();_llRemovedPlayers.add('${esc(name)}');_llRenderFiltered()" title="Remove player from view" aria-label="Remove ${esc(name)} from view">&times;</button>
                 <div class="ll-player-info">
                     <span class="ll-player-name">${esc(name)}</span>
                     ${data.died ? '<span title="Died during session" style="color:var(--loss-red); margin-left:0.3rem;">💀</span>' : ''}
@@ -9987,9 +10038,11 @@ document.getElementById('feedback-modal').addEventListener('click', function(e) 
 });
 
 document.addEventListener('keydown', function(e) {
-    if (e.key === 'Escape' && !document.getElementById('feedback-modal').classList.contains('hidden')) {
-        closeFeedbackModal();
-    }
+    if (e.key !== 'Escape') return;
+    const feedback = document.getElementById('feedback-modal');
+    const whitelist = document.getElementById('whitelist-modal');
+    if (feedback && !feedback.classList.contains('hidden')) { closeFeedbackModal(); return; }
+    if (whitelist && !whitelist.classList.contains('hidden')) { closeWhitelistModal(); return; }
 });
 
 async function submitFeedback() {
@@ -10135,6 +10188,99 @@ const ITEM_PRESETS = {
     'Transport Bags': ['T4_BAG','T5_BAG','T6_BAG','T7_BAG','T8_BAG','T4_BAG_INSIGHT','T5_BAG_INSIGHT','T6_BAG_INSIGHT','T7_BAG_INSIGHT','T8_BAG_INSIGHT'],
     'Popular Mounts': ['T5_MOUNT_OX','T7_MOUNT_OX','T8_MOUNT_MAMMOTH_TRANSPORT','T8_MOUNT_SWAMPDRAGON','T8_MOUNT_DIREBEAR','T8_MOUNT_DIREWOLF','T8_MOUNT_MAMMOTH_BATTLE']
 };
+
+// ===== REUSABLE HOVER TOOLTIP =====
+// Any element with data-tip="..." (plain text) or data-tip-item="T8_BAG" (rich item tooltip)
+// Optional companion data attributes on item tooltips:
+//   data-tip-quality="4"  data-tip-crafter="Coldtouch"  data-tip-value="125000"
+//   data-tip-source="loot" (renders "Unknown — looted" when crafter is missing)
+let _tipEl = null;
+let _tipTimer = null;
+let _tipCurrent = null;
+
+function ensureTooltipEl() {
+    if (_tipEl) return _tipEl;
+    const el = document.createElement('div');
+    el.id = 'global-tooltip';
+    el.className = 'global-tooltip hidden';
+    el.setAttribute('role', 'tooltip');
+    document.body.appendChild(el);
+    _tipEl = el;
+    return el;
+}
+
+function buildTooltipContent(target) {
+    const itemId = target.dataset.tipItem;
+    if (itemId) {
+        const name = getFriendlyName(itemId) || itemId;
+        const tier = (itemId.match(/^T(\d)/) || [])[1];
+        const ench = extractEnchantment(itemId);
+        const quality = target.dataset.tipQuality;
+        const crafter = target.dataset.tipCrafter;
+        const value = target.dataset.tipValue;
+        const source = target.dataset.tipSource;
+        const lines = [];
+        lines.push(`<div class="tip-header">
+            <img src="https://render.albiononline.com/v1/item/${encodeURIComponent(itemId)}.png${quality ? '?quality=' + encodeURIComponent(quality) : ''}" class="tip-icon" onerror="this.style.display='none'" alt="">
+            <div class="tip-title-wrap">
+                <div class="tip-title">${esc(name)}</div>
+                <div class="tip-meta">${tier ? 'T' + tier : ''}${ench && ench !== '0' ? '.' + ench : ''}${quality && quality !== '1' ? ' · ' + esc(getQualityName(parseInt(quality))) : ''}</div>
+            </div>
+        </div>`);
+        if (value && parseInt(value) > 0) lines.push(`<div class="tip-row"><span class="tip-label">Market value</span><span class="tip-val">${parseInt(value).toLocaleString()} 💰</span></div>`);
+        if (crafter) lines.push(`<div class="tip-row"><span class="tip-label">Crafted by</span><span class="tip-val">${esc(crafter)}</span></div>`);
+        else if (source === 'loot') lines.push(`<div class="tip-row muted"><span class="tip-label">Crafter</span><span class="tip-val">Unknown — looted</span></div>`);
+        return lines.join('');
+    }
+    const txt = target.dataset.tip;
+    if (txt) return `<div class="tip-simple">${esc(txt)}</div>`;
+    return null;
+}
+
+function positionTooltip(target) {
+    if (!_tipEl) return;
+    const rect = target.getBoundingClientRect();
+    const tipRect = _tipEl.getBoundingClientRect();
+    let left = rect.left + rect.width / 2 - tipRect.width / 2;
+    let top = rect.top - tipRect.height - 10;
+    if (top < 10) top = rect.bottom + 10;
+    left = Math.max(8, Math.min(left, window.innerWidth - tipRect.width - 8));
+    _tipEl.style.left = left + 'px';
+    _tipEl.style.top = top + 'px';
+}
+
+function showTooltipFor(target) {
+    const content = buildTooltipContent(target);
+    if (!content) return;
+    const el = ensureTooltipEl();
+    el.innerHTML = content;
+    el.classList.remove('hidden');
+    positionTooltip(target);
+}
+
+function hideTooltip() {
+    if (_tipEl) _tipEl.classList.add('hidden');
+    _tipCurrent = null;
+}
+
+document.addEventListener('mouseover', (e) => {
+    const target = e.target.closest('[data-tip], [data-tip-item]');
+    if (!target || target === _tipCurrent) return;
+    _tipCurrent = target;
+    clearTimeout(_tipTimer);
+    _tipTimer = setTimeout(() => showTooltipFor(target), 140);
+});
+
+document.addEventListener('mouseout', (e) => {
+    const target = e.target.closest('[data-tip], [data-tip-item]');
+    if (!target) return;
+    const related = e.relatedTarget;
+    if (related && target.contains(related)) return;
+    clearTimeout(_tipTimer);
+    hideTooltip();
+});
+
+document.addEventListener('scroll', hideTooltip, true);
 
 // Init with timers widget
 const _origInit = typeof init === 'function' ? init : null;

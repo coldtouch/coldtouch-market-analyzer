@@ -344,6 +344,16 @@
                     <button class="nav-tab" data-tab="transport">Transport Routes</button>
                     <button class="nav-tab" data-tab="live-flips">Live Flips</button>
                     <button class="nav-tab" data-tab="portfolio">Portfolio Tracker</button>
+                </div>
+            </div>
+            <!-- Loot Tools group -->
+            <div class="nav-group nav-group-loot">
+                <button class="nav-group-toggle" data-default-tab="loot-buyer" aria-label="Loot Tools menu">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 8h16v12H4z"></path><path d="M2 8h20v4H2z"></path><path d="M10 12h4v4h-4z"></path><path d="M12 4v4"></path><path d="M10 4h4"></path></svg>
+                    Loot Tools
+                    <svg class="nav-chevron" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="6 9 12 15 18 9"></polyline></svg>
+                </button>
+                <div class="nav-dropdown">
                     <button class="nav-tab" data-tab="loot-buyer">Loot Buyer</button>
                     <button class="nav-tab" data-tab="loot-logger">Loot Logger</button>
                 </div>
@@ -1931,6 +1941,19 @@
                     <h2 class="about-heading">Changelog</h2>
                     <div id="changelog-wrapper" style="max-height: 500px; overflow-y: auto; position: relative;">
                     <div class="changelog-list">
+                        <div class="changelog-entry">
+                            <div class="changelog-date">April 16, 2026</div>
+                            <div class="changelog-title">Loot Tools Phase 1: New Section + Visual Overhaul</div>
+                            <ul>
+                                <li><strong>New &quot;Loot Tools&quot; nav group:</strong> Loot Buyer and Loot Logger promoted out of Trading into their own top-level menu.</li>
+                                <li><strong>Bigger, readable icons:</strong> preview strip 22&rarr;32 px, expanded item rows 28&rarr;40 px, Loot Buyer grid 24&rarr;40 px. Preview strip caps at 10 with `+N` overflow.</li>
+                                <li><strong>Hover tooltips:</strong> rich cards show item name, tier, enchantment, quality, market value, and crafter (on chest captures). For pure loot drops, shows &quot;Unknown &mdash; looted&quot; honestly rather than hiding the field (game doesn&rsquo;t include crafter in loot packets).</li>
+                                <li><strong>Session overview strip:</strong> events, players, items looted, est. value, deaths, duration at the top of every session view.</li>
+                                <li><strong>Color-coded player cards:</strong> green border for friendly guild, red for enemy loot source, grey for unknown.</li>
+                                <li><strong>Mobile &amp; a11y:</strong> new 420 px breakpoint, always-visible touch-friendly remove button, ARIA labels on every icon button, `Esc` closes the whitelist modal.</li>
+                                <li>Service worker cache bumped v3 &rarr; v4. Hard refresh once if you see stale UI.</li>
+                            </ul>
+                        </div>
                         <div class="changelog-entry">
                             <div class="changelog-date">April 15, 2026</div>
                             <div class="changelog-title">Batch 5 Wrap-up: Session Labels, Whitelist, Auto-save, CSV Exports, Upgrade Flips</div>

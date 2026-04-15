@@ -2,6 +2,44 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-04-16 — Loot Tools Phase 1: New Section + Visual Overhaul
+
+**New "Loot Tools" navigation group:**
+- Loot Buyer and Loot Logger promoted from the Trading dropdown into their own top-level group with a dedicated icon and menu, reflecting how central they've become.
+
+**Icon size bump for readability:**
+- Preview strip icons: 22 → 32 px (with hover zoom + subtle border)
+- Expanded item rows: 28 → 40 px
+- Loot Buyer item grid: 24 → 40 px
+- Preview strip now caps at 10 unique items with a `+N` overflow indicator (was unbounded)
+
+**Reusable hover tooltip component:**
+- `data-tip` (plain text) or `data-tip-item` (rich card with icon, tier, enchantment, quality, market value, crafter)
+- Wired on every Loot Logger item row + preview icon + Loot Buyer item row
+- For loot pickups where crafter info isn't in the game packet, tooltip honestly shows "Unknown — looted" instead of hiding the row
+- Vanilla JS, ~90 LoC, zero new dependencies
+
+**Session overview strip:**
+- Six at-a-glance stats above every session view: events, players, items looted, est. value, deaths (💀), duration
+- Replaces the old muted single-line header
+
+**Color-coded player cards:**
+- Friendly guild members get a green 4 px left border
+- Enemy loot sources get a red border
+- Unknown players (no guild data) get a grey border
+
+**Mobile / touch / a11y:**
+- New 420 px breakpoint for narrow phones — toolbar stacks cleanly, session-name input goes full width
+- Remove-player button now 32×32 px and always visible on mobile (was 20 px hover-only — unusable on touch)
+- Session rename pencil + session delete `✕` bumped to 28–32 px touch targets
+- ARIA labels on every icon-only button
+- `Esc` key now closes the whitelist modal in addition to the feedback modal
+- Focus-visible outlines on remove/rename buttons
+
+**Service worker cache bumped `v3` → `v4`** so returning users pick up the new app.js. Hard refresh once if you see stale UI.
+
+---
+
 ### 2026-04-15 — Batch 5 Wrap-up: Session Labels, Whitelist, Auto-save, CSV Exports, Upgrade Flips
 
 **Loot Logger:**
