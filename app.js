@@ -5262,7 +5262,10 @@ function renderLootCaptures() {
                     </div>
                     <div class="loot-card-meta">${itemCount} items &bull; ${equipCount} equip ${stackCount} stack${weightStr ? ` &bull; ${weightStr}` : ''} &bull; ${timeAgoStr}</div>
                 </div>
-                <button class="btn-small" onclick="event.stopPropagation(); removeLootCapture(${capIndex});" style="position:absolute; top:0.4rem; right:0.4rem; font-size:0.65rem; padding:0.15rem 0.4rem; color:var(--loss-red); background:none; border:1px solid var(--loss-red); border-radius:4px;" title="Remove this capture">✕</button>
+                <div style="position:absolute; top:0.4rem; right:0.4rem; display:flex; gap:0.3rem;">
+                    <button class="btn-small" onclick="event.stopPropagation(); trackCaptureDirectly(${capIndex});" style="font-size:0.65rem; padding:0.15rem 0.4rem; color:var(--accent); background:none; border:1px solid var(--accent); border-radius:4px;" title="Mark as already-bought and track in Phase 3 without running analysis">📦 Track</button>
+                    <button class="btn-small" onclick="event.stopPropagation(); removeLootCapture(${capIndex});" style="font-size:0.65rem; padding:0.15rem 0.4rem; color:var(--loss-red); background:none; border:1px solid var(--loss-red); border-radius:4px;" title="Remove this capture">✕</button>
+                </div>
             </div>`;
         };
 
@@ -5519,6 +5522,37 @@ async function analyzeLoot() {
         document.getElementById('loot-save-btn').addEventListener('click', buyThisTab);
     } catch (e) {
         resultsDiv.innerHTML = `<div class="empty-state"><p>Analysis failed: ${esc(e.message)}</p></div>`;
+    }
+}
+
+// Fast-path: "Track this" button on a chest capture chip. Prompts for purchase
+// price, then posts directly to /api/loot-tab/save without running Phase 1 eval.
+// Intended for the workflow "I already bought this and I just want to track sales now".
+async function trackCaptureDirectly(capIndex) {
+    const cap = lootBuyerCaptures[capIndex];
+    if (!cap || !cap.items || cap.items.length === 0) {
+        showToast('Capture not found or empty', 'error');
+        return;
+    }
+    const defaultName = cap.customName || cap.tabName || 'Chest Capture';
+    const priceStr = prompt(`Purchase price for "${defaultName}" (silver)?\n\n${cap.items.length} items will be tracked.`, '0');
+    if (priceStr === null) return; // cancelled
+    const purchasePrice = Math.max(0, parseInt(priceStr) || 0);
+    const city = prompt('Which city did you buy this in? (optional)', '') || '';
+    try {
+        const res = await fetch(`${VPS_BASE}/api/loot-tab/save`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', ...authHeaders() },
+            body: JSON.stringify({ tabName: defaultName, city, purchasePrice, items: cap.items })
+        });
+        const d = await res.json();
+        if (!res.ok) throw new Error(d.error || 'Failed');
+        showToast(`Tracked "${defaultName}" — view it below`, 'success');
+        loadTrackedTabs();
+        // Remove capture from chip list so user doesn't double-track
+        removeLootCapture(capIndex);
+    } catch(e) {
+        showToast('Failed to track: ' + e.message, 'error');
     }
 }
 
@@ -6201,6 +6235,7 @@ let _llDeaths = [];               // computed death timeline for current session
 let _llPrimaryGuild = '';          // most-common guild among looters (= "our" side)
 let _llPrimaryAlliance = '';
 let _llDeathFilterVictim = null;   // when set, restricts view to that death's chain
+let _llCurrentSessionId = null;    // session_id when viewing a saved session, null for live
 
 // --- Session naming, whitelist, auto-save ---
 const LL_SESSION_NAME_KEY = 'albion_live_session_name';
@@ -6630,6 +6665,7 @@ async function loadLootSessions() {
 }
 
 function showLiveSession() {
+    _llCurrentSessionId = null; // live session has no server-side ID yet
     // Whitelist is applied on the LIVE session view only. Death events always pass
     // through so "who died" remains accurate; only loot lines get filtered.
     const source = lootWhitelist.length
@@ -6658,6 +6694,7 @@ async function showSessionDetail(sessionId) {
     const detail = document.getElementById('loot-session-detail');
     detail.style.display = '';
     detail.innerHTML = '<div class="empty-state"><p>Loading…</p></div>';
+    _llCurrentSessionId = sessionId;
     try {
         const res = await fetch(`${VPS_BASE}/api/loot-session/${encodeURIComponent(sessionId)}`, { headers: authHeaders() });
         const data = await res.json();
@@ -7046,6 +7083,9 @@ function _llRenderFiltered() {
         </div>
         <div class="ll-summary-actions">
             <button class="btn-small" onclick="exportLootSession()" title="Export to CSV">CSV</button>
+            ${_llCurrentSessionId
+                ? `<button class="btn-small-accent" onclick="runAccountabilityForSession('${esc(_llCurrentSessionId)}')" title="Cross-reference this session against chest deposits">✓ Accountability</button>`
+                : ''}
             ${isDetail ? `<button class="btn-small" onclick="hideLootSessionDetail()">&#x2190; Back</button>` : ''}
         </div>
     </div>`;
@@ -7353,6 +7393,55 @@ async function confirmDeleteLootSession(sessionId, btnEl) {
     }
 }
 
+// Cross-link from Accountability -> Loot Buyer with missing items pre-loaded.
+// Opens Loot Buyer, fills the manual-entry list with aggregated missing items,
+// and kicks off the worth analysis so current market values show immediately.
+function valueMissingItemsInLootBuyer() {
+    const missing = window._llSuspectMissingItems || {};
+    const entries = Object.entries(missing);
+    if (entries.length === 0) { showToast('No missing items to value', 'warn'); return; }
+    // Switch to Loot Buyer tab
+    document.querySelector('[data-tab="loot-buyer"]')?.click();
+    // Populate manual items (quality=1 as we don't know the original quality from accountability)
+    lootManualItems = entries.map(([itemId, qty]) => ({
+        itemId,
+        quality: 1,
+        quantity: qty,
+        isEquipment: false
+    }));
+    renderLootManualItems();
+    // Expose in the Phase 1 worth-analysis view
+    lootSelectedCapture = {
+        items: lootManualItems.map(it => ({ ...it })),
+        tabName: 'Missing from accountability',
+        capturedAt: new Date().toISOString(),
+        isManual: true
+    };
+    selectLootCaptureUI('Missing from accountability', lootSelectedCapture.items);
+    showToast(`Loaded ${entries.length} missing item type${entries.length !== 1 ? 's' : ''} — set an asking price of 0 to see just the market values`, 'info');
+}
+
+// Cross-link from Loot Logger session view -> Accountability tab with session pre-selected.
+// If the session dropdown hasn't been populated yet, populate it first.
+async function runAccountabilityForSession(sessionId) {
+    showLootLoggerMode('accountability');
+    // Ensure dropdown has the session as an option, then select it
+    const sel = document.getElementById('acc-session-select');
+    if (sel) {
+        // Wait for populateAccountabilityDropdowns to finish if we just triggered it
+        await new Promise(r => setTimeout(r, 250));
+        const has = Array.from(sel.options).some(o => o.value === sessionId);
+        if (!has) {
+            // Force re-populate (may have failed if not authed, but try)
+            await populateAccountabilityDropdowns();
+        }
+        sel.value = sessionId;
+        // Scroll into view so the user sees they're in the right mode
+        sel.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        showToast('Session pre-selected. Choose chest captures and click "Run Check".', 'info');
+    }
+}
+
 async function runAccountabilityCheck() {
     const sessionId = document.getElementById('acc-session-select').value;
     const captureSel = document.getElementById('acc-capture-select');
@@ -7529,11 +7618,24 @@ async function runAccountabilityCheck() {
     // Suspects banner
     if (suspects.length > 0) {
         const suspectNames = suspects.map(s => esc(s.name)).join(', ');
+        // Aggregate missing items across suspects so user can cross-check current market values
+        const missingAgg = {};
+        for (const p of suspects) {
+            for (const it of (p.items || [])) {
+                if (!it.missing || it.missing <= 0) continue;
+                const key = it.itemId;
+                missingAgg[key] = (missingAgg[key] || 0) + it.missing;
+            }
+        }
+        const hasMissingItems = Object.keys(missingAgg).length > 0;
+        // Stash on window so the handler can read it without globals through the function scope
+        window._llSuspectMissingItems = missingAgg;
         html += `<div style="background:rgba(239,68,68,0.12); border:1px solid rgba(239,68,68,0.3); border-radius:8px; padding:0.7rem 1rem; margin-bottom:0.75rem;">
             <div style="font-weight:600; color:var(--loss-red); font-size:0.85rem; margin-bottom:0.25rem;">
                 &#9888; ${suspects.length} suspect${suspects.length > 1 ? 's' : ''} — ${formatSilver(totalMissingSilver)} missing
             </div>
-            <div style="font-size:0.75rem; color:var(--text-muted);">${suspectNames}</div>
+            <div style="font-size:0.75rem; color:var(--text-muted); margin-bottom:${hasMissingItems ? '0.5rem' : '0'};">${suspectNames}</div>
+            ${hasMissingItems ? `<button class="btn-small" onclick="valueMissingItemsInLootBuyer()" title="Load missing items into Loot Buyer to see current market values">&#128178; Value missing items</button>` : ''}
         </div>`;
     }
 
