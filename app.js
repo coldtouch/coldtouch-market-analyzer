@@ -6858,19 +6858,22 @@ function _llDebouncedRender(delay) {
 let _llRemovedPlayers = new Set(); // players removed from current view
 let _llResolvedDeaths = new Set(); // deaths marked as resolved
 // E2: window._chestCaptures already initialized in Loot Buyer section (= lootBuyerCaptures)
-// Loot Logger filter/sort state (persisted across re-renders)
-let _llCurrentEvents = [];
-let _llCurrentByPlayer = {};
-let _llPriceMap = {};
-let _llDepositedMap = null;
-let _llTargetEl = null;
-let _llIsDetail = false;
-let _llDeaths = [];               // computed death timeline for current session
-let _llPrimaryGuild = '';          // most-common guild among looters (= "our" side)
-let _llPrimaryAlliance = '';
-let _llDeathFilterVictim = null;   // when set, restricts view to that death's chain
-let _llCurrentSessionId = null;    // session_id when viewing a saved session, null for live
-let _llPlayerTrends = {};          // G6: per-player cross-session stats, keyed by name
+// ─── Loot Logger render state ──────────────────────────────────────────
+// These globals hold the current session's computed data between renders.
+// They are set by renderLootSessionEvents() and read by _llRenderFiltered().
+// 4.4: Grouped here for clarity — see also liveSession* flags near resetLiveSession().
+let _llCurrentEvents = [];          // current session's event array
+let _llCurrentByPlayer = {};        // {playerName: {items[], guild, alliance, totalValue, ...}}
+let _llPriceMap = {};               // {itemId: {price}} — cached per session (E4 memoization)
+let _llDepositedMap = null;         // accountability deposit map (null in normal session view)
+let _llTargetEl = null;             // DOM element to render into
+let _llIsDetail = false;            // true = viewing a specific saved session
+let _llDeaths = [];                 // computed death timeline for current session
+let _llPrimaryGuild = '';           // most-common guild among looters (= "our" side)
+let _llPrimaryAlliance = '';        // most-common alliance
+let _llDeathFilterVictim = null;    // when set, restricts view to that death's chain
+let _llCurrentSessionId = null;     // session_id when viewing a saved session, null for live
+let _llPlayerTrends = {};           // G6: per-player cross-session stats, keyed by name
 // Phase 5 item filter chips (multi-select) — hydrated from localStorage so user choices persist
 let _llActiveChips = new Set((() => {
     try { return JSON.parse(localStorage.getItem('albion_ll_chips') || '[]'); } catch { return []; }

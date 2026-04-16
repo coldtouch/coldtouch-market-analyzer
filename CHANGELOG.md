@@ -2,6 +2,25 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-04-16 — Guild Leaderboard, Session Merge, Sale Edit/Delete, Crafter Stats + Refactors
+
+**New Features:**
+- **Guild Leaderboard** (G1): Historical top looters, killers, deaths, and most active players across all your saved sessions. 7d/30d/all-time filter. Accessible from Loot Tools menu or Ctrl+Shift+L.
+- **Inline Sale Edit/Delete**: Edit the price/quantity of any recorded sale, or delete it entirely. Hover a sale row to see the edit/delete buttons.
+- **Crafter Aggregation** (C4): "Top Crafters" strip shows the 5 most frequent crafters across all your tracked loot tabs with medal icons.
+- **Session/Tab Overlap Badges** (F1): Tracked tab cards now show a "📋 Session" badge when the purchase happened during a logged loot session.
+- **Per-Item Sell Mark-Off**: Collapsible items checklist in tracked tab detail. Click items to mark them as sold (persists in localStorage, visual strikethrough).
+- **Session Merge**: Combine 2+ saved sessions into one new merged session. Original sessions are preserved. Accessible from Loot Tools menu.
+
+**Refactors:**
+- **E2**: Consolidated `window._chestCaptures` and `lootBuyerCaptures` into a single shared array reference. Eliminated 3 seeding/sync sites.
+- **E5**: Player card virtualization — large sessions (50+ players) now render first 30 cards with a "Show more" button.
+- **E6**: All Loot Logger filter/sort inputs debounced through `_llDebouncedRender()`.
+- **E9**: JSDoc type definitions for CapturedItem, ChestCapture, LootEvent, LootSession, TrackedTab.
+- **4.4**: Documented and grouped all Loot Logger render-state globals with clear comments.
+
+SW cache bumped to v22.
+
 ### 2026-04-16 — Per-player trends (G6)
 
 Every player card in the Loot Logger session view now shows a compact
