@@ -8142,6 +8142,7 @@ function _llRenderFiltered() {
             </div>
             <button class="btn-small" onclick="exportLootSession()" title="Export to CSV">CSV</button>
             <button class="btn-small" onclick="exportLootSessionTxt()" title="Export as .txt in ao-loot-logger format">.txt</button>
+            <button class="btn-small" onclick="exportLootSessionJson()" title="Export raw session data as JSON">JSON</button>
             ${_llCurrentSessionId
                 ? `<button class="btn-small-accent" onclick="runAccountabilityForSession('${esc(_llCurrentSessionId)}')" title="Cross-reference this session against chest deposits">✓ Accountability</button>`
                 : ''}
@@ -11673,6 +11674,45 @@ function exportLootSession() {
         };
     });
     exportToCSV(rows, `loot-session-${new Date().toISOString().slice(0, 10)}.csv`);
+}
+
+function exportLootSessionJson() {
+    const events = _llCurrentEvents;
+    if (!events || events.length === 0) { showToast('No loot data to export', 'warn'); return; }
+    const priceMap = _llPriceMap || {};
+    const deaths = _llDeaths || [];
+    const byPlayer = _llCurrentByPlayer || {};
+    const data = {
+        exportedAt: new Date().toISOString(),
+        sessionId: _llCurrentSessionId || 'live',
+        eventCount: events.length,
+        playerCount: Object.keys(byPlayer).length,
+        deaths: deaths.map(d => ({
+            victim: d.victim, killer: d.killer, timestamp: d.timestamp,
+            estimatedValue: d.estimatedValue, wasFriendly: d.wasFriendly,
+            itemCount: d.lootedItems.length
+        })),
+        players: Object.entries(byPlayer).map(([name, data]) => ({
+            name, guild: data.guild || '', alliance: data.alliance || '',
+            items: data.totalQty || 0, value: data.totalValue || 0,
+            isEnemy: !!data.isEnemy
+        })),
+        events: events.map(e => ({
+            t: e.timestamp, by: e.looted_by_name, byG: e.looted_by_guild,
+            from: e.looted_from_name, item: e.item_id, qty: e.quantity || 1,
+            w: e.weight || 0
+        }))
+    };
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `loot-session-${data.sessionId.slice(0, 20)}-${new Date().toISOString().slice(0, 10)}.json`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    showToast('Session exported as JSON', 'success');
 }
 
 // ===== FEEDBACK MODAL =====
