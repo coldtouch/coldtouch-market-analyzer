@@ -4713,6 +4713,7 @@ function initLiveSync() {
                     }
                     if (lootBuyerCaptures.length > 20) lootBuyerCaptures.length = 20;
                     renderLootCaptures();
+                    _fireCaptureBusEvent('add', captures[0]); // F3: notify subscribers
                     // Flash the tab
                     const tab = document.querySelector('[data-tab="loot-buyer"]');
                     if (tab && currentTab !== 'loot-buyer') {
@@ -5242,6 +5243,23 @@ function renderProfile(data) {
 // read from window._chestCaptures. The alias keeps existing code working.
 window._chestCaptures = window._chestCaptures || [];
 const lootBuyerCaptures = window._chestCaptures;
+
+// F3: Capture event bus — fire a DOM custom event whenever captures change.
+// Both Loot Buyer and Loot Logger subscribe via document.addEventListener.
+// Callers push to _chestCaptures first, then fire the event.
+function _fireCaptureBusEvent(action, capture) {
+    document.dispatchEvent(new CustomEvent('chest-capture-change', {
+        detail: { action, capture, captures: window._chestCaptures }
+    }));
+}
+// Subscriber: Loot Logger accountability chips auto-refresh on capture changes
+document.addEventListener('chest-capture-change', () => {
+    if (typeof renderCaptureChips === 'function' &&
+        typeof lootLoggerMode !== 'undefined' && lootLoggerMode === 'accountability') {
+        renderCaptureChips();
+        if (typeof populateAccountabilityDropdowns === 'function') populateAccountabilityDropdowns();
+    }
+});
 let lootAnalysisMode = 'worth';
 let lootSelectedCapture = null;
 let lastLootEvalData = null; // retained for "I Bought This" save action
@@ -5402,6 +5420,7 @@ function removeLootCapture(index) {
         // E2: No sync needed — lootBuyerCaptures IS window._chestCaptures
         lootSelectedCapture = null;
         renderLootCaptures();
+        _fireCaptureBusEvent('remove', null); // F3: notify subscribers
         showToast('Capture removed', 'info');
     }
 }
@@ -7526,6 +7545,8 @@ async function loadLootSessions() {
             </div>`;
         }).join('');
         list.innerHTML = html;
+        // 4.5: Async stamp "📦 Tab" badges on sessions that overlap with tracked tab purchases
+        _loadSessionTabBadges(lootSessions);
     } catch(e) {
         const isAuth = e.message === 'auth';
         const msg = isAuth
@@ -7535,6 +7556,36 @@ async function loadLootSessions() {
             ${!isAuth ? '<button class="btn-small" onclick="loadLootSessions()" style="margin-top:0.5rem;">Retry</button>' : ''}
         </div>`;
     }
+}
+
+// 4.5: Reverse F1 — stamp "📦 Tab" badge on session cards when a tracked tab was purchased during the session
+async function _loadSessionTabBadges(sessions) {
+    if (!sessions || !sessions.length) return;
+    if (!localStorage.getItem('albion_auth_token') && !discordUser) return;
+    try {
+        const res = await fetch(`${VPS_BASE}/api/loot-tabs`, { headers: authHeaders() });
+        if (!res.ok) return;
+        const data = await res.json();
+        const tabs = data.tabs || [];
+        if (!tabs.length) return;
+        const BUFFER = 3600000; // 1 hour
+        for (const session of sessions) {
+            const start = session.started_at - BUFFER;
+            const end = (session.ended_at || session.started_at) + BUFFER;
+            const overlapping = tabs.filter(t => t.purchasedAt >= start && t.purchasedAt <= end);
+            if (overlapping.length === 0) continue;
+            const card = document.querySelector(`.ll-session-card[onclick*="showSessionDetail('${esc(session.session_id)}')"]`);
+            if (!card) continue;
+            const titleArea = card.querySelector('.ll-session-title');
+            if (!titleArea || titleArea.querySelector('.session-tab-badge')) continue;
+            const badge = document.createElement('span');
+            badge.className = 'll-session-shared-badge session-tab-badge';
+            badge.style.cssText = 'background:rgba(245,158,11,0.15); color:#fbbf24; border-color:rgba(245,158,11,0.3); margin-left:0.3rem;';
+            badge.title = `${overlapping.length} tracked tab${overlapping.length !== 1 ? 's' : ''} purchased during this session`;
+            badge.textContent = `📦 ${overlapping.length} tab${overlapping.length !== 1 ? 's' : ''}`;
+            titleArea.appendChild(badge);
+        }
+    } catch { /* silent */ }
 }
 
 function showLiveSession() {
@@ -9052,9 +9103,10 @@ function handleLootLoggerWsMessage(msg) {
         if (!window._chestCaptures.includes(msg.data)) {
             window._chestCaptures.push(msg.data);
             if (window._chestCaptures.length > 20) window._chestCaptures.shift();
+            _fireCaptureBusEvent('add', msg.data); // F3: notify subscribers
         }
         showToast(`Chest capture received: ${esc(msg.data.tabName || 'Unknown tab')}`, 'success');
-        // Update Accountability UI if visible
+        // Update Accountability UI if visible (F3 subscriber also handles this, but kept for backward compat)
         if (lootLoggerMode === 'accountability') {
             populateAccountabilityDropdowns();
             renderCaptureChips();
@@ -12534,12 +12586,17 @@ async function _renderGuildLeaderboard() {
             <div class="ll-summary-stat"><div class="ll-summary-label">Items</div><div class="ll-summary-value">${(t.total_items || 0).toLocaleString()}</div></div>
             <div class="ll-summary-stat"><div class="ll-summary-label">Deaths</div><div class="ll-summary-value ${t.total_deaths > 0 ? 'loss' : ''}">${t.total_deaths > 0 ? '💀 ' : ''}${(t.total_deaths || 0).toLocaleString()}</div></div>
         </div>`;
+        html += `<div style="text-align:right; margin-bottom:0.5rem;">
+            <button class="btn-small" onclick="copyLeaderboardToDiscord()" title="Copy leaderboard to clipboard as Discord-friendly text">📋 Copy to Discord</button>
+        </div>`;
         html += '<div class="lb-grid">';
         html += _lbTable('Top Looters', '📦', data.topLooters || [], ['name', 'guild', 'items', 'sessions'], { items: 'Items', sessions: 'Sessions' });
         html += _lbTable('Top Killers', '⚔', data.topKillers || [], ['name', 'guild', 'kills'], { kills: 'Kills' });
         html += _lbTable('Most Deaths', '💀', data.mostDeaths || [], ['name', 'guild', 'deaths'], { deaths: 'Deaths' });
         html += _lbTable('Most Active', '🔥', data.mostActive || [], ['name', 'guild', 'sessions', 'items'], { sessions: 'Sessions', items: 'Items' });
         html += '</div>';
+        // Stash data for Discord copy
+        window._lastLeaderboardData = data;
         body.innerHTML = html;
     } catch (e) {
         body.innerHTML = `<div class="empty-state"><p>${esc(e.message)} — login required.</p></div>`;
@@ -12566,6 +12623,37 @@ function _lbTable(title, icon, rows, cols, labels) {
     });
     html += '</tbody></table></div>';
     return html;
+}
+
+// Discord copy for Guild Leaderboard — formats leaderboard data as Markdown table
+function copyLeaderboardToDiscord() {
+    const d = window._lastLeaderboardData;
+    if (!d) { showToast('No leaderboard data loaded', 'warn'); return; }
+    const t = d.totals || {};
+    const periodLabel = _lbPeriod === '7d' ? 'Last 7 days' : _lbPeriod === '30d' ? 'Last 30 days' : 'All time';
+    let text = `**🏆 Guild Leaderboard — ${periodLabel}**\n`;
+    text += `${t.total_sessions || 0} sessions · ${t.total_players || 0} players · ${(t.total_items || 0).toLocaleString()} items · 💀 ${t.total_deaths || 0} deaths\n\n`;
+    const fmtSection = (title, icon, rows, valKey) => {
+        if (!rows || !rows.length) return '';
+        const medals = ['🥇', '🥈', '🥉'];
+        let s = `**${icon} ${title}**\n`;
+        rows.slice(0, 5).forEach((r, i) => {
+            const rank = i < 3 ? medals[i] : `${i + 1}.`;
+            const guild = r.guild ? ` [${r.guild}]` : '';
+            s += `${rank} ${r.name}${guild} — ${(r[valKey] || 0).toLocaleString()}\n`;
+        });
+        return s + '\n';
+    };
+    text += fmtSection('Top Looters', '📦', d.topLooters, 'items');
+    text += fmtSection('Top Killers', '⚔', d.topKillers, 'kills');
+    text += fmtSection('Most Deaths', '💀', d.mostDeaths, 'deaths');
+    text += fmtSection('Most Active', '🔥', d.mostActive, 'sessions');
+    // Route through copy preview modal if it exists
+    if (typeof openCopyPreviewModal === 'function') {
+        openCopyPreviewModal('Guild Leaderboard — Discord', text);
+    } else {
+        navigator.clipboard.writeText(text.trim()).then(() => showToast('Leaderboard copied!', 'success'));
+    }
 }
 
 // Global cross-tab shortcuts — work anywhere in the app
