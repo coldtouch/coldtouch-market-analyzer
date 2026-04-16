@@ -6579,6 +6579,7 @@ function renderTrackedTabDetail(tab) {
                 <span style="font-size:0.7rem; color:var(--text-muted);">▼</span>
             </div>
             <div id="items-checklist-${tab.id}" style="display:none; margin-top:0.35rem;">
+                ${soldCount > 0 ? `<div style="text-align:right; margin-bottom:0.25rem;" onclick="event.stopPropagation()"><button class="btn-small" style="font-size:0.65rem; padding:0.15rem 0.4rem;" onclick="clearSoldMarks(${tab.id})">Clear all marks</button></div>` : ''}
                 ${itemsList.map(([key, it]) => {
                     const name = getFriendlyName(it.itemId) || it.itemId;
                     const qLbl = (it.quality || 1) > 1 ? ` q${it.quality}` : '';
@@ -6810,6 +6811,12 @@ function toggleItemSold(tabId, itemKey, rowEl) {
             }
         }
     }
+}
+
+function clearSoldMarks(tabId) {
+    try { localStorage.removeItem(`albion_sold_items_${tabId}`); } catch {}
+    _reloadTabDetail(tabId);
+    showToast('All sold marks cleared', 'info');
 }
 
 function _reloadTabDetail(tabId) {
