@@ -3235,7 +3235,8 @@ function detectFlip(id, q) {
 }
 
 // === ALERTER LOGIC ===
-const TAX_RATE = 0.065;
+const TAX_RATE = 0.03;    // 3% market tax (instant sell)
+const SETUP_FEE = 0.025;  // 2.5% listing fee (sell orders)
 const alertMarketDb = {};
 const CITY_NAMES = { 'Thetford': 'Thetford', 'Lymhurst': 'Lymhurst', 'Bridgewatch': 'Bridgewatch', 'Black Market': 'Black Market', 'Caerleon': 'Caerleon', 'Fort Sterling': 'Fort Sterling', 'Martlock': 'Martlock', 'Brecilien': 'Brecilien' };
 const API_LOCALE_MAP = { '0': 'Thetford', '7': 'Thetford', '3004': 'Thetford', '3': 'Lymhurst', '1002': 'Lymhurst', '4': 'Bridgewatch', '2004': 'Bridgewatch', '3003': 'Black Market', '3005': 'Caerleon', '3008': 'Fort Sterling', '4000': 'Martlock', '4300': 'Brecilien' };
@@ -4329,7 +4330,7 @@ let natsConnection = null;
 (async () => {
   try {
     natsConnection = await connect({
-      servers: "nats.albion-online-data.com:4222",
+      servers: "nats.albion-online-data.com:24222",
       user: "public",
       pass: "thenewalbiondata",
       reconnect: true,
