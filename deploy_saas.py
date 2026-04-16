@@ -1701,6 +1701,45 @@ app.post('/api/loot-tab/:id/sale', requireAuth, (req, res) => {
   });
 });
 
+// Edit a sale record (update price, quantity, or item)
+app.put('/api/loot-tab/:id/sale/:saleId', requireAuth, (req, res) => {
+  const tabId = parseInt(req.params.id);
+  const saleId = parseInt(req.params.saleId);
+  if (!tabId || !saleId) return res.status(400).json({ error: 'Invalid ids.' });
+  const { salePrice, quantity } = req.body;
+  if (!salePrice) return res.status(400).json({ error: 'salePrice required.' });
+  const price = parseInt(salePrice);
+  if (isNaN(price) || price <= 0) return res.status(400).json({ error: 'salePrice must be positive.' });
+  const qty = Math.max(1, parseInt(quantity) || 1);
+  // Verify ownership via loot_tabs join
+  db.get(`SELECT s.id FROM loot_tab_sales s JOIN loot_tabs t ON s.loot_tab_id = t.id
+          WHERE s.id = ? AND t.id = ? AND t.user_id = ?`, [saleId, tabId, req.user.id], (err, row) => {
+    if (err) return res.status(500).json({ error: err.message });
+    if (!row) return res.status(404).json({ error: 'Sale not found.' });
+    db.run(`UPDATE loot_tab_sales SET sale_price = ?, quantity = ? WHERE id = ?`,
+      [price, qty, saleId], function(err2) {
+        if (err2) return res.status(500).json({ error: err2.message });
+        res.json({ success: true });
+      });
+  });
+});
+
+// Delete a single sale record
+app.delete('/api/loot-tab/:id/sale/:saleId', requireAuth, (req, res) => {
+  const tabId = parseInt(req.params.id);
+  const saleId = parseInt(req.params.saleId);
+  if (!tabId || !saleId) return res.status(400).json({ error: 'Invalid ids.' });
+  db.get(`SELECT s.id FROM loot_tab_sales s JOIN loot_tabs t ON s.loot_tab_id = t.id
+          WHERE s.id = ? AND t.id = ? AND t.user_id = ?`, [saleId, tabId, req.user.id], (err, row) => {
+    if (err) return res.status(500).json({ error: err.message });
+    if (!row) return res.status(404).json({ error: 'Sale not found.' });
+    db.run(`DELETE FROM loot_tab_sales WHERE id = ?`, [saleId], function(err2) {
+      if (err2) return res.status(500).json({ error: err2.message });
+      res.json({ success: true, deleted: this.changes });
+    });
+  });
+});
+
 // Update tab status (open / partial / sold)
 app.patch('/api/loot-tab/:id/status', requireAuth, (req, res) => {
   const tabId = parseInt(req.params.id);
@@ -1868,6 +1907,117 @@ app.post('/api/loot-session/:sessionId/unshare', requireAuth, (req, res) => {
     });
 });
 
+// C4: Crafter aggregation — top crafters across all tracked tabs.
+app.get('/api/crafter-stats', requireAuth, (req, res) => {
+  readDb.all(`SELECT id, items_json FROM loot_tabs WHERE user_id = ?`, [req.user.id], (err, rows) => {
+    if (err) return res.status(500).json({ error: err.message });
+    const crafterMap = {};
+    let totalItems = 0;
+    for (const row of (rows || [])) {
+      try {
+        const items = JSON.parse(row.items_json);
+        for (const it of items) {
+          const crafter = it.crafterName || it.crafter || '';
+          if (!crafter) continue;
+          if (!crafterMap[crafter]) crafterMap[crafter] = { items: 0, tabIds: new Set() };
+          crafterMap[crafter].items += (it.quantity || 1);
+          crafterMap[crafter].tabIds.add(row.id);
+          totalItems++;
+        }
+      } catch { /* skip malformed JSON */ }
+    }
+    const crafters = Object.entries(crafterMap)
+      .map(([name, data]) => ({ name, items: data.items, tabs: data.tabIds.size }))
+      .sort((a, b) => b.items - a.items)
+      .slice(0, 20);
+    res.json({ crafters, totalCraftedItems: totalItems, totalTabs: (rows || []).length });
+  });
+});
+
+// G1: Guild Leaderboard — aggregated stats across ALL saved sessions.
+// Returns top looters, killers, deaths, most active players.
+// Query params: period=all|7d|30d (default all)
+app.get('/api/guild-leaderboard', requireAuth, (req, res) => {
+  const period = req.query.period || 'all';
+  let cutoff = 0;
+  if (period === '7d') cutoff = Date.now() - 7 * 24 * 3600 * 1000;
+  else if (period === '30d') cutoff = Date.now() - 30 * 24 * 3600 * 1000;
+
+  const timeCond = cutoff > 0 ? ' AND timestamp >= ?' : '';
+  const timeParams = cutoff > 0 ? [cutoff] : [];
+
+  // 1) Top looters: items picked up (excluding deaths and silver)
+  const lootersSql = `
+    SELECT looted_by_name as name, looted_by_guild as guild,
+           COUNT(DISTINCT session_id) as sessions,
+           SUM(quantity) as items, COUNT(*) as events
+    FROM loot_events
+    WHERE user_id = ? AND item_id != '__DEATH__' AND is_silver = 0${timeCond}
+    GROUP BY looted_by_name
+    ORDER BY items DESC LIMIT 15`;
+
+  // 2) Top killers: deaths where they are the killer (looted_by_name on __DEATH__ rows)
+  const killersSql = `
+    SELECT looted_by_name as name, looted_by_guild as guild, COUNT(*) as kills
+    FROM loot_events
+    WHERE user_id = ? AND item_id = '__DEATH__'${timeCond}
+    GROUP BY looted_by_name
+    ORDER BY kills DESC LIMIT 15`;
+
+  // 3) Most deaths: victim (looted_from_name on __DEATH__ rows)
+  const deathsSql = `
+    SELECT looted_from_name as name, looted_from_guild as guild, COUNT(*) as deaths
+    FROM loot_events
+    WHERE user_id = ? AND item_id = '__DEATH__'${timeCond}
+    GROUP BY looted_from_name
+    ORDER BY deaths DESC LIMIT 15`;
+
+  // 4) Most active: distinct sessions per player
+  const activeSql = `
+    SELECT looted_by_name as name, looted_by_guild as guild,
+           COUNT(DISTINCT session_id) as sessions, SUM(quantity) as items
+    FROM loot_events
+    WHERE user_id = ? AND item_id != '__DEATH__' AND is_silver = 0${timeCond}
+    GROUP BY looted_by_name
+    ORDER BY sessions DESC LIMIT 15`;
+
+  // 5) Totals
+  const totalsSql = `
+    SELECT COUNT(DISTINCT session_id) as total_sessions,
+           COUNT(DISTINCT looted_by_name) as total_players,
+           SUM(CASE WHEN item_id != '__DEATH__' AND is_silver = 0 THEN quantity ELSE 0 END) as total_items,
+           SUM(CASE WHEN item_id = '__DEATH__' THEN 1 ELSE 0 END) as total_deaths
+    FROM loot_events
+    WHERE user_id = ?${timeCond}`;
+
+  const uid = req.user.id;
+  const p1 = [uid, ...timeParams];
+
+  readDb.all(lootersSql, p1, (e1, looters) => {
+    if (e1) return res.status(500).json({ error: e1.message });
+    readDb.all(killersSql, p1, (e2, killers) => {
+      if (e2) return res.status(500).json({ error: e2.message });
+      readDb.all(deathsSql, p1, (e3, deaths) => {
+        if (e3) return res.status(500).json({ error: e3.message });
+        readDb.all(activeSql, p1, (e4, active) => {
+          if (e4) return res.status(500).json({ error: e4.message });
+          readDb.get(totalsSql, p1, (e5, totals) => {
+            if (e5) return res.status(500).json({ error: e5.message });
+            res.json({
+              period,
+              totals: totals || { total_sessions: 0, total_players: 0, total_items: 0, total_deaths: 0 },
+              topLooters: looters || [],
+              topKillers: killers || [],
+              mostDeaths: deaths || [],
+              mostActive: active || []
+            });
+          });
+        });
+      });
+    });
+  });
+});
+
 // G6: Bulk per-player trends across the user's saved sessions.
 // POST { names: ["Coldtouch","Ally2",...] } → { "Coldtouch": {stats}, ... }
 // Used by the session view to inject trend data into each player card in one roundtrip.
@@ -1916,6 +2066,39 @@ app.post('/api/player-trends-bulk', requireAuth, (req, res) => {
       res.json({ trends });
     });
   });
+});
+
+// Session merge — combine multiple sessions into one new session.
+// POST { sessionIds: ["id1","id2",...], name: "optional name" }
+app.post('/api/loot-sessions/merge', requireAuth, (req, res) => {
+  const { sessionIds, name } = req.body;
+  if (!Array.isArray(sessionIds) || sessionIds.length < 2 || sessionIds.length > 10) {
+    return res.status(400).json({ error: 'Provide 2-10 session IDs to merge.' });
+  }
+  const uid = req.user.id;
+  const newId = name
+    ? name.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 64) + '_' + Date.now()
+    : 'merged_' + Date.now();
+  const placeholders = sessionIds.map(() => '?').join(',');
+  // Verify all sessions belong to this user, then copy events to new session
+  db.all(`SELECT DISTINCT session_id FROM loot_events WHERE user_id = ? AND session_id IN (${placeholders})`,
+    [uid, ...sessionIds], (err, found) => {
+      if (err) return res.status(500).json({ error: err.message });
+      const foundIds = new Set((found || []).map(r => r.session_id));
+      const missing = sessionIds.filter(id => !foundIds.has(id));
+      if (missing.length > 0) return res.status(404).json({ error: 'Sessions not found: ' + missing.join(', ') });
+      // Copy all events to the new session_id, preserving original timestamps
+      db.run(`INSERT INTO loot_events (user_id, session_id, timestamp, looted_by_name, looted_by_guild, looted_by_alliance,
+              looted_from_name, looted_from_guild, looted_from_alliance, item_id, numeric_id, quantity, weight, is_silver)
+              SELECT ?, ?, timestamp, looted_by_name, looted_by_guild, looted_by_alliance,
+              looted_from_name, looted_from_guild, looted_from_alliance, item_id, numeric_id, quantity, weight, is_silver
+              FROM loot_events WHERE user_id = ? AND session_id IN (${placeholders})
+              ORDER BY timestamp ASC`,
+        [uid, newId, uid, ...sessionIds], function(err2) {
+          if (err2) return res.status(500).json({ error: err2.message });
+          res.json({ success: true, newSessionId: newId, eventsCopied: this.changes });
+        });
+    });
 });
 
 // G4: Public read-only view — unauthenticated, token-based access.

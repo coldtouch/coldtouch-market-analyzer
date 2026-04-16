@@ -6100,6 +6100,8 @@ async function loadTrackedTabs() {
         }
         _lastTrackedTabs = data.tabs;
         _renderTrackedTabsList();
+        _loadCrafterStats(); // C4: async crafter aggregation
+        _loadSessionTabOverlaps(data.tabs); // F1: async overlap badges
     } catch(e) {
         list.innerHTML = `<div class="empty-state"><p>Failed to load tracked tabs: ${esc(e.message)}</p></div>`;
     }
@@ -6168,6 +6170,71 @@ function _renderTrackedTabsHeader(tabs) {
 function _onTrackedTabsSortChange(val) {
     try { localStorage.setItem('albion_buyer_sort', val); } catch {}
     _renderTrackedTabsList();
+}
+
+// C4: Crafter aggregation — fetch and render top crafters across tracked tabs
+async function _loadCrafterStats() {
+    if (!localStorage.getItem('albion_auth_token') && !discordUser) return;
+    try {
+        const res = await fetch(`${VPS_BASE}/api/crafter-stats`, { headers: authHeaders() });
+        if (!res.ok) return;
+        const data = await res.json();
+        const crafters = data.crafters || [];
+        if (crafters.length === 0) return;
+        let container = document.getElementById('crafter-stats-strip');
+        if (!container) {
+            container = document.createElement('div');
+            container.id = 'crafter-stats-strip';
+            const header = document.getElementById('loot-tracked-header');
+            if (header) header.after(container);
+            else return;
+        }
+        const top5 = crafters.slice(0, 5);
+        container.innerHTML = `<div class="crafter-strip">
+            <span class="crafter-strip-label">🔨 Top crafters</span>
+            ${top5.map((c, i) => `<span class="crafter-chip" title="${esc(c.name)}: ${c.items} items across ${c.tabs} tab${c.tabs !== 1 ? 's' : ''}">${i < 3 ? ['🥇','🥈','🥉'][i] + ' ' : ''}${esc(c.name)} <strong>${c.items}</strong></span>`).join('')}
+            ${crafters.length > 5 ? `<span class="crafter-chip crafter-more" title="Total: ${crafters.length} crafters">+${crafters.length - 5} more</span>` : ''}
+        </div>`;
+    } catch { /* silent */ }
+}
+
+// F1: Session ↔ Tracked tab overlap badges — async stamps badges on tab cards
+async function _loadSessionTabOverlaps(tabs) {
+    if (!tabs || !tabs.length) return;
+    if (!localStorage.getItem('albion_auth_token') && !discordUser) return;
+    try {
+        const res = await fetch(`${VPS_BASE}/api/loot-sessions`, { headers: authHeaders() });
+        if (!res.ok) return;
+        const data = await res.json();
+        const sessions = data.sessions || [];
+        if (!sessions.length) return;
+        // For each tab, check if its purchase time falls within a session window (±1h buffer)
+        const BUFFER = 3600000; // 1 hour
+        for (const tab of tabs) {
+            const purchaseTime = tab.purchasedAt || 0;
+            if (!purchaseTime) continue;
+            const matchingSession = sessions.find(s => {
+                const start = s.started_at - BUFFER;
+                const end = (s.ended_at || s.started_at) + BUFFER;
+                return purchaseTime >= start && purchaseTime <= end;
+            });
+            if (matchingSession) {
+                // Find the card in DOM and add a badge
+                const card = document.querySelector(`.loot-tracked-card[onclick*="toggleTrackedTabDetail(${tab.id},"]`);
+                if (!card) continue;
+                const titleArea = card.querySelector('.loot-tracked-header > div');
+                if (!titleArea) continue;
+                // Don't double-add
+                if (titleArea.querySelector('.session-overlap-badge')) continue;
+                const badge = document.createElement('span');
+                badge.className = 'loot-tab-badge session-overlap-badge';
+                badge.style.cssText = 'background:rgba(139,92,246,0.15); color:#a78bfa; border-color:rgba(139,92,246,0.3);';
+                badge.title = 'Purchased during a logged loot session';
+                badge.textContent = '📋 Session';
+                titleArea.appendChild(badge);
+            }
+        }
+    } catch { /* silent */ }
 }
 
 async function loadRecentSales() {
@@ -6401,16 +6468,52 @@ function renderTrackedTabDetail(tab) {
             const qualLabel = s.quality > 1 ? ` q${s.quality}` : '';
             const total = (s.sale_price * s.quantity).toLocaleString();
             const date = new Date(s.sold_at).toLocaleDateString();
-            return `<div style="display:grid; grid-template-columns:1fr auto auto; align-items:center; gap:0.5rem; font-size:0.78rem; padding:0.3rem 0; border-bottom:1px solid var(--border-color);">
+            return `<div class="sale-row" data-sale-id="${s.id}" style="display:grid; grid-template-columns:1fr auto auto auto; align-items:center; gap:0.5rem; font-size:0.78rem; padding:0.3rem 0; border-bottom:1px solid var(--border-color);">
                 <span style="color:var(--text-primary);">${esc(name)}${qualLabel} ×${s.quantity}</span>
                 <span style="color:var(--profit-green); font-weight:600;">${total}s</span>
                 <span style="color:var(--text-muted);">${date}</span>
+                <span class="sale-actions" onclick="event.stopPropagation()">
+                    <button class="btn-icon" onclick="editSaleInline(${tab.id},${s.id},${s.sale_price},${s.quantity})" title="Edit sale" aria-label="Edit sale">✏</button>
+                    <button class="btn-icon btn-icon-danger" onclick="deleteSaleRecord(${tab.id},${s.id})" title="Delete sale" aria-label="Delete sale">✕</button>
+                </span>
             </div>`;
         }).join('');
 
     const totalRevLabel = tab.revenueSoFar.toLocaleString();
     const netLabel = (tab.netProfit >= 0 ? '+' : '') + tab.netProfit.toLocaleString();
     const netColor = tab.netProfit >= 0 ? 'var(--profit-green)' : 'var(--loss-red)';
+
+    // Per-item mark-off checklist (persisted in localStorage)
+    const soldKey = `albion_sold_items_${tab.id}`;
+    let soldSet;
+    try { soldSet = new Set(JSON.parse(localStorage.getItem(soldKey) || '[]')); } catch { soldSet = new Set(); }
+    const items = tab.items || [];
+    const itemsGrouped = {};
+    for (const it of items) {
+        const k = (it.itemId || '') + '_' + (it.quality || 1);
+        if (!itemsGrouped[k]) itemsGrouped[k] = { ...it, quantity: 0 };
+        itemsGrouped[k].quantity += (it.quantity || 1);
+    }
+    const itemsList = Object.entries(itemsGrouped);
+    const soldCount = itemsList.filter(([k]) => soldSet.has(k)).length;
+    const itemsChecklistHtml = itemsList.length > 0 ? `
+        <div style="margin-top:0.75rem;">
+            <div style="display:flex; justify-content:space-between; align-items:center; cursor:pointer;" onclick="event.stopPropagation(); const el=document.getElementById('items-checklist-${tab.id}'); el.style.display=el.style.display==='none'?'':'none';">
+                <span style="font-size:0.72rem; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.04em; font-weight:600;">Items checklist (${soldCount}/${itemsList.length} sold)</span>
+                <span style="font-size:0.7rem; color:var(--text-muted);">▼</span>
+            </div>
+            <div id="items-checklist-${tab.id}" style="display:none; margin-top:0.35rem;">
+                ${itemsList.map(([key, it]) => {
+                    const name = getFriendlyName(it.itemId) || it.itemId;
+                    const qLbl = (it.quality || 1) > 1 ? ` q${it.quality}` : '';
+                    const isSold = soldSet.has(key);
+                    return `<div class="item-check-row${isSold ? ' item-sold' : ''}" onclick="event.stopPropagation(); toggleItemSold(${tab.id},'${esc(key)}',this)">
+                        <span class="item-check-box">${isSold ? '✓' : ''}</span>
+                        <span class="item-check-name">${esc(name)}${qLbl} ×${it.quantity}</span>
+                    </div>`;
+                }).join('')}
+            </div>
+        </div>` : '';
 
     return `<div style="margin-top:0.75rem; padding-top:0.75rem; border-top:1px solid var(--border-color);">
         <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.5rem; flex-wrap:wrap; gap:0.4rem;">
@@ -6430,6 +6533,7 @@ function renderTrackedTabDetail(tab) {
         </div>
         <div style="font-size:0.78rem; color:var(--text-muted); margin-bottom:0.35rem;">${tab.sales.length} sale record${tab.sales.length !== 1 ? 's' : ''}</div>
         ${salesHtml}
+        ${itemsChecklistHtml}
     </div>`;
 }
 
@@ -6548,6 +6652,83 @@ async function submitSaleForm(tabId) {
         if (btn) { btn.disabled = false; btn.textContent = 'Save Sale'; }
         showToast('Failed to record sale: ' + e.message, 'error');
     }
+}
+
+// Inline edit a sale — replace the row with editable fields
+function editSaleInline(tabId, saleId, currentPrice, currentQty) {
+    const row = document.querySelector(`.sale-row[data-sale-id="${saleId}"]`);
+    if (!row) return;
+    row.innerHTML = `
+        <div style="display:flex; gap:0.4rem; align-items:center; grid-column:1/-1;" onclick="event.stopPropagation()">
+            <label style="font-size:0.72rem; color:var(--text-muted);">Qty</label>
+            <input type="number" id="edit-qty-${saleId}" value="${currentQty}" min="1" class="sale-form-input" style="width:60px; height:26px; font-size:0.78rem;">
+            <label style="font-size:0.72rem; color:var(--text-muted);">Price/ea</label>
+            <input type="number" id="edit-price-${saleId}" value="${currentPrice}" min="1" class="sale-form-input" style="width:100px; height:26px; font-size:0.78rem;">
+            <button class="btn-small-accent" onclick="submitSaleEdit(${tabId},${saleId})">Save</button>
+            <button class="btn-small" onclick="_reloadTabDetail(${tabId})">Cancel</button>
+        </div>`;
+}
+async function submitSaleEdit(tabId, saleId) {
+    const qty = Math.max(1, parseInt(document.getElementById(`edit-qty-${saleId}`)?.value) || 1);
+    const price = parseInt(document.getElementById(`edit-price-${saleId}`)?.value);
+    if (!price || price <= 0) return;
+    try {
+        const res = await fetch(`${VPS_BASE}/api/loot-tab/${tabId}/sale/${saleId}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json', ...authHeaders() },
+            body: JSON.stringify({ salePrice: price, quantity: qty })
+        });
+        if (!res.ok) { const d = await res.json(); throw new Error(d.error || 'Failed'); }
+        showToast('Sale updated', 'success');
+        _reloadTabDetail(tabId);
+    } catch(e) {
+        showToast('Failed to update sale: ' + e.message, 'error');
+    }
+}
+async function deleteSaleRecord(tabId, saleId) {
+    if (!confirm('Delete this sale record?')) return;
+    try {
+        const res = await fetch(`${VPS_BASE}/api/loot-tab/${tabId}/sale/${saleId}`, {
+            method: 'DELETE',
+            headers: authHeaders()
+        });
+        if (!res.ok) { const d = await res.json(); throw new Error(d.error || 'Failed'); }
+        showToast('Sale deleted', 'success');
+        _reloadTabDetail(tabId);
+    } catch(e) {
+        showToast('Failed to delete sale: ' + e.message, 'error');
+    }
+}
+// Per-item sold mark-off toggle (localStorage persistence)
+function toggleItemSold(tabId, itemKey, rowEl) {
+    const soldKey = `albion_sold_items_${tabId}`;
+    let sold;
+    try { sold = new Set(JSON.parse(localStorage.getItem(soldKey) || '[]')); } catch { sold = new Set(); }
+    if (sold.has(itemKey)) sold.delete(itemKey);
+    else sold.add(itemKey);
+    try { localStorage.setItem(soldKey, JSON.stringify([...sold])); } catch {}
+    // Update UI inline
+    const isSold = sold.has(itemKey);
+    rowEl.classList.toggle('item-sold', isSold);
+    const box = rowEl.querySelector('.item-check-box');
+    if (box) box.textContent = isSold ? '✓' : '';
+    // Update checklist header count
+    const checklist = rowEl.closest('[id^="items-checklist-"]');
+    if (checklist) {
+        const header = checklist.previousElementSibling;
+        if (header) {
+            const totalRows = checklist.querySelectorAll('.item-check-row').length;
+            const soldRows = checklist.querySelectorAll('.item-check-row.item-sold').length;
+            const label = header.querySelector('span');
+            if (label) label.textContent = `Items checklist (${soldRows}/${totalRows} sold)`;
+        }
+    }
+}
+
+function _reloadTabDetail(tabId) {
+    const detail = document.getElementById(`loot-tracked-detail-${tabId}`);
+    if (detail) detail.style.display = 'none';
+    loadTrackedTabs();
 }
 
 async function updateTabStatus(tabId, status) {
@@ -12176,14 +12357,148 @@ function _llShowShortcutHelp() {
             <div class="ll-shortcut-row"><kbd>?</kbd><span>Show this help</span></div>
             <div class="ll-shortcut-row" style="border-top:1px dashed var(--border-color); margin-top:0.4rem; padding-top:0.55rem;"><kbd>Ctrl+Shift+T</kbd><span>Trip Summary (any tab)</span></div>
             <div class="ll-shortcut-row"><kbd>Ctrl+Shift+C</kbd><span>Compare Sessions (any tab)</span></div>
+            <div class="ll-shortcut-row"><kbd>Ctrl+Shift+L</kbd><span>Guild Leaderboard (any tab)</span></div>
             <p style="font-size:0.72rem; color:var(--text-muted); margin:0.75rem 0 0;">Shortcuts don't fire while typing in a text field.</p>
         </div>`;
     document.body.appendChild(modal);
 }
 
+// Session Merge — combine 2+ saved sessions into one
+function openSessionMerge() {
+    document.getElementById('session-merge-modal')?.classList.remove('hidden');
+    document.getElementById('session-merge-result').innerHTML = '';
+    _populateMergeList();
+}
+function closeSessionMerge() {
+    document.getElementById('session-merge-modal')?.classList.add('hidden');
+}
+async function _populateMergeList() {
+    const list = document.getElementById('session-merge-list');
+    if (!list) return;
+    list.innerHTML = '<div class="empty-state"><p>Loading...</p></div>';
+    try {
+        const res = await fetch(`${VPS_BASE}/api/loot-sessions`, { headers: authHeaders() });
+        if (!res.ok) throw new Error('Failed to load sessions');
+        const data = await res.json();
+        const sessions = data.sessions || [];
+        if (sessions.length < 2) {
+            list.innerHTML = '<div class="empty-state"><p>Need at least 2 saved sessions to merge.</p></div>';
+            return;
+        }
+        const savedNames = typeof getSavedSessionNames === 'function' ? getSavedSessionNames() : {};
+        list.innerHTML = sessions.map(s => {
+            const started = new Date(s.started_at).toLocaleString();
+            const label = savedNames[s.session_id] || started;
+            return `<label class="merge-session-item" onclick="event.stopPropagation()">
+                <input type="checkbox" value="${esc(s.session_id)}" class="merge-session-cb">
+                <span>${esc(label)}</span>
+                <span style="color:var(--text-muted); font-size:0.72rem;">${s.event_count} events · ${s.player_count} players</span>
+            </label>`;
+        }).join('');
+    } catch(e) {
+        list.innerHTML = `<div class="empty-state"><p>${esc(e.message)} — login required.</p></div>`;
+    }
+}
+async function submitSessionMerge() {
+    const checkboxes = document.querySelectorAll('.merge-session-cb:checked');
+    const ids = Array.from(checkboxes).map(cb => cb.value);
+    if (ids.length < 2) { showToast('Select at least 2 sessions to merge', 'warn'); return; }
+    const name = document.getElementById('merge-session-name')?.value?.trim() || '';
+    const btn = document.getElementById('merge-submit-btn');
+    if (btn) { btn.disabled = true; btn.textContent = 'Merging...'; }
+    try {
+        const res = await fetch(`${VPS_BASE}/api/loot-sessions/merge`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', ...authHeaders() },
+            body: JSON.stringify({ sessionIds: ids, name })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Failed');
+        document.getElementById('session-merge-result').innerHTML =
+            `<p style="color:var(--profit-green); font-size:0.8rem;">Merged ${ids.length} sessions (${data.eventsCopied} events). Reload to see the new session.</p>`;
+        showToast(`Merged ${ids.length} sessions`, 'success');
+    } catch(e) {
+        document.getElementById('session-merge-result').innerHTML =
+            `<p style="color:var(--loss-red); font-size:0.8rem;">${esc(e.message)}</p>`;
+    } finally {
+        if (btn) { btn.disabled = false; btn.textContent = 'Merge Selected'; }
+    }
+}
+
+// G1: Guild Leaderboard — aggregated stats across all saved sessions.
+let _lbPeriod = 'all';
+function openGuildLeaderboard() {
+    document.getElementById('guild-leaderboard-modal')?.classList.remove('hidden');
+    _renderGuildLeaderboard();
+}
+function closeGuildLeaderboard() {
+    document.getElementById('guild-leaderboard-modal')?.classList.add('hidden');
+}
+function setLeaderboardPeriod(p) {
+    _lbPeriod = p;
+    document.querySelectorAll('#guild-leaderboard-modal [data-lb-window]').forEach(b => {
+        b.classList.toggle('btn-small-accent', b.dataset.lbWindow === p);
+        b.classList.toggle('btn-small', b.dataset.lbWindow !== p);
+    });
+    _renderGuildLeaderboard();
+}
+async function _renderGuildLeaderboard() {
+    const body = document.getElementById('guild-leaderboard-body');
+    if (!body) return;
+    body.innerHTML = '<div class="empty-state"><p>Loading...</p></div>';
+    // Highlight active period button
+    document.querySelectorAll('#guild-leaderboard-modal [data-lb-window]').forEach(b => {
+        b.classList.toggle('btn-small-accent', b.dataset.lbWindow === _lbPeriod);
+        b.classList.toggle('btn-small', b.dataset.lbWindow !== _lbPeriod);
+    });
+    try {
+        const res = await fetch(`${VPS_BASE}/api/guild-leaderboard?period=${_lbPeriod}`, { headers: authHeaders() });
+        if (!res.ok) throw new Error('Failed to load leaderboard');
+        const data = await res.json();
+        const t = data.totals || {};
+        let html = `<div class="ll-summary-strip" style="margin-bottom:1rem;">
+            <div class="ll-summary-stat"><div class="ll-summary-label">Sessions</div><div class="ll-summary-value">${(t.total_sessions || 0).toLocaleString()}</div></div>
+            <div class="ll-summary-stat"><div class="ll-summary-label">Players</div><div class="ll-summary-value">${(t.total_players || 0).toLocaleString()}</div></div>
+            <div class="ll-summary-stat"><div class="ll-summary-label">Items</div><div class="ll-summary-value">${(t.total_items || 0).toLocaleString()}</div></div>
+            <div class="ll-summary-stat"><div class="ll-summary-label">Deaths</div><div class="ll-summary-value ${t.total_deaths > 0 ? 'loss' : ''}">${t.total_deaths > 0 ? '💀 ' : ''}${(t.total_deaths || 0).toLocaleString()}</div></div>
+        </div>`;
+        html += '<div class="lb-grid">';
+        html += _lbTable('Top Looters', '📦', data.topLooters || [], ['name', 'guild', 'items', 'sessions'], { items: 'Items', sessions: 'Sessions' });
+        html += _lbTable('Top Killers', '⚔', data.topKillers || [], ['name', 'guild', 'kills'], { kills: 'Kills' });
+        html += _lbTable('Most Deaths', '💀', data.mostDeaths || [], ['name', 'guild', 'deaths'], { deaths: 'Deaths' });
+        html += _lbTable('Most Active', '🔥', data.mostActive || [], ['name', 'guild', 'sessions', 'items'], { sessions: 'Sessions', items: 'Items' });
+        html += '</div>';
+        body.innerHTML = html;
+    } catch (e) {
+        body.innerHTML = `<div class="empty-state"><p>${esc(e.message)} — login required.</p></div>`;
+    }
+}
+function _lbTable(title, icon, rows, cols, labels) {
+    if (!rows.length) return `<div class="lb-section"><h3 class="lb-title">${icon} ${esc(title)}</h3><p class="hint" style="color:var(--text-muted); font-size:0.78rem;">No data yet.</p></div>`;
+    const medals = ['🥇', '🥈', '🥉'];
+    let html = `<div class="lb-section"><h3 class="lb-title">${icon} ${esc(title)}</h3><table class="lb-table"><thead><tr><th>#</th><th>Player</th>`;
+    for (const c of cols) {
+        if (c === 'name' || c === 'guild') continue;
+        html += `<th>${esc(labels[c] || c)}</th>`;
+    }
+    html += '</tr></thead><tbody>';
+    rows.forEach((r, i) => {
+        const rank = i < 3 ? medals[i] : `${i + 1}`;
+        const guild = r.guild ? `<span class="lb-guild">[${esc(r.guild)}]</span>` : '';
+        html += `<tr class="${i < 3 ? 'lb-top3' : ''}"><td class="lb-rank">${rank}</td><td>${esc(r.name)} ${guild}</td>`;
+        for (const c of cols) {
+            if (c === 'name' || c === 'guild') continue;
+            html += `<td class="lb-val">${(r[c] || 0).toLocaleString()}</td>`;
+        }
+        html += '</tr>';
+    });
+    html += '</tbody></table></div>';
+    return html;
+}
+
 // Global cross-tab shortcuts — work anywhere in the app
 document.addEventListener('keydown', (e) => {
-    // Ctrl+Shift+T opens Trip Summary, Ctrl+Shift+C opens Compare Sessions
+    // Ctrl+Shift+T opens Trip Summary, Ctrl+Shift+C opens Compare Sessions, Ctrl+Shift+L opens Leaderboard
     if (!(e.ctrlKey || e.metaKey) || !e.shiftKey) return;
     const t = e.target;
     if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
@@ -12193,6 +12508,9 @@ document.addEventListener('keydown', (e) => {
     } else if (e.key === 'C' || e.key === 'c') {
         e.preventDefault();
         if (typeof openSessionCompare === 'function') openSessionCompare();
+    } else if (e.key === 'L' || e.key === 'l') {
+        e.preventDefault();
+        if (typeof openGuildLeaderboard === 'function') openGuildLeaderboard();
     }
 });
 

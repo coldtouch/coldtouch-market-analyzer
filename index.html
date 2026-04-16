@@ -358,6 +358,8 @@
                     <button class="nav-tab" data-tab="loot-logger">Loot Logger</button>
                     <button class="nav-tab nav-tab-action" onclick="event.preventDefault(); openTripSummary(); this.closest('.nav-dropdown')?.classList.remove('show');" title="Today's running totals from Loot Logger + Loot Buyer">📊 Trip Summary</button>
                     <button class="nav-tab nav-tab-action" onclick="event.preventDefault(); openSessionCompare(); this.closest('.nav-dropdown')?.classList.remove('show');" title="Pick two saved sessions and see them side-by-side">⚖ Compare Sessions</button>
+                    <button class="nav-tab nav-tab-action" onclick="event.preventDefault(); openGuildLeaderboard(); this.closest('.nav-dropdown')?.classList.remove('show');" title="Historical leaderboard across all your saved sessions">🏆 Guild Leaderboard</button>
+                    <button class="nav-tab nav-tab-action" onclick="event.preventDefault(); openSessionMerge(); this.closest('.nav-dropdown')?.classList.remove('show');" title="Combine multiple sessions into one">🔀 Merge Sessions</button>
                 </div>
             </div>
             <!-- Game Tools group -->
@@ -3143,6 +3145,39 @@
             </div>
             <button class="btn-small-accent" onclick="runSessionCompare()">Compare</button>
             <div id="session-compare-body" style="margin-top:1rem;"></div>
+        </div>
+    </div>
+
+    <!-- Session Merge modal -->
+    <div id="session-merge-modal" class="modal hidden" onclick="if(event.target===this)closeSessionMerge()">
+        <div class="modal-content" style="max-width:640px;">
+            <button class="close-btn" onclick="closeSessionMerge()">&times;</button>
+            <h2 style="color:var(--accent); margin:0 0 0.5rem; font-size:1.1rem;">🔀 Merge Sessions</h2>
+            <p style="color:var(--text-secondary); font-size:0.78rem; margin:0 0 0.75rem;">Select 2+ sessions to combine into one. Original sessions are preserved.</p>
+            <div id="session-merge-list" style="max-height:300px; overflow-y:auto; margin-bottom:0.75rem;"></div>
+            <div style="display:flex; gap:0.5rem; align-items:center;">
+                <input type="text" id="merge-session-name" class="sale-form-input" placeholder="Merged session name (optional)" style="flex:1; height:32px;">
+                <button class="btn-small-accent" id="merge-submit-btn" onclick="submitSessionMerge()">Merge Selected</button>
+            </div>
+            <div id="session-merge-result" style="margin-top:0.5rem;"></div>
+        </div>
+    </div>
+
+    <!-- G1: Guild Leaderboard modal -->
+    <div id="guild-leaderboard-modal" class="modal hidden" onclick="if(event.target===this)closeGuildLeaderboard()">
+        <div class="modal-content" style="max-width:880px;">
+            <button class="close-btn" onclick="closeGuildLeaderboard()">&times;</button>
+            <div style="display:flex; align-items:center; justify-content:space-between; gap:0.5rem; margin-bottom:0.75rem; flex-wrap:wrap;">
+                <h2 style="color:var(--accent); margin:0; font-size:1.15rem;">🏆 Guild Leaderboard</h2>
+                <div style="display:flex; gap:0.4rem;">
+                    <button class="btn-small" data-lb-window="7d" onclick="setLeaderboardPeriod('7d')">Last 7d</button>
+                    <button class="btn-small" data-lb-window="30d" onclick="setLeaderboardPeriod('30d')">Last 30d</button>
+                    <button class="btn-small" data-lb-window="all" onclick="setLeaderboardPeriod('all')">All time</button>
+                </div>
+            </div>
+            <div id="guild-leaderboard-body">
+                <div class="empty-state"><p>Loading...</p></div>
+            </div>
         </div>
     </div>
 
