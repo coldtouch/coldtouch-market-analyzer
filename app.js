@@ -7531,7 +7531,8 @@ async function loadLootSessions() {
         html += lootSessions.map(s => {
             const started = new Date(s.started_at).toLocaleString();
             const endedAt = s.ended_at ? new Date(s.ended_at) : null;
-            const duration = endedAt ? Math.round((endedAt - new Date(s.started_at)) / 60000) + ' min' : 'ongoing';
+            const durMins = endedAt ? Math.round((endedAt - new Date(s.started_at)) / 60000) : 0;
+            const duration = !endedAt ? 'ongoing' : durMins >= 60 ? `${Math.floor(durMins / 60)}h ${durMins % 60}m` : `${durMins} min`;
             const sid = esc(s.session_id);
             const customName = savedNames[s.session_id];
             const titleMain = customName
