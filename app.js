@@ -1855,6 +1855,7 @@ async function doCraftSearch() {
 
         spinner.classList.add('hidden');
         renderCraftDetail(resolvedId, recipe, data);
+        trackActivity('craft_calc', 1);
         await updateDbStatus();
     } catch (e) {
         spinner.classList.add('hidden');
@@ -4732,6 +4733,7 @@ function initLiveSync() {
                     if (lootBuyerCaptures.length > 20) lootBuyerCaptures.length = 20;
                     renderLootCaptures();
                     _fireCaptureBusEvent('add', captures[0]); // F3: notify subscribers
+                    trackActivity('chest_capture', captures.length);
                     // Flash the tab
                     const tab = document.querySelector('[data-tab="loot-buyer"]');
                     if (tab && currentTab !== 'loot-buyer') {
@@ -6746,6 +6748,7 @@ async function submitSaleForm(tabId) {
         document.getElementById(`sale-form-${tabId}`)?.remove();
         const detail = document.getElementById(`loot-tracked-detail-${tabId}`);
         if (detail) detail.style.display = 'none'; // collapse so re-click reloads fresh
+        trackActivity('sale_record', 1);
         loadTrackedTabs();
     } catch(e) {
         if (btn) { btn.disabled = false; btn.textContent = 'Save Sale'; }
@@ -7395,6 +7398,7 @@ async function saveLiveSession() {
             // Clear the autosave draft — this data is now durable server-side.
             try { localStorage.removeItem(LL_DRAFT_KEY); } catch {}
             showToast(`Session saved (${data.eventsImported} events)${liveSessionName ? ` as "${liveSessionName}"` : ''}`, 'success');
+            trackActivity('loot_session', 1);
             if (lootLoggerMode === 'live') loadLootSessions();
         } else {
             showToast('Save failed — login required', 'error');
@@ -8937,6 +8941,7 @@ async function runAccountabilityCheck() {
     }).join('');
 
     resultEl.innerHTML = html;
+    trackActivity('accountability', 1);
 }
 
 function copyAccountabilityToDiscord(template) {
@@ -9967,17 +9972,29 @@ function renderTransportResults(routes, budget, mountCapacity, haulPlans, availa
 }
 
 // ====== CONTRIBUTION TRACKING ======
+// Legacy scan tracking — kept for backward compat, still populates contributions table
 function trackContribution(itemCount) {
-    if (!discordUser) return; // Only track for logged-in users
+    if (!discordUser) return;
     fetch(`${VPS_BASE}/api/contributions`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...authHeaders() },
         body: JSON.stringify({ source: 'web_refresh', item_count: itemCount })
+    }).catch(() => {});
+    // Also track as new-style activity
+    trackActivity('scan', 1);
+}
+// Unified activity tracking — tracks all user actions (scan, loot_session, chest_capture, etc.)
+function trackActivity(type, count) {
+    if (!localStorage.getItem('albion_auth_token') && !discordUser) return;
+    fetch(`${VPS_BASE}/api/activity`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify({ type, count: count || 1 })
     }).catch(() => {}); // Fire-and-forget
 }
 
 // ====== COMMUNITY TAB ======
-const TIER_THRESHOLDS = { bronze: 0, silver: 50, gold: 200, diamond: 500 };
+const TIER_THRESHOLDS = { bronze: 0, silver: 100, gold: 400, diamond: 1000 }; // Updated for combined scoring
 const TIER_ORDER = ['bronze', 'silver', 'gold', 'diamond'];
 
 function getTierProgress(tier, scans30d) {
@@ -10021,6 +10038,51 @@ async function loadCommunityTab() {
                 }
                 document.getElementById('tier-progress-fill').style.width = progress.pct + '%';
             }
+            // Fetch activity breakdown and render below stats
+            try {
+                const actRes = await fetch(`${VPS_BASE}/api/activity-stats`, { headers: authHeaders() });
+                if (actRes.ok) {
+                    const actData = await actRes.json();
+                    const breakdown = actData.breakdown || {};
+                    const score = actData.combinedScore || 0;
+                    const ACTIVITY_LABELS = { scan: '🔍 Market Scans', loot_session: '📋 Loot Sessions', chest_capture: '📦 Chest Captures', sale_record: '💰 Sales', accountability: '✓ Accountability', transport_plan: '🚛 Transport', craft_calc: '🔨 Crafting' };
+                    const ACTIVITY_WEIGHTS = { scan: 1, loot_session: 5, chest_capture: 3, sale_record: 2, accountability: 3, transport_plan: 1, craft_calc: 1 };
+                    let breakdownHtml = '<div class="activity-breakdown" style="margin-top:0.75rem; padding:0.6rem; background:var(--bg-secondary); border-radius:8px; border:1px solid var(--border-color);">';
+                    breakdownHtml += `<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.4rem;"><span style="font-size:0.72rem; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.04em; font-weight:600;">Activity Score (30d)</span><span style="color:var(--accent); font-weight:700; font-size:1rem;">${score.toLocaleString()}</span></div>`;
+                    const entries = Object.entries(ACTIVITY_LABELS).filter(([k]) => breakdown[k] > 0);
+                    if (entries.length > 0) {
+                        breakdownHtml += '<div style="display:grid; grid-template-columns:repeat(auto-fill, minmax(140px, 1fr)); gap:0.35rem;">';
+                        for (const [key, label] of entries) {
+                            const count = breakdown[key] || 0;
+                            const pts = count * (ACTIVITY_WEIGHTS[key] || 1);
+                            breakdownHtml += `<div style="font-size:0.75rem; padding:0.25rem 0.4rem; background:rgba(255,255,255,0.03); border-radius:4px;" title="${count} actions × ${ACTIVITY_WEIGHTS[key]} pts = ${pts} pts">${label} <strong style="color:var(--accent);">${count}</strong></div>`;
+                        }
+                        breakdownHtml += '</div>';
+                    } else {
+                        breakdownHtml += '<p style="color:var(--text-muted); font-size:0.78rem; margin:0.25rem 0 0;">No activity tracked yet. Use the tools and your score will grow!</p>';
+                    }
+                    breakdownHtml += '</div>';
+                    // Insert after the stats card
+                    const statsCard = document.getElementById('community-my-stats');
+                    let existingBreakdown = statsCard?.parentElement?.querySelector('.activity-breakdown');
+                    if (existingBreakdown) existingBreakdown.remove();
+                    statsCard?.insertAdjacentHTML('afterend', breakdownHtml);
+
+                    // Update tier based on combined score (not just scans)
+                    const actTier = actData.tier || 'bronze';
+                    const tierBadge2 = document.getElementById('community-my-tier');
+                    if (tierBadge2) {
+                        tierBadge2.textContent = actTier.charAt(0).toUpperCase() + actTier.slice(1);
+                        tierBadge2.className = `tier-badge tier-${actTier}`;
+                    }
+                    const progress2 = getTierProgress(actTier, score);
+                    document.getElementById('tier-current-label').textContent = actTier.charAt(0).toUpperCase() + actTier.slice(1);
+                    if (progress2.nextTier) {
+                        document.getElementById('tier-next-label').textContent = `→ ${progress2.nextTier.charAt(0).toUpperCase() + progress2.nextTier.slice(1)} (${progress2.nextThreshold} pts)`;
+                    }
+                    document.getElementById('tier-progress-fill').style.width = progress2.pct + '%';
+                }
+            } catch { /* silent — activity breakdown is optional */ }
         } catch (e) {
             if (DEBUG) console.log('Failed to load my stats:', e);
         }

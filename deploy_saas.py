@@ -285,6 +285,17 @@ db.serialize(() => {
     updated_at INTEGER NOT NULL
   )`);
 
+  // === USER ACTIVITY TRACKING (replaces scan-only contributions for combined scoring) ===
+  db.run(`CREATE TABLE IF NOT EXISTS user_activity (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id TEXT NOT NULL,
+    activity_type TEXT NOT NULL,
+    count INTEGER DEFAULT 1,
+    recorded_at INTEGER NOT NULL
+  )`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_user_activity ON user_activity(user_id, recorded_at)`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_user_activity_type ON user_activity(user_id, activity_type)`);
+
   // === PHASE 3: Loot Lifecycle Tracker ===
   db.run(`CREATE TABLE IF NOT EXISTS loot_tabs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -2350,6 +2361,52 @@ app.post('/api/feedback', feedbackLimiter, (req, res) => {
     console.error('[Feedback] Webhook error:', err.message);
     res.status(500).json({ error: 'Failed to deliver feedback' });
   });
+});
+
+// Unified activity tracking — replaces scan-only tracking with combined scoring
+const ACTIVITY_WEIGHTS = { scan: 1, loot_session: 5, chest_capture: 3, sale_record: 2, accountability: 3, transport_plan: 1, craft_calc: 1 };
+const VALID_ACTIVITY_TYPES = Object.keys(ACTIVITY_WEIGHTS);
+const activityLimiter = rateLimit({ windowMs: 60 * 1000, max: 60, standardHeaders: true, legacyHeaders: false });
+
+app.post('/api/activity', requireAuth, activityLimiter, (req, res) => {
+  const { type, count } = req.body;
+  if (!type || !VALID_ACTIVITY_TYPES.includes(type)) {
+    return res.status(400).json({ error: 'type must be one of: ' + VALID_ACTIVITY_TYPES.join(', ') });
+  }
+  const cnt = Math.min(Math.max(1, parseInt(count) || 1), 500);
+  db.run(`INSERT INTO user_activity (user_id, activity_type, count, recorded_at) VALUES (?, ?, ?, ?)`,
+    [req.user.id, type, cnt, Date.now()], (err) => {
+      if (err) return res.status(500).json({ error: err.message });
+      res.json({ success: true });
+    });
+});
+
+app.get('/api/activity-stats', requireAuth, (req, res) => {
+  const uid = req.user.id;
+  const thirtyDaysAgo = Date.now() - 30 * 24 * 3600 * 1000;
+  db.all(`SELECT activity_type, SUM(count) as total FROM user_activity WHERE user_id = ? AND recorded_at > ? GROUP BY activity_type`,
+    [uid, thirtyDaysAgo], (err, rows) => {
+      if (err) return res.status(500).json({ error: err.message });
+      const breakdown = {};
+      let combinedScore = 0;
+      for (const r of (rows || [])) {
+        breakdown[r.activity_type] = r.total;
+        combinedScore += (r.total || 0) * (ACTIVITY_WEIGHTS[r.activity_type] || 1);
+      }
+      // Also include legacy scan contributions
+      db.get(`SELECT COUNT(*) as cnt FROM contributions WHERE user_id = ? AND created_at > ?`, [uid, thirtyDaysAgo], (err2, scanRow) => {
+        const legacyScans = scanRow?.cnt || 0;
+        if (legacyScans > 0 && !breakdown.scan) {
+          breakdown.scan = legacyScans;
+          combinedScore += legacyScans * ACTIVITY_WEIGHTS.scan;
+        }
+        let tier = 'bronze';
+        if (combinedScore >= 1000) tier = 'diamond';
+        else if (combinedScore >= 400) tier = 'gold';
+        else if (combinedScore >= 100) tier = 'silver';
+        res.json({ breakdown, combinedScore, tier });
+      });
+    });
 });
 
 app.get('/api/my-stats', requireAuth, (req, res) => {
