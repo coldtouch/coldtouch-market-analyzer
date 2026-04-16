@@ -4761,20 +4761,30 @@ function initLiveSync() {
 
             // Chest captures from game client
             if (data.type === 'chest-capture' || data.type === 'chest-captures') {
-                const captures = data.type === 'chest-captures' ? data.data : [data.data];
+                const isBatch = data.type === 'chest-captures';
+                const captures = isBatch ? data.data : [data.data];
                 if (captures && captures.length > 0) {
+                    let added = 0;
                     for (const cap of captures) {
-                        if (cap && cap.items) lootBuyerCaptures.unshift(cap);
+                        if (!cap || !cap.items) continue;
+                        // Deduplicate: skip if we already have a capture with the same containerId+capturedAt
+                        const isDup = lootBuyerCaptures.some(existing =>
+                            existing.containerId === cap.containerId &&
+                            existing.capturedAt === cap.capturedAt
+                        );
+                        if (!isDup) { lootBuyerCaptures.unshift(cap); added++; }
                     }
                     if (lootBuyerCaptures.length > 20) lootBuyerCaptures.length = 20;
-                    renderLootCaptures();
-                    _fireCaptureBusEvent('add', captures[0]); // F3: notify subscribers
-                    trackActivity('chest_capture', captures.length);
-                    // Flash the tab
-                    const tab = document.querySelector('[data-tab="loot-buyer"]');
-                    if (tab && currentTab !== 'loot-buyer') {
-                        tab.classList.add('has-new');
-                        setTimeout(() => tab.classList.remove('has-new'), 3000);
+                    if (added > 0 || isBatch) renderLootCaptures();
+                    if (added > 0) {
+                        _fireCaptureBusEvent('add', captures[0]); // F3: notify subscribers
+                        trackActivity('chest_capture', added);
+                        // Flash the tab only for genuinely new captures
+                        const tab = document.querySelector('[data-tab="loot-buyer"]');
+                        if (tab && currentTab !== 'loot-buyer') {
+                            tab.classList.add('has-new');
+                            setTimeout(() => tab.classList.remove('has-new'), 3000);
+                        }
                     }
                 }
                 return;
@@ -5424,7 +5434,8 @@ function renderLootCaptures() {
     // If captures have vaultTabs, split items into per-tab groups
     let cards = [];
     lootBuyerCaptures.forEach((cap, capIdx) => {
-        const ago = timeAgo(new Date(cap.capturedAt).toISOString());
+        const capturedMs = typeof cap.capturedAt === 'number' ? cap.capturedAt : (cap.capturedAt ? new Date(cap.capturedAt).getTime() : 0);
+        const ago = capturedMs > 0 ? timeAgo(new Date(capturedMs).toISOString()) : 'Unknown time';
         const hasDirectTabName = cap.tabName && cap.tabName.length > 0;
         const hasTabs = !hasDirectTabName && cap.vaultTabs && cap.vaultTabs.length > 0;
 

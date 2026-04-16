@@ -2,6 +2,15 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-04-16 — Chest Capture Duplicate & Timestamp Fix
+
+**Frontend (app.js):**
+- Deduplicate chest captures on WS reconnect — `chest-captures` batch handler now skips captures already in `lootBuyerCaptures` (matched by `containerId + capturedAt`), preventing old captures from re-appearing as new on every disconnect/reconnect
+- Tab flash, activity tracking, and capture bus event now only fire for genuinely new captures (not reconnect duplicates)
+- Defensive `capturedAt` handling in `renderLootCaptures` — handles both Unix-ms numbers and ISO strings safely; shows "Unknown time" instead of throwing on missing/invalid timestamp
+
+---
+
 ### 2026-04-16 — Security & Quality Audit Fixes (Batch 5)
 
 **Backend (deploy_saas.py):**
