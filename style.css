@@ -4267,6 +4267,7 @@ footer a:hover {
 }
 
 /* Build cards */
+/* BENCHED: Community Builds
 .build-card {
     background: var(--bg-card);
     border: 1px solid var(--border-color);
@@ -4293,8 +4294,10 @@ footer a:hover {
     font-size: 0.65rem;
     white-space: nowrap;
 }
+END BENCHED: Community Builds */
 
 /* Mount type headers */
+/* BENCHED: Mounts Database
 .mount-type-header {
     color: var(--accent);
     font-size: 1.1rem;
@@ -4303,6 +4306,7 @@ footer a:hover {
     padding-bottom: 0.3rem;
     border-bottom: 1px solid var(--border-color);
 }
+END BENCHED: Mounts Database */
 
 /* ============================================================
    LANDING PAGE OVERLAY

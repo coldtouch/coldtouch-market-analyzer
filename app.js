@@ -448,7 +448,7 @@ function initTabs() {
             if (currentTab === 'alerts') loadAlerts();
             if (currentTab === 'community') { if (typeof loadLeaderboard === 'function') loadLeaderboard(); }
             if (currentTab === 'portfolio') { if (typeof renderPortfolio === 'function') renderPortfolio(); }
-            if (currentTab === 'mounts') { if (typeof renderMountsDatabase === 'function') renderMountsDatabase(); }
+            // BENCHED: if (currentTab === 'mounts') { if (typeof renderMountsDatabase === 'function') renderMountsDatabase(); }
             if (currentTab === 'farm') { if (typeof renderFarmBreed === 'function') renderFarmBreed(); }
 
             // Update URL with current tab (shareable deep link)
@@ -4368,9 +4368,9 @@ async function init() {
     if (favDeleteBtn) favDeleteBtn.addEventListener('click', deleteFavoriteList);
     setupAutocomplete('fav-item-search', 'fav-autocomplete', (id) => { addFavoriteItem(id); });
 
-    // Mounts
-    const mountScanBtn = document.getElementById('mount-scan-btn');
-    if (mountScanBtn) mountScanBtn.addEventListener('click', loadMountsDatabase);
+    // BENCHED: Mounts
+    // const mountScanBtn = document.getElementById('mount-scan-btn');
+    // if (mountScanBtn) mountScanBtn.addEventListener('click', loadMountsDatabase);
 
     // Top Traded
     const topScanBtn = document.getElementById('top-scan-btn');
@@ -4411,11 +4411,11 @@ async function init() {
     // Offer to restore a draft if one exists (only for users who already had the toggle on)
     restoreLiveDraftIfAny();
 
-    // Builds Browser
-    const buildsLoadBtn = document.getElementById('builds-load-btn');
-    if (buildsLoadBtn) buildsLoadBtn.addEventListener('click', () => loadBuilds(false));
-    const buildsMoreBtn = document.getElementById('builds-more-btn');
-    if (buildsMoreBtn) buildsMoreBtn.addEventListener('click', () => loadBuilds(true));
+    // BENCHED: Builds Browser
+    // const buildsLoadBtn = document.getElementById('builds-load-btn');
+    // if (buildsLoadBtn) buildsLoadBtn.addEventListener('click', () => loadBuilds(false));
+    // const buildsMoreBtn = document.getElementById('builds-more-btn');
+    // if (buildsMoreBtn) buildsMoreBtn.addEventListener('click', () => loadBuilds(true));
 
     // Landing page: Guest skip button
     const guestBtn = document.getElementById('landing-guest-btn');
@@ -10465,7 +10465,7 @@ function renderFavoritePrices(items, priceMap) {
 }
 
 // ============================================================
-// MOUNTS DATABASE
+/* BENCHED: MOUNTS DATABASE
 // ============================================================
 function classifyMount(itemId) {
     const id = itemId.toUpperCase();
@@ -10648,6 +10648,7 @@ function renderMountsDatabase(mounts, city) {
         });
     }
 }
+END BENCHED: MOUNTS DATABASE */
 
 // ============================================================
 // TOP TRADED ITEMS
@@ -11210,6 +11211,7 @@ function renderFarmResults(results, farmType) {
     container.insertAdjacentHTML('beforeend', tableHTML);
 }
 
+/* BENCHED: COMMUNITY BUILDS
 // ============================================================
 // BUILDS BROWSER (AlbionFreeMarket Public API)
 // ============================================================
@@ -11342,6 +11344,7 @@ function createBuildCard(build) {
 
     return card;
 }
+END BENCHED: COMMUNITY BUILDS */
 
 // ============================================================
 // CRAFTING SAVE/LOAD & SHOPPING LIST
