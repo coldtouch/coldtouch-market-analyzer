@@ -98,6 +98,7 @@ const CLIENT_SECRET = process.env.DISCORD_CLIENT_SECRET;
 const BOT_TOKEN = process.env.DISCORD_BOT_TOKEN;
 const DISCORD_FEEDBACK_WEBHOOK = process.env.DISCORD_FEEDBACK_WEBHOOK || '';
 const SESSION_SECRET = process.env.SESSION_SECRET;
+if (!SESSION_SECRET) { console.error('[FATAL] SESSION_SECRET env var is not set — refusing to start'); process.exit(1); }
 
 const GAME_SERVER = process.env.GAME_SERVER || 'europe';
 const API_BASE = `https://${GAME_SERVER}.albion-online-data.com/api/v2/stats/prices`;
@@ -961,7 +962,13 @@ app.get('/auth/discord/callback', async (req, res) => {
     const stateParam = req.query.state;
     if (stateParam) {
       try {
-        const state = JSON.parse(Buffer.from(stateParam, 'base64url').toString());
+        const dotIdx = stateParam.lastIndexOf('.');
+        if (dotIdx === -1) throw new Error('Missing state signature');
+        const statePayload = stateParam.slice(0, dotIdx);
+        const stateSig = stateParam.slice(dotIdx + 1);
+        const expectedSig = require('crypto').createHmac('sha256', SESSION_SECRET).update(statePayload).digest('hex');
+        if (stateSig !== expectedSig) throw new Error('State signature mismatch');
+        const state = JSON.parse(Buffer.from(statePayload, 'base64url').toString());
         if (state.link && state.userId) {
           // Link Discord to existing email account
           db.run(`UPDATE users SET linked_discord_id = ?, avatar = ? WHERE id = ?`,
@@ -999,7 +1006,7 @@ function resolveUser(req, res, next) {
   const auth = req.headers['authorization'];
   if (auth && auth.startsWith('Bearer ')) {
     try {
-      req.user = jwt.verify(auth.slice(7), SESSION_SECRET);
+      req.user = jwt.verify(auth.slice(7), SESSION_SECRET, { algorithms: ['HS256'] });
     } catch(e) { /* invalid/expired token — req.user stays undefined */ }
   }
   next();
@@ -1154,6 +1161,8 @@ app.post('/api/register', registerLimiter, async (req, res) => {
 
 // Rate limit: 10 login attempts per 15 minutes per IP
 const loginLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 10, message: { error: 'Too many login attempts. Try again in 15 minutes.' } });
+const deviceAuthLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 10, message: { error: 'Too many device authorization attempts. Try again in 15 minutes.' }, keyGenerator: (req) => req.user ? req.user.id : req.ip });
+const evalLimiter = rateLimit({ windowMs: 60 * 1000, max: 10, message: { error: 'Too many loot evaluations. Slow down.' }, keyGenerator: (req) => req.user ? req.user.id : req.ip });
 
 app.post('/api/login', loginLimiter, async (req, res) => {
   const { email, password } = req.body;
@@ -1187,7 +1196,9 @@ app.post('/api/login', loginLimiter, async (req, res) => {
 app.post('/api/link-discord', (req, res) => {
   if (!req.user) return res.status(401).json({ error: 'Login required' });
   // This initiates the linking flow — redirect to Discord OAuth with a special state param
-  const state = Buffer.from(JSON.stringify({ link: true, userId: req.user.id })).toString('base64url');
+  const statePayload = Buffer.from(JSON.stringify({ link: true, userId: req.user.id })).toString('base64url');
+  const stateSig = require('crypto').createHmac('sha256', SESSION_SECRET).update(statePayload).digest('hex');
+  const state = statePayload + '.' + stateSig;
   const linkUrl = `https://discord.com/api/oauth2/authorize?client_id=${CLIENT_ID}&redirect_uri=${encodeURIComponent('https://' + domain + '/auth/discord/callback')}&response_type=code&scope=identify&state=${state}`;
   res.json({ url: linkUrl });
 });
@@ -1423,7 +1434,7 @@ app.post('/api/device/token', (req, res) => {
 });
 
 // Step 3: User authorizes on website (browser, logged in)
-app.post('/api/device/authorize', (req, res) => {
+app.post('/api/device/authorize', deviceAuthLimiter, (req, res) => {
   if (!req.user) return res.status(401).json({ error: 'Login required' });
   const { user_code } = req.body;
   if (!user_code) return res.status(400).json({ error: 'user_code required' });
@@ -1482,7 +1493,7 @@ app.get('/api/capture-token', (req, res) => {
 });
 
 // Evaluate loot tab items against market data
-app.post('/api/loot-evaluate', (req, res) => {
+app.post('/api/loot-evaluate', evalLimiter, (req, res) => {
   if (!req.user) return res.status(401).json({ error: 'Login required.' });
   const { items, askingPrice } = req.body;
   if (!items || !Array.isArray(items) || items.length === 0 || items.length > 300) {
@@ -2060,9 +2071,9 @@ app.post('/api/player-trends-bulk', requireAuth, (req, res) => {
     FROM loot_events
     WHERE user_id = ? AND item_id = '__DEATH__' AND looted_from_name IN (${placeholders})
     GROUP BY looted_from_name`;
-  db.all(sql, [req.user.id, ...cleaned], (err, rows) => {
+  readDb.all(sql, [req.user.id, ...cleaned], (err, rows) => {
     if (err) return res.status(500).json({ error: err.message });
-    db.all(deathsSql, [req.user.id, ...cleaned], (err2, deathRows) => {
+    readDb.all(deathsSql, [req.user.id, ...cleaned], (err2, deathRows) => {
       if (err2) return res.status(500).json({ error: err2.message });
       const trends = {};
       for (const r of rows || []) {
@@ -2086,8 +2097,8 @@ app.post('/api/player-trends-bulk', requireAuth, (req, res) => {
 // POST { sessionIds: ["id1","id2",...], name: "optional name" }
 app.post('/api/loot-sessions/merge', requireAuth, (req, res) => {
   const { sessionIds, name } = req.body;
-  if (!Array.isArray(sessionIds) || sessionIds.length < 2 || sessionIds.length > 10) {
-    return res.status(400).json({ error: 'Provide 2-10 session IDs to merge.' });
+  if (!Array.isArray(sessionIds) || sessionIds.length < 2 || sessionIds.length > 5) {
+    return res.status(400).json({ error: 'Provide 2-5 session IDs to merge.' });
   }
   const uid = req.user.id;
   const newId = name
@@ -2604,6 +2615,7 @@ setTimeout(initPriceRefCache, 15000);
 setInterval(() => { refreshPriceRefCache(); setTimeout(buildPriceReference, 5000); }, 10 * 60 * 1000);
 
 app.get('/api/transport-routes-live', (req, res) => {
+  try {
   const buyCity = req.query.buy_city || '';
   const sellCity = req.query.sell_city || '';
   const sellStrategy = req.query.sell_strategy || 'market';
@@ -2745,6 +2757,10 @@ app.get('/api/transport-routes-live', (req, res) => {
   }
   console.log(`[Transport-Live] ${routes.length} routes (strategy=${sellStrategy}, maxAge=${maxAge}m, instant=${instantAvailable})`);
   res.json({ routes: result, total: routes.length, dataPoints: Object.keys(alertMarketDb).length });
+  } catch(e) {
+    console.error('[Transport-Live] Computation error:', e);
+    res.status(500).json({ error: 'Failed to compute transport routes.' });
+  }
 });
 
 app.get('/api/price-history', (req, res) => {
@@ -2936,7 +2952,7 @@ wss.on('connection', ws => {
       // Browser auth (JWT token)
       if (msg.type === 'auth' && msg.token) {
         try {
-          ws.user = jwt.verify(msg.token, SESSION_SECRET);
+          ws.user = jwt.verify(msg.token, SESSION_SECRET, { algorithms: ['HS256'] });
           ws.isAuthenticated = true;
           ws.clientType = 'browser';
           wsSafeSend(ws, { type: 'auth', success: true });
@@ -3154,7 +3170,7 @@ async function broadcastFlip(flip) {
   try {
     const valid = await validateFlipPrices(flip.itemId, flip.quality, flip.buyCity, flip.sellCity, flip.buyPrice, flip.sellPrice);
     if (!valid) return;
-  } catch(e) { /* validation failed — broadcast anyway rather than silencing valid flips */ }
+  } catch(e) { console.warn('[broadcastFlip] Validation error, dropping flip:', e.message); return; }
 
   liveFlips.unshift(flip);
   if (liveFlips.length > MAX_FLIPS) liveFlips.pop();
