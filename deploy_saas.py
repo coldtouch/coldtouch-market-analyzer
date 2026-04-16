@@ -1856,6 +1856,8 @@ app.get('/api/loot-sessions', requireAuth, (req, res) => {
       MAX(e.timestamp) as ended_at,
       COUNT(*) as event_count,
       COUNT(DISTINCT e.looted_by_name) as player_count,
+      ROUND(SUM(CASE WHEN e.item_id != '__DEATH__' THEN e.weight * e.quantity ELSE 0 END), 1) as total_weight,
+      SUM(CASE WHEN e.item_id = '__DEATH__' THEN 1 ELSE 0 END) as death_count,
       s.public_token as public_token
     FROM loot_events e
     LEFT JOIN loot_session_shares s ON s.session_id = e.session_id AND s.user_id = e.user_id

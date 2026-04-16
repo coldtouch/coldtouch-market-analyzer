@@ -7550,7 +7550,7 @@ async function loadLootSessions() {
                         <button class="ll-session-rename-btn" onclick="event.stopPropagation(); renameSavedSession('${sid}')" title="Rename session" aria-label="Rename session">✏️</button>
                         ${sharedBadge}
                     </div>
-                    <div class="ll-session-meta">${s.event_count} events &bull; ${s.player_count} players</div>
+                    <div class="ll-session-meta">${s.event_count} events &bull; ${s.player_count} players${s.total_weight > 0 ? ` &bull; ${s.total_weight.toLocaleString()} kg` : ''}${s.death_count > 0 ? ` &bull; 💀 ${s.death_count}` : ''}</div>
                 </div>
                 <button class="btn-small" style="padding:0.35rem 0.55rem; font-size:0.8rem; flex-shrink:0; min-width:32px; min-height:32px;" onclick="event.stopPropagation(); openShareSessionModal('${sid}', ${tokenArg})" title="Share this session" aria-label="Share session">🔗</button>
                 <button class="btn-small-danger" style="padding:0.35rem 0.55rem; font-size:0.8rem; flex-shrink:0; min-width:32px; min-height:32px;" onclick="event.stopPropagation(); deleteLootSession('${sid}', this)" title="Delete session" aria-label="Delete session">✕</button>
