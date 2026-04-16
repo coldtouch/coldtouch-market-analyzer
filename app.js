@@ -12302,7 +12302,7 @@ if (document.readyState === 'loading') {
 
 // G14: Trip Summary — cross-feature dashboard pulling from Loot Logger + Loot Buyer.
 // Shows running totals for the selected time window (default 24h).
-let _tripWindow = '24h';
+let _tripWindow = (() => { try { return localStorage.getItem('albion_trip_window') || '24h'; } catch { return '24h'; } })();
 
 function openTripSummary() {
     document.getElementById('trip-summary-modal')?.classList.remove('hidden');
@@ -12313,6 +12313,7 @@ function closeTripSummary() {
 }
 function setTripWindow(win) {
     _tripWindow = win;
+    try { localStorage.setItem('albion_trip_window', win); } catch {}
     // Update button highlighting
     document.querySelectorAll('#trip-summary-modal [data-window]').forEach(b => {
         b.classList.toggle('btn-small-accent', b.dataset.window === win);
@@ -12613,7 +12614,7 @@ async function submitSessionMerge() {
 }
 
 // G1: Guild Leaderboard — aggregated stats across all saved sessions.
-let _lbPeriod = 'all';
+let _lbPeriod = (() => { try { return localStorage.getItem('albion_lb_period') || 'all'; } catch { return 'all'; } })();
 function openGuildLeaderboard() {
     document.getElementById('guild-leaderboard-modal')?.classList.remove('hidden');
     _renderGuildLeaderboard();
@@ -12623,6 +12624,7 @@ function closeGuildLeaderboard() {
 }
 function setLeaderboardPeriod(p) {
     _lbPeriod = p;
+    try { localStorage.setItem('albion_lb_period', p); } catch {}
     document.querySelectorAll('#guild-leaderboard-modal [data-lb-window]').forEach(b => {
         b.classList.toggle('btn-small-accent', b.dataset.lbWindow === p);
         b.classList.toggle('btn-small', b.dataset.lbWindow !== p);
