@@ -4,6 +4,22 @@ All notable changes to the Coldtouch Market Analyzer will be documented in this 
 
 ### 2026-04-16 — Guild Leaderboard, Session Merge, Sale Edit/Delete, Crafter Stats + Refactors (Batch 2)
 
+### 2026-04-16 — Feature Review: Fix, Bench, Overhaul (Batch 4)
+
+**Fix:**
+- **Live Flips fixed**: NATS port corrected from 4222 → 24222. Backend TAX_RATE corrected from 0.065 → 0.03. Flips should now flow again.
+
+**Benched (commented out, not deleted):**
+- **Mounts Database**: Nav button + tab pane + JS functions commented out. MOUNT_DATA constant kept for Transport tab.
+- **Community Builds**: Nav button + tab pane + JS functions commented out. AlbionFreeMarket API no longer called.
+
+**Overhauled:**
+- **Crafting Profits**: Category filter on bulk scan (weapons/armor/consumables/offhand/accessories/materials), batch quantity multiplier, focus cost input (shown when "Use Focus" checked), inline save name input (replaces prompt()), auto-calculate on switchToCraft().
+- **Community Tab**: Unified activity tracking — new `user_activity` table tracks scans, loot sessions, chest captures, sales, accountability checks, transport plans, and craft calculations. Combined weighted score (scan=1pt, session=5pt, capture=3pt, sale=2pt, accountability=3pt, transport/craft=1pt). Activity breakdown grid on Community tab. Tier thresholds updated.
+- **Portfolio Tracker**: Auto-imports from Loot Buyer — buyThisTab() creates BUY entry, submitSaleForm() creates SELL entry. "Sync from Loot Buyer" button imports all tracked tabs. Synced entries show purple "Loot Buyer" badge.
+
+SW cache bumped to v24.
+
 **Session 2 continued (Batch 3):**
 - **JSON export**: Full session export as structured JSON (metadata, death timeline, player summaries, raw events).
 - **Leaderboard weight column**: Top Looters table now shows total weight (kg) per player. Discord copy includes weight in parentheses.
