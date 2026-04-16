@@ -4,6 +4,12 @@ All notable changes to the Coldtouch Market Analyzer will be documented in this 
 
 ### 2026-04-16 — Guild Leaderboard, Session Merge, Sale Edit/Delete, Crafter Stats + Refactors (Batch 2)
 
+**Session 2 continued (Batch 3):**
+- **JSON export**: Full session export as structured JSON (metadata, death timeline, player summaries, raw events).
+- **Leaderboard weight column**: Top Looters table now shows total weight (kg) per player. Discord copy includes weight in parentheses.
+- **Better duration formatting**: Sessions over 1 hour show "2h 15m" instead of "135 min".
+- **Primary guild in summary strip**: Session detail summary shows the detected primary guild for quick context.
+
 **Session 2 additions:**
 - **Discord copy for Guild Leaderboard**: 📋 button generates markdown-formatted leaderboard with medal icons, routes through copy preview modal.
 - **Reverse session badges** (4.5): Session cards show "📦 N tabs" badge when tracked tabs were purchased during that session. Completes the bidirectional link from F1.
