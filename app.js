@@ -8132,6 +8132,10 @@ function _llRenderFiltered() {
             <div class="ll-summary-label">Duration</div>
             <div class="ll-summary-value">${fmtDuration(durMs)}</div>
         </div>
+        ${_llPrimaryGuild ? `<div class="ll-summary-stat" title="Most common guild among looters">
+            <div class="ll-summary-label">Guild</div>
+            <div class="ll-summary-value" style="font-size:0.78rem;">${esc(_llPrimaryGuild)}</div>
+        </div>` : ''}
         <div class="ll-summary-actions">
             <div class="ll-discord-dropdown">
                 <button class="btn-small" onclick="this.nextElementSibling.classList.toggle('open')" title="Copy session to Discord">📋 Discord ▾</button>
