@@ -2,6 +2,15 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-04-16 — Deep audit + HANDOFF update
+
+**Audit:**
+- Full-stack deep audit completed: 81 findings (10 critical, 22 high, 32 medium, 17 low). Report saved to `DEEP_AUDIT_2026-04-16.md`.
+- Critical findings: JWT `alg:none` vulnerability (S-1), `SESSION_SECRET` startup guard missing (S-2), Discord OAuth state forgeable (S-3), device auth ownership gap (S-4), two frontend XSS vectors (F-1/F-2), four Go client issues (unbounded goroutine spawn, `globalItemCache` OOM, auth goroutine leak, relay queue race condition).
+- Confirmed `computeAnalytics` already uses `statsDb` correctly — no fix needed.
+- Confirmed all LOOT_ROADMAP phases 1–5 complete per audit cross-reference.
+- `HANDOFF.md` updated with full April 16 session summary and new priority matrix.
+
 ### 2026-04-16 — Go client: fix expiry mail item ID bug
 
 **Bug fix (Go client):**

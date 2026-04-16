@@ -1,12 +1,71 @@
 # Albion Market Analyzer — Project Handoff
 
-> **Last updated:** 2026-04-10
+> **Last updated:** 2026-04-16
 > **Author:** Coldtouch (yuvalvilensky@gmail.com)
 > **Purpose:** Everything a new session needs to continue development without re-discovering context.
 
 ---
 
-## 0. Latest Session — April 10, 2026
+## 0. Latest Session — April 16, 2026
+
+### What Was Done
+
+#### 1. Go Client: `operation_read_mail.go` expiry ItemID bug fixed (commit `d49dcc8`)
+- **Root cause:** `MARKETPLACE_SELLORDER_EXPIRED_SUMMARY` mail body format is `sold | total_amount | item_id | price_in_10000ths` — **not** the same layout as sell notifications.
+- **Bug:** `decodeExpiryNotification()` used `body[1]` (the integer total amount) as `notification.ItemID`, and tried `strconv.Atoi(body[2])` on the actual item ID string — which always errored, silently dropping **every** expiry notification.
+- **Fix:** Swapped body indices — `amount = strconv.Atoi(body[1])`, `notification.ItemID = body[2]`.
+- **Committed** to Go client `master` and pushed. Website `CHANGELOG.md` updated.
+
+#### 2. PvP loot data verified working
+- Today's loot session (`loot-events-2026-04-16_16-44-12.txt`) from a live PvP run (BnG/Saggin guild, kills against E H O T / Y O I N K) copied to project root for upload testing.
+- Loot Logger upload mode, death tracking, per-player recovery breakdown, and session summary all functional with real data.
+- 3 live sessions confirmed in the Go client `logs/` folder from previous days (April 11–13) plus today's.
+
+#### 3. Deep audit completed — 81 findings across full stack
+- **Report:** `DEEP_AUDIT_2026-04-16.md` in project root (not committed — review first).
+- **10 Critical, 22 High, 32 Medium, 17 Low.**
+
+**Critical findings (must fix soon):**
+
+| ID | Area | Issue |
+|----|------|-------|
+| S-1 | Backend auth | JWT algorithm not pinned — vulnerable to `alg:none` attack |
+| S-2 | Backend auth | `SESSION_SECRET` not validated at startup — undefined secret forgeable |
+| S-3 | Backend auth | Discord OAuth state not HMAC-signed — account linking hijack |
+| S-4 | Backend auth | `/api/device/authorize` — any user can approve any device code |
+| F-1 | Frontend XSS | `dismissedKey` injected into inline `onclick` template literal |
+| F-2 | Frontend XSS | URL `?tab=` fed into `querySelector` without validation |
+| GC-1 | Go client | Unbounded goroutine spawn in `router.go` — no worker pool |
+| GC-2 | Go client | `globalItemCache` grows forever — OOM after hours of play |
+| GC-3 | Go client | Auth goroutine leaked on every reconnect attempt |
+| GC-4 | Go client | Race condition between `sendOrQueue` and `flushPending` in VPS relay |
+
+**Quickest wins (5–15 min each):** S-1, S-2 (JWT fixes in `deploy_saas.py`), B-3 (`/api/player-trends-bulk` uses `db` not `readDb`), F-1, F-2 (frontend XSS), GC-5 (vault tab name race), GC-6 (increase VPS relay queue from 50 → 500).
+
+#### 4. `computeAnalytics` confirmed already fixed
+- Audit confirmed `computeAnalytics` correctly uses `statsDb` throughout (all reads, writes, EMA computation). Error path logs with `console.error`. Fixed in a prior session — no action needed.
+
+#### 5. LOOT_ROADMAP.md phases 1–5 essentially complete
+- Per audit cross-reference, every phase 1–5 feature from `LOOT_ROADMAP.md` is implemented:
+  - D1 (Loot Tools nav group), A1 (bigger icons), A3 (summary strip), A4 (color-coded borders) ✅
+  - B1/B3 (deaths section + timeline) ✅
+  - C1/C3 (crafter name forwarded from Go client + shown in tooltips) ✅
+  - G1 (guild leaderboard), G4 (shareable URLs), G6 (player trends), G8 (whitelist presets), G9 (Discord templates), G11 (filter chips) ✅
+- **Remaining gaps:** B6 (equipment-at-death — requires Go client work), G10 (loot split calculator), D4/D5 (accountability cross-links), multi-server VPS.
+
+### Still Pending (Carried Forward)
+- **10 Critical audit findings** — see `DEEP_AUDIT_2026-04-16.md`, priority matrix at top. Fix S-1/S-2 first (5 min each).
+- **Multi-server VPS price history** — schema migration (5 tables + `server` column), NATS multi-subscribe, `?server=` on all API endpoints. Still not started. Non-Europe players see no VPS data.
+- **B6 — Equipment-at-death** — `EvCharacterEquipmentChanged` (opcode 99) handler not implemented in Go client. Deaths show reconstructed loot only, not equipped gear.
+- **G10 — Loot split calculator** — high-value guild feature, not built yet.
+- **ReadMail → loot tab auto-match** — research complete, implementation not done. Sale mails can auto-populate Phase 3 sales.
+- **Device Auth end-to-end test** — never tested in live game.
+- **Negative item ID cosmetic names** — IDs -56, -59, -62, -63, -64, -65, -68, -71, -121 unidentified.
+- **DevOps gaps** — no rollback on deploy, no automated DB backup, no `/healthz` endpoint (see DO-1 to DO-6 in audit).
+
+---
+
+## 0b. Previous Session — April 10, 2026 (Server Switch Fix)
 
 ### What Was Done
 
