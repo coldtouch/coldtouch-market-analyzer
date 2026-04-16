@@ -12601,7 +12601,7 @@ async function _renderGuildLeaderboard() {
             <button class="btn-small" onclick="copyLeaderboardToDiscord()" title="Copy leaderboard to clipboard as Discord-friendly text">📋 Copy to Discord</button>
         </div>`;
         html += '<div class="lb-grid">';
-        html += _lbTable('Top Looters', '📦', data.topLooters || [], ['name', 'guild', 'items', 'sessions'], { items: 'Items', sessions: 'Sessions' });
+        html += _lbTable('Top Looters', '📦', data.topLooters || [], ['name', 'guild', 'items', 'total_weight', 'sessions'], { items: 'Items', total_weight: 'Weight', sessions: 'Sessions' });
         html += _lbTable('Top Killers', '⚔', data.topKillers || [], ['name', 'guild', 'kills'], { kills: 'Kills' });
         html += _lbTable('Most Deaths', '💀', data.mostDeaths || [], ['name', 'guild', 'deaths'], { deaths: 'Deaths' });
         html += _lbTable('Most Active', '🔥', data.mostActive || [], ['name', 'guild', 'sessions', 'items'], { sessions: 'Sessions', items: 'Items' });
@@ -12628,7 +12628,9 @@ function _lbTable(title, icon, rows, cols, labels) {
         html += `<tr class="${i < 3 ? 'lb-top3' : ''}"><td class="lb-rank">${rank}</td><td>${esc(r.name)} ${guild}</td>`;
         for (const c of cols) {
             if (c === 'name' || c === 'guild') continue;
-            html += `<td class="lb-val">${(r[c] || 0).toLocaleString()}</td>`;
+            const val = r[c] || 0;
+            const formatted = c === 'total_weight' ? (val > 0 ? val.toLocaleString() + ' kg' : '—') : val.toLocaleString();
+            html += `<td class="lb-val">${formatted}</td>`;
         }
         html += '</tr>';
     });
@@ -12644,18 +12646,19 @@ function copyLeaderboardToDiscord() {
     const periodLabel = _lbPeriod === '7d' ? 'Last 7 days' : _lbPeriod === '30d' ? 'Last 30 days' : 'All time';
     let text = `**🏆 Guild Leaderboard — ${periodLabel}**\n`;
     text += `${t.total_sessions || 0} sessions · ${t.total_players || 0} players · ${(t.total_items || 0).toLocaleString()} items · 💀 ${t.total_deaths || 0} deaths\n\n`;
-    const fmtSection = (title, icon, rows, valKey) => {
+    const fmtSection = (title, icon, rows, valKey, suffix) => {
         if (!rows || !rows.length) return '';
         const medals = ['🥇', '🥈', '🥉'];
         let s = `**${icon} ${title}**\n`;
         rows.slice(0, 5).forEach((r, i) => {
             const rank = i < 3 ? medals[i] : `${i + 1}.`;
             const guild = r.guild ? ` [${r.guild}]` : '';
-            s += `${rank} ${r.name}${guild} — ${(r[valKey] || 0).toLocaleString()}\n`;
+            const extra = suffix && r[suffix] ? ` (${r[suffix].toLocaleString()} kg)` : '';
+            s += `${rank} ${r.name}${guild} — ${(r[valKey] || 0).toLocaleString()}${extra}\n`;
         });
         return s + '\n';
     };
-    text += fmtSection('Top Looters', '📦', d.topLooters, 'items');
+    text += fmtSection('Top Looters', '📦', d.topLooters, 'items', 'total_weight');
     text += fmtSection('Top Killers', '⚔', d.topKillers, 'kills');
     text += fmtSection('Most Deaths', '💀', d.mostDeaths, 'deaths');
     text += fmtSection('Most Active', '🔥', d.mostActive, 'sessions');

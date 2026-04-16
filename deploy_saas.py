@@ -1950,7 +1950,8 @@ app.get('/api/guild-leaderboard', requireAuth, (req, res) => {
   const lootersSql = `
     SELECT looted_by_name as name, looted_by_guild as guild,
            COUNT(DISTINCT session_id) as sessions,
-           SUM(quantity) as items, COUNT(*) as events
+           SUM(quantity) as items, COUNT(*) as events,
+           ROUND(SUM(weight * quantity), 1) as total_weight
     FROM loot_events
     WHERE user_id = ? AND item_id != '__DEATH__' AND is_silver = 0${timeCond}
     GROUP BY looted_by_name
