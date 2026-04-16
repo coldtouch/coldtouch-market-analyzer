@@ -5181,7 +5181,67 @@ function renderProfile(data) {
 }
 
 // ====== LOOT BUYER TAB ======
-let lootBuyerCaptures = [];
+
+/**
+ * @typedef {Object} CapturedItem
+ * @property {string} itemId - Albion item string ID (e.g. "T7_HEAD_PLATE_SET1")
+ * @property {number} [quality=1] - Item quality (1=Normal, 2=Good, 3=Outstanding, 4=Excellent, 5=Masterpiece)
+ * @property {number} [enchantment=0] - Enchantment level (0-4)
+ * @property {number} [quantity=1] - Stack count
+ * @property {string} [crafterName] - Who crafted the item (chest captures only, unavailable for loot drops)
+ */
+
+/**
+ * @typedef {Object} ChestCapture
+ * @property {string} [tabName] - Tab label from in-game container
+ * @property {CapturedItem[]} items - Items in the captured container
+ * @property {number} [timestamp] - Capture timestamp (ms epoch)
+ */
+
+/**
+ * @typedef {Object} LootEvent
+ * @property {number} timestamp - Event timestamp (ms epoch)
+ * @property {string} looted_by_name - Player who picked up the item
+ * @property {string} [looted_by_guild] - Looter's guild
+ * @property {string} [looted_by_alliance] - Looter's alliance
+ * @property {string} looted_from_name - Source (corpse name or container)
+ * @property {string} [looted_from_guild] - Source guild
+ * @property {string} item_id - Item ID or '__DEATH__' for death events
+ * @property {number} [quantity=1] - Stack count
+ * @property {number} [weight=0] - Item weight in kg
+ * @property {boolean} [is_silver=false] - True if this event is a silver pickup
+ */
+
+/**
+ * @typedef {Object} LootSession
+ * @property {string} session_id - UUID or generated session identifier
+ * @property {number} started_at - First event timestamp
+ * @property {number} ended_at - Last event timestamp
+ * @property {number} event_count - Total events in session
+ * @property {number} player_count - Distinct players
+ * @property {string} [public_token] - G4 share token (null if not shared)
+ */
+
+/**
+ * @typedef {Object} TrackedTab
+ * @property {number} id - Database row ID
+ * @property {string} tabName - User-facing tab name
+ * @property {string} [city] - Purchase city
+ * @property {number} purchasePrice - Total silver paid
+ * @property {number} purchasedAt - Purchase timestamp (ms epoch)
+ * @property {string} status - 'open' | 'partial' | 'sold'
+ * @property {CapturedItem[]} [items] - Original items (only in detail view)
+ * @property {{id:number, item_id:string, quality:number, quantity:number, sale_price:number, sold_at:number}[]} [sales] - Sale records
+ * @property {number} revenueSoFar - Sum of recorded sales
+ * @property {number} netProfit - Revenue minus purchase price
+ * @property {number} [totalQuantity] - Total item count
+ * @property {number} [saleRecords] - Number of sale records
+ */
+
+// E2: Single store for chest captures — both Loot Buyer and Loot Logger
+// read from window._chestCaptures. The alias keeps existing code working.
+window._chestCaptures = window._chestCaptures || [];
+const lootBuyerCaptures = window._chestCaptures;
 let lootAnalysisMode = 'worth';
 let lootSelectedCapture = null;
 let lastLootEvalData = null; // retained for "I Bought This" save action
@@ -5339,10 +5399,7 @@ function renderLootCaptures() {
 function removeLootCapture(index) {
     if (index >= 0 && index < lootBuyerCaptures.length) {
         lootBuyerCaptures.splice(index, 1);
-        // Also remove from _chestCaptures if synced
-        if (window._chestCaptures && index < window._chestCaptures.length) {
-            window._chestCaptures.splice(index, 1);
-        }
+        // E2: No sync needed — lootBuyerCaptures IS window._chestCaptures
         lootSelectedCapture = null;
         renderLootCaptures();
         showToast('Capture removed', 'info');
@@ -6792,10 +6849,15 @@ let liveSessionActive = false; // whether we are actively recording live events
 let chestCaptureActive = false; // whether chest capture mode is on
 let liveSessionSaved = false;   // whether current live session has been saved (prevents duplicates)
 let _llShowLiveTimer = null;    // debounce timer for showLiveSession re-renders
-let _llSearchTimer = null;      // debounce timer for search input
+let _llSearchTimer = null;      // debounce timer for search/filter input
+// E6: Debounced render — all filter/sort changes go through this
+function _llDebouncedRender(delay) {
+    if (_llSearchTimer) clearTimeout(_llSearchTimer);
+    _llSearchTimer = setTimeout(_llRenderFiltered, delay || 200);
+}
 let _llRemovedPlayers = new Set(); // players removed from current view
 let _llResolvedDeaths = new Set(); // deaths marked as resolved
-window._chestCaptures = window._chestCaptures || [];
+// E2: window._chestCaptures already initialized in Loot Buyer section (= lootBuyerCaptures)
 // Loot Logger filter/sort state (persisted across re-renders)
 let _llCurrentEvents = [];
 let _llCurrentByPlayer = {};
@@ -7301,7 +7363,7 @@ function toggleChestCapture() {
 }
 
 function resetChestCaptures() {
-    window._chestCaptures = [];
+    window._chestCaptures.length = 0; // E2: clear in-place to preserve alias
     chestCaptureActive = false;
     const btn = document.getElementById('ll-capture-toggle-btn');
     if (btn) { btn.textContent = 'Start Capturing'; btn.classList.remove('active'); }
@@ -7315,11 +7377,8 @@ function renderCaptureChips() {
     _updateLootLoggerModePillCounts();
     const chips = document.getElementById('ll-capture-chips');
     if (!chips) return;
-    // Always seed from lootBuyerCaptures (which gets re-sent on WS reconnect from VPS memory)
-    if ((!window._chestCaptures || window._chestCaptures.length === 0) && typeof lootBuyerCaptures !== 'undefined' && lootBuyerCaptures.length > 0) {
-        window._chestCaptures = [...lootBuyerCaptures];
-    }
-    const captures = window._chestCaptures || [];
+    // E2: lootBuyerCaptures IS window._chestCaptures — no seeding needed
+    const captures = window._chestCaptures;
     if (captures.length === 0) {
         chips.innerHTML = '<span style="font-size:0.75rem; color:var(--text-muted);">No chest captures yet — open a chest with the client running</span>';
         return;
@@ -7368,10 +7427,7 @@ function showLootLoggerMode(mode) {
         loadLootSessions();
     }
     if (mode === 'accountability') {
-        // Seed from lootBuyerCaptures if _chestCaptures is empty (captures arrived before switching here)
-        if ((!window._chestCaptures || window._chestCaptures.length === 0) && typeof lootBuyerCaptures !== 'undefined' && lootBuyerCaptures.length > 0) {
-            window._chestCaptures = [...lootBuyerCaptures];
-        }
+        // E2: lootBuyerCaptures IS window._chestCaptures — no seeding needed
         populateAccountabilityDropdowns();
         renderCaptureChips();
     }
@@ -7843,8 +7899,9 @@ async function renderLootSessionEvents(events, targetEl, depositedMap) {
         })
         .catch(() => { /* silent — card just won't show trends */ });
     }
-    // Reset death filter when loading a new session
+    // Reset filters when loading a new session
     _llDeathFilterVictim = null;
+    window._llShowAllCards = false; // E5: reset card batch on session change
 
     // Render header + search/sort bar + cards
     _llRenderFiltered();
@@ -8044,15 +8101,15 @@ function _llRenderFiltered() {
     html += `<div class="ll-filter-bar">
         <div class="search-input-wrapper" style="flex:1; min-width:160px;">
             <span class="search-icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg></span>
-            <input type="text" id="ll-search" placeholder="Search player, guild, or item..." value="${esc(searchVal)}" oninput="if(_llSearchTimer)clearTimeout(_llSearchTimer);_llSearchTimer=setTimeout(_llRenderFiltered,300)">
+            <input type="text" id="ll-search" placeholder="Search player, guild, or item..." value="${esc(searchVal)}" oninput="_llDebouncedRender(300)">
         </div>
-        <select id="ll-filter-tier" class="transport-select" style="min-width:80px;" onchange="_llRenderFiltered()" title="Filter items by tier">
+        <select id="ll-filter-tier" class="transport-select" style="min-width:80px;" onchange="_llDebouncedRender(100)" title="Filter items by tier">
             <option value="all"${filterVal === 'all' ? ' selected' : ''}>All Tiers</option>
             <option value="t5+"${filterVal === 't5+' ? ' selected' : ''}>T5+</option>
             <option value="t6+"${filterVal === 't6+' ? ' selected' : ''}>T6+</option>
             <option value="nobags"${filterVal === 'nobags' ? ' selected' : ''}>No Bags</option>
         </select>
-        <select id="ll-sort" class="transport-select" style="min-width:100px;" onchange="_llRenderFiltered()">
+        <select id="ll-sort" class="transport-select" style="min-width:100px;" onchange="_llDebouncedRender(100)">
             <option value="value"${sortVal === 'value' ? ' selected' : ''}>Value ↓</option>
             <option value="items"${sortVal === 'items' ? ' selected' : ''}>Items ↓</option>
             <option value="weight"${sortVal === 'weight' ? ' selected' : ''}>Weight ↓</option>
@@ -8102,8 +8159,14 @@ function _llRenderFiltered() {
         }
     }
 
+    // E5: Virtualize large sessions — initially render max 30 cards, "Show more" loads the rest
+    const CARD_BATCH = 30;
+    const showAll = window._llShowAllCards || false;
+    const visibleEntries = (!showAll && entries.length > CARD_BATCH) ? entries.slice(0, CARD_BATCH) : entries;
+    const hiddenCount = entries.length - visibleEntries.length;
+
     // Player cards
-    html += entries.map(([name, data]) => {
+    html += visibleEntries.map(([name, data]) => {
         const playerValue = data.totalValue;
         const weightStr = data.totalWeight > 0 ? data.totalWeight.toFixed(1) + ' kg' : '—';
         const guildBorder = data.guild && guildColorMap[data.guild]
@@ -8279,6 +8342,13 @@ function _llRenderFiltered() {
         html += '<div class="empty-state"><p>No players match your search.</p></div>';
     }
 
+    // E5: "Show more" button for large sessions
+    if (hiddenCount > 0) {
+        html += `<div style="text-align:center; padding:0.75rem;">
+            <button class="btn-small-accent" onclick="window._llShowAllCards=true;_llRenderFiltered();">Show ${hiddenCount} more player${hiddenCount !== 1 ? 's' : ''}</button>
+        </div>`;
+    }
+
     detail.innerHTML = html;
 
     // Restore search focus + cursor position after re-render
@@ -8385,11 +8455,8 @@ function populateAccountabilityDropdowns() {
             sessionSel.innerHTML = opts;
         }).catch(() => {});
 
-    // Seed from lootBuyerCaptures (re-sent on WS reconnect from VPS)
-    if ((!window._chestCaptures || window._chestCaptures.length === 0) && typeof lootBuyerCaptures !== 'undefined' && lootBuyerCaptures.length > 0) {
-        window._chestCaptures = [...lootBuyerCaptures];
-    }
-    const captures = window._chestCaptures || [];
+    // E2: lootBuyerCaptures IS window._chestCaptures — no seeding needed
+    const captures = window._chestCaptures;
     if (captures.length === 0) {
         captureSel.innerHTML = '<option value="" disabled>No captures yet — open a chest with the client running</option>';
     } else {
@@ -8978,9 +9045,11 @@ function handleLootLoggerWsMessage(msg) {
         } else if (!chestCaptureActive) {
             // Skip if capture mode is off and not on accountability tab
         }
-        if (!window._chestCaptures) window._chestCaptures = [];
-        window._chestCaptures.push(msg.data);
-        if (window._chestCaptures.length > 20) window._chestCaptures.shift();
+        // E2: lootBuyerCaptures IS window._chestCaptures — push to the unified store
+        if (!window._chestCaptures.includes(msg.data)) {
+            window._chestCaptures.push(msg.data);
+            if (window._chestCaptures.length > 20) window._chestCaptures.shift();
+        }
         showToast(`Chest capture received: ${esc(msg.data.tabName || 'Unknown tab')}`, 'success');
         // Update Accountability UI if visible
         if (lootLoggerMode === 'accountability') {
