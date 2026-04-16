@@ -819,13 +819,7 @@ select:focus {
 }
 .loot-player-card.expanded .loot-player-items { display: block; }
 
-.loot-log-item-row {
-    display: flex;
-    align-items: center;
-    gap: 0.4rem;
-    padding: 0.25rem 0;
-    font-size: 0.78rem;
-}
+/* Dead CSS removed: .loot-log-item-row (not used in app.js or index.html) */
 
 /* Accountability status */
 .acc-deposited { opacity: 0.6; }

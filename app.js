@@ -5282,8 +5282,8 @@ function initLootManualEntry() {
     const addBtn = document.getElementById('loot-manual-add-btn');
     if (addBtn) addBtn.addEventListener('click', () => {
         if (!selectedItemId) return;
-        const quality = parseInt(document.getElementById('loot-manual-quality').value) || 1;
-        const qty = Math.max(1, parseInt(document.getElementById('loot-manual-qty').value) || 1);
+        const quality = parseInt(document.getElementById('loot-manual-quality')?.value) || 1;
+        const qty = Math.max(1, parseInt(document.getElementById('loot-manual-qty')?.value) || 1);
 
         // Check if same item+quality already in list — merge quantities
         const existing = lootManualItems.find(it => it.itemId === selectedItemId && it.quality === quality);
@@ -6676,6 +6676,7 @@ function showSaleForm(tabId) {
             // Wire up item dropdown → auto-fill qty
             const sel = document.getElementById(`sale-item-${tabId}`);
             const customRow = document.getElementById(`sale-custom-row-${tabId}`);
+            if (!sel) return;
             sel.addEventListener('change', () => {
                 if (sel.value === '__custom__') {
                     customRow.style.display = '';
@@ -6695,6 +6696,7 @@ function showSaleForm(tabId) {
 
 async function submitSaleForm(tabId) {
     const sel = document.getElementById(`sale-item-${tabId}`);
+    if (!sel) return;
     let itemId = sel.value;
     let quality = parseInt(sel.selectedOptions[0]?.dataset?.quality) || 1;
 
@@ -6704,8 +6706,8 @@ async function submitSaleForm(tabId) {
         if (!itemId) return;
     }
 
-    const qty = Math.max(1, parseInt(document.getElementById(`sale-qty-${tabId}`).value) || 1);
-    const price = parseInt(document.getElementById(`sale-price-${tabId}`).value);
+    const qty = Math.max(1, parseInt(document.getElementById(`sale-qty-${tabId}`)?.value) || 1);
+    const price = parseInt(document.getElementById(`sale-price-${tabId}`)?.value);
     if (!price || price <= 0) return;
 
     const btn = document.getElementById(`sale-submit-${tabId}`);

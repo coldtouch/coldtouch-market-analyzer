@@ -2,7 +2,17 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
-### 2026-04-16 — Guild Leaderboard, Session Merge, Sale Edit/Delete, Crafter Stats + Refactors
+### 2026-04-16 — Guild Leaderboard, Session Merge, Sale Edit/Delete, Crafter Stats + Refactors (Batch 2)
+
+**Session 2 additions:**
+- **Discord copy for Guild Leaderboard**: 📋 button generates markdown-formatted leaderboard with medal icons, routes through copy preview modal.
+- **Reverse session badges** (4.5): Session cards show "📦 N tabs" badge when tracked tabs were purchased during that session. Completes the bidirectional link from F1.
+- **Capture event bus** (F3): `_fireCaptureBusEvent()` dispatches DOM CustomEvent on every chest capture add/remove. Loot Logger accountability auto-refreshes via subscriber.
+- **Unit tests** (E10): 15 tests covering `isWhitelistedEvent` (case-sensitivity contract) and `buildDeathTimeline` (value estimation, friendly/enemy detection, multi-death sorting).
+- **Null-safety fixes**: 4 crash-path bugs fixed in sale form handling (`submitSaleForm`, `showSaleForm`, `initLootManualEntry`).
+- **Dead CSS cleanup**: Removed unused `.loot-log-item-row` selector.
+
+
 
 **New Features:**
 - **Guild Leaderboard** (G1): Historical top looters, killers, deaths, and most active players across all your saved sessions. 7d/30d/all-time filter. Accessible from Loot Tools menu or Ctrl+Shift+L.
