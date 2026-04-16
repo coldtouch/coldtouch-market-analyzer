@@ -5793,6 +5793,10 @@ async function buyThisTab() {
             btn.style.color = '#000';
             btn.disabled = false;
         }
+        // Auto-sync to Portfolio: create a BUY entry with the tab's details
+        if (askingPrice > 0 && d.id) {
+            _addPortfolioBuyFromTab(d.id, tabName, askingPrice, lootSelectedCapture.items);
+        }
         loadTrackedTabs();
     } catch(e) {
         if (btn) { btn.disabled = false; btn.textContent = 'I Bought This — Track Tab'; }
@@ -6749,6 +6753,7 @@ async function submitSaleForm(tabId) {
         const detail = document.getElementById(`loot-tracked-detail-${tabId}`);
         if (detail) detail.style.display = 'none'; // collapse so re-click reloads fresh
         trackActivity('sale_record', 1);
+        _addPortfolioSellFromTab(tabId, price * qty, qty); // Portfolio sync
         loadTrackedTabs();
     } catch(e) {
         if (btn) { btn.disabled = false; btn.textContent = 'Save Sale'; }
@@ -10896,6 +10901,107 @@ function savePortfolioTrades(trades) {
     localStorage.setItem(PORTFOLIO_STORAGE_KEY, JSON.stringify(trades));
 }
 
+// Portfolio ↔ Loot Buyer sync: auto-create BUY entry when a loot tab is tracked
+function _addPortfolioBuyFromTab(tabId, tabName, purchasePrice, items) {
+    const trades = getPortfolioTrades();
+    // Check for duplicate by tabId
+    if (trades.some(t => t._lootTabId === tabId)) return;
+    // Use the primary item as the portfolio item ID
+    const primaryItem = items && items.length > 0 ? items[0].itemId : 'LOOT_TAB';
+    trades.push({
+        id: Date.now(),
+        _lootTabId: tabId,
+        _source: 'loot_buyer',
+        type: 'buy',
+        itemId: primaryItem,
+        itemName: tabName,
+        quantity: items ? items.reduce((s, it) => s + (it.quantity || 1), 0) : 1,
+        price: purchasePrice,
+        city: '',
+        date: new Date().toISOString()
+    });
+    savePortfolioTrades(trades);
+}
+
+// Portfolio ↔ Loot Buyer sync: auto-create SELL entry when a sale is recorded on a tracked tab
+function _addPortfolioSellFromTab(tabId, salePrice, quantity) {
+    const trades = getPortfolioTrades();
+    // Find the matching BUY entry
+    const buyEntry = trades.find(t => t._lootTabId === tabId && t.type === 'buy');
+    if (!buyEntry) return;
+    trades.push({
+        id: Date.now(),
+        _lootTabId: tabId,
+        _source: 'loot_buyer',
+        type: 'sell',
+        itemId: buyEntry.itemId,
+        itemName: buyEntry.itemName,
+        quantity: quantity || 1,
+        price: salePrice,
+        city: '',
+        date: new Date().toISOString()
+    });
+    savePortfolioTrades(trades);
+}
+
+// Sync button: scan tracked tabs and reconcile with portfolio
+async function syncPortfolioFromTabs() {
+    if (!localStorage.getItem('albion_auth_token') && !discordUser) {
+        showToast('Log in to sync with Loot Buyer', 'warn');
+        return;
+    }
+    try {
+        const res = await fetch(`${VPS_BASE}/api/loot-tabs`, { headers: authHeaders() });
+        if (!res.ok) throw new Error('Failed to load tabs');
+        const data = await res.json();
+        const tabs = data.tabs || [];
+        const trades = getPortfolioTrades();
+        let imported = 0;
+        for (const tab of tabs) {
+            if (tab.purchasePrice <= 0) continue;
+            if (trades.some(t => t._lootTabId === tab.id)) continue;
+            trades.push({
+                id: Date.now() + imported,
+                _lootTabId: tab.id,
+                _source: 'loot_buyer',
+                type: 'buy',
+                itemId: 'LOOT_TAB_' + tab.id,
+                itemName: tab.tabName || `Tab #${tab.id}`,
+                quantity: tab.totalQuantity || tab.itemCount || 1,
+                price: tab.purchasePrice,
+                city: tab.city || '',
+                date: new Date(tab.purchasedAt).toISOString()
+            });
+            imported++;
+            // Also import sales for this tab
+            if (tab.revenueSoFar > 0 && tab.saleRecords > 0) {
+                trades.push({
+                    id: Date.now() + imported + 10000,
+                    _lootTabId: tab.id,
+                    _source: 'loot_buyer',
+                    type: 'sell',
+                    itemId: 'LOOT_TAB_' + tab.id,
+                    itemName: tab.tabName || `Tab #${tab.id}`,
+                    quantity: tab.saleRecords,
+                    price: Math.round(tab.revenueSoFar / Math.max(1, tab.saleRecords)),
+                    city: tab.city || '',
+                    date: new Date().toISOString()
+                });
+                imported++;
+            }
+        }
+        savePortfolioTrades(trades);
+        if (imported > 0) {
+            showToast(`Imported ${imported} entries from Loot Buyer`, 'success');
+            renderPortfolio();
+        } else {
+            showToast('Portfolio already up to date', 'info');
+        }
+    } catch(e) {
+        showToast('Sync failed: ' + e.message, 'error');
+    }
+}
+
 function addPortfolioTrade() {
     const type = document.getElementById('portfolio-type').value;
     const itemId = portfolioSearchExactId || document.getElementById('portfolio-item-search').value.trim();
@@ -11051,14 +11157,15 @@ function renderPortfolio() {
         const date = new Date(t.timestamp).toLocaleDateString();
         const typeColor = t.type === 'buy' ? 'var(--loss-red)' : 'var(--profit-green)';
         const typeLabel = t.type === 'buy' ? 'BUY' : 'SELL';
+        const syncBadge = t._source === 'loot_buyer' ? ' <span style="font-size:0.6rem; background:rgba(139,92,246,0.15); color:#a78bfa; padding:0.1rem 0.3rem; border-radius:4px;">Loot Buyer</span>' : '';
         const safeItemId = encodeURIComponent(t.itemId);
         const safeTradeId = esc(t.id);
         tableHTML += `<tr>
             <td>${date}</td>
-            <td><span style="font-weight:700; color:${typeColor};">${typeLabel}</span></td>
+            <td><span style="font-weight:700; color:${typeColor};">${typeLabel}</span>${syncBadge}</td>
             <td style="display:flex; align-items:center; gap:0.5rem;">
                 <img src="https://render.albiononline.com/v1/item/${safeItemId}.png" width="24" height="24" style="image-rendering:pixelated;" onerror="this.style.display='none'">
-                ${esc(name)}
+                ${esc(t.itemName || name)}
             </td>
             <td>${t.quantity.toLocaleString()}</td>
             <td>${t.price.toLocaleString()}</td>
