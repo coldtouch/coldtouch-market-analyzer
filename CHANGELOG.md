@@ -2,6 +2,13 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-04-16 — Go client: fix expiry mail item ID bug
+
+**Bug fix (Go client):**
+- **`decodeExpiryNotification` item ID fix**: `MARKETPLACE_SELLORDER_EXPIRED_SUMMARY` mail body format is `sold | total_amount | item_id | price_in_10000ths`. The expiry decoder had body[1] and body[2] swapped — `notification.ItemID` was set to body[1] (the integer total amount) and body[2] (the real item ID string) was fed to `strconv.Atoi`, which always errored and silently dropped all expiry notifications. Fixed by reading amount from body[1] and item ID from body[2].
+
+**Note:** `computeAnalytics` DB connection was audited — already correctly uses `statsDb` (fixed in a prior session). No change needed.
+
 ### 2026-04-16 — Guild Leaderboard, Session Merge, Sale Edit/Delete, Crafter Stats + Refactors (Batch 2)
 
 ### 2026-04-16 — Feature Review: Fix, Bench, Overhaul (Batch 4)
