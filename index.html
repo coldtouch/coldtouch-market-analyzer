@@ -706,6 +706,10 @@
                 <div class="control-group checkbox-group">
                     <label><input type="checkbox" id="craft-use-focus"> Use Focus</label>
                 </div>
+                <div class="control-group" id="craft-focus-cost-group" style="display:none;">
+                    <label for="craft-focus-cost">Focus Cost</label>
+                    <input type="number" id="craft-focus-cost" min="0" value="0" placeholder="Silver per focus" style="width:90px;" title="Silver cost per focus point (for silver/focus ratio)">
+                </div>
                 <div class="control-group">
                     <label for="craft-spec">Spec Level</label>
                     <input type="number" id="craft-spec" min="0" max="100" value="0" style="width:70px;">
@@ -763,12 +767,28 @@
                         </select>
                     </div>
                     <div class="control-group">
+                        <label for="craft-category">Category</label>
+                        <select id="craft-category">
+                            <option value="all">All Categories</option>
+                            <option value="weapons">Weapons</option>
+                            <option value="armor">Armor</option>
+                            <option value="offhand">Off-Hand</option>
+                            <option value="consumables">Consumables</option>
+                            <option value="accessories">Accessories</option>
+                            <option value="materials">Materials</option>
+                        </select>
+                    </div>
+                    <div class="control-group">
                         <label for="craft-sort">Sort By</label>
                         <select id="craft-sort">
                             <option value="profit">Highest Profit</option>
                             <option value="roi">Highest ROI</option>
                             <option value="name">Name</option>
                         </select>
+                    </div>
+                    <div class="control-group">
+                        <label for="craft-qty">Batch Qty</label>
+                        <input type="number" id="craft-qty" min="1" max="1000" value="1" style="width:60px;">
                     </div>
                     <button id="craft-scan-btn" class="btn-primary">Scan All Recipes</button>
                     <button id="craft-export-btn" class="btn-secondary" onclick="exportCraftingCSV()" title="Export current recipes as CSV">Export CSV</button>

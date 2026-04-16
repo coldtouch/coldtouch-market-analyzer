@@ -2112,6 +2112,8 @@ function processCrafting(data, tier, sortBy) {
     const useFocus = document.getElementById('craft-use-focus')?.checked || false;
     const cityBonusPct = parseFloat(document.getElementById('craft-city-bonus')?.value) || 0;
     const stationFee = parseFloat(document.getElementById('craft-fee')?.value) || 0;
+    const categoryFilter = document.getElementById('craft-category')?.value || 'all';
+    const batchQty = Math.max(1, parseInt(document.getElementById('craft-qty')?.value) || 1);
     const rrr = calculateRRR(useFocus, cityBonusPct);
     const effectiveMultiplier = 1 - rrr;
 
@@ -2144,6 +2146,8 @@ function processCrafting(data, tier, sortBy) {
     const crafts = [];
     for (const [finishedItem, recipe] of Object.entries(recipesData)) {
         if (!prices[finishedItem]) continue;
+        // Category filter
+        if (categoryFilter !== 'all' && (recipe.category || 'other') !== categoryFilter) continue;
 
         for (const [quality, citiesObj] of Object.entries(prices[finishedItem])) {
             let bestSellCity = null, bestSellPrice = 0, finalDate = '0001';
@@ -2193,7 +2197,10 @@ function processCrafting(data, tier, sortBy) {
 
             crafts.push({
                 itemId: finishedItem, quality, sellCity: bestSellCity, sellPrice: bestSellPrice,
-                matCost: totalMatCost, mats: matBreakdown, tax, fee, profit, roi,
+                matCost: totalMatCost * batchQty, mats: matBreakdown,
+                tax: tax * batchQty, fee: fee * batchQty,
+                profit: profit * batchQty, roi,
+                batchQty,
                 updateDate: oldestDate, category: recipe.category || 'other'
             });
         }
@@ -2421,13 +2428,18 @@ function setupCardButtons(container) {
 }
 
 function switchToCraft(itemId) {
-    // Switch to crafting tab and pre-fill the search with this item
+    // Switch to crafting tab, pre-fill the search, and auto-calculate
     document.querySelector('[data-tab="crafting"]')?.click();
     setTimeout(() => {
         const search = document.getElementById('craft-search');
         if (search) {
             search.value = getFriendlyName(itemId) || itemId;
             search.dispatchEvent(new Event('input'));
+            // Auto-trigger calculation after autocomplete settles
+            setTimeout(() => {
+                const calcBtn = document.getElementById('craft-calc-btn');
+                if (calcBtn) calcBtn.click();
+            }, 300);
         }
     }, 100);
 }
@@ -4135,6 +4147,12 @@ async function init() {
         }
     });
     setupAutocomplete('craft-search', 'craft-autocomplete', (id) => { craftSearchExactId = id; });
+    // Toggle focus cost input visibility
+    const focusCB = document.getElementById('craft-use-focus');
+    if (focusCB) focusCB.addEventListener('change', () => {
+        const fg = document.getElementById('craft-focus-cost-group');
+        if (fg) fg.style.display = focusCB.checked ? '' : 'none';
+    });
     document.getElementById('craft-search').addEventListener('keydown', (e) => {
         if (e.key === 'Enter') doCraftSearch();
     });
@@ -11361,8 +11379,31 @@ function saveCraftSetup() {
     const itemId = craftSearchExactId || searchInput.value.trim();
     if (!itemId) { showToast('Search for an item first.', 'warn'); return; }
 
-    const name = prompt('Name this crafting setup:', getFriendlyName(itemId) || itemId);
+    // Inline input instead of prompt() — check if already showing
+    const existing = document.getElementById('craft-save-name-input');
+    if (existing) { existing.focus(); return; }
+    const defaultName = getFriendlyName(itemId) || itemId;
+    const container = document.createElement('div');
+    container.id = 'craft-save-name-input';
+    container.style.cssText = 'display:flex; gap:0.4rem; align-items:center; margin:0.5rem 0;';
+    container.innerHTML = `
+        <input type="text" id="craft-save-name-val" class="sale-form-input" value="${esc(defaultName)}" placeholder="Setup name" style="flex:1; height:30px;">
+        <button class="btn-small-accent" onclick="confirmSaveCraftSetup()">Save</button>
+        <button class="btn-small" onclick="document.getElementById('craft-save-name-input')?.remove()">Cancel</button>`;
+    const detail = document.getElementById('craft-detail-view');
+    if (detail) detail.prepend(container);
+    else document.getElementById('craft-bulk-section')?.prepend(container);
+    document.getElementById('craft-save-name-val')?.focus();
+    return;
+}
+function confirmSaveCraftSetup() {
+    const nameInput = document.getElementById('craft-save-name-val');
+    const name = nameInput?.value?.trim();
     if (!name) return;
+    document.getElementById('craft-save-name-input')?.remove();
+    const searchInput = document.getElementById('craft-search');
+    const itemId = craftSearchExactId || searchInput?.value?.trim();
+    if (!itemId) return;
 
     const setup = {
         itemId: craftSearchExactId || itemId,
