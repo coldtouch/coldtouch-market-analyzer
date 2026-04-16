@@ -6583,8 +6583,10 @@ function renderTrackedTabDetail(tab) {
                     const name = getFriendlyName(it.itemId) || it.itemId;
                     const qLbl = (it.quality || 1) > 1 ? ` q${it.quality}` : '';
                     const isSold = soldSet.has(key);
+                    const iconUrl = `https://render.albiononline.com/v1/item/${encodeURIComponent(it.itemId)}.png?quality=${it.quality || 1}`;
                     return `<div class="item-check-row${isSold ? ' item-sold' : ''}" onclick="event.stopPropagation(); toggleItemSold(${tab.id},'${esc(key)}',this)">
                         <span class="item-check-box">${isSold ? '✓' : ''}</span>
+                        <img src="${iconUrl}" class="item-check-icon" loading="lazy" onerror="this.style.display='none'" alt="">
                         <span class="item-check-name">${esc(name)}${qLbl} ×${it.quantity}</span>
                     </div>`;
                 }).join('')}
@@ -6799,6 +6801,13 @@ function toggleItemSold(tabId, itemKey, rowEl) {
             const soldRows = checklist.querySelectorAll('.item-check-row.item-sold').length;
             const label = header.querySelector('span');
             if (label) label.textContent = `Items checklist (${soldRows}/${totalRows} sold)`;
+            // Auto-suggest status change to "sold" when all items are checked
+            if (soldRows === totalRows && totalRows > 0) {
+                const statusSel = checklist.closest('[style*="border-top"]')?.querySelector('.loot-status-select');
+                if (statusSel && statusSel.value !== 'sold') {
+                    showToast('All items sold! Consider marking this tab as Sold ✓', 'success');
+                }
+            }
         }
     }
 }
@@ -12660,6 +12669,16 @@ function copyLeaderboardToDiscord() {
 
 // Global cross-tab shortcuts — work anywhere in the app
 document.addEventListener('keydown', (e) => {
+    // ? opens shortcut help from ANY tab (non-modifier)
+    if (!e.ctrlKey && !e.metaKey && !e.altKey && (e.key === '?' || (e.key === '/' && e.shiftKey))) {
+        const t = e.target;
+        if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return;
+        const anyModalOpen = Array.from(document.querySelectorAll('.modal')).some(m => !m.classList.contains('hidden'));
+        if (anyModalOpen) return;
+        e.preventDefault();
+        if (typeof _llShowShortcutHelp === 'function') _llShowShortcutHelp();
+        return;
+    }
     // Ctrl+Shift+T opens Trip Summary, Ctrl+Shift+C opens Compare Sessions, Ctrl+Shift+L opens Leaderboard
     if (!(e.ctrlKey || e.metaKey) || !e.shiftKey) return;
     const t = e.target;

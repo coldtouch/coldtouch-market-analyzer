@@ -6046,7 +6046,9 @@ footer {
 .flip-consumed::after { content: 'TAKEN'; position: absolute; top: 0.3rem; right: 0.3rem; font-size: 0.6rem; padding: 0.1rem 0.3rem; background: rgba(100,100,100,0.3); color: var(--text-muted); border-radius: 4px; }
 
 /* Per-item mark-off checklist */
-.item-check-row { display:flex; align-items:center; gap:0.4rem; padding:0.25rem 0.3rem; border-bottom:1px solid rgba(255,255,255,0.04); font-size:0.78rem; cursor:pointer; transition:opacity 0.15s; }
+.item-check-row { display:flex; align-items:center; gap:0.4rem; padding:0.3rem 0.3rem; border-bottom:1px solid rgba(255,255,255,0.04); font-size:0.78rem; cursor:pointer; transition:opacity 0.15s; }
+.item-check-icon { width:24px; height:24px; image-rendering:pixelated; border-radius:3px; flex-shrink:0; }
+.item-sold .item-check-icon { opacity:0.35; }
 .item-check-row:hover { background:rgba(255,255,255,0.03); }
 .item-check-box { width:18px; height:18px; border:1px solid var(--border-color); border-radius:3px; display:flex; align-items:center; justify-content:center; font-size:0.68rem; color:var(--profit-green); flex-shrink:0; }
 .item-check-name { color:var(--text-primary); }
