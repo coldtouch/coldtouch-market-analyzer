@@ -2,6 +2,31 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-04-16 — Security & Quality Audit Fixes (Batch 5)
+
+**Backend (deploy_saas.py):**
+- **S-1** — Pin all `jwt.verify()` calls to `{ algorithms: ['HS256'] }` — prevents alg:none / RS256 downgrade attacks
+- **S-2** — Crash-fail at startup if `SESSION_SECRET` is undefined — avoids silently using `undefined` as HMAC key
+- **S-3** — HMAC-sign Discord OAuth state param with `SESSION_SECRET` — prevents account-linking hijack via forged state
+- **S-4** — Rate-limit `/api/device/authorize` (10 req/15min per user) — prevents brute-force code scanning
+- **B-1** — `broadcastFlip` validation errors now log + return instead of broadcasting unvalidated flips
+- **B-2** — Rate-limit `/api/loot-evaluate` (10 req/min per user)
+- **B-3** — `/api/player-trends-bulk` reads via `readDb` to avoid main DB queue starvation
+- **B-4** — Wrap `/api/transport-routes-live` computation in try/catch
+- **B-5** — Session merge limit lowered from 10 → 5
+
+**Frontend (app.js + index.html):**
+- **F-1** — Replace inline `onclick` + template literal in news banner with `addEventListener` — eliminates XSS via server-controlled `dismissedKey` injected into `onclick` attr
+- **F-2** — Whitelist valid tab names before using URL `?tab=` in `querySelector` — prevents CSS injection via unsanitized URL param
+- **F-3/P-1** — Cap `analyticsCache` at 500 entries with FIFO eviction — prevents unbounded memory growth
+- **DI-1** — Add `_analyticsInFlight` Map to deduplicate concurrent `fetchAnalytics()` calls
+- **S-9** — Add `rel="noopener noreferrer"` to all `target="_blank"` links
+- **UX-1** — Add `aria-label`, `aria-expanded`, `aria-controls` to mobile menu button
+- **CQ-2** — Replace all `confirm()`/`prompt()` calls with `showConfirm()`/`showPrompt()` toast dialogs — adds `showPrompt()` helper, converts 13 call sites across alerts, loot, portfolio, crafting, and session management
+
+**Go client (event_vault_info.go):**
+- **GC-5** — Hold `vaultMu.RLock()` in `matchContainerToVaultTab` — fixes data race against `Process()` goroutines writing shared vault state (GC-3/4/6/7 were fixed in previous session)
+
 ### 2026-04-16 — Guild Leaderboard, Session Merge, Sale Edit/Delete, Crafter Stats + Refactors (Batch 2)
 
 ### 2026-04-16 — Feature Review: Fix, Bench, Overhaul (Batch 4)
