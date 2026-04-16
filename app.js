@@ -89,6 +89,7 @@ let analyticsChartInstance = null;
 let scanAbortController = null;
 let spreadStatsCache = {}; // keyed by "itemId_quality_buyCity_sellCity"
 const analyticsCache = new Map(); // keyed by itemId, value: { price_trend, latest_price } | 'pending'
+const ANALYTICS_CACHE_MAX = 500; // evict oldest entries when over limit
 let spreadStatsCacheTime = 0;
 let discordUser = null; // stored on auth check for contribution tracking
 
@@ -149,6 +150,26 @@ function showConfirm(message, onYes) {
             <button class="btn-small-danger" onclick="this.closest('.toast').remove(); (${onYes.toString()})()">Confirm</button>
         </div>`;
     container.appendChild(toast);
+}
+
+function showPrompt(message, defaultValue, onSubmit) {
+    let container = document.getElementById('toast-container');
+    if (!container) {
+        container = document.createElement('div');
+        container.id = 'toast-container';
+        document.body.appendChild(container);
+    }
+    const toast = document.createElement('div');
+    toast.className = 'toast toast-confirm show';
+    const inputId = 'show-prompt-input-' + Date.now();
+    toast.innerHTML = `<div style="margin-bottom:0.5rem;">${esc(message)}</div>
+        <input id="${inputId}" type="text" class="input-field" value="${esc(defaultValue || '')}" style="width:100%; margin-bottom:0.5rem;">
+        <div style="display:flex; gap:0.5rem; justify-content:flex-end;">
+            <button class="btn-small" onclick="this.closest('.toast').remove()">Cancel</button>
+            <button class="btn-small-accent" onclick="const v=document.getElementById('${inputId}').value; this.closest('.toast').remove(); (${onSubmit.toString()})(v)">OK</button>
+        </div>`;
+    container.appendChild(toast);
+    setTimeout(() => { const inp = document.getElementById(inputId); if (inp) { inp.focus(); inp.select(); } }, 50);
 }
 
 function getFriendlyName(id) {
@@ -472,7 +493,8 @@ function initTabs() {
     const urlItem = urlParams.get('item');
     const urlFrom = urlParams.get('from');
     const urlTo = urlParams.get('to');
-    if (urlTab) {
+    const VALID_TABS = new Set(['browser','flipper','bmflipper','compare','top-traded','item-power','favorites','crafting','journals','rrr','repair','transport','live-flips','portfolio','loot-buyer','mounts','farm','builds','alerts','community','profile','feedback','about']);
+    if (urlTab && VALID_TABS.has(urlTab)) {
         const tabEl = document.querySelector(`.nav-tab[data-tab="${urlTab}"]`);
         if (tabEl) tabEl.click();
         // Pre-fill item search if provided
@@ -901,9 +923,14 @@ function getVolatilityBadge(consistencyPct) {
     return '';
 }
 
+const _analyticsInFlight = new Map(); // dedup concurrent fetches for same itemId
 async function fetchAnalytics(itemId) {
-    if (analyticsCache.has(itemId)) return analyticsCache.get(itemId);
-    analyticsCache.set(itemId, 'pending');
+    if (analyticsCache.has(itemId)) {
+        const cached = analyticsCache.get(itemId);
+        if (cached !== 'pending') return cached;
+    }
+    if (_analyticsInFlight.has(itemId)) return _analyticsInFlight.get(itemId);
+    const promise = (async () => {
     try {
         const res = await fetch(`${VPS_BASE}/api/analytics/${encodeURIComponent(itemId)}`);
         if (!res.ok) { analyticsCache.delete(itemId); return null; }
@@ -923,11 +950,15 @@ async function fetchAnalytics(itemId) {
         }
         const data = { price_trend: priceTrend, _raw: raw };
         analyticsCache.set(itemId, data);
+        if (analyticsCache.size > ANALYTICS_CACHE_MAX) analyticsCache.delete(analyticsCache.keys().next().value);
         return data;
     } catch {
         analyticsCache.delete(itemId);
         return null;
     }
+    })();
+    _analyticsInFlight.set(itemId, promise);
+    try { return await promise; } finally { _analyticsInFlight.delete(itemId); }
 }
 
 function prefetchTrendBadges(container) {
@@ -3017,7 +3048,7 @@ async function createAlert() {
 }
 
 async function deleteAlert(channelId) {
-    if (!confirm(`Delete alert for channel ${channelId}?`)) return;
+    showConfirm(`Delete alert for channel ${channelId}?`, async () => {
     try {
         await fetch(`${VPS_BASE}/api/alerts`, {
             method: 'DELETE',
@@ -3028,6 +3059,7 @@ async function deleteAlert(channelId) {
     } catch (e) {
         showToast('Failed to delete alert.', 'error');
     }
+    });
 }
 
 // ============================================================
@@ -4053,9 +4085,13 @@ async function loadNewsBanner() {
         // Don't show if user dismissed this exact message
         const dismissedKey = 'news_dismissed_' + (data.updatedAt || 0);
         if (localStorage.getItem(dismissedKey)) { el.style.display = 'none'; return; }
-        const linkHtml = data.link ? ` <a href="${data.link}" target="_blank">Learn more</a>` : '';
-        el.className = `banner-${data.type || 'info'}`;
-        el.innerHTML = `${data.message}${linkHtml}<button class="banner-close" onclick="this.parentElement.style.display='none'; localStorage.setItem('${dismissedKey}','1');">&times;</button>`;
+        const linkHtml = data.link ? ` <a href="${esc(data.link)}" target="_blank" rel="noopener noreferrer">Learn more</a>` : '';
+        el.className = `banner-${esc(data.type || 'info')}`;
+        el.innerHTML = `${esc(data.message)}${linkHtml}<button class="banner-close">&times;</button>`;
+        el.querySelector('.banner-close').addEventListener('click', () => {
+            el.style.display = 'none';
+            localStorage.setItem(dismissedKey, '1');
+        });
         el.style.display = '';
     } catch { /* silent */ }
 }
@@ -5156,8 +5192,8 @@ function renderProfile(data) {
         } catch { showToast('Failed to start Discord linking.', 'error'); }
     };
 
-    if (unlinkBtn) unlinkBtn.onclick = async () => {
-        if (!confirm('Unlink your Discord account?')) return;
+    if (unlinkBtn) unlinkBtn.onclick = () => {
+        showConfirm('Unlink your Discord account?', async () => {
         try {
             const res = await fetch(`${VPS_BASE}/api/unlink-discord`, { method: 'POST', headers: authHeaders() });
             const d = await res.json();
@@ -5169,6 +5205,7 @@ function renderProfile(data) {
                 showToast(d.error || 'Failed to unlink.', 'error');
             }
         } catch { showToast('Network error.', 'error'); }
+        });
     };
 
     // Capture token
@@ -5448,11 +5485,10 @@ function removeLootCapture(index) {
 function renameLootCapture(index) {
     const cap = lootBuyerCaptures[index];
     if (!cap) return;
-    const name = prompt('Name this capture:', cap.customName || '');
-    if (name !== null) {
+    showPrompt('Name this capture:', cap.customName || '', (name) => {
         cap.customName = name.trim() || null;
         renderLootCaptures();
-    }
+    });
 }
 
 function selectLootCaptureTab(capIndex, tabIndex, slotsPerTab) {
@@ -5742,32 +5778,33 @@ async function analyzeLoot() {
 // Fast-path: "Track this" button on a chest capture chip. Prompts for purchase
 // price, then posts directly to /api/loot-tab/save without running Phase 1 eval.
 // Intended for the workflow "I already bought this and I just want to track sales now".
-async function trackCaptureDirectly(capIndex) {
+function trackCaptureDirectly(capIndex) {
     const cap = lootBuyerCaptures[capIndex];
     if (!cap || !cap.items || cap.items.length === 0) {
         showToast('Capture not found or empty', 'error');
         return;
     }
     const defaultName = cap.customName || cap.tabName || 'Chest Capture';
-    const priceStr = prompt(`Purchase price for "${defaultName}" (silver)?\n\n${cap.items.length} items will be tracked.`, '0');
-    if (priceStr === null) return; // cancelled
-    const purchasePrice = Math.max(0, parseInt(priceStr) || 0);
-    const city = prompt('Which city did you buy this in? (optional)', '') || '';
-    try {
-        const res = await fetch(`${VPS_BASE}/api/loot-tab/save`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', ...authHeaders() },
-            body: JSON.stringify({ tabName: defaultName, city, purchasePrice, items: cap.items })
+    showPrompt(`Purchase price for "${defaultName}" (silver)? (${cap.items.length} items will be tracked)`, '0', (priceStr) => {
+        const purchasePrice = Math.max(0, parseInt(priceStr) || 0);
+        showPrompt('Which city did you buy this in? (optional)', '', async (city) => {
+            try {
+                const res = await fetch(`${VPS_BASE}/api/loot-tab/save`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+                    body: JSON.stringify({ tabName: defaultName, city: city || '', purchasePrice, items: cap.items })
+                });
+                const d = await res.json();
+                if (!res.ok) throw new Error(d.error || 'Failed');
+                showToast(`Tracked "${defaultName}" — view it below`, 'success');
+                loadTrackedTabs();
+                // Remove capture from chip list so user doesn't double-track
+                removeLootCapture(capIndex);
+            } catch(e) {
+                showToast('Failed to track: ' + e.message, 'error');
+            }
         });
-        const d = await res.json();
-        if (!res.ok) throw new Error(d.error || 'Failed');
-        showToast(`Tracked "${defaultName}" — view it below`, 'success');
-        loadTrackedTabs();
-        // Remove capture from chip list so user doesn't double-track
-        removeLootCapture(capIndex);
-    } catch(e) {
-        showToast('Failed to track: ' + e.message, 'error');
-    }
+    });
 }
 
 async function buyThisTab() {
@@ -6793,7 +6830,7 @@ async function submitSaleEdit(tabId, saleId) {
     }
 }
 async function deleteSaleRecord(tabId, saleId) {
-    if (!confirm('Delete this sale record?')) return;
+    showConfirm('Delete this sale record?', async () => {
     try {
         const res = await fetch(`${VPS_BASE}/api/loot-tab/${tabId}/sale/${saleId}`, {
             method: 'DELETE',
@@ -6805,6 +6842,7 @@ async function deleteSaleRecord(tabId, saleId) {
     } catch(e) {
         showToast('Failed to delete sale: ' + e.message, 'error');
     }
+    });
 }
 // Per-item sold mark-off toggle (localStorage persistence)
 function toggleItemSold(tabId, itemKey, rowEl) {
@@ -7050,10 +7088,11 @@ function renameSavedSession(sid) {
 
 function _fallbackPromptRename(sid) {
     const current = getSavedSessionNames()[sid] || '';
-    const next = prompt('Rename this loot session:', current);
-    if (next === null) return;
-    setSavedSessionName(sid, next.trim());
-    loadLootSessions();
+    showPrompt('Rename this loot session:', current, (next) => {
+        if (!next && next !== '') return;
+        setSavedSessionName(sid, next.trim());
+        loadLootSessions();
+    });
 }
 
 // --- Whitelist ---
@@ -7121,11 +7160,19 @@ function applyWhitelistPreset(kind) {
         showToast(`Added "${alliance}" to whitelist`, 'success');
     } else if (kind === 'me') {
         // Try to infer the user's character name from discord profile or saved logs
-        const myName = (discordUser?.username) || localStorage.getItem('albion_character_name') || prompt('Enter your in-game character name:', '');
-        if (!myName) return;
-        try { localStorage.setItem('albion_character_name', myName); } catch {}
-        add(myName);
-        showToast(`Added "${myName}" to whitelist`, 'success');
+        const savedName = (discordUser?.username) || localStorage.getItem('albion_character_name');
+        if (!savedName) {
+            showPrompt('Enter your in-game character name:', '', (myName) => {
+                if (!myName) return;
+                try { localStorage.setItem('albion_character_name', myName); } catch {}
+                add(myName);
+                showToast(`Added "${myName}" to whitelist`, 'success');
+                input.value = existing.join('\n');
+            });
+            return;
+        }
+        add(savedName);
+        showToast(`Added "${savedName}" to whitelist`, 'success');
     }
     input.value = existing.join('\n');
 }
@@ -7176,18 +7223,17 @@ function restoreLiveDraftIfAny() {
         // Only offer if user hasn't already started a new session
         if (liveLootEvents.length > 0) return;
         const when = draft.savedAt ? new Date(draft.savedAt).toLocaleString() : 'earlier';
-        if (!confirm(`A loot logger draft from ${when} was auto-saved (${draft.events.length} events${draft.name ? ', "' + draft.name + '"' : ''}). Restore it?`)) {
-            try { localStorage.removeItem(LL_DRAFT_KEY); } catch {}
-            return;
-        }
-        liveLootEvents = draft.events;
-        liveSessionName = draft.name || '';
-        try { localStorage.setItem(LL_SESSION_NAME_KEY, liveSessionName); } catch {}
-        const nameInput = document.getElementById('ll-session-name-input');
-        if (nameInput) nameInput.value = liveSessionName;
-        updateLiveLootIndicator();
-        if (lootLoggerMode === 'live') loadLootSessions();
-        showToast(`Restored ${draft.events.length} events from draft`, 'success');
+        const eventsCount = draft.events.length;
+        showConfirm(`A loot logger draft from ${when} was auto-saved (${eventsCount} events${draft.name ? ', "' + draft.name + '"' : ''}). Restore it?`, () => {
+            liveLootEvents = draft.events;
+            liveSessionName = draft.name || '';
+            try { localStorage.setItem(LL_SESSION_NAME_KEY, liveSessionName); } catch {}
+            const nameInput = document.getElementById('ll-session-name-input');
+            if (nameInput) nameInput.value = liveSessionName;
+            updateLiveLootIndicator();
+            if (lootLoggerMode === 'live') loadLootSessions();
+            showToast(`Restored ${eventsCount} events from draft`, 'success');
+        });
     } catch(e) {
         console.warn('[loot logger] restore draft failed:', e);
     }
@@ -7342,11 +7388,7 @@ function updateLiveLootIndicator() {
 }
 
 function resetLiveSession() {
-    if (liveLootEvents.length > 0 && !liveSessionSaved) {
-        if (!confirm('You have unsaved loot events. Discard them?\n\nClick Cancel to go back and save first.')) return;
-    } else if (liveLootEvents.length > 0) {
-        if (!confirm('Clear the current live session?')) return;
-    }
+    const doReset = () => {
     // E3: single source of truth for flag reset (clears state + localStorage)
     resetLiveSessionFlags();
     _llRemovedPlayers.clear();
@@ -7367,6 +7409,14 @@ function resetLiveSession() {
     if (detail) { detail.style.display = 'none'; detail.innerHTML = ''; }
     if (lootLoggerMode === 'live') loadLootSessions();
     showToast('Live session cleared', 'info');
+    }; // end doReset
+    if (liveLootEvents.length > 0 && !liveSessionSaved) {
+        showConfirm('You have unsaved loot events. Discard them? (Cancel to go back and save first.)', doReset);
+    } else if (liveLootEvents.length > 0) {
+        showConfirm('Clear the current live session?', doReset);
+    } else {
+        doReset();
+    }
 }
 
 async function saveLiveSession() {
@@ -10404,18 +10454,15 @@ function deleteFavoriteList() {
         return;
     }
 
-    if (!confirm(`Delete the list "${name}"?`)) return;
-
-    const lists = JSON.parse(localStorage.getItem(FAV_STORAGE_KEY) || '{}');
-    delete lists[name];
-    localStorage.setItem(FAV_STORAGE_KEY, JSON.stringify(lists));
-    _invalidateFavoriteCache();
-
-    loadFavoriteLists();
-
-    // Clear results
-    const container = document.getElementById('fav-results');
-    if (container) container.innerHTML = '';
+    showConfirm(`Delete the list "${name}"?`, () => {
+        const lists = JSON.parse(localStorage.getItem(FAV_STORAGE_KEY) || '{}');
+        delete lists[name];
+        localStorage.setItem(FAV_STORAGE_KEY, JSON.stringify(lists));
+        _invalidateFavoriteCache();
+        loadFavoriteLists();
+        const container = document.getElementById('fav-results');
+        if (container) container.innerHTML = '';
+    });
 }
 
 function addFavoriteItem(itemId) {
@@ -11052,9 +11099,10 @@ function deletePortfolioTrade(tradeId) {
 }
 
 function clearPortfolio() {
-    if (!confirm('Delete all portfolio trades? This cannot be undone.')) return;
-    localStorage.removeItem(PORTFOLIO_STORAGE_KEY);
-    renderPortfolio();
+    showConfirm('Delete all portfolio trades? This cannot be undone.', () => {
+        localStorage.removeItem(PORTFOLIO_STORAGE_KEY);
+        renderPortfolio();
+    });
 }
 
 function exportPortfolioCSV() {
@@ -11636,12 +11684,12 @@ function deleteCraftSetup() {
     const select = document.getElementById('craft-load-select');
     const name = select.value;
     if (!name) return;
-    if (!confirm(`Delete setup "${name}"?`)) return;
-
-    const setups = getCraftSetups();
-    delete setups[name];
-    localStorage.setItem(CRAFT_SETUPS_KEY, JSON.stringify(setups));
-    loadCraftSetupDropdown();
+    showConfirm(`Delete setup "${name}"?`, () => {
+        const setups = getCraftSetups();
+        delete setups[name];
+        localStorage.setItem(CRAFT_SETUPS_KEY, JSON.stringify(setups));
+        loadCraftSetupDropdown();
+    });
 }
 
 function generateShoppingList(recipe, itemId, priceIndex, effectiveMultiplier) {
@@ -12426,7 +12474,7 @@ async function _createShare() {
 
 async function _revokeShare() {
     if (!_shareCurrentSessionId) return;
-    if (!confirm('Revoke the share link? Anyone with the old link will get a 404.')) return;
+    showConfirm('Revoke the share link? Anyone with the old link will get a 404.', async () => {
     try {
         const res = await fetch(`${VPS_BASE}/api/loot-session/${encodeURIComponent(_shareCurrentSessionId)}/unshare`, {
             method: 'POST',
@@ -12443,6 +12491,7 @@ async function _revokeShare() {
     } catch(e) {
         showToast('Failed to revoke: ' + e.message, 'error');
     }
+    });
 }
 
 function _copyShareUrl() {
