@@ -2,6 +2,34 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-04-17 — Loot Split + Equipment-at-Death + DevOps batch
+
+**New features:**
+- **G10 Loot Split Calculator** — modal under Loot Tools dropdown. Splits silver between participants with per-person weights and bonuses, supports % or fixed silver off-the-top deduction (tax/repair/scout cut), pulls totals from current loot session, and copies a Discord-formatted breakdown via the existing copy-preview modal. State persists in localStorage.
+- **B6 Equipment-at-death** — new Go client opcode 90 handler (`evCharacterEquipmentChanged`) tracks each player's last-known gear by name. Death events now carry the victim's equipped items at the moment of death; backend persists in `loot_events.equipment_json`; frontend renders a teal-bordered "Worn at death" strip on each death card.
+
+**DevOps (deploy_saas.py):**
+- **DO-1 Rollback** — `python deploy_saas.py rollback` restores the previous backend.js from the `.bak` snapshot taken on every deploy.
+- **DO-2 /healthz** — added a stable health endpoint (mirrors `/health`) that includes db/readDb/statsDb status, NATS state, WS client count, deploy version stamp (`SERVER_VERSION`), and start time. Suitable for UptimeRobot/BetterStack pings.
+- **DO-3 DB backup cron** — deploy installs `/etc/cron.d/albion-backup` running `sqlite3 .backup` every 6h with 7-day retention to `/opt/albion-saas/backups/`.
+- **DO-6 --frontend-only flag** — `deploy_saas.py --frontend-only` exits with a notice (frontend lives on GitHub Pages, not VPS) so frontend pushes never accidentally restart the backend.
+- **DO-4 Go client `--version`** — augmented existing flag to also print build date, runtime OS/arch, and Go version. Build with `-ldflags "-X main.version=vX.Y -X main.buildDate=..."`.
+
+**Schema:**
+- `loot_events.equipment_json TEXT` — new nullable column for B6. Added via `ALTER` so existing rows are unaffected.
+
+**Verified already in-place (no change needed):**
+- ReadMail → loot tab auto-match end-to-end (Go client `SendSaleNotification` + backend `sale-notification` handler matches active loot tabs and pushes to user browser).
+- Go client GC-1/GC-2/GC-3/GC-4/GC-6/GC-7 — all critical Go client audit findings already fixed in worktree (router worker pool, item cache TTL, auth goroutine cleanup, sendOrQueue/flushPending race, queue size 500, WS read deadline).
+- FG-1 D4 accountability → Loot Buyer (`valueMissingItemsInLootBuyer()`).
+- FG-2 D5 capture → Track this (📦 Track button on every capture card).
+
+**Deferred (needs live verification):**
+- Multi-server VPS price history. NATS topic-per-region pattern needs live confirmation before adding `server` column + multi-subscribe — risk of silent data corruption otherwise.
+- Device Auth end-to-end live test — requires in-game session.
+
+---
+
 ### 2026-04-16 — Chest Capture Duplicate & Timestamp Fix
 
 **Frontend (app.js):**

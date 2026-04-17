@@ -26,17 +26,44 @@ CLIENT_SECRET = os.environ['DISCORD_CLIENT_SECRET']
 BOT_TOKEN = os.environ['DISCORD_BOT_TOKEN']
 
 def main():
+    # DO-1 rollback: `python deploy_saas.py rollback` restores the .bak backend.js.
+    # DO-6 frontend-only: `python deploy_saas.py --frontend-only` would just push
+    #   static assets, but the static frontend lives on GitHub Pages — not the VPS —
+    #   so the flag exists for future use. Today it just prints a notice and exits.
+    args = [a for a in sys.argv[1:] if a]
+    mode = 'deploy'
+    if args and args[0] in ('rollback', '--rollback'):
+        mode = 'rollback'
+    elif args and args[0] in ('--frontend-only', 'frontend-only'):
+        print("[deploy_saas] --frontend-only: backend/VPS not affected. Push frontend to GitHub Pages via `git push origin main` instead.")
+        return
+
     print("Connecting to VPS...")
     ssh = paramiko.SSHClient()
     ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
     ssh.connect(ip, username=usr, password=password, timeout=10)
-    
+
     def run_wait(cmd):
         stdin, stdout, stderr = ssh.exec_command(cmd)
         stdout.channel.recv_exit_status()
         return stdout.read().decode()
 
+    if mode == 'rollback':
+        # DO-1: restore previous backend.js from .bak created during last deploy.
+        bak_check = run_wait("test -f /opt/albion-saas/backend.js.bak && echo OK || echo MISSING").strip()
+        if bak_check != 'OK':
+            print("[rollback] No backup file found at /opt/albion-saas/backend.js.bak — cannot rollback.")
+            ssh.close()
+            sys.exit(1)
+        run_wait("cp /opt/albion-saas/backend.js.bak /opt/albion-saas/backend.js")
+        run_wait("systemctl restart albion-saas")
+        status = run_wait("systemctl is-active albion-saas").strip()
+        print(f"[rollback] Restored previous backend.js. Service status: {status}")
+        ssh.close()
+        return
+
     run_wait("mkdir -p /opt/albion-saas")
+    run_wait("mkdir -p /opt/albion-saas/backups")
     run_wait("systemctl disable --now albion-proxy || true")
     run_wait("apt-get update && apt-get install -y build-essential python3")
     
@@ -99,6 +126,10 @@ const BOT_TOKEN = process.env.DISCORD_BOT_TOKEN;
 const DISCORD_FEEDBACK_WEBHOOK = process.env.DISCORD_FEEDBACK_WEBHOOK || '';
 const SESSION_SECRET = process.env.SESSION_SECRET;
 if (!SESSION_SECRET) { console.error('[FATAL] SESSION_SECRET env var is not set — refusing to start'); process.exit(1); }
+
+// DO-2: served by /healthz so deploys can be detected by external monitors.
+const SERVER_VERSION = process.env.SERVER_VERSION || 'unknown';
+const SERVER_STARTED_AT = new Date().toISOString();
 
 const GAME_SERVER = process.env.GAME_SERVER || 'europe';
 const API_BASE = `https://${GAME_SERVER}.albion-online-data.com/api/v2/stats/prices`;
@@ -356,6 +387,8 @@ db.serialize(() => {
     weight REAL DEFAULT 0,
     is_silver INTEGER DEFAULT 0
   )`);
+  // B6: equipment-at-death column. Added via ALTER for existing DBs (safe — fails silently if column already exists).
+  db.run(`ALTER TABLE loot_events ADD COLUMN equipment_json TEXT DEFAULT NULL`, () => {});
   db.run(`CREATE INDEX IF NOT EXISTS idx_loot_events_user_session ON loot_events(user_id, session_id)`);
   db.run(`CREATE INDEX IF NOT EXISTS idx_loot_events_session ON loot_events(session_id, timestamp)`);
 
@@ -1046,21 +1079,31 @@ app.post('/api/news', requireAuth, (req, res) => {
   });
 });
 
-app.get('/health', (req, res) => {
-  res.json({
+// /health and /healthz return the same payload — /healthz is the conventional
+// name used by uptime monitors (UptimeRobot, BetterStack, k8s probes). DO-2.
+function healthPayload() {
+  const mem = process.memoryUsage();
+  return {
     status: 'ok',
     uptime: Math.floor(process.uptime()),
     memory: {
-      rss: Math.floor(process.memoryUsage().rss / 1024 / 1024),
-      heap: Math.floor(process.memoryUsage().heapUsed / 1024 / 1024),
-      heapTotal: Math.floor(process.memoryUsage().heapTotal / 1024 / 1024)
+      rss: Math.floor(mem.rss / 1024 / 1024),
+      heap: Math.floor(mem.heapUsed / 1024 / 1024),
+      heapTotal: Math.floor(mem.heapTotal / 1024 / 1024)
     },
+    db: !!(db && db.open),
+    readDb: !!(readDb && readDb.open),
+    statsDb: !!(statsDb && statsDb.open),
     nats: !!natsConnection,
     wsClients: wsClients ? wsClients.size : 0,
     cacheItems: cacheItemCount || 0,
-    alertDbItems: Object.keys(alertMarketDb).length
-  });
-});
+    alertDbItems: Object.keys(alertMarketDb).length,
+    version: SERVER_VERSION,
+    startedAt: SERVER_STARTED_AT
+  };
+}
+app.get('/health', (req, res) => res.json(healthPayload()));
+app.get('/healthz', (req, res) => res.json(healthPayload()));
 
 app.get('/api/me', (req, res) => {
   if(req.user) {
@@ -3014,12 +3057,18 @@ wss.on('connection', ws => {
         if (!ws.lootSessionId) {
           ws.lootSessionId = ws.user.id + '_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
         }
-        db.run(`INSERT INTO loot_events (user_id, session_id, timestamp, looted_by_name, looted_by_guild, looted_by_alliance, looted_from_name, looted_from_guild, looted_from_alliance, item_id, numeric_id, quantity, weight, is_silver)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '__DEATH__', 0, 0, 0, 0)`,
+        // B6: persist equipment-at-death (if any) so saved sessions retain it.
+        let equipJson = null;
+        if (Array.isArray(ev.equipmentAtDeath) && ev.equipmentAtDeath.length > 0) {
+          try { equipJson = JSON.stringify(ev.equipmentAtDeath.slice(0, 32)); } catch {}
+        }
+        db.run(`INSERT INTO loot_events (user_id, session_id, timestamp, looted_by_name, looted_by_guild, looted_by_alliance, looted_from_name, looted_from_guild, looted_from_alliance, item_id, numeric_id, quantity, weight, is_silver, equipment_json)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '__DEATH__', 0, 0, 0, 0, ?)`,
           [ws.user.id, ws.lootSessionId, ev.timestamp || Date.now(),
            ev.killerName || '', ev.killerGuild || '', '',
-           ev.victimName || '', ev.victimGuild || '', '']);
-        // Push to browser
+           ev.victimName || '', ev.victimGuild || '', '',
+           equipJson]);
+        // Push to browser (already includes equipmentAtDeath via spread)
         for (const wc of wsClients) {
           if (wc.clientType === 'browser' && wc.isAuthenticated && wc.user && wc.user.id === ws.user.id) {
             wsSafeSend(wc, { type: 'death-event', data: { ...ev, sessionId: ws.lootSessionId } });
@@ -4541,6 +4590,9 @@ require('http').createServer((req, res) => {
   res.end();
 }).listen(80, () => console.log('HTTP redirect listening on 80'));
 """
+    # DO-1: snapshot current backend.js so `deploy_saas.py rollback` can restore it.
+    run_wait("test -f /opt/albion-saas/backend.js && cp /opt/albion-saas/backend.js /opt/albion-saas/backend.js.bak || true")
+
     # Use SFTP for backend.js — base64 via echo truncates at ~100KB
     sftp = ssh.open_sftp()
     with sftp.file('/opt/albion-saas/backend.js', 'w') as f:
@@ -4556,6 +4608,9 @@ require('http').createServer((req, res) => {
     smtp_pass = os.environ.get('SMTP_PASS', '')
     smtp_from = os.environ.get('SMTP_FROM', 'noreply@albionaitool.xyz')
     feedback_webhook = os.environ.get('DISCORD_FEEDBACK_WEBHOOK', '')
+    # DO-2: surface the deploy timestamp via /healthz so monitors can detect new versions.
+    import datetime
+    server_version = datetime.datetime.utcnow().strftime('%Y%m%d-%H%M%S')
     env_content = f"""DOMAIN={domain}
 DISCORD_CLIENT_ID={CLIENT_ID}
 DISCORD_CLIENT_SECRET={CLIENT_SECRET}
@@ -4563,6 +4618,7 @@ DISCORD_BOT_TOKEN={BOT_TOKEN}
 DISCORD_FEEDBACK_WEBHOOK={feedback_webhook}
 SESSION_SECRET={session_secret}
 GAME_SERVER={game_server}
+SERVER_VERSION={server_version}
 SMTP_HOST={smtp_host}
 SMTP_PORT={smtp_port}
 SMTP_USER={smtp_user}
@@ -4591,12 +4647,20 @@ WantedBy=multi-user.target
     b64_svc = base64.b64encode(svc.encode()).decode()
     run_wait(f"echo '{b64_svc}' | base64 -d > /etc/systemd/system/albion-saas.service")
 
+    # DO-3: install/refresh SQLite backup cron. Runs every 6h, keeps 7 days.
+    backup_cron = """# Albion SaaS DB backup — 4x daily, retain 7 days. Managed by deploy_saas.py.
+0 */6 * * * root sqlite3 /opt/albion-saas/database.sqlite ".backup /opt/albion-saas/backups/db-$(date +\\%Y\\%m\\%d-\\%H).sqlite" 2>>/var/log/albion-backup.log && find /opt/albion-saas/backups -name 'db-*.sqlite' -mtime +7 -delete
+"""
+    b64_cron = base64.b64encode(backup_cron.encode()).decode()
+    run_wait(f"echo '{b64_cron}' | base64 -d > /etc/cron.d/albion-backup && chmod 644 /etc/cron.d/albion-backup")
+
     run_wait("systemctl daemon-reload")
     run_wait("systemctl enable albion-saas")
     run_wait("systemctl restart albion-saas")
-    
+
     status = run_wait("systemctl is-active albion-saas")
     print(f"Service status: {status.strip()}")
+    print(f"Server version stamp: {server_version}")
     ssh.close()
     print("SaaS Deployed successfully!")
 

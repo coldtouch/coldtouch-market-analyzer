@@ -7768,6 +7768,17 @@ function buildDeathTimeline(events, byPlayer, priceMap, primaryGuild, primaryAll
         const killer = ev.looted_by_name || '';
         if (!victim) continue;
         const deathTs = +new Date(ev.timestamp) || 0;
+        // B6: parse equipment-at-death. Live WS events use `equipmentAtDeath`
+        // (camelCase array); persisted DB rows use `equipment_json` (TEXT).
+        let equipmentAtDeath = null;
+        if (Array.isArray(ev.equipmentAtDeath) && ev.equipmentAtDeath.length > 0) {
+            equipmentAtDeath = ev.equipmentAtDeath;
+        } else if (typeof ev.equipment_json === 'string' && ev.equipment_json.length > 2) {
+            try {
+                const parsed = JSON.parse(ev.equipment_json);
+                if (Array.isArray(parsed) && parsed.length > 0) equipmentAtDeath = parsed;
+            } catch {}
+        }
         // Attribute every loot event off this victim to the death.
         // Events can happen slightly before the death marker (packet ordering),
         // so we take all corpse loots regardless of timestamp but prefer post-death.
@@ -7802,6 +7813,7 @@ function buildDeathTimeline(events, byPlayer, priceMap, primaryGuild, primaryAll
             killerGuild: ev.looted_by_guild || '',
             timestamp: deathTs,
             lootedItems,
+            equipmentAtDeath,
             estimatedValue,
             lootedBy: Object.values(byLooter).sort((a, b) => b.silver - a.silver || b.items - a.items),
             wasFriendly: !!wasVictimFriendly
@@ -7894,6 +7906,23 @@ function renderDeathsSection(deaths) {
             `${esc(l.name)} <span style="color:var(--text-muted);">(${l.items} item${l.items !== 1 ? 's' : ''}${l.silver > 0 ? ', ' + formatSilver(l.silver) : ''})</span>`
         ).join(', ');
         const extra = d.lootedBy.length > 3 ? ` <span style="color:var(--text-muted);">+${d.lootedBy.length - 3} more</span>` : '';
+        // B6: equipment-at-death strip — items the victim was wearing when they died.
+        // Shown above recovered items so users can see "what they had" vs "what was looted".
+        let equipmentHtml = '';
+        if (Array.isArray(d.equipmentAtDeath) && d.equipmentAtDeath.length > 0) {
+            const equipImgs = d.equipmentAtDeath.slice(0, 12).map(eq => {
+                const id = eq.itemId || '';
+                if (!id) return '';
+                const valEntry = _llPriceMap[id];
+                const valAttr = valEntry && valEntry.price > 0 ? ` data-tip-value="${Math.floor(valEntry.price)}"` : '';
+                return `<img src="https://render.albiononline.com/v1/item/${encodeURIComponent(id)}.png" class="ll-death-item ll-death-equip" data-tip-item="${esc(id)}" data-tip-source="equipped"${valAttr} loading="lazy" onerror="this.style.display='none'" alt="">`;
+            }).join('');
+            const more = d.equipmentAtDeath.length > 12 ? `<span class="ll-preview-overflow">+${d.equipmentAtDeath.length - 12}</span>` : '';
+            equipmentHtml = `<div class="ll-death-equipment-row" title="Equipment the victim was wearing at the moment of death (live capture)">
+                <span class="ll-death-equipment-label">Worn at death:</span>
+                <div class="ll-death-items">${equipImgs}${more}</div>
+            </div>`;
+        }
         return `<div class="ll-death-card ${sideClass}${filterActive && _llDeathFilterVictim === d.victim ? ' active-filter' : ''}">
             <div class="ll-death-top">
                 <div class="ll-death-title">
@@ -7906,6 +7935,7 @@ function renderDeathsSection(deaths) {
                 </div>
                 <div class="ll-death-value ${d.wasFriendly ? 'loss' : 'gain'}">${d.estimatedValue > 0 ? formatSilver(d.estimatedValue) : '—'}</div>
             </div>
+            ${equipmentHtml}
             <div class="ll-death-middle">
                 <div class="ll-death-items">${previewHtml || '<span style="color:var(--text-muted); font-size:0.75rem; font-style:italic;">No items recovered off corpse</span>'}</div>
                 <div class="ll-death-actions">
@@ -12600,6 +12630,198 @@ function _tripWindowCutoff() {
     if (_tripWindow === '24h') return now - 24 * 3600 * 1000;
     if (_tripWindow === '7d') return now - 7 * 24 * 3600 * 1000;
     return 0; // all time
+}
+
+// === G10: Loot Split Calculator ===
+// Splits silver between participants with weights and an off-the-top deduction
+// (covers tax/repair/scout cuts). Persists between opens via localStorage.
+const _LOOT_SPLIT_LS_KEY = 'albion_loot_split_state_v1';
+let _lootSplitState = null;
+
+function _lootSplitDefaultState() {
+    return {
+        total: 0,
+        deduction: 10,
+        deductionMode: 'percent',
+        participants: [
+            { name: 'Player 1', weight: 1, bonus: 0 },
+            { name: 'Player 2', weight: 1, bonus: 0 }
+        ]
+    };
+}
+function _lootSplitLoad() {
+    try {
+        const raw = localStorage.getItem(_LOOT_SPLIT_LS_KEY);
+        if (raw) {
+            const parsed = JSON.parse(raw);
+            if (parsed && Array.isArray(parsed.participants) && parsed.participants.length > 0) return parsed;
+        }
+    } catch {}
+    return _lootSplitDefaultState();
+}
+function _lootSplitSave() {
+    try { localStorage.setItem(_LOOT_SPLIT_LS_KEY, JSON.stringify(_lootSplitState)); } catch {}
+}
+
+function openLootSplit() {
+    _lootSplitState = _lootSplitLoad();
+    document.getElementById('loot-split-modal')?.classList.remove('hidden');
+    const totalEl = document.getElementById('loot-split-total');
+    const dedEl = document.getElementById('loot-split-deduction');
+    const dedModeEl = document.getElementById('loot-split-deduction-mode');
+    if (totalEl) totalEl.value = _lootSplitState.total;
+    if (dedEl) dedEl.value = _lootSplitState.deduction;
+    if (dedModeEl) dedModeEl.value = _lootSplitState.deductionMode;
+    lootSplitRender();
+}
+function closeLootSplit() {
+    document.getElementById('loot-split-modal')?.classList.add('hidden');
+}
+function lootSplitReset() {
+    _lootSplitState = _lootSplitDefaultState();
+    _lootSplitSave();
+    openLootSplit();
+}
+function lootSplitAddRow() {
+    if (!_lootSplitState) _lootSplitState = _lootSplitLoad();
+    const n = _lootSplitState.participants.length + 1;
+    _lootSplitState.participants.push({ name: `Player ${n}`, weight: 1, bonus: 0 });
+    _lootSplitSave();
+    lootSplitRender();
+}
+function lootSplitRemoveRow(idx) {
+    if (!_lootSplitState) return;
+    _lootSplitState.participants.splice(idx, 1);
+    if (_lootSplitState.participants.length === 0) {
+        _lootSplitState.participants.push({ name: 'Player 1', weight: 1, bonus: 0 });
+    }
+    _lootSplitSave();
+    lootSplitRender();
+}
+function _lootSplitReadInputs() {
+    if (!_lootSplitState) _lootSplitState = _lootSplitLoad();
+    const totalEl = document.getElementById('loot-split-total');
+    const dedEl = document.getElementById('loot-split-deduction');
+    const dedModeEl = document.getElementById('loot-split-deduction-mode');
+    _lootSplitState.total = Math.max(0, parseFloat(totalEl?.value) || 0);
+    _lootSplitState.deduction = Math.max(0, parseFloat(dedEl?.value) || 0);
+    _lootSplitState.deductionMode = dedModeEl?.value || 'percent';
+    document.querySelectorAll('#loot-split-rows [data-row-idx]').forEach(row => {
+        const i = parseInt(row.dataset.rowIdx, 10);
+        if (!_lootSplitState.participants[i]) return;
+        const nameEl = row.querySelector('.ls-name');
+        const wEl = row.querySelector('.ls-weight');
+        const bEl = row.querySelector('.ls-bonus');
+        _lootSplitState.participants[i].name = (nameEl?.value || '').slice(0, 32);
+        _lootSplitState.participants[i].weight = Math.max(0, parseFloat(wEl?.value) || 0);
+        _lootSplitState.participants[i].bonus = Math.max(0, parseFloat(bEl?.value) || 0);
+    });
+}
+function _lootSplitCompute() {
+    if (!_lootSplitState) _lootSplitState = _lootSplitLoad();
+    const s = _lootSplitState;
+    const total = s.total;
+    const dedAmt = s.deductionMode === 'percent'
+        ? Math.min(total, total * (s.deduction / 100))
+        : Math.min(total, s.deduction);
+    const totalBonus = s.participants.reduce((a, p) => a + (p.bonus || 0), 0);
+    const remaining = Math.max(0, total - dedAmt - totalBonus);
+    const totalWeight = s.participants.reduce((a, p) => a + (p.weight || 0), 0);
+    const shares = s.participants.map(p => {
+        const wShare = totalWeight > 0 ? remaining * (p.weight / totalWeight) : 0;
+        return { ...p, payout: Math.round(wShare + (p.bonus || 0)) };
+    });
+    const paidOut = shares.reduce((a, p) => a + p.payout, 0);
+    return { total, dedAmt, totalBonus, remaining, totalWeight, shares, paidOut };
+}
+function lootSplitRender() {
+    const rowsEl = document.getElementById('loot-split-rows');
+    const sumEl = document.getElementById('loot-split-summary');
+    if (!rowsEl || !sumEl) return;
+    _lootSplitReadInputs();
+    _lootSplitSave();
+    const result = _lootSplitCompute();
+    rowsEl.innerHTML = result.shares.map((p, i) => `
+        <div data-row-idx="${i}" style="display:grid; grid-template-columns:minmax(0,1.6fr) 70px 110px minmax(0,1fr) 28px; gap:0.4rem; align-items:center; padding:0.35rem 0.45rem; background:var(--bg-primary); border:1px solid var(--border-color); border-radius:6px;">
+            <input type="text" class="ls-name" value="${esc(p.name)}" maxlength="32" placeholder="Name" style="background:transparent; border:none; color:var(--text-primary); font-size:0.85rem; outline:none;" oninput="lootSplitRender()">
+            <input type="number" class="ls-weight" value="${p.weight}" min="0" step="0.5" title="Share weight (1 = standard share)" style="background:transparent; border:none; color:var(--text-secondary); font-size:0.82rem; text-align:center; outline:none;" oninput="lootSplitRender()">
+            <input type="number" class="ls-bonus" value="${p.bonus}" min="0" step="1000" title="Fixed bonus paid before split (e.g. caller cut)" placeholder="bonus" style="background:transparent; border:none; color:var(--text-secondary); font-size:0.82rem; text-align:right; outline:none;" oninput="lootSplitRender()">
+            <span style="text-align:right; font-weight:600; color:var(--accent); font-size:0.88rem;" title="Total payout = weighted share + bonus">${p.payout.toLocaleString()}</span>
+            <button onclick="lootSplitRemoveRow(${i})" title="Remove" style="background:transparent; border:none; color:var(--text-muted); cursor:pointer; font-size:1rem; padding:0; line-height:1;">×</button>
+        </div>
+    `).join('');
+    const dedLabel = _lootSplitState.deductionMode === 'percent'
+        ? `${_lootSplitState.deduction.toFixed(1)}%`
+        : `${Math.round(_lootSplitState.deduction).toLocaleString()} silver`;
+    sumEl.innerHTML = `
+        <div style="display:flex; flex-wrap:wrap; gap:0.6rem 1.2rem; justify-content:space-between;">
+            <span><strong>Pot:</strong> ${result.total.toLocaleString()} silver</span>
+            <span><strong>Deducted (${dedLabel}):</strong> ${Math.round(result.dedAmt).toLocaleString()}</span>
+            <span><strong>Bonuses:</strong> ${result.totalBonus.toLocaleString()}</span>
+            <span><strong>Split pool:</strong> ${Math.round(result.remaining).toLocaleString()}</span>
+            <span><strong>Paid out:</strong> ${result.paidOut.toLocaleString()}</span>
+        </div>
+    `;
+}
+async function lootSplitImportFromSession() {
+    if (!_lootSplitState) _lootSplitState = _lootSplitLoad();
+    const events = (typeof liveLootEvents !== 'undefined' && Array.isArray(liveLootEvents)) ? liveLootEvents : [];
+    const lootOnly = events.filter(e => (e.item_id || e.itemId || '') !== '__DEATH__');
+    if (lootOnly.length === 0) {
+        if (typeof showToast === 'function') showToast('No loot events in current session', 'warn');
+        return;
+    }
+    let prices;
+    try { prices = await getPriceCache(); } catch { prices = []; }
+    const priceMap = new Map();
+    for (const p of (prices || [])) {
+        const id = p.item_id || p.itemId;
+        if (!id) continue;
+        const px = p.sell_price_min || p.price_min || 0;
+        if (px > 0) {
+            const cur = priceMap.get(id) || 0;
+            if (px > cur) priceMap.set(id, px); // best-city max as conservative valuation
+        }
+    }
+    let total = 0;
+    let priced = 0;
+    let missing = 0;
+    for (const ev of lootOnly) {
+        const id = ev.item_id || ev.itemId || '';
+        const qty = ev.quantity || ev.amount || 1;
+        const px = priceMap.get(id) || 0;
+        if (px > 0) { total += px * qty; priced++; } else { missing++; }
+    }
+    _lootSplitState.total = Math.round(total);
+    _lootSplitSave();
+    const totalEl = document.getElementById('loot-split-total');
+    if (totalEl) totalEl.value = _lootSplitState.total;
+    lootSplitRender();
+    if (typeof showToast === 'function') {
+        showToast(`Imported ${total.toLocaleString()} silver from ${priced} items (${missing} unpriced)`, 'success');
+    }
+}
+function lootSplitCopyDiscord() {
+    _lootSplitReadInputs();
+    const result = _lootSplitCompute();
+    const dedLabel = _lootSplitState.deductionMode === 'percent'
+        ? `${_lootSplitState.deduction.toFixed(1)}%`
+        : `${Math.round(_lootSplitState.deduction).toLocaleString()} silver`;
+    const lines = [
+        '**💰 Loot Split**',
+        `Pot: \`${result.total.toLocaleString()}\` silver`,
+        `Deducted (${dedLabel}): \`${Math.round(result.dedAmt).toLocaleString()}\``,
+        result.totalBonus > 0 ? `Bonuses: \`${result.totalBonus.toLocaleString()}\`` : null,
+        `Split pool: \`${Math.round(result.remaining).toLocaleString()}\``,
+        '',
+        ...result.shares.map(p => {
+            const tag = (p.bonus || 0) > 0 ? ` _(+${p.bonus.toLocaleString()} bonus)_` : '';
+            return `• **${p.name}** — \`${p.payout.toLocaleString()}\`${tag}`;
+        })
+    ].filter(Boolean);
+    if (typeof openCopyPreview === 'function') {
+        openCopyPreview('Preview — Loot Split', lines.join('\n'), 'Loot split copied');
+    }
 }
 
 async function _renderTripSummary() {

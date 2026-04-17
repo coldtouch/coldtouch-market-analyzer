@@ -360,6 +360,7 @@
                     <button class="nav-tab nav-tab-action" onclick="event.preventDefault(); openSessionCompare(); this.closest('.nav-dropdown')?.classList.remove('show');" title="Pick two saved sessions and see them side-by-side">⚖ Compare Sessions</button>
                     <button class="nav-tab nav-tab-action" onclick="event.preventDefault(); openGuildLeaderboard(); this.closest('.nav-dropdown')?.classList.remove('show');" title="Historical leaderboard across all your saved sessions">🏆 Guild Leaderboard</button>
                     <button class="nav-tab nav-tab-action" onclick="event.preventDefault(); openSessionMerge(); this.closest('.nav-dropdown')?.classList.remove('show');" title="Combine multiple sessions into one">🔀 Merge Sessions</button>
+                    <button class="nav-tab nav-tab-action" onclick="event.preventDefault(); openLootSplit(); this.closest('.nav-dropdown')?.classList.remove('show');" title="Split silver/items between guildmates with weights, off-the-top deductions, and Discord copy">💰 Loot Split</button>
                 </div>
             </div>
             <!-- Game Tools group -->
@@ -1994,6 +1995,18 @@
                     <div id="changelog-wrapper" style="max-height: 500px; overflow-y: auto; position: relative;">
                     <div class="changelog-list">
                         <div class="changelog-entry">
+                            <div class="changelog-date">April 17, 2026</div>
+                            <div class="changelog-title">💰 Loot Split Calculator + ⚔ Equipment-at-Death + 🛠 DevOps</div>
+                            <ul>
+                                <li><strong>Loot Split Calculator</strong> &mdash; new modal under Loot Tools dropdown. Splits silver across guildmates with per-person weights and bonuses, supports % or fixed-silver off-the-top deductions, imports totals from current loot session, and one-click Discord copy.</li>
+                                <li><strong>Equipment at death</strong> &mdash; Go client now tracks each player's gear via <code>EvCharacterEquipmentChanged</code>. Death cards show a teal-bordered "Worn at death" item strip alongside the recovered loot &mdash; you can now see what was on the corpse vs what was looted.</li>
+                                <li><strong>Health endpoint</strong> &mdash; new <code>/healthz</code> reports DB connectivity (3 connections), NATS state, deploy version stamp, and uptime &mdash; ready for UptimeRobot/BetterStack pings.</li>
+                                <li><strong>Backups</strong> &mdash; deploy script now installs a 6-hourly SQLite backup cron with 7-day retention. The April 4 corruption incident is now recoverable from snapshots.</li>
+                                <li><strong>Rollback</strong> &mdash; <code>python deploy_saas.py rollback</code> restores the previous backend.js from a snapshot taken on every deploy.</li>
+                                <li><strong>Go client <code>--version</code></strong> now also prints build date, OS/arch, and Go version &mdash; easier to diagnose user reports.</li>
+                            </ul>
+                        </div>
+                        <div class="changelog-entry">
                             <div class="changelog-date">April 16, 2026</div>
                             <div class="changelog-title">🔒 Security &amp; Quality Audit Fixes</div>
                             <ul>
@@ -3246,6 +3259,44 @@
             </div>
             <div id="trip-summary-body">
                 <div class="empty-state"><p>Loading...</p></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- G10: Loot Split Calculator — split silver/items N ways with weights and off-the-top deductions -->
+    <div id="loot-split-modal" class="modal hidden" onclick="if(event.target===this)closeLootSplit()">
+        <div class="modal-content" style="max-width:760px;">
+            <button class="close-btn" onclick="closeLootSplit()">&times;</button>
+            <div style="display:flex; align-items:center; justify-content:space-between; gap:0.5rem; margin-bottom:0.75rem; flex-wrap:wrap;">
+                <h2 style="color:var(--accent); margin:0; font-size:1.15rem;">💰 Loot Split Calculator</h2>
+                <div style="display:flex; gap:0.4rem;">
+                    <button class="btn-small" onclick="lootSplitImportFromSession()" title="Pull total value from the currently viewed loot session">⬇ From session</button>
+                    <button class="btn-small" onclick="lootSplitReset()" title="Reset all fields">↻ Reset</button>
+                </div>
+            </div>
+            <div class="control-group" style="display:grid; grid-template-columns:1fr 1fr; gap:0.6rem;">
+                <label style="display:flex; flex-direction:column; gap:0.2rem; font-size:0.78rem; color:var(--text-secondary);">Total silver
+                    <input type="number" id="loot-split-total" min="0" step="1000" value="0" style="background:var(--bg-primary); border:1px solid var(--border-color); border-radius:6px; padding:0.45rem 0.6rem; color:var(--text-primary); font-size:0.92rem;" oninput="lootSplitRender()">
+                </label>
+                <label style="display:flex; flex-direction:column; gap:0.2rem; font-size:0.78rem; color:var(--text-secondary);">Off-the-top deduction
+                    <div style="display:flex; gap:0.4rem; align-items:center;">
+                        <input type="number" id="loot-split-deduction" min="0" max="99" step="1" value="10" style="flex:1; background:var(--bg-primary); border:1px solid var(--border-color); border-radius:6px; padding:0.45rem 0.6rem; color:var(--text-primary); font-size:0.92rem;" oninput="lootSplitRender()">
+                        <select id="loot-split-deduction-mode" onchange="lootSplitRender()" style="background:var(--bg-primary); border:1px solid var(--border-color); border-radius:6px; padding:0.45rem 0.5rem; color:var(--text-primary); font-size:0.85rem;">
+                            <option value="percent">%</option>
+                            <option value="silver">silver</option>
+                        </select>
+                    </div>
+                </label>
+            </div>
+            <div style="display:flex; align-items:center; justify-content:space-between; margin:0.75rem 0 0.4rem;">
+                <strong style="font-size:0.85rem; color:var(--text-primary);">Participants</strong>
+                <button class="btn-small" onclick="lootSplitAddRow()">+ Add</button>
+            </div>
+            <div id="loot-split-rows" style="display:flex; flex-direction:column; gap:0.4rem; max-height:280px; overflow-y:auto; padding:0.2rem;"></div>
+            <div id="loot-split-summary" style="margin-top:0.85rem; padding:0.65rem 0.75rem; border-radius:8px; background:rgba(255,255,255,0.03); border:1px solid var(--border-color); font-size:0.82rem; color:var(--text-secondary);"></div>
+            <div style="display:flex; gap:0.5rem; margin-top:0.75rem; justify-content:flex-end;">
+                <button class="btn-small" onclick="lootSplitCopyDiscord()">📋 Copy Discord</button>
+                <button class="btn-small-accent" onclick="closeLootSplit()">Done</button>
             </div>
         </div>
     </div>
