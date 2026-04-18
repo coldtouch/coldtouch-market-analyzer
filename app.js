@@ -6445,6 +6445,17 @@ function initLiveSync() {
                             tab.classList.add('has-new');
                             setTimeout(() => tab.classList.remove('has-new'), 3000);
                         }
+                        // Refresh Accountability UI if that tab is visible — previously this
+                        // was only done in handleLootLoggerWsMessage, which never ran because
+                        // this handler returns early. Users on Loot Logger → Accountability
+                        // saw the dropdown stay stale even though the capture WAS stored.
+                        if (typeof _updateLootLoggerModePillCounts === 'function') _updateLootLoggerModePillCounts();
+                        if (currentTab === 'loot-logger' && lootLoggerMode === 'accountability') {
+                            if (typeof populateAccountabilityDropdowns === 'function') populateAccountabilityDropdowns();
+                            if (typeof renderCaptureChips === 'function') renderCaptureChips();
+                            // Toast so the user actually notices the new capture appeared.
+                            showToast(`New chest capture added: ${esc(captures[0].tabName || 'Unknown tab')} (${captures[0].items?.length || 0} items)`, 'success');
+                        }
                     }
                 }
                 return;
