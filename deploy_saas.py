@@ -963,7 +963,10 @@ app.use(cors({ origin: 'https://coldtouch.github.io', credentials: true }));
 app.use(helmet({ contentSecurityPolicy: false }));
 
 // JSON body parsing — must be before any route that reads req.body
-app.use(express.json());
+// 5 MB ceiling so big accountability shares + loot uploads don't hit the default 100 KB cap
+// (which returns an HTML error page — the client then chokes on "<!DOCTYPE" trying to JSON.parse it).
+// Individual endpoints still enforce their own size caps (e.g. captures_json ≤ 500 KB).
+app.use(express.json({ limit: '5mb' }));
 
 // Global request timeout
 app.use((req, res, next) => {

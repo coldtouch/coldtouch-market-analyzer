@@ -2,11 +2,12 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
-### 2026-04-18 — Accountability deaths now expandable with items
+### 2026-04-18 — Accountability deaths expandable + share-failed-on-big-content fix
 
 - **Shared Accountability view:** each death row is now clickable — expanding shows Recovered items (48×48 icons with qty badges and price tooltips), Worn-at-death equipment, and who looted the corpse. Previously the share link only showed a flat "victim → killer" strip with no way to see what was dropped or recovered.
 - Replaced the inline deaths section in `runAccountabilityCheck` with the same `renderDeathsSection(deaths)` helper the main Loot Logger session view uses, so owner view and shared view now render identically.
-- **sw.js cache:** v39 → v40. Frontend-only change, no backend deploy.
+- **Fix: "Share failed: Unexpected token '<'" on big sessions.** Express's default JSON body limit was 100 KB — large accountability shares (many captures with many items) exceeded it, Express returned an HTML error page, and the client choked trying to JSON.parse `<!DOCTYPE`. Bumped the global JSON body limit to 5 MB. Individual endpoints still enforce their own caps (e.g. captures_json ≤ 500 KB).
+- **sw.js cache:** v39 → v40. **Backend deploy required** for the body-limit fix.
 
 ---
 

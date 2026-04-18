@@ -2266,10 +2266,11 @@
                     <div class="changelog-list">
                         <div class="changelog-entry">
                             <div class="changelog-date">April 18, 2026</div>
-                            <div class="changelog-title">☠ Shared Accountability &mdash; deaths are now expandable with items</div>
+                            <div class="changelog-title">☠ Shared Accountability &mdash; deaths expandable + share-on-big-content fix</div>
                             <ul>
                                 <li><strong>Shared accountability links show death loot</strong> &mdash; each death row in the Accountability view now expands on click to reveal Recovered items (with qty badges and price tooltips), Worn-at-death equipment, and who looted the corpse. Before, the share view showed only a flat "victim &rarr; killer" strip with no way to see what was dropped or picked up.</li>
                                 <li>Owner view and shared view now render deaths identically &mdash; both use the same expandable row component from the main session view.</li>
+                                <li><strong>Fix: "Share failed: Unexpected token '&lt;'"</strong> on big content. Express was rejecting POSTs over 100&nbsp;KB with an HTML error page, and the client choked trying to JSON.parse it. Bumped body limit to 5&nbsp;MB.</li>
                                 <li>Service worker cache v39 &rarr; v40.</li>
                             </ul>
                         </div>
