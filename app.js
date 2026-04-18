@@ -9440,16 +9440,23 @@ async function loadLootSessions() {
         const savedNames = getSavedSessionNames();
         _updateLootLoggerModePillCounts();
 
-        // Group sessions by age: Today / Yesterday / This Week / Older.
-        // Today stays expanded; older buckets collapse into <details> to save space.
-        const now = Date.now();
-        const ONE_DAY = 86400000;
+        // Group sessions by CALENDAR day in the user's local timezone — not by rolling 24h window.
+        // Fix (2026-04-18): previous version used `now - started_at < 24h` which put a 11 PM yesterday
+        // session into "Today" if it's currently before 11 PM today. Now we compare against midnight
+        // boundaries, so "Today" strictly means same calendar date.
+        // Also handles both numeric (Unix ms) and ISO-string `started_at` by always going through `new Date()`.
+        const todayStart = new Date();
+        todayStart.setHours(0, 0, 0, 0);
+        const todayMs = todayStart.getTime();
+        const yesterdayMs = todayMs - 86400000;
+        const weekStartMs = todayMs - 6 * 86400000; // last 7 calendar days including today
         const buckets = { today: [], yesterday: [], week: [], older: [] };
         for (const s of lootSessions) {
-            const age = now - s.started_at;
-            if (age < ONE_DAY) buckets.today.push(s);
-            else if (age < 2 * ONE_DAY) buckets.yesterday.push(s);
-            else if (age < 7 * ONE_DAY) buckets.week.push(s);
+            const ts = +new Date(s.started_at); // works for both ms numbers and ISO strings
+            if (isNaN(ts)) { buckets.older.push(s); continue; }
+            if (ts >= todayMs) buckets.today.push(s);
+            else if (ts >= yesterdayMs) buckets.yesterday.push(s);
+            else if (ts >= weekStartMs) buckets.week.push(s);
             else buckets.older.push(s);
         }
 
