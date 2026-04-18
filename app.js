@@ -9360,7 +9360,10 @@ function renderCaptureChips() {
         const count = cap.items ? cap.items.length : 0;
         const tw = cap.items ? cap.items.reduce((s, it) => s + getItemWeight(it.itemId) * (it.quantity || 1), 0) : 0;
         const weightStr = tw > 0 ? ` · ${tw.toFixed(1)} kg` : '';
-        return `<div class="ll-capture-chip">${name}<span class="ll-chip-count">${count} items${weightStr}</span></div>`;
+        // Show capture age so the user can tell which tab is recent vs stale.
+        const capturedMs = typeof cap.capturedAt === 'number' ? cap.capturedAt : (cap.capturedAt ? new Date(cap.capturedAt).getTime() : 0);
+        const ageStr = capturedMs > 0 ? ` · ${timeAgo(new Date(capturedMs).toISOString())}` : '';
+        return `<div class="ll-capture-chip">${name}<span class="ll-chip-count">${count} items${weightStr}${ageStr}</span></div>`;
     }).join('');
 }
 
@@ -10596,14 +10599,51 @@ function populateAccountabilityDropdowns() {
     if (captures.length === 0) {
         captureSel.innerHTML = '<option value="" disabled>No captures yet — open a chest with the client running</option>';
     } else {
-        captureSel.innerHTML = captures.map((cap, i) => {
+        // Sort by capture time desc so newest is on top.
+        const indexed = captures.map((c, i) => ({ c, i }));
+        indexed.sort((a, b) => {
+            const ta = typeof a.c.capturedAt === 'number' ? a.c.capturedAt : (a.c.capturedAt ? new Date(a.c.capturedAt).getTime() : 0);
+            const tb = typeof b.c.capturedAt === 'number' ? b.c.capturedAt : (b.c.capturedAt ? new Date(b.c.capturedAt).getTime() : 0);
+            return tb - ta;
+        });
+        captureSel.innerHTML = indexed.map(({ c: cap, i }) => {
             const name = cap.tabName || `Capture ${i + 1}`;
             const count = cap.items ? cap.items.length : 0;
             const tw = cap.items ? cap.items.reduce((s, it) => s + getItemWeight(it.itemId) * (it.quantity || 1), 0) : 0;
-            const weightStr = tw > 0 ? ` &bull; ${tw.toFixed(1)} kg` : '';
-            return `<option value="${i}">${esc(name)} (${count} items${weightStr})</option>`;
+            const weightStr = tw > 0 ? ` · ${tw.toFixed(1)} kg` : '';
+            // Timestamp: show relative (e.g. "5m ago") + absolute HH:MM local time
+            const capturedMs = typeof cap.capturedAt === 'number' ? cap.capturedAt : (cap.capturedAt ? new Date(cap.capturedAt).getTime() : 0);
+            let timeStr = '';
+            if (capturedMs > 0) {
+                const iso = new Date(capturedMs).toISOString();
+                const rel = timeAgo(iso);
+                const abs = new Date(capturedMs).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                timeStr = ` · ${rel} (${abs})`;
+            } else {
+                timeStr = ' · time unknown';
+            }
+            return `<option value="${i}">${esc(name)} — ${count} items${weightStr}${timeStr}</option>`;
         }).join('');
     }
+}
+
+// Re-run the last accountability check. Useful when people deposit loot a bit later
+// and the user wants to check again without re-selecting the dropdowns.
+async function rerunAccountabilityCheck() {
+    const sessionSel = document.getElementById('acc-session-select');
+    const captureSel = document.getElementById('acc-capture-select');
+    if (!sessionSel || !captureSel) return;
+    if (!sessionSel.value) { showToast('Select a session first', 'warn'); return; }
+    const anySelected = Array.from(captureSel.selectedOptions).some(o => o.value !== '');
+    if (!anySelected) { showToast('Select at least one chest capture first', 'warn'); return; }
+    // Refresh the dropdown so the timestamps update.
+    populateAccountabilityDropdowns();
+    // Brief pause to let DOM update the dropdown (selection may shift).
+    await new Promise(r => setTimeout(r, 150));
+    // Run the check. updateLastRunLabel will fire below.
+    runAccountabilityCheck();
+    const label = document.getElementById('acc-last-run');
+    if (label) label.textContent = `Last re-run: ${new Date().toLocaleTimeString()}`;
 }
 
 async function deleteLootSession(sessionId, btnEl) {
@@ -10737,6 +10777,8 @@ async function runAccountabilityCheck() {
     if (selectedIdxs.length === 0) { showToast('Select at least one chest capture', 'warning'); return; }
 
     resultEl.innerHTML = '<div class="empty-state"><p>Analyzing…</p></div>';
+    const lastRunLabel = document.getElementById('acc-last-run');
+    if (lastRunLabel) lastRunLabel.textContent = `Running check at ${new Date().toLocaleTimeString()}…`;
 
     // Fetch loot events
     let lootEvents;
@@ -11034,6 +11076,9 @@ async function runAccountabilityCheck() {
     }).join('');
 
     resultEl.innerHTML = html;
+    // Stamp last-run label so re-run timing is visible.
+    const lastRunEl = document.getElementById('acc-last-run');
+    if (lastRunEl) lastRunEl.textContent = `✓ Last checked: ${new Date().toLocaleTimeString()}`;
     trackActivity('accountability', 1);
 }
 

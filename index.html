@@ -3554,11 +3554,18 @@
                                 <select id="acc-session-select" class="transport-select" style="width:100%;"><option value="">-- Select session --</option></select>
                             </div>
                             <div>
-                                <label style="font-size:0.78rem; color:var(--text-muted); display:block; margin-bottom:0.3rem;">Chest Captures (hold Ctrl to multi-select)</label>
-                                <select id="acc-capture-select" class="transport-select" style="width:100%; min-height:3.5rem;" multiple><option value="">-- No captures yet --</option></select>
+                                <label style="font-size:0.78rem; color:var(--text-muted); display:flex; justify-content:space-between; align-items:center; margin-bottom:0.3rem;">
+                                    <span>Chest Captures (hold Ctrl to multi-select)</span>
+                                    <button class="btn-small" style="padding:0.15rem 0.45rem; font-size:0.68rem;" onclick="populateAccountabilityDropdowns(); showToast('Capture list refreshed — open a chest in-game to add more', 'info');" title="Refresh capture timestamps (people sometimes deposit later)">🔄 Refresh</button>
+                                </label>
+                                <select id="acc-capture-select" class="transport-select" style="width:100%; min-height:4.5rem;" multiple><option value="">-- No captures yet --</option></select>
                             </div>
                         </div>
-                        <button class="btn-small-accent" onclick="runAccountabilityCheck()">Run Check</button>
+                        <div style="display:flex; gap:0.5rem; align-items:center; flex-wrap:wrap;">
+                            <button class="btn-small-accent" onclick="runAccountabilityCheck()">Run Check</button>
+                            <button class="btn-small" onclick="rerunAccountabilityCheck()" title="Re-run the last accountability check (useful after people deposit loot later)">🔄 Re-run Check</button>
+                            <span id="acc-last-run" style="font-size:0.72rem; color:var(--text-muted);"></span>
+                        </div>
                     </div>
                     <div id="accountability-result"></div>
                 </div>
