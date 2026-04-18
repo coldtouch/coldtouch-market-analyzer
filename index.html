@@ -1048,10 +1048,30 @@
                     </div>
                     <button id="transport-scan-btn" class="btn-scan" style="height:38px; padding:0 1.5rem; font-size:0.85rem;">Find Routes</button>
                     <button id="transport-export-btn" class="btn-secondary" style="height:38px; padding:0 1rem; font-size:0.85rem;" onclick="exportTransportCSV()" title="Export current results as CSV">Export CSV</button>
+                    <button id="transport-swap-btn" class="btn-secondary" style="height:38px; padding:0 0.8rem; font-size:0.85rem;" title="Swap buy and sell cities (plan the return leg)">↔ Swap</button>
+                </div>
+                <!-- Row 2: advanced options — gank rate, auto-refresh, saved plans -->
+                <div style="display:flex; gap:1rem; align-items:center; flex-wrap:wrap; margin-top:0.5rem; padding-top:0.5rem; border-top:1px dashed var(--border);">
+                    <div class="control-group" style="min-width:240px;">
+                        <label for="transport-gank-rate" title="Red/black-zone routes have a gank rate (chance your load is lost to a ganker). Expected Net = Profit × (1 − gank rate). Safe Royal→Royal is 0%; Royal→Caerleon is ~5-15%; territory/black-zone runs 15-40%.">Route Risk: <span id="transport-gank-rate-value" style="color:var(--accent); font-weight:700;">0%</span> gank rate</label>
+                        <input type="range" id="transport-gank-rate" min="0" max="40" value="0" step="1" style="width:220px; accent-color:var(--accent);">
+                    </div>
+                    <div class="control-group checkbox-group">
+                        <label title="Auto-refresh live routes every 60 seconds"><input type="checkbox" id="transport-autorefresh"> Auto-refresh (60s)</label>
+                    </div>
+                    <div class="control-group">
+                        <label for="transport-saved-select" style="margin-right:0.3rem;">My Haul Plans</label>
+                        <select id="transport-saved-select" style="min-width:160px;">
+                            <option value="">— load saved —</option>
+                        </select>
+                        <button id="transport-save-plan-btn" class="btn-secondary" style="margin-left:0.3rem; padding:0.3rem 0.6rem; font-size:0.76rem;" title="Save current filter setup as a named plan">💾 Save</button>
+                        <button id="transport-delete-plan-btn" class="btn-secondary" style="margin-left:0.15rem; padding:0.3rem 0.5rem; font-size:0.76rem; color:var(--loss-red);" title="Delete selected plan">🗑</button>
+                    </div>
                 </div>
             </div>
             <div id="transport-spinner" class="spinner hidden"></div>
             <div id="transport-error" class="error-message hidden"></div>
+            <div id="transport-refresh-badge" style="display:none; font-size:0.72rem; color:var(--text-muted); margin:0.3rem 0;">Last refreshed: <span id="transport-refresh-time">—</span></div>
             <div id="transport-results"></div>
         </section>
 
@@ -2246,6 +2266,21 @@
                     <div class="changelog-list">
                         <div class="changelog-entry">
                             <div class="changelog-date">April 18, 2026</div>
+                            <div class="changelog-title">🏅 Community leaderboard + Profile overhaul + Transport v2</div>
+                            <ul>
+                                <li><strong>Community leaderboard by Activity Score</strong> &mdash; no longer just "top scanners". Your combined 30-day activity (loot sessions &times;5, chest captures &times;3, accountability &times;3, sales &times;2, market scans &times;1, transport + crafting &times;1) ranks you against everyone else. Top section explains the formula in a collapsible panel.</li>
+                                <li><strong>Profile page overhaul</strong> &mdash; stats now lead with Activity Score + Community Rank + Tier instead of just scans. New Activity Breakdown panel shows per-category contribution counts and point totals.</li>
+                                <li><strong>Profile wizard fixed</strong> &mdash; removed the "Run with <code>--capture</code>" step. Capture is on by default in the client; users don't need flags.</li>
+                                <li><strong>Transport: Route Risk slider</strong> &mdash; set a gank rate (0-40%) and every route card gets a "Risk-Adj Net" column = profit &times; (1&minus;rate) &minus; cost &times; rate. Red-zone routes are now honestly priced.</li>
+                                <li><strong>Transport: Auto-refresh</strong> &mdash; toggle in the control panel. Routes update every 60 seconds when you're viewing the tab + in live mode.</li>
+                                <li><strong>Transport: My Haul Plans</strong> &mdash; save/load named filter configurations. Every setting (cities, mount, budget, confidence, freshness, gank rate, sort) persists across sessions.</li>
+                                <li><strong>Transport: Swap cities button</strong> &mdash; flips buy&harr;sell and re-scans. Quick round-trip planning.</li>
+                                <li><strong>Transport: Discord Embed Shopping List</strong> &mdash; new button renders the haul as a Discord markdown code block with aligned columns (Item / Qty / Unit / Total / Risk-Adj Net). Preview modal lets you trim before pasting.</li>
+                                <li>Service worker cache v28 &rarr; v29.</li>
+                            </ul>
+                        </div>
+                        <div class="changelog-entry">
+                            <div class="changelog-date">April 18, 2026</div>
                             <div class="changelog-title">🔧 Live Flips fix + Loot Logger redesign + Transport mount weights</div>
                             <ul>
                                 <li><strong>Live Flips working again</strong> &mdash; default filter was 50k silver but backend broadcasts 10k+. Dropped default to 10k. Filter-persistence was also broken due to wrong DOM IDs. Softened the low-side outlier guard so legitimately cheap resources aren't rejected.</li>
@@ -3027,8 +3062,21 @@
         <!-- ====== TAB: COMMUNITY ====== -->
         <section class="tab-pane hidden" id="pane-community">
             <div class="controls-panel">
-                <h2 style="color:var(--accent); margin:0 0 0.5rem 0; font-size:1.2rem;">👥 Community Scanners</h2>
-                <p style="color:var(--text-secondary); font-size:0.85rem; margin:0 0 1rem 0;">Every time you refresh an item's prices, you contribute to the community data pool. Scan more items to climb the leaderboard!</p>
+                <h2 style="color:var(--accent); margin:0 0 0.5rem 0; font-size:1.2rem;">👥 Community Contributors</h2>
+                <p style="color:var(--text-secondary); font-size:0.85rem; margin:0 0 0.4rem 0;">Everything you do on the site counts — market scans, loot sessions, chest captures, sale recording, accountability checks, transport plans, crafting calcs. Rankings are based on your <strong>combined Activity Score</strong> (last 30 days).</p>
+                <details style="font-size:0.78rem; color:var(--text-muted);">
+                    <summary style="cursor:pointer; user-select:none;">How Activity Score is calculated</summary>
+                    <div style="margin-top:0.4rem; padding:0.5rem 0.75rem; background:rgba(255,255,255,0.03); border-radius:6px;">
+                        <span style="margin-right:0.75rem;">📋 Loot Session <strong style="color:var(--accent);">×5</strong></span>
+                        <span style="margin-right:0.75rem;">📦 Chest Capture <strong style="color:var(--accent);">×3</strong></span>
+                        <span style="margin-right:0.75rem;">✓ Accountability <strong style="color:var(--accent);">×3</strong></span>
+                        <span style="margin-right:0.75rem;">💰 Sale Record <strong style="color:var(--accent);">×2</strong></span>
+                        <span style="margin-right:0.75rem;">🔍 Market Scan <strong style="color:var(--accent);">×1</strong></span>
+                        <span style="margin-right:0.75rem;">🚛 Transport <strong style="color:var(--accent);">×1</strong></span>
+                        <span>🔨 Craft Calc <strong style="color:var(--accent);">×1</strong></span>
+                        <div style="margin-top:0.3rem;">Tier thresholds — <strong>Bronze</strong> 0+, <strong>Silver</strong> 100+, <strong>Gold</strong> 400+, <strong>Diamond</strong> 1000+.</div>
+                    </div>
+                </details>
             </div>
 
             <!-- My Stats Card (visible when logged in) -->
@@ -3046,6 +3094,10 @@
                     </div>
                 </div>
                 <div class="community-stats-grid">
+                    <div class="community-stat-box">
+                        <div class="community-stat-value" id="community-my-score">0</div>
+                        <div class="community-stat-label">Activity Score (30d)</div>
+                    </div>
                     <div class="community-stat-box">
                         <div class="community-stat-value" id="community-my-scans30d">0</div>
                         <div class="community-stat-label">Scans (30d)</div>
@@ -3068,7 +3120,7 @@
 
             <!-- Leaderboard -->
             <div class="community-leaderboard">
-                <h3 style="color:var(--text-primary); margin:0 0 1rem 0; font-size:1rem;">🏆 Top Scanners (30 Days)</h3>
+                <h3 style="color:var(--text-primary); margin:0 0 1rem 0; font-size:1rem;">🏆 Top Contributors (30 Days)</h3>
                 <div id="leaderboard-list"></div>
                 <div id="leaderboard-empty" class="empty-state" style="display:none;">
                     <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle></svg>
@@ -3107,8 +3159,20 @@
 
                 <!-- Stats card -->
                 <div class="profile-card">
-                    <h3 class="profile-card-title">Contribution Stats</h3>
+                    <h3 class="profile-card-title">Contribution Stats <span style="font-size:0.72rem; color:var(--text-muted); font-weight:400;">(last 30 days)</span></h3>
                     <div class="profile-stats-grid">
+                        <div class="profile-stat-item">
+                            <span class="profile-stat-value" id="profile-score">0</span>
+                            <span class="profile-stat-label">Activity Score</span>
+                        </div>
+                        <div class="profile-stat-item">
+                            <span class="profile-stat-value" id="profile-rank">—</span>
+                            <span class="profile-stat-label">Community Rank</span>
+                        </div>
+                        <div class="profile-stat-item">
+                            <span class="profile-stat-value" id="profile-tier-text">Bronze</span>
+                            <span class="profile-stat-label">Current Tier</span>
+                        </div>
                         <div class="profile-stat-item">
                             <span class="profile-stat-value" id="profile-scans-30d">0</span>
                             <span class="profile-stat-label">Scans (30d)</span>
@@ -3117,11 +3181,9 @@
                             <span class="profile-stat-value" id="profile-scans-total">0</span>
                             <span class="profile-stat-label">All-Time Scans</span>
                         </div>
-                        <div class="profile-stat-item">
-                            <span class="profile-stat-value" id="profile-tier-text">Bronze</span>
-                            <span class="profile-stat-label">Current Tier</span>
-                        </div>
                     </div>
+                    <!-- Activity breakdown — populated by renderProfile() -->
+                    <div id="profile-activity-breakdown" style="margin-top:0.7rem;"></div>
                 </div>
 
                 <!-- Loot lifetime stats (populated async from /api/loot-sessions + /api/loot-tabs) -->
@@ -3233,11 +3295,11 @@
                     </div>
                     <div class="profile-wizard-step">
                         <div class="step-num">3</div>
-                        <div class="step-body"><strong>Paste into <code>config.yaml</code></strong> next to the client: <code>token: "paste-here"</code>. Example file is inside the download.</div>
+                        <div class="step-body"><strong>Paste into <code>config.yaml</code></strong> next to the client: <code>token: "paste-here"</code>. An example file ships with the download.</div>
                     </div>
                     <div class="profile-wizard-step">
                         <div class="step-num">4</div>
-                        <div class="step-body"><strong>Run with <code>--capture</code></strong> (or flip Capture Mode on in the client's tray menu), then launch Albion.</div>
+                        <div class="step-body"><strong>Launch the client, then launch Albion</strong>. Capture is on by default — every feature of the site (Loot Buyer, Loot Logger, chest captures, sale notifications, equipment-at-death) works automatically with no flags.</div>
                     </div>
                     <div class="profile-wizard-step">
                         <div class="step-num">5</div>

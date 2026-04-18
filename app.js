@@ -5865,6 +5865,7 @@ async function init() {
 
     // Transport tab
     document.getElementById('transport-scan-btn').addEventListener('click', doTransportScan);
+    initTransportEnhancements();
 
     // Transport mode toggle (Live vs Historical)
     document.querySelectorAll('.transport-mode-btn').forEach(btn => {
@@ -6822,13 +6823,49 @@ function renderProfile(data) {
         verifyBanner.style.display = (user.authType === 'email' && !user.emailVerified) ? 'flex' : 'none';
     }
 
-    // Stats
+    // Stats — activity-score-first (refreshed from /api/my-stats which now returns { score, breakdown, rank, scans_30d, scans_total, tier })
     const s30d = document.getElementById('profile-scans-30d');
     if (s30d) s30d.textContent = (stats.scans_30d || 0).toLocaleString();
     const sTotal = document.getElementById('profile-scans-total');
     if (sTotal) sTotal.textContent = (stats.scans_total || 0).toLocaleString();
     const tierText = document.getElementById('profile-tier-text');
     if (tierText && stats.tier) tierText.textContent = stats.tier.charAt(0).toUpperCase() + stats.tier.slice(1);
+    const scoreEl = document.getElementById('profile-score');
+    if (scoreEl) scoreEl.textContent = (stats.score || 0).toLocaleString();
+    const rankEl = document.getElementById('profile-rank');
+    if (rankEl) rankEl.textContent = stats.rank > 0 ? '#' + stats.rank : '—';
+
+    // Activity breakdown — rendered from stats.breakdown (if present) OR fetched separately
+    // (the existing /api/my-stats now includes breakdown; kept the fallback fetch for older cached payloads).
+    const breakdownEl = document.getElementById('profile-activity-breakdown');
+    if (breakdownEl) {
+        const renderBreakdown = (breakdown, score) => {
+            const ACTIVITY_LABELS = { scan: '🔍 Market Scans', loot_session: '📋 Loot Sessions', chest_capture: '📦 Chest Captures', sale_record: '💰 Sales', accountability: '✓ Accountability', transport_plan: '🚛 Transport', craft_calc: '🔨 Crafting' };
+            const ACTIVITY_WEIGHTS = { scan: 1, loot_session: 5, chest_capture: 3, sale_record: 2, accountability: 3, transport_plan: 1, craft_calc: 1 };
+            const entries = Object.entries(ACTIVITY_LABELS).filter(([k]) => (breakdown[k] || 0) > 0);
+            if (entries.length === 0) {
+                breakdownEl.innerHTML = '<p style="color:var(--text-muted); font-size:0.78rem; margin:0.25rem 0 0;">No activity tracked yet. Use the tools (market scans, loot sessions, chest captures, sales, transport, crafting) and your score will grow.</p>';
+                return;
+            }
+            let html = '<div style="padding:0.5rem 0.6rem; background:rgba(0,0,0,0.15); border-radius:6px; border:1px solid var(--border);"><div style="font-size:0.7rem; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.04em; font-weight:600; margin-bottom:0.4rem;">Activity Breakdown</div>';
+            html += '<div style="display:grid; grid-template-columns:repeat(auto-fill, minmax(140px, 1fr)); gap:0.3rem;">';
+            for (const [key, label] of entries) {
+                const count = breakdown[key] || 0;
+                const pts = count * (ACTIVITY_WEIGHTS[key] || 1);
+                html += `<div style="font-size:0.75rem; padding:0.25rem 0.4rem; background:rgba(255,255,255,0.03); border-radius:4px;" title="${count} actions × ${ACTIVITY_WEIGHTS[key]} pts = ${pts} pts">${label} <strong style="color:var(--accent);">${count}</strong> <span style="color:var(--text-muted);">(${pts} pts)</span></div>`;
+            }
+            html += '</div></div>';
+            breakdownEl.innerHTML = html;
+        };
+        if (stats.breakdown && Object.keys(stats.breakdown).length > 0) {
+            renderBreakdown(stats.breakdown, stats.score || 0);
+        } else {
+            // Fetch breakdown in background
+            fetch(`${VPS_BASE}/api/activity-stats`, { headers: authHeaders() }).then(r => r.ok ? r.json() : null).then(d => {
+                if (d) renderBreakdown(d.breakdown || {}, d.combinedScore || 0);
+            }).catch(() => {});
+        }
+    }
 
     // Password section visibility (email accounts only)
     const pwSection = document.getElementById('profile-password-section');
@@ -11199,6 +11236,173 @@ function handleLootLoggerWsMessage(msg) {
 // ====== TRANSPORT TAB ======
 let lastTransportRoutes = null;
 
+// ============================================================
+// Transport enhancements (2026-04-18) — gank-rate, auto-refresh, saved plans, swap, Discord embed
+// ============================================================
+let _transportRefreshTimer = null;
+const TRANSPORT_PLANS_KEY = 'transport_saved_plans_v1';
+
+function _getTransportSavedPlans() {
+    try { return JSON.parse(localStorage.getItem(TRANSPORT_PLANS_KEY) || '{}'); } catch { return {}; }
+}
+function _setTransportSavedPlans(plans) {
+    try { localStorage.setItem(TRANSPORT_PLANS_KEY, JSON.stringify(plans)); } catch {}
+}
+function _refreshTransportSavedDropdown() {
+    const sel = document.getElementById('transport-saved-select');
+    if (!sel) return;
+    const plans = _getTransportSavedPlans();
+    const names = Object.keys(plans).sort();
+    const current = sel.value;
+    sel.innerHTML = '<option value="">— load saved —</option>' + names.map(n => `<option value="${esc(n)}">${esc(n)}</option>`).join('');
+    if (names.includes(current)) sel.value = current;
+}
+function _applyTransportPlan(plan) {
+    if (!plan) return;
+    const set = (id, v) => { const el = document.getElementById(id); if (el && v != null) el.value = String(v); };
+    const check = (id, v) => { const el = document.getElementById(id); if (el && v != null) el.checked = !!v; };
+    set('transport-buy-city', plan.buyCity || '');
+    set('transport-sell-city', plan.sellCity || '');
+    set('transport-budget', plan.budget || 500000);
+    set('transport-mount', plan.mount || 'ox_t8');
+    set('transport-free-slots', plan.freeSlots || 30);
+    set('transport-item-type', plan.itemType || 'all');
+    set('transport-min-confidence', plan.minConfidence || 40);
+    set('transport-sell-strategy', plan.sellStrategy || 'instant');
+    set('transport-fresh-mode', plan.freshMode || 'off');
+    set('transport-fresh-threshold', plan.freshThreshold || 60);
+    set('transport-sort', plan.sortBy || 'trip_profit');
+    check('transport-exclude-caerleon', plan.excludeCaerleon || false);
+    set('transport-gank-rate', plan.gankRate || 0);
+    const el = document.getElementById('transport-gank-rate-value');
+    if (el) el.textContent = (plan.gankRate || 0) + '%';
+    // Trigger change event on mount so capacity info updates
+    document.getElementById('transport-mount')?.dispatchEvent(new Event('change'));
+}
+
+function initTransportEnhancements() {
+    // --- Swap cities button ---
+    const swapBtn = document.getElementById('transport-swap-btn');
+    if (swapBtn) swapBtn.addEventListener('click', () => {
+        const buy = document.getElementById('transport-buy-city');
+        const sell = document.getElementById('transport-sell-city');
+        if (!buy || !sell) return;
+        const tmp = buy.value;
+        buy.value = sell.value;
+        sell.value = tmp;
+        showToast('Cities swapped — planning the return leg', 'info');
+        doTransportScan();
+    });
+
+    // --- Gank rate slider (live label update + re-render) ---
+    const gankSlider = document.getElementById('transport-gank-rate');
+    const gankLabel = document.getElementById('transport-gank-rate-value');
+    if (gankSlider && gankLabel) {
+        gankSlider.addEventListener('input', () => {
+            gankLabel.textContent = gankSlider.value + '%';
+            gankLabel.style.color = gankSlider.value >= 20 ? 'var(--loss-red)' : gankSlider.value >= 5 ? '#fbbf24' : 'var(--profit-green)';
+        });
+        gankSlider.addEventListener('change', () => {
+            // Re-render existing routes with the new risk rate instead of re-fetching.
+            if (lastTransportRoutes && lastTransportRoutes.length > 0) {
+                const budget = parseInt(document.getElementById('transport-budget').value) || 500000;
+                const sortBy = document.getElementById('transport-sort').value;
+                const { mountCapacity, freeSlots } = getTransportMountConfig();
+                enrichAndRenderTransport(lastTransportRoutes, budget, sortBy, mountCapacity, freeSlots);
+            }
+        });
+    }
+
+    // --- Auto-refresh ---
+    const autoToggle = document.getElementById('transport-autorefresh');
+    if (autoToggle) {
+        autoToggle.addEventListener('change', () => {
+            if (_transportRefreshTimer) { clearInterval(_transportRefreshTimer); _transportRefreshTimer = null; }
+            if (autoToggle.checked) {
+                _transportRefreshTimer = setInterval(() => {
+                    // Only refresh if the pane is visible to the user.
+                    const pane = document.getElementById('pane-transport');
+                    if (!pane || pane.classList.contains('hidden')) return;
+                    // Only auto-refresh in live mode.
+                    const mode = document.querySelector('.transport-mode-btn.active')?.dataset.mode;
+                    if (mode !== 'live') return;
+                    doTransportScan();
+                    const badge = document.getElementById('transport-refresh-time');
+                    if (badge) badge.textContent = new Date().toLocaleTimeString();
+                }, 60000);
+                showToast('Auto-refresh ON — routes will update every 60 seconds', 'info');
+                document.getElementById('transport-refresh-badge').style.display = '';
+            } else {
+                showToast('Auto-refresh OFF', 'info');
+                document.getElementById('transport-refresh-badge').style.display = 'none';
+            }
+        });
+    }
+
+    // --- Saved Plans ---
+    const savedSel = document.getElementById('transport-saved-select');
+    const saveBtn = document.getElementById('transport-save-plan-btn');
+    const delBtn = document.getElementById('transport-delete-plan-btn');
+    if (savedSel) {
+        _refreshTransportSavedDropdown();
+        savedSel.addEventListener('change', () => {
+            const name = savedSel.value;
+            if (!name) return;
+            const plans = _getTransportSavedPlans();
+            if (plans[name]) {
+                _applyTransportPlan(plans[name]);
+                showToast(`Loaded plan "${name}"`, 'success');
+                doTransportScan();
+            }
+        });
+    }
+    if (saveBtn) saveBtn.addEventListener('click', () => {
+        showPrompt('Name this haul plan', '', (name) => {
+            name = (name || '').trim();
+            if (!name) return;
+            const plans = _getTransportSavedPlans();
+            plans[name] = {
+                buyCity: document.getElementById('transport-buy-city').value,
+                sellCity: document.getElementById('transport-sell-city').value,
+                budget: parseInt(document.getElementById('transport-budget').value) || 500000,
+                mount: document.getElementById('transport-mount').value,
+                freeSlots: parseInt(document.getElementById('transport-free-slots').value) || 30,
+                itemType: document.getElementById('transport-item-type').value,
+                minConfidence: parseInt(document.getElementById('transport-min-confidence').value) || 0,
+                sellStrategy: document.getElementById('transport-sell-strategy').value,
+                freshMode: document.getElementById('transport-fresh-mode').value,
+                freshThreshold: parseInt(document.getElementById('transport-fresh-threshold').value) || 60,
+                sortBy: document.getElementById('transport-sort').value,
+                excludeCaerleon: document.getElementById('transport-exclude-caerleon').checked,
+                gankRate: parseInt(document.getElementById('transport-gank-rate').value) || 0,
+            };
+            _setTransportSavedPlans(plans);
+            _refreshTransportSavedDropdown();
+            const sel = document.getElementById('transport-saved-select');
+            if (sel) sel.value = name;
+            showToast(`Plan "${name}" saved`, 'success');
+        });
+    });
+    if (delBtn) delBtn.addEventListener('click', () => {
+        const sel = document.getElementById('transport-saved-select');
+        const name = sel?.value;
+        if (!name) { showToast('Select a plan to delete first', 'warn'); return; }
+        showConfirm(`Delete plan "${name}"?`, () => {
+            const plans = _getTransportSavedPlans();
+            delete plans[name];
+            _setTransportSavedPlans(plans);
+            _refreshTransportSavedDropdown();
+            showToast(`Plan "${name}" deleted`, 'info');
+        });
+    });
+}
+
+// Expose for Shopping List Discord copy — used in enrichAndRenderTransport
+function getTransportGankRate() {
+    const el = document.getElementById('transport-gank-rate');
+    return el ? (parseInt(el.value) || 0) / 100 : 0;
+}
+
 async function doTransportScan() {
     if (scanAbortController) scanAbortController.abort();
     scanAbortController = new AbortController();
@@ -11676,6 +11880,18 @@ function renderTransportResults(routes, budget, mountCapacity, haulPlans, availa
                             <div style="font-size:0.7rem; color:var(--text-muted);">Trip Profit</div>
                             <div style="font-size:1rem; font-weight:700; color:var(--profit-green);">+${plan.totalProfit.toLocaleString()}</div>
                         </div>
+                        ${(() => {
+                            const gr = getTransportGankRate();
+                            if (gr > 0) {
+                                const expNet = Math.round(plan.totalProfit * (1 - gr) - plan.totalCost * gr);
+                                const col = expNet >= 0 ? 'var(--profit-green)' : 'var(--loss-red)';
+                                return `<div style="text-align:right;" title="Expected net after ${(gr*100).toFixed(0)}% gank rate. If ganked you lose the full load: (profit × (1 − gank)) − (cost × gank).">
+                                    <div style="font-size:0.7rem; color:var(--text-muted);">Risk-Adj Net</div>
+                                    <div style="font-size:0.95rem; font-weight:700; color:${col};">${expNet >= 0 ? '+' : ''}${expNet.toLocaleString()}</div>
+                                </div>`;
+                            }
+                            return '';
+                        })()}
                         <div style="text-align:right;">
                             <div style="font-size:0.7rem; color:var(--text-muted);">ROI</div>
                             <div style="font-size:0.9rem; font-weight:600; color:var(--profit-green);">${roiPct}%</div>
@@ -11760,19 +11976,56 @@ function renderTransportResults(routes, budget, mountCapacity, haulPlans, availa
                     </button>
                 </div>
                 <div class="haul-items-list">${itemsHtml}</div>
-                <div style="margin-top:0.75rem; text-align:right;">
+                <div style="margin-top:0.75rem; text-align:right; display:flex; gap:0.4rem; justify-content:flex-end;">
+                    <button class="btn-copy-shopping-list-discord" style="
+                        background:rgba(88,101,242,0.12); border:1px solid rgba(88,101,242,0.4); color:#5865f2;
+                        padding:0.4rem 0.8rem; border-radius:6px; cursor:pointer; font-size:0.76rem;
+                        display:inline-flex; align-items:center; gap:0.35rem; transition: all 0.15s;"
+                        title="Copy shopping list as Discord-formatted code block (paste into any Discord channel)">
+                        📋 Discord Embed
+                    </button>
                     <button class="btn-copy-shopping-list" style="
                         background:var(--surface-3, #2a2a3a); border:1px solid var(--border-dim); color:var(--text-secondary);
                         padding:0.4rem 0.8rem; border-radius:6px; cursor:pointer; font-size:0.76rem;
                         display:inline-flex; align-items:center; gap:0.35rem; transition: all 0.15s;"
-                        title="Copy shopping list to clipboard">
+                        title="Copy shopping list to clipboard (plain text)">
                         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
-                        Copy Shopping List
+                        Copy Plain
                     </button>
                 </div>
             `;
 
-            // Copy shopping list handler
+            // Discord embed copy — markdown-styled code block, renders as a table in Discord.
+            const discordBtn = detailDiv.querySelector('.btn-copy-shopping-list-discord');
+            if (discordBtn) discordBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const roi = plan.totalCost > 0 ? ((plan.totalProfit / plan.totalCost) * 100).toFixed(1) : 0;
+                const gr = getTransportGankRate();
+                const expNet = gr > 0 ? Math.round(plan.totalProfit * (1 - gr) - plan.totalCost * gr) : plan.totalProfit;
+                const nameWidth = Math.max(18, Math.min(28, ...plan.items.map(it => getFriendlyName(it.itemId).length)));
+                const pad = (s, w) => (s + ' '.repeat(w)).slice(0, w);
+                const padNum = (n) => String(n).padStart(10);
+                const rows = plan.items.map(it => {
+                    const name = getFriendlyName(it.itemId);
+                    return `${pad(name, nameWidth)} ${padNum(it.planUnits + 'x')} ${padNum(Math.floor(it.buyPrice).toLocaleString())} ${padNum(it.planCost.toLocaleString())}`;
+                });
+                const embed = [
+                    `**🚛 Haul Plan — ${plan.buyCity} → ${plan.sellCity}**`,
+                    '```',
+                    `${pad('Item', nameWidth)} ${padNum('Qty')} ${padNum('Unit (s)')} ${padNum('Total (s)')}`,
+                    '─'.repeat(nameWidth + 33),
+                    ...rows,
+                    '─'.repeat(nameWidth + 33),
+                    `${pad('TOTAL COST', nameWidth)} ${padNum('')} ${padNum('')} ${padNum(plan.totalCost.toLocaleString())}`,
+                    `${pad('TRIP PROFIT', nameWidth)} ${padNum('')} ${padNum('')} ${padNum('+' + plan.totalProfit.toLocaleString())}`,
+                    gr > 0 ? `${pad(`RISK-ADJ (${(gr*100).toFixed(0)}% gank)`, nameWidth)} ${padNum('')} ${padNum('')} ${padNum((expNet >= 0 ? '+' : '') + expNet.toLocaleString())}` : '',
+                    '```',
+                    `**ROI:** ${roi}% · **Slots:** ${plan.totalSlots}/${availableSlots} · **Weight:** ${plan.totalWeight.toFixed(1)} kg`,
+                ].filter(Boolean).join('\n');
+                openCopyPreview('Preview — Haul Plan for Discord', embed, 'Haul plan copied — paste into Discord');
+            });
+
+            // Copy shopping list handler (plain text)
             const copyBtn = detailDiv.querySelector('.btn-copy-shopping-list');
             copyBtn.addEventListener('click', (e) => {
                 e.stopPropagation();
@@ -12047,6 +12300,8 @@ async function loadCommunityTab() {
                 tierBadge.className = `tier-badge tier-${tier}`;
 
                 document.getElementById('community-my-rank').textContent = stats.rank || '—';
+                const scoreEl = document.getElementById('community-my-score');
+                if (scoreEl) scoreEl.textContent = (stats.score || 0).toLocaleString();
                 document.getElementById('community-my-scans30d').textContent = (stats.scans_30d || 0).toLocaleString();
                 document.getElementById('community-my-scans-total').textContent = (stats.scans_total || 0).toLocaleString();
 
@@ -12134,6 +12389,9 @@ async function loadCommunityTab() {
                 ? `https://cdn.discordapp.com/avatars/${u.user_id}/${u.avatar}.png?size=64`
                 : 'https://cdn.discordapp.com/embed/avatars/0.png';
             const medal = rank === 1 ? '🥇' : rank === 2 ? '🥈' : rank === 3 ? '🥉' : rank;
+            // Primary metric: activity score. Secondary: scan count (kept for continuity with old leaderboard).
+            const score = u.score || u.scans_30d || 0;
+            const subMetric = u.scans_30d > 0 ? `<span style="color:var(--text-muted); font-size:0.7rem; margin-left:0.25rem;">${u.scans_30d.toLocaleString()} scans</span>` : '';
 
             return `
                 <div class="leaderboard-row">
@@ -12143,7 +12401,7 @@ async function loadCommunityTab() {
                         ${esc(u.username) || 'Unknown'}
                         <span class="tier-badge tier-${tier}">${tierLabel}</span>
                     </div>
-                    <div class="leaderboard-scans">${(u.scans_30d || 0).toLocaleString()} scans</div>
+                    <div class="leaderboard-scans">${score.toLocaleString()} pts${subMetric}</div>
                 </div>`;
         }).join('');
     } catch (e) {

@@ -2493,27 +2493,101 @@ app.get('/api/activity-stats', requireAuth, (req, res) => {
 
 app.get('/api/my-stats', requireAuth, (req, res) => {
   const userId = req.user.id;
+  const thirtyDaysAgo = Date.now() - 30 * 24 * 3600 * 1000;
   db.get(`SELECT scans_30d, scans_total, tier FROM user_stats WHERE user_id = ?`, [userId], (err, row) => {
-    if (err || !row) return res.json({ scans_30d: 0, scans_total: 0, tier: 'bronze', rank: 0 });
-    db.get(`SELECT COUNT(*) + 1 as rank FROM user_stats WHERE scans_30d > ?`, [row.scans_30d], (err2, rankRow) => {
-      res.json({
-        scans_30d: row.scans_30d,
-        scans_total: row.scans_total,
-        tier: row.tier,
-        rank: rankRow ? rankRow.rank : 0
+    const scanRow = row || { scans_30d: 0, scans_total: 0, tier: 'bronze' };
+    // Compute activity score + rank from combined activities (same logic as /api/activity-stats + /api/leaderboard).
+    db.all(`SELECT activity_type, SUM(count) as total FROM user_activity WHERE user_id = ? AND recorded_at > ? GROUP BY activity_type`, [userId, thirtyDaysAgo], (err2, actRows) => {
+      const breakdown = {};
+      let score = 0;
+      for (const r of (actRows || [])) {
+        breakdown[r.activity_type] = r.total;
+        score += (r.total || 0) * (ACTIVITY_WEIGHTS[r.activity_type] || 1);
+      }
+      // Include legacy scan contributions if no scan activity yet
+      db.get(`SELECT COUNT(*) as cnt FROM contributions WHERE user_id = ? AND created_at > ?`, [userId, thirtyDaysAgo], (err3, scanCntRow) => {
+        const legacyScans = scanCntRow?.cnt || 0;
+        if (legacyScans > 0 && !breakdown.scan) {
+          breakdown.scan = legacyScans;
+          score += legacyScans * ACTIVITY_WEIGHTS.scan;
+        }
+        let tier = 'bronze';
+        if (score >= 1000) tier = 'diamond';
+        else if (score >= 400) tier = 'gold';
+        else if (score >= 100) tier = 'silver';
+        // Rank across all users by combined activity score — done via the cached leaderboard.
+        const rankFromCache = (leaderboardCache || []).findIndex(u => u.user_id === userId) + 1;
+        res.json({
+          scans_30d: scanRow.scans_30d || 0,
+          scans_total: scanRow.scans_total || 0,
+          tier,
+          rank: rankFromCache > 0 ? rankFromCache : 0,
+          score,
+          breakdown,
+        });
       });
     });
   });
 });
 
+// Activity-score leaderboard — ranks users by combined weighted activity (scans, loot, chest, sales, etc.)
+// Replaces the old scans-only leaderboard. Top 20 cached for 60s.
 app.get('/api/leaderboard', (req, res) => {
   const now = Date.now();
   if (leaderboardCache && now - leaderboardCacheTime < 60000) {
     return res.json(leaderboardCache);
   }
-  db.all(`SELECT user_id, username, avatar, scans_30d, tier FROM user_stats WHERE scans_30d > 0 ORDER BY scans_30d DESC LIMIT 20`, [], (err, rows) => {
-    if (err) return res.status(500).json({ error: err.message });
-    leaderboardCache = rows || [];
+  const thirtyDaysAgo = now - 30 * 24 * 3600 * 1000;
+  // Join user_activity with user_stats to get username + avatar. Include legacy contributions as scan weight.
+  db.all(`
+    SELECT u.user_id, u.username, u.avatar,
+           SUM(CASE WHEN a.activity_type IS NOT NULL THEN a.count * COALESCE(w.weight, 1) ELSE 0 END) AS score,
+           MAX(COALESCE(u.scans_30d, 0)) AS scans_30d
+    FROM user_stats u
+    LEFT JOIN user_activity a ON a.user_id = u.user_id AND a.recorded_at > ?
+    LEFT JOIN (
+      SELECT 'scan' AS activity_type, 1 AS weight UNION ALL
+      SELECT 'loot_session', 5 UNION ALL
+      SELECT 'chest_capture', 3 UNION ALL
+      SELECT 'sale_record', 2 UNION ALL
+      SELECT 'accountability', 3 UNION ALL
+      SELECT 'transport_plan', 1 UNION ALL
+      SELECT 'craft_calc', 1
+    ) w ON w.activity_type = a.activity_type
+    GROUP BY u.user_id, u.username, u.avatar
+    HAVING score > 0 OR scans_30d > 0
+    ORDER BY score DESC, scans_30d DESC
+    LIMIT 20
+  `, [thirtyDaysAgo], (err, rows) => {
+    if (err) {
+      console.error('[Leaderboard] query failed:', err.message);
+      // Fallback: legacy scans-only ranking so the tab never shows empty.
+      db.all(`SELECT user_id, username, avatar, scans_30d, tier, 0 AS score FROM user_stats WHERE scans_30d > 0 ORDER BY scans_30d DESC LIMIT 20`, [], (err2, fallback) => {
+        if (err2) return res.status(500).json({ error: err2.message });
+        leaderboardCache = fallback || [];
+        leaderboardCacheTime = now;
+        res.json(leaderboardCache);
+      });
+      return;
+    }
+    // Derive tier from score (matches /api/activity-stats logic)
+    const enriched = (rows || []).map(r => {
+      // If score is 0 but user has legacy scans, fall back to scan-based score for smoother migration.
+      const effectiveScore = r.score > 0 ? r.score : (r.scans_30d || 0);
+      let tier = 'bronze';
+      if (effectiveScore >= 1000) tier = 'diamond';
+      else if (effectiveScore >= 400) tier = 'gold';
+      else if (effectiveScore >= 100) tier = 'silver';
+      return {
+        user_id: r.user_id,
+        username: r.username,
+        avatar: r.avatar,
+        score: effectiveScore,
+        scans_30d: r.scans_30d || 0,
+        tier,
+      };
+    });
+    leaderboardCache = enriched;
     leaderboardCacheTime = now;
     res.json(leaderboardCache);
   });

@@ -2,6 +2,32 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-04-18 — Community leaderboard + Profile overhaul + Transport deferred items
+
+**Community page:**
+- Leaderboard now ranks by **combined Activity Score** (30d), not just market scans. Top 20 contributors with tier, score, and scans sub-metric.
+- Backend `/api/leaderboard` rewritten to sum weighted activities via SQL — scan ×1, loot_session ×5, chest_capture ×3, sale_record ×2, accountability ×3, transport ×1, craft ×1. Falls back to legacy scans if activity table is empty.
+- Top section now explains the new scoring system (collapsible "How is this calculated" with weights + tier thresholds Bronze 0+ / Silver 100+ / Gold 400+ / Diamond 1000+).
+- My Stats card adds a prominent "Activity Score (30d)" box alongside the existing scan counters.
+
+**Profile page:**
+- Stats grid now leads with **Activity Score + Community Rank + Tier**, followed by scan counts. Adds an Activity Breakdown panel below (per-activity counts + point totals).
+- `/api/my-stats` backend returns the full `{ score, breakdown, rank, scans_30d, scans_total, tier }` payload so Profile doesn't need a second round-trip.
+- Data Client setup wizard step 4 rewritten — removed the "Run with `--capture`" instruction. Capture is on by default in the Go client (`config.CaptureEnabled = true`); users don't need any flags.
+
+**Transport — all deferred items from earlier research shipped:**
+- **Route Risk slider** (0-40% gank rate) — computes "Risk-Adj Net" = profit × (1 − rate) − cost × rate and shows it as a new column on every route card. Red zone routes are now explicitly penalised for expected losses.
+- **Auto-refresh (60s)** — toggle that polls `/api/transport-routes-live` every minute when Transport tab is visible + live mode is active. "Last refreshed" timestamp badge.
+- **My Haul Plans** (localStorage) — save/load named filter configurations. Each plan stores buy/sell city, mount, budget, slots, item type, confidence, sell strategy, freshness, sort, exclude-Caerleon, gank rate. Dropdown in the control panel.
+- **↔ Swap cities button** — flips buy↔sell and re-scans instantly. Quick round-trip planning without rebuilding the filter.
+- **Discord Embed Shopping List** — new "📋 Discord Embed" button renders the haul plan as a Discord markdown code block (aligned columns: Item / Qty / Unit / Total + Risk-Adj Net if gank-rate is set). Goes through the copy-preview modal so users can trim before sharing. Plain-text copy still available as secondary button.
+
+**sw.js cache:** v28 → v29.
+
+**Backend deploy required** for the activity-score leaderboard rewrite.
+
+---
+
 ### 2026-04-18 — User request batch: Live Flips fix + Market Browser + Loot Logger redesign
 
 **Live Flips — WORKING AGAIN 🎯**
