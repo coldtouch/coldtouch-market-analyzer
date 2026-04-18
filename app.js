@@ -10651,6 +10651,9 @@ async function processLootFiles(files) {
 // === ACCOUNTABILITY CHECK ===
 
 function populateAccountabilityDropdowns() {
+    // Shared-accountability viewer commandeers the dropdowns with a synthetic session +
+    // pre-selected captures; don't overwrite them when the user's own session list loads.
+    if (window._sharedAccountabilityActive) return;
     const sessionSel = document.getElementById('acc-session-select');
     const captureSel = document.getElementById('acc-capture-select');
     if (!sessionSel || !captureSel) return;
@@ -11066,6 +11069,10 @@ async function runAccountabilityCheck() {
             item_id: e.item_id || e.itemId || '',
             quantity: e.quantity || 1
         }));
+    } else if (sessionId === '__shared__' && Array.isArray(window._sharedAccountabilityEvents)) {
+        // Shared accountability view — events come from /api/accountability/public/:token (in memory).
+        // No auth fetch needed; skip straight to the compare logic.
+        lootEvents = window._sharedAccountabilityEvents;
     } else {
         try {
             const res = await fetch(`${VPS_BASE}/api/loot-session/${encodeURIComponent(sessionId)}`, { headers: authHeaders() });
@@ -15398,56 +15405,99 @@ async function _handlePublicShareLoad() {
     }
 }
 
-// Render shared ACCOUNTABILITY view with a "Before" / "With accountability" toggle.
-// Before = normal session event breakdown (no deposit tracking).
-// With accountability = same view but with deposit-status dots overlaid on each item.
-function _renderPublicAccountabilityView(data) {
-    const overlay = document.createElement('div');
-    overlay.id = 'public-share-overlay';
-    const when = data.createdAt ? new Date(data.createdAt).toLocaleString() : '';
-    overlay.innerHTML = `
-        <div class="public-share-banner">
-            <span>🔗 Viewing a shared accountability check — read-only${data.sessionName ? ` · <strong>${esc(data.sessionName)}</strong>` : ''}${when ? ` · created ${esc(when)}` : ''}</span>
-            <a href="${window.location.pathname}" class="btn-small">Continue to Coldtouch &rarr;</a>
-        </div>
-        <div style="padding:1rem; max-width:1200px; margin:0 auto;">
-            <div style="display:flex; gap:0.5rem; margin-bottom:0.75rem; padding:0.5rem; background:rgba(255,255,255,0.03); border:1px solid var(--border); border-radius:8px;">
-                <button class="btn-small btn-small-accent" id="acc-share-before">📋 Before — session events</button>
-                <button class="btn-small" id="acc-share-after">✓ With accountability check</button>
-                <span style="margin-left:auto; font-size:0.75rem; color:var(--text-muted);">${data.captures.length} chest capture${data.captures.length !== 1 ? 's' : ''} · ${data.events.length} events</span>
-            </div>
-            <div id="public-share-container"></div>
-        </div>`;
-    document.body.appendChild(overlay);
+// Render shared ACCOUNTABILITY inside the normal Loot Logger → Accountability tab
+// (no overlay, no "Continue to Coldtouch" button). The recipient sees exactly what
+// the share owner saw when they clicked Share — full accountability result with
+// deposit-status dots, suspects banner, player cards, everything. A thin read-only
+// banner is added at the top of the tab with the share metadata.
+//
+// Approach: hide the landing overlay, navigate to Loot Logger → Accountability,
+// inject the shared events + captures into the same logic path that runs when a
+// user clicks Run Check. This reuses 100% of the existing accountability render.
+async function _renderPublicAccountabilityView(data) {
+    // 0. Flag active so populateAccountabilityDropdowns leaves our synthetic state alone.
+    window._sharedAccountabilityActive = true;
 
-    // Build the deposited map from the serialized captures
-    const depositedMap = {};
+    // 1. Kill the landing overlay so the view is usable without forcing login.
+    const landing = document.getElementById('landing-overlay');
+    if (landing) { landing.style.display = 'none'; landing.classList.add('dismissed'); }
+
+    // 2. Wait for the basic app init (tabs, handlers) to be in place before navigating.
+    //    `init()` runs on DOMContentLoaded — we may get here before it finishes.
+    const waitFor = (pred, timeout = 5000) => new Promise((resolve, reject) => {
+        const start = Date.now();
+        const tick = () => {
+            if (pred()) return resolve();
+            if (Date.now() - start > timeout) return reject(new Error('timeout'));
+            setTimeout(tick, 50);
+        };
+        tick();
+    });
+    try {
+        await waitFor(() => typeof populateAccountabilityDropdowns === 'function' && document.querySelector('[data-tab="loot-logger"]'));
+    } catch { /* init didn't come — render anyway, may fail gracefully */ }
+
+    // 3. Navigate to Loot Logger → Accountability.
+    document.querySelector('[data-tab="loot-logger"]')?.click();
+    if (typeof showLootLoggerMode === 'function') showLootLoggerMode('accountability');
+
+    // 4. Inject the shared captures into window._chestCaptures (without disturbing any
+    //    existing captures the viewer may have). We'll select only the shared ones.
+    window._chestCaptures = window._chestCaptures || [];
+    const sharedCapStartIdx = window._chestCaptures.length;
     for (const cap of (data.captures || [])) {
-        for (const it of (cap.items || [])) {
-            depositedMap[it.itemId] = (depositedMap[it.itemId] || 0) + (it.quantity || 1);
-        }
+        window._chestCaptures.push({ ...cap, _isSharedView: true });
     }
 
-    const target = document.getElementById('public-share-container');
-    _llTargetEl = target;
-    _llIsDetail = true;
+    // 5. Pre-populate the dropdowns so runAccountabilityCheck reads exactly what was shared.
+    const sessionSel = document.getElementById('acc-session-select');
+    const captureSel = document.getElementById('acc-capture-select');
+    if (sessionSel) {
+        // Synthetic option for the shared session id so the dropdown accepts it.
+        const stubVal = '__shared__';
+        sessionSel.innerHTML = `<option value="${stubVal}" selected>🔗 Shared: ${esc(data.sessionName || 'accountability check')}</option>`;
+        sessionSel.value = stubVal;
+    }
+    if (captureSel) {
+        // Build options for each shared capture + mark them selected.
+        captureSel.innerHTML = (data.captures || []).map((cap, i) => {
+            const name = cap.tabName || `Shared capture ${i + 1}`;
+            const count = cap.items?.length || 0;
+            return `<option value="${sharedCapStartIdx + i}" selected>${esc(name)} — ${count} items</option>`;
+        }).join('');
+    }
 
-    const renderBefore = async () => {
-        document.getElementById('acc-share-before').classList.add('btn-small-accent');
-        document.getElementById('acc-share-after').classList.remove('btn-small-accent');
-        target.innerHTML = '<div class="empty-state"><p>Loading…</p></div>';
-        await renderLootSessionEvents(data.events || [], target, null);
+    // 6. Stash the shared events + sessionId so runAccountabilityCheck fetches them from memory
+    //    instead of hitting the private /api/loot-session endpoint (which requires auth).
+    window._sharedAccountabilityEvents = data.events || [];
+    window._sharedAccountabilitySessionId = '__shared__';
+    window._sharedAccountabilityMeta = {
+        sessionName: data.sessionName || '',
+        createdAt: data.createdAt || 0,
     };
-    const renderAfter = async () => {
-        document.getElementById('acc-share-after').classList.add('btn-small-accent');
-        document.getElementById('acc-share-before').classList.remove('btn-small-accent');
-        target.innerHTML = '<div class="empty-state"><p>Loading…</p></div>';
-        await renderLootSessionEvents(data.events || [], target, depositedMap);
-    };
-    document.getElementById('acc-share-before').addEventListener('click', renderBefore);
-    document.getElementById('acc-share-after').addEventListener('click', renderAfter);
-    // Default to After view — that's the point of an accountability share.
-    renderAfter();
+
+    // 7. Add a thin banner above the accountability pane so the recipient knows it's a share.
+    const pane = document.getElementById('pane-loot-logger');
+    if (pane && !document.getElementById('shared-acc-banner')) {
+        const when = data.createdAt ? new Date(data.createdAt).toLocaleString() : '';
+        const banner = document.createElement('div');
+        banner.id = 'shared-acc-banner';
+        banner.style.cssText = 'background:linear-gradient(90deg, rgba(88,101,242,0.14), rgba(88,101,242,0.06)); border:1px solid rgba(88,101,242,0.35); border-radius:8px; padding:0.55rem 0.9rem; margin:0.5rem 0 0.75rem; font-size:0.82rem; color:#c7d2ff; display:flex; gap:0.5rem; align-items:center; flex-wrap:wrap;';
+        banner.innerHTML = `
+            <span>🔗</span>
+            <span><strong>Shared accountability check</strong>${data.sessionName ? ` — "${esc(data.sessionName)}"` : ''}${when ? ` · created ${esc(when)}` : ''}</span>
+            <span style="margin-left:auto; color:var(--text-muted); font-size:0.72rem;">Read-only view — ${(data.events || []).length} events · ${(data.captures || []).length} chest capture${(data.captures || []).length !== 1 ? 's' : ''}</span>`;
+        // Insert right at the top of the accountability mode container.
+        const accMode = document.getElementById('loot-log-accountability');
+        if (accMode) accMode.insertBefore(banner, accMode.firstChild);
+        else pane.insertBefore(banner, pane.firstChild);
+    }
+
+    // 8. Run the accountability check — uses the same code path as a normal user click.
+    if (typeof runAccountabilityCheck === 'function') {
+        // Give the DOM a beat to settle after dropdown injection.
+        setTimeout(() => runAccountabilityCheck(), 100);
+    }
 }
 
 function _renderPublicShareError(msg) {
