@@ -2,6 +2,39 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-04-18 — User request batch: Live Flips fix + Market Browser + Loot Logger redesign
+
+**Live Flips — WORKING AGAIN 🎯**
+- Root cause: frontend default filter was **50k silver** but backend broadcasts 10k+. Users saw only a subset of flips.
+- Plus `initLiveFlipsFilterPersistence` was using non-existent DOM IDs (`flips-city-buy`, `flips-type`) — silently broken.
+- **Fixes:** default min-profit 50k → 10k; persistence ID list aligned with real IDs (`flips-city-filter`, `flips-type-filter`); softened low-side outlier guard from 0.25× to 0.1× of global average (was rejecting legitimately cheap resource tiers during volatile periods).
+
+**Market Browser card button swap**
+- The "Flips" button on each item card now shows "Craft" for items with a recipe, leading straight to the crafting detail view with material breakdown + best sell city. Items without a recipe keep "Flips" as a fallback.
+
+**Transport — mount weights CORRECTED (bombshell)**
+- Our MOUNT_DATA was 5-10× too low. Wiki says T7 Grandmaster's Ox = 2,667 kg (we had 1,262), T8 Elder's Ox = 3,200 kg (missing), T8 Elder's Mammoth = 22,521 kg (we had 1,764!).
+- All mounts now use wiki-correct values. Added Mule, T3 Horse, Swiftclaw, Moose, Giant Stag, Grizzly Bear, T4/T5/T6/T8 Ox variants. Dropdown reorganized into optgroups: On Foot / Transport Ox / Combat hybrid / Mammoth.
+- Impact: every Transport haul plan that used anything other than our existing (wrong) T7 Ox or T8 Mammoth entry was under-predicting capacity by 5-10×.
+
+**Recent Sales moved from Loot Buyer → Portfolio**
+- Lives alongside trade history where it belongs. Now in a collapsible `<details>` card. Auto-detect from in-game mail still works — same `_recentSales` buffer, same `renderRecentSales` function.
+
+**Loot Logger — major redesign (items 5-12 from user request)**
+- **Sessions grouping** — past sessions are now grouped into collapsible buckets: 📅 Today (open) / Yesterday / This Week / Older. Huge space saving for users with 50+ saved sessions.
+- **Hide sessions list on pick** — clicking a session hides the list entirely; a "← Back" button in the detail view restores it. Resolves the "both visible at once" complaint.
+- **Timeline hover rich tooltip** — bars now show a floating tooltip with death count + victim names, **guild-colored** via a deterministic hash palette so the same guild appears in the same color everywhere in the session.
+- **Deaths color fix** — friendlies were shown in red, enemies in green (framed as "outcome for our guild"). Flipped to match player-card convention: **friends = green, enemies = red**, regardless of which side benefited.
+- **Deaths section is now one big collapsible card** containing one-liner rows. Click any row to expand for items, equipment-at-death, recovered-by list, and action buttons. Massive visual cleanup on sessions with 20+ deaths.
+- **Player card loot icons** — ALL unique items shown (no 10-icon cap), aggregated per item+quality with a qty badge. Icons bumped to 48×48 px (was ~32). Flex-wrap means the strip grows vertically instead of getting truncated.
+- **Accountability gets Event View** — new "📋 Event View" button on the accountability results renders the same per-player layout as the normal session view, with deposit-status color dots (🟢 deposited / 🟡 partial / 🔴 missing / ⚫ lost on death) overlaid on each item row. Added a color legend strip at the top explaining what each dot means.
+
+**Files modified:** `app.js` (Live Flips + Market Browser + Loot Logger), `db.js` (no change — freshness fix already in place), `deploy_saas.py` (outlier guard 0.25→0.1), `index.html` (mount dropdown, Recent Sales move), `style.css` (260+ lines of new Loot Logger CSS), `sw.js` (v27→v28).
+
+**Backend deploy required** for the outlier guard loosening.
+
+---
+
 ### 2026-04-18 — Big Audit Remediation (price accuracy + UX + flows)
 
 Follow-up to the Crafting Overhaul: comprehensive audit across price accuracy, UX polish, and user journeys surfaced ~40 findings. This release fixes all **CRITICAL** and **HIGH** severity items plus the top-ranked structural improvements.

@@ -952,17 +952,34 @@
                         <input type="number" id="transport-budget" value="500000" min="10000" step="50000" style="width:140px;">
                     </div>
                     <div class="control-group">
-                        <label for="transport-mount">Mount / Carry Weight</label>
+                        <label for="transport-mount" title="Mount max load from wiki (corrected April 18 — prior values were 5-10x too low)">Mount / Carry Weight</label>
                         <select id="transport-mount">
-                            <option value="none">No Mount (600 kg base)</option>
-                            <option value="ox_t3">T3 Transport Ox (476 kg)</option>
-                            <option value="ox_t5">T5 Transport Ox (816 kg)</option>
-                            <option value="ox_t7">T7 Transport Ox (1,262 kg)</option>
-                            <option value="mammoth_t8" selected>T8 Transport Mammoth (1,764 kg)</option>
-                            <option value="mammoth_saddled">T8 Saddled Mammoth (2,308 kg)</option>
-                            <option value="ignore">Ignore Weight (&#x221e;)</option>
+                            <optgroup label="On foot">
+                                <option value="none">No Mount (600 kg)</option>
+                                <option value="mule">Mule (360 kg)</option>
+                            </optgroup>
+                            <optgroup label="Transport Ox (pure haul)">
+                                <option value="ox_t3">T3 Journeyman's Ox (1,200 kg)</option>
+                                <option value="ox_t4">T4 Adept's Ox (1,600 kg)</option>
+                                <option value="ox_t5">T5 Expert's Ox (2,000 kg)</option>
+                                <option value="ox_t6">T6 Master's Ox (2,400 kg)</option>
+                                <option value="ox_t7">T7 Grandmaster's Ox (2,667 kg)</option>
+                                <option value="ox_t8" selected>T8 Elder's Ox (3,200 kg)</option>
+                            </optgroup>
+                            <optgroup label="Combat / hybrid (can gallop away)">
+                                <option value="horse_t3">T3 Riding Horse (520 kg)</option>
+                                <option value="swiftclaw">T5 Swiftclaw (900 kg)</option>
+                                <option value="moose">T6 Moose (1,400 kg)</option>
+                                <option value="giant_stag">T7 Giant Stag (1,600 kg)</option>
+                                <option value="grizzly_bear">T7 Grizzly Bear (2,200 kg)</option>
+                            </optgroup>
+                            <optgroup label="Mammoth (giant haul, +8 slots)">
+                                <option value="mammoth_t8">T8 Transport Mammoth (22,521 kg)</option>
+                                <option value="mammoth_saddled">T8 Saddled Mammoth (22,521 kg)</option>
+                            </optgroup>
+                            <option value="ignore">— Ignore Weight Limits —</option>
                         </select>
-                        <div id="transport-mount-info" style="font-size:0.73rem; color:var(--text-muted); margin-top:3px;">Carry capacity: 1,764 kg</div>
+                        <div id="transport-mount-info" style="font-size:0.73rem; color:var(--text-muted); margin-top:3px;">Carry capacity: 3,200 kg</div>
                     </div>
                     <div class="control-group">
                         <label for="transport-free-slots" title="How many inventory slots are free after your gear, food, potions, etc.">Free Slots</label>
@@ -1673,8 +1690,8 @@
                     <div class="control-group" style="min-width:100px;">
                         <label for="flips-min-profit">Min Profit</label>
                         <select id="flips-min-profit">
-                            <option value="10000">10k+</option>
-                            <option value="50000" selected>50k+</option>
+                            <option value="10000" selected>10k+</option>
+                            <option value="50000">50k+</option>
                             <option value="100000">100k+</option>
                             <option value="500000">500k+</option>
                         </select>
@@ -1821,6 +1838,20 @@
 
             <!-- Trade History -->
             <div id="portfolio-trades" style="margin-top:1rem;"></div>
+
+            <!-- ====== RECENT SALES (from in-game mail) — moved from Loot Buyer tab ====== -->
+            <details id="loot-sales-section" class="controls-panel" style="margin-top:1rem;" open>
+                <summary style="cursor:pointer; display:flex; justify-content:space-between; align-items:center; list-style:none;">
+                    <h3 style="color:var(--text-primary); margin:0; font-size:1rem;">📨 Recent Sales <span style="font-size:0.72rem; color:var(--text-muted); font-weight:normal;">(auto-detected from in-game mail)</span></h3>
+                    <span style="display:inline-flex; gap:0.4rem;">
+                        <button class="btn-small" onclick="event.preventDefault(); copyRecentSalesToDiscord();" title="Copy recent sales list for Discord (preview before copy)">📋 Discord</button>
+                    </span>
+                </summary>
+                <div style="margin:0.5rem 0;">
+                    <input type="text" id="loot-sales-search" placeholder="Filter sales by item name or city..." oninput="renderRecentSales()" class="sale-form-input" style="font-size:0.82rem; width:100%; max-width:400px;">
+                </div>
+                <div id="loot-recent-sales"></div>
+            </details>
         </section>
 
         <!-- ====== TAB: FARMING ====== -->
@@ -2213,6 +2244,23 @@
                     <h2 class="about-heading">Changelog</h2>
                     <div id="changelog-wrapper" style="max-height: 500px; overflow-y: auto; position: relative;">
                     <div class="changelog-list">
+                        <div class="changelog-entry">
+                            <div class="changelog-date">April 18, 2026</div>
+                            <div class="changelog-title">🔧 Live Flips fix + Loot Logger redesign + Transport mount weights</div>
+                            <ul>
+                                <li><strong>Live Flips working again</strong> &mdash; default filter was 50k silver but backend broadcasts 10k+. Dropped default to 10k. Filter-persistence was also broken due to wrong DOM IDs. Softened the low-side outlier guard so legitimately cheap resources aren't rejected.</li>
+                                <li><strong>Transport mount weights corrected</strong> &mdash; our values were 5-10&times; too low. T8 Elder's Mammoth is 22,521 kg (we had 1,764!), T7 Grandmaster's Ox is 2,667 kg (we had 1,262). Added Mule, T3 Horse, Swiftclaw, Moose, Giant Stag, Grizzly Bear, full T4-T8 Ox ladder. Dropdown reorganized into clean categories.</li>
+                                <li><strong>Market Browser</strong> &mdash; the "Flips" button on item cards is now "Craft" for items that have a recipe, leading straight to the crafting detail with material breakdown.</li>
+                                <li><strong>Recent Sales moved to Portfolio</strong> &mdash; lives next to trade history where it belongs. Still auto-detects sales from in-game mail.</li>
+                                <li><strong>Loot Logger &mdash; sessions grouped</strong> into collapsible 📅 Today / Yesterday / This Week / Older buckets. Massive space saving for users with lots of saved sessions.</li>
+                                <li><strong>Loot Logger &mdash; pick a session, list hides</strong>. Previously both were visible at once. "← Back" button restores the list.</li>
+                                <li><strong>Loot Logger timeline hover</strong> &mdash; bars now show a rich tooltip with death count + victim names, <strong>guild-colored</strong> via a hash palette consistent with the player cards.</li>
+                                <li><strong>Loot Logger deaths &mdash; color fixed</strong>: friends = green, enemies = red (was reversed). Whole deaths section is now one big collapsible card with compact one-liner rows that expand on click. No more 20 massive cards dominating the page.</li>
+                                <li><strong>Loot Logger player cards &mdash; all loot icons shown</strong>. No more "+N more" truncation. Icons bumped from ~32px to 48px with quantity badge and hover value tooltip.</li>
+                                <li><strong>Accountability &mdash; new Event View mode</strong>. See the same per-player layout as the normal session view, with green/yellow/red/grey status dots on every item row (deposited / partial / missing / lost on death).</li>
+                                <li>Service worker cache v27 &rarr; v28.</li>
+                            </ul>
+                        </div>
                         <div class="changelog-entry">
                             <div class="changelog-date">April 18, 2026</div>
                             <div class="changelog-title">🩹 Big Audit Remediation &mdash; accuracy + UX + flows</div>
@@ -3310,17 +3358,7 @@
             <!-- Analysis results -->
             <div id="loot-results" style="display:none;"></div>
 
-            <!-- ====== RECENT SALES (from in-game mail) ====== -->
-            <div id="loot-sales-section" style="margin-top:2rem;">
-                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.5rem; gap:0.5rem; flex-wrap:wrap;">
-                    <h3 style="color:var(--text-primary); margin:0; font-size:1rem;">Recent Sales <span style="font-size:0.72rem; color:var(--text-muted); font-weight:normal;">(auto-detected from in-game mail)</span></h3>
-                    <button class="btn-small" onclick="copyRecentSalesToDiscord()" title="Copy recent sales list for Discord (preview before copy)">&#128203; Discord</button>
-                </div>
-                <div style="margin-bottom:0.5rem;">
-                    <input type="text" id="loot-sales-search" placeholder="Filter sales by item name or city..." oninput="renderRecentSales()" class="sale-form-input" style="font-size:0.82rem; width:100%; max-width:400px;">
-                </div>
-                <div id="loot-recent-sales"></div>
-            </div>
+            <!-- Recent Sales moved to Portfolio tab (Apr 18 audit — belongs with trade tracking) -->
 
             <!-- ====== MY TRACKED TABS ====== -->
             <div id="loot-tracked-section" style="margin-top:2rem;">

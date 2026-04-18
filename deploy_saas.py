@@ -3338,7 +3338,8 @@ function detectFlip(id, q) {
   const gAvg = globalPriceRef[id + '_' + q] || 0;
   if (gAvg > 0 && bestBuy.price > gAvg * 4) return; // >4x global avg is almost certainly stale
   // Low-side guard: a junk 1-silver sell listing would create a phantom flip. Reject extreme low outliers.
-  if (gAvg > 0 && bestSell.price < gAvg * 0.25 && bestSell.price > 0) return;
+  // 0.1× threshold catches 1-silver junk but passes legitimately cheap resource tiers.
+  if (gAvg > 0 && bestSell.price < gAvg * 0.1 && bestSell.price > 0) return;
 
   // === Cross-city flips ===
   if (bestSell.city && bestBuy.city && bestSell.city !== bestBuy.city) {

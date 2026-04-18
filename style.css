@@ -1725,8 +1725,11 @@ select:focus {
     padding: 0.6rem 0.85rem;
     transition: border-color var(--transition), box-shadow var(--transition);
 }
-.ll-death-friendly { border-left-color: var(--loss-red); }
-.ll-death-enemy { border-left-color: var(--profit-green); }
+/* SWAPPED 2026-04-18 — user wants friends=green, enemies=red, matching .ll-card-* convention.
+   Previous semantics framed it as "outcome for our guild" (friendly died = loss = red). Now
+   matches the player-card convention where the color represents the PERSON's side. */
+.ll-death-friendly { border-left-color: var(--profit-green); }
+.ll-death-enemy { border-left-color: var(--loss-red); }
 .ll-death-card.active-filter {
     box-shadow: 0 0 0 2px var(--accent);
     background: rgba(212, 175, 55, 0.04);
@@ -1764,12 +1767,12 @@ select:focus {
     margin-left: 0.2rem;
 }
 .ll-death-friendly .ll-death-badge {
-    background: rgba(239, 68, 68, 0.15);
-    color: var(--loss-red);
-}
-.ll-death-enemy .ll-death-badge {
     background: rgba(74, 222, 128, 0.15);
     color: var(--profit-green);
+}
+.ll-death-enemy .ll-death-badge {
+    background: rgba(239, 68, 68, 0.15);
+    color: var(--loss-red);
 }
 .ll-death-value {
     font-weight: 700;
@@ -6117,6 +6120,301 @@ footer {
 /* Disabled buttons */
 .btn-small:disabled, .btn-small-accent:disabled, button:disabled {
     opacity: 0.5; cursor: not-allowed; pointer-events: none;
+}
+
+/* ============================================================
+ * LOOT LOGGER REDESIGN — Apr 18, 2026 (items 5-12)
+ * Sessions grouping, compact deaths, bigger icons, timeline hover
+ * ============================================================ */
+
+/* Sessions grouped into <details> buckets — Today / Yesterday / This Week / Older */
+.ll-sessions-bucket {
+    margin-bottom: 0.5rem;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+}
+.ll-sessions-bucket-summary {
+    cursor: pointer;
+    padding: 0.55rem 0.75rem;
+    background: rgba(255, 255, 255, 0.03);
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-weight: 600;
+    font-size: 0.85rem;
+    list-style: none;
+    user-select: none;
+}
+.ll-sessions-bucket-summary::-webkit-details-marker { display: none; }
+.ll-sessions-bucket-summary::before {
+    content: '▸';
+    color: var(--accent);
+    transition: transform 0.15s;
+    width: 0.8rem;
+    display: inline-block;
+}
+.ll-sessions-bucket[open] > .ll-sessions-bucket-summary::before { transform: rotate(90deg); }
+.ll-sessions-bucket-label { flex: 1 1 auto; color: var(--text-primary); }
+.ll-sessions-bucket-count {
+    background: var(--accent);
+    color: #0a0a0a;
+    padding: 0.1rem 0.5rem;
+    border-radius: 10px;
+    font-size: 0.7rem;
+    font-weight: 700;
+}
+.ll-sessions-bucket-body {
+    padding: 0.4rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+}
+
+/* Deaths section — single <details> container + nested <details> per death row */
+.ll-deaths-section {
+    margin: 0.6rem 0;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: rgba(0, 0, 0, 0.15);
+    overflow: hidden;
+}
+.ll-deaths-summary {
+    cursor: pointer;
+    padding: 0.55rem 0.75rem;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-weight: 600;
+    font-size: 0.85rem;
+    list-style: none;
+    user-select: none;
+    background: rgba(255, 255, 255, 0.02);
+}
+.ll-deaths-summary::-webkit-details-marker { display: none; }
+.ll-deaths-summary::before {
+    content: '▸';
+    color: var(--accent);
+    transition: transform 0.15s;
+    width: 0.8rem;
+    display: inline-block;
+}
+.ll-deaths-section[open] > .ll-deaths-summary::before { transform: rotate(90deg); }
+.ll-deaths-title-text { color: var(--text-primary); }
+.ll-deaths-count {
+    background: rgba(255, 255, 255, 0.1);
+    padding: 0.1rem 0.5rem;
+    border-radius: 10px;
+    font-size: 0.72rem;
+    font-weight: 700;
+}
+.ll-deaths-friendly-count {
+    color: var(--profit-green);
+    font-size: 0.75rem;
+    font-weight: 700;
+}
+.ll-deaths-enemy-count {
+    color: var(--loss-red);
+    font-size: 0.75rem;
+    font-weight: 700;
+}
+
+.ll-deaths-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+    padding: 0.3rem;
+    max-height: 600px;
+    overflow-y: auto;
+}
+
+/* Individual death row — compact one-liner that expands on click */
+.ll-death-row {
+    border-left: 3px solid var(--border);
+    background: rgba(255, 255, 255, 0.02);
+    border-radius: 4px;
+    overflow: hidden;
+    transition: background 0.12s;
+}
+.ll-death-row.ll-death-friendly { border-left-color: var(--profit-green); }
+.ll-death-row.ll-death-enemy { border-left-color: var(--loss-red); }
+.ll-death-row:hover { background: rgba(255, 255, 255, 0.04); }
+.ll-death-row.active-filter { background: rgba(240, 192, 64, 0.08); border-left-color: var(--accent); }
+
+.ll-death-row-summary {
+    cursor: pointer;
+    padding: 0.35rem 0.6rem;
+    display: grid;
+    grid-template-columns: 24px 50px 1fr auto 1fr auto auto;
+    gap: 0.5rem;
+    align-items: center;
+    font-size: 0.82rem;
+    list-style: none;
+}
+.ll-death-row-summary::-webkit-details-marker { display: none; }
+.ll-death-row-icon { font-size: 1rem; }
+.ll-death-row-time { color: var(--text-muted); font-variant-numeric: tabular-nums; font-size: 0.75rem; }
+.ll-death-row-victim { font-weight: 600; color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ll-death-row-sep { color: var(--text-muted); }
+.ll-death-row-killer { color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ll-death-row-value {
+    color: var(--accent);
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    font-size: 0.78rem;
+    min-width: 60px;
+    text-align: right;
+}
+.ll-death-row .ll-death-badge {
+    padding: 0.08rem 0.45rem;
+    border-radius: 10px;
+    font-size: 0.65rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    font-weight: 700;
+}
+
+.ll-death-row-body {
+    padding: 0.5rem 0.8rem 0.75rem 0.8rem;
+    background: rgba(0, 0, 0, 0.2);
+    border-top: 1px solid rgba(255, 255, 255, 0.05);
+}
+.ll-death-section-label {
+    font-size: 0.68rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-muted);
+    margin: 0.35rem 0 0.2rem 0;
+    font-weight: 600;
+}
+.ll-death-looters-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.3rem;
+}
+.ll-looter-chip {
+    background: rgba(255, 255, 255, 0.04);
+    padding: 0.15rem 0.4rem;
+    border-radius: 10px;
+    font-size: 0.72rem;
+    color: var(--text-secondary);
+}
+
+/* Mobile compaction for the summary grid */
+@media (max-width: 640px) {
+    .ll-death-row-summary {
+        grid-template-columns: 20px 1fr auto auto;
+        font-size: 0.78rem;
+    }
+    .ll-death-row-time, .ll-death-row-sep, .ll-death-row-killer { display: none; }
+}
+
+/* Timeline rich tooltip (floating above bars on hover) */
+.ll-timeline-rich-tip {
+    position: fixed;
+    z-index: 9999;
+    pointer-events: none;
+    background: rgba(0, 0, 0, 0.95);
+    border: 1px solid var(--accent);
+    border-radius: 6px;
+    padding: 0.5rem 0.75rem;
+    font-size: 0.78rem;
+    color: var(--text-primary);
+    min-width: 180px;
+    max-width: 280px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+}
+.ll-timeline-rich-tip .ll-timeline-tip-title {
+    font-weight: 700;
+    color: var(--accent);
+    font-size: 0.8rem;
+    margin-bottom: 0.3rem;
+}
+.ll-timeline-rich-tip .ll-timeline-tip-events {
+    margin-top: 0.3rem;
+    padding-top: 0.3rem;
+    border-top: 1px solid rgba(255, 255, 255, 0.1);
+    color: var(--text-muted);
+    font-size: 0.72rem;
+}
+
+/* Player-card loot preview icons — BIGGER (user request), wrap all of them */
+.ll-preview-slot {
+    position: relative;
+    display: inline-flex;
+    flex: 0 0 auto;
+}
+.ll-preview-icon {
+    width: 48px !important;
+    height: 48px !important;
+    border-radius: 4px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    background: rgba(0, 0, 0, 0.2);
+    transition: transform 0.1s;
+}
+.ll-preview-slot:hover .ll-preview-icon {
+    transform: scale(1.1);
+    border-color: var(--accent);
+}
+.ll-preview-qty-badge {
+    position: absolute;
+    bottom: -2px;
+    right: -2px;
+    background: var(--accent);
+    color: #0a0a0a;
+    font-size: 0.62rem;
+    font-weight: 700;
+    padding: 0.05rem 0.25rem;
+    border-radius: 8px;
+    pointer-events: none;
+    min-width: 16px;
+    text-align: center;
+}
+/* Header strip should wrap so all icons are shown */
+.ll-player-card .ll-header-preview,
+.ll-player-card .ll-icon-strip {
+    flex-wrap: wrap !important;
+    gap: 3px !important;
+    max-width: 100%;
+}
+
+/* Item state dots (used in both normal and accountability views).
+   Consistent color semantics:
+   - green  = deposited (in the guild chest)
+   - yellow = partial   (some deposited, some still out)
+   - red    = missing   (should be deposited but isn't)
+   - blue   = picked up by another player
+   - grey   = lost to death / other */
+.ll-item-status-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    display: inline-block;
+    margin-right: 0.35rem;
+    flex-shrink: 0;
+}
+.ll-dot-deposited { background: var(--profit-green); box-shadow: 0 0 4px rgba(74, 222, 128, 0.6); }
+.ll-dot-partial   { background: #fbbf24; box-shadow: 0 0 4px rgba(251, 191, 36, 0.6); }
+.ll-dot-missing   { background: var(--loss-red); box-shadow: 0 0 4px rgba(239, 68, 68, 0.6); }
+.ll-dot-taken     { background: #5b8def; box-shadow: 0 0 4px rgba(91, 141, 239, 0.6); }
+.ll-dot-died      { background: var(--text-muted); }
+
+/* Accountability legend/strip inside accountability mode */
+.ll-accountability-legend {
+    display: flex;
+    gap: 0.7rem;
+    padding: 0.5rem 0.75rem;
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    margin-bottom: 0.5rem;
+    font-size: 0.75rem;
+    flex-wrap: wrap;
+}
+.ll-accountability-legend span {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
 }
 
 /* ============================================================

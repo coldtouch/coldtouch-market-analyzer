@@ -6,7 +6,55 @@
 
 ---
 
-## 0. Latest Session — April 18, 2026 — Big Audit Remediation
+## 0. Latest Session — April 18, 2026 — User request batch (Live Flips + Market Browser + Loot Logger redesign)
+
+Processed the user's list of 12 items from the Loot Logger / Market Browser / Live Flips area. All CRITICAL items shipped.
+
+### Live Flips fix (was broken for days)
+- `index.html:1677` default `flips-min-profit` 50000 → 10000 (matched backend `FLIP_MIN_PROFIT=10000`).
+- `initLiveFlipsFilterPersistence` ids array corrected — previous list had `flips-city-buy`/`flips-type` which don't exist; actual IDs are `flips-city-filter`/`flips-type-filter`.
+- `deploy_saas.py` detectFlip low-side outlier guard `gAvg * 0.25` → `gAvg * 0.1` (was rejecting legitimately cheap resources during volatile periods).
+- `flips-min-profit` fallback value `50000` → `10000` in two call sites in app.js.
+
+### Transport mount weights — CRITICAL DATA FIX
+- `MOUNT_DATA` had weights 5-10× too low. Wiki: T7 Grandmaster's Ox = 2,667kg (we had 1,262); T8 Elder's Mammoth = **22,521 kg** (we had 1,764!).
+- Replaced with correct wiki values. Added Mule, T3 Horse, Swiftclaw, Moose, Giant Stag, Grizzly Bear, full T4-T8 Ox ladder.
+- Dropdown reorganized into optgroups: On Foot / Transport Ox / Combat hybrid / Mammoth.
+- Deep-research agent delivered a full improvement list (gank-rate risk model, auto-refresh, saved plans, Discord embed, round-trip planner). Mount weights were the single biggest accuracy gap — shipped. Other recs documented but deferred.
+
+### Market Browser card button
+- Items with a recipe now show "Craft" instead of "Flips" (calls `switchToCraft`). Items without recipes keep "Flips".
+
+### Recent Sales relocated
+- Moved from `#pane-loot-buyer` → `#pane-portfolio` (below trade history, in a `<details open>` card). Same DOM IDs so existing `renderRecentSales()` + auto-detect keep working.
+
+### Loot Logger redesign (items 5-12)
+- Sessions grouped into collapsible `<details>` buckets: 📅 Today (open) / Yesterday / This Week / Older.
+- Selecting a session hides `#loot-sessions-list`; `hideLootSessionDetail()` restores.
+- Timeline bars get `data-tip-html` with death count + victim names, guild-colored via hash palette (same palette as player cards for consistency).
+- `initTimelineRichTooltip()` (wired from `init()`) handles delegated hover to show a floating `.ll-timeline-rich-tip`.
+- **Death colors FLIPPED**: `.ll-death-friendly` now green, `.ll-death-enemy` now red. Matches `.ll-card-*` convention. (Was framed as "outcome for our side" — now matches "this person's side".)
+- `renderDeathsSection` rewritten as outer `<details>` containing nested `<details>` rows. Each row is a one-liner (icon/time/victim→killer/value/badge) that expands on click for items / equipment-at-death / looters / actions.
+- Player card loot preview: ALL unique items (no 10-icon cap), aggregated by itemId+quality with qty badge. Icons bumped to 48×48 via `.ll-preview-icon { width:48px; height:48px !important }`.
+- Accountability: new "📋 Event View" button (`_accShowEventView`) re-renders via `renderLootSessionEvents(events, container, depositedMap)` — same layout as normal view with `.ll-dot-deposited/partial/missing/died` color dots overlaid. Color legend strip added above.
+
+### CSS additions
+`.ll-sessions-bucket*`, `.ll-death-row*`, `.ll-death-row-summary/body`, `.ll-death-section-label`, `.ll-looter-chip`, `.ll-timeline-rich-tip`, `.ll-timeline-tip-*`, `.ll-preview-slot`, `.ll-preview-qty-badge`, `.ll-preview-icon` (48px), `.ll-item-status-dot`, `.ll-dot-deposited/partial/missing/taken/died`, `.ll-accountability-legend`.
+
+### Cache + deploy
+- sw.js: v27 → v28.
+- Backend deploy required (outlier guard change in deploy_saas.py).
+
+### Deferred (not blocking, research only)
+- Transport Discord embed copy format.
+- Transport live auto-refresh (60s poll while tab open).
+- Transport "My Haul Plans" saved-slot system.
+- Transport gank-rate risk model (biggest competitive gap, but needs separate UX pass).
+- Transport round-trip planner.
+
+---
+
+## 0.0.5 Earlier Session — April 18, 2026 — Big Audit Remediation
 
 Three parallel audit agents (price accuracy, UX polish, feature flows) surfaced ~40 findings across CRITICAL → LOW severity. This session **fixed every CRITICAL + HIGH item** plus the top structural improvements from the MEDIUM tier. See `CHANGELOG.md` 2026-04-18 entry for full feature list.
 

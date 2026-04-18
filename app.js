@@ -256,16 +256,27 @@ function effectiveTaxRate(sellMode /* 'instant' | 'order' */) {
     return sellMode === 'instant' ? TAX_RATE : (TAX_RATE + SETUP_FEE);
 }
 
-// Transport mount carry-weight table. Mounts only add weight capacity — slots come from player inventory only.
+// Transport mount carry-weight table — corrected 2026-04-18 audit.
+// Previous values were 5-10x too low (T7 Ox 1262 vs wiki 2667, T8 Mammoth 1764 vs wiki 22521!).
+// Per-mount max load from wiki (Grandmaster's Transport Ox, Elder's Transport Mammoth pages).
 // "none" = player base carry capacity with a standard bag (600 kg).
 const MOUNT_DATA = {
-    'none':            { weight: 600,      label: 'No Mount'             },
-    'ox_t3':           { weight: 476,      label: 'T3 Transport Ox'      },
-    'ox_t5':           { weight: 816,      label: 'T5 Transport Ox'      },
-    'ox_t7':           { weight: 1262,     label: 'T7 Transport Ox'      },
-    'mammoth_t8':      { weight: 1764,     label: 'T8 Transport Mammoth'  },
-    'mammoth_saddled': { weight: 2308,     label: 'T8 Saddled Mammoth'   },
-    'ignore':          { weight: Infinity, label: 'Ignore Weight'         },
+    'none':            { weight: 600,   label: 'No Mount' },
+    'mule':            { weight: 360,   label: 'Mule' },
+    'horse_t3':        { weight: 520,   label: 'T3 Riding Horse' },
+    'ox_t3':           { weight: 1200,  label: 'T3 Journeyman\'s Transport Ox' },
+    'ox_t4':           { weight: 1600,  label: 'T4 Adept\'s Transport Ox' },
+    'ox_t5':           { weight: 2000,  label: 'T5 Expert\'s Transport Ox' },
+    'ox_t6':           { weight: 2400,  label: 'T6 Master\'s Transport Ox' },
+    'ox_t7':           { weight: 2667,  label: 'T7 Grandmaster\'s Transport Ox' },
+    'ox_t8':           { weight: 3200,  label: 'T8 Elder\'s Transport Ox' },
+    'swiftclaw':       { weight: 900,   label: 'T5 Swiftclaw (hybrid)' },
+    'moose':           { weight: 1400,  label: 'T6 Moose (combat mount)' },
+    'giant_stag':      { weight: 1600,  label: 'T7 Giant Stag (medium load)' },
+    'grizzly_bear':    { weight: 2200,  label: 'T7 Grizzly Bear (combat+haul)' },
+    'mammoth_t8':      { weight: 22521, label: 'T8 Elder\'s Transport Mammoth', extraSlots: 8 },
+    'mammoth_saddled': { weight: 22521, label: 'T8 Saddled Mammoth', extraSlots: 8 },
+    'ignore':          { weight: Infinity, label: 'Ignore Weight' },
 };
 
 function getTransportMountConfig() {
@@ -1026,10 +1037,13 @@ async function renderBrowser() {
                     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"></polyline></svg>
                     Graph
                 </button>
-                <button class="btn-card-action" data-action="flips" data-item="${id}" title="Find flip opportunities for this item">
+                ${recipesData[id] ? `<button class="btn-card-action" data-action="craft-browser" data-item="${id}" title="Open crafting profit breakdown — materials, focus, best sell city">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>
+                    Craft
+                </button>` : `<button class="btn-card-action" data-action="flips" data-item="${id}" title="Find flip opportunities for this item (no recipe — showing flips instead)">
                     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 1l4 4-4 4"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><path d="M7 23l-4-4 4-4"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg>
                     Flips
-                </button>
+                </button>`}
             </div>
         `;
         container.appendChild(card);
@@ -1040,6 +1054,13 @@ async function renderBrowser() {
         btn.addEventListener('click', () => {
             const itemId = btn.dataset.item;
             switchToCompare(itemId);
+        });
+    });
+
+    // Craft button (swapped from Flips for items that have a recipe).
+    container.querySelectorAll('[data-action="craft-browser"]').forEach(btn => {
+        btn.addEventListener('click', () => {
+            if (typeof switchToCraft === 'function') switchToCraft(btn.dataset.item);
         });
     });
 
@@ -3550,6 +3571,41 @@ function renderRefineDeepdive(rows) {
     </div>`;
 }
 
+// Timeline rich tooltip: on hover of a .ll-timeline-bar with data-tip-html,
+// show a floating tooltip with death details (guild-colored).
+function initTimelineRichTooltip() {
+    let tipEl = null;
+    const showTip = (bar, ev) => {
+        const encoded = bar.getAttribute('data-tip-html');
+        if (!encoded) return;
+        if (!tipEl) {
+            tipEl = document.createElement('div');
+            tipEl.className = 'll-timeline-rich-tip';
+            document.body.appendChild(tipEl);
+        }
+        tipEl.innerHTML = decodeURIComponent(encoded);
+        tipEl.style.display = 'block';
+        const rect = bar.getBoundingClientRect();
+        const tipRect = tipEl.getBoundingClientRect();
+        let left = rect.left + rect.width / 2 - tipRect.width / 2;
+        let top = rect.top - tipRect.height - 8;
+        if (top < 8) top = rect.bottom + 8;
+        if (left < 8) left = 8;
+        if (left + tipRect.width > window.innerWidth - 8) left = window.innerWidth - tipRect.width - 8;
+        tipEl.style.left = left + 'px';
+        tipEl.style.top = top + 'px';
+    };
+    const hideTip = () => { if (tipEl) tipEl.style.display = 'none'; };
+    document.addEventListener('mouseover', (e) => {
+        const bar = e.target.closest('.ll-timeline-bar[data-tip-html]');
+        if (bar) showTip(bar, e);
+    });
+    document.addEventListener('mouseout', (e) => {
+        const bar = e.target.closest('.ll-timeline-bar');
+        if (bar) hideTip();
+    });
+}
+
 function initTopNRankerEvents() {
     const btn = document.getElementById('topn-scan-btn');
     if (btn) btn.addEventListener('click', doTopNRank);
@@ -5745,6 +5801,7 @@ async function init() {
     initCrafterProfileEvents();
     initCraftSimEvents();
     initLiveFlipsFilterPersistence();
+    initTimelineRichTooltip();
 
     // Server switch: clear cached prices and reload for the new server
     document.getElementById('server-select').addEventListener('change', onServerChange);
@@ -6510,7 +6567,7 @@ function renderLiveFlips(isNewFlip = false) {
     const container = document.getElementById('flips-list');
     if (!container) return;
 
-    const minProfit = parseInt(document.getElementById('flips-min-profit')?.value) || 50000;
+    const minProfit = parseInt(document.getElementById('flips-min-profit')?.value) || 10000;
     const minRoi = parseFloat(document.getElementById('flips-min-roi')?.value) || 3;
     const cityFilter = document.getElementById('flips-city-filter')?.value || 'all';
     const typeFilter = document.getElementById('flips-type-filter')?.value || 'all';
@@ -6624,7 +6681,8 @@ function renderLiveFlips(isNewFlip = false) {
 // Persist Live Flips filter state across tab re-entries / reloads.
 function initLiveFlipsFilterPersistence() {
     const FILTER_KEY = 'liveFlipsFilters_v1';
-    const ids = ['flips-city-buy','flips-city-sell','flips-type','flips-min-profit','flips-min-roi','flips-sound-toggle','flips-desktop-notify-toggle'];
+    // Real DOM IDs from index.html — previous list had non-existent 'flips-city-buy'/'flips-city-sell'/'flips-type' so persistence silently dropped them.
+    const ids = ['flips-city-filter','flips-type-filter','flips-min-profit','flips-min-roi','flips-sound-toggle','flips-desktop-notify-toggle'];
     // Restore
     try {
         const saved = JSON.parse(localStorage.getItem(FILTER_KEY) || '{}');
@@ -9344,7 +9402,21 @@ async function loadLootSessions() {
 
         const savedNames = getSavedSessionNames();
         _updateLootLoggerModePillCounts();
-        html += lootSessions.map(s => {
+
+        // Group sessions by age: Today / Yesterday / This Week / Older.
+        // Today stays expanded; older buckets collapse into <details> to save space.
+        const now = Date.now();
+        const ONE_DAY = 86400000;
+        const buckets = { today: [], yesterday: [], week: [], older: [] };
+        for (const s of lootSessions) {
+            const age = now - s.started_at;
+            if (age < ONE_DAY) buckets.today.push(s);
+            else if (age < 2 * ONE_DAY) buckets.yesterday.push(s);
+            else if (age < 7 * ONE_DAY) buckets.week.push(s);
+            else buckets.older.push(s);
+        }
+
+        const renderCard = (s) => {
             const started = new Date(s.started_at).toLocaleString();
             const endedAt = s.ended_at ? new Date(s.ended_at) : null;
             const durMins = endedAt ? Math.round((endedAt - new Date(s.started_at)) / 60000) : 0;
@@ -9354,11 +9426,8 @@ async function loadLootSessions() {
             const titleMain = customName
                 ? `<strong>${esc(customName)}</strong> <span style="font-size:0.68rem; color:var(--text-muted);">${started}</span>`
                 : `${started}`;
-            // G4: shared indicator + share button
             const isShared = !!s.public_token;
-            const sharedBadge = isShared
-                ? `<span class="ll-session-shared-badge" title="This session has a public share link">🔗 shared</span>`
-                : '';
+            const sharedBadge = isShared ? `<span class="ll-session-shared-badge" title="This session has a public share link">🔗 shared</span>` : '';
             const tokenArg = isShared ? `'${esc(s.public_token)}'` : 'null';
             return `<div class="ll-session-card${isShared ? ' is-shared' : ''}" onclick="showSessionDetail('${sid}')">
                 <div class="ll-session-info">
@@ -9371,7 +9440,24 @@ async function loadLootSessions() {
                 <button class="btn-small" style="padding:0.35rem 0.55rem; font-size:0.8rem; flex-shrink:0; min-width:32px; min-height:32px;" onclick="event.stopPropagation(); openShareSessionModal('${sid}', ${tokenArg})" title="Share this session" aria-label="Share session">🔗</button>
                 <button class="btn-small-danger" style="padding:0.35rem 0.55rem; font-size:0.8rem; flex-shrink:0; min-width:32px; min-height:32px;" onclick="event.stopPropagation(); deleteLootSession('${sid}', this)" title="Delete session" aria-label="Delete session">✕</button>
             </div>`;
-        }).join('');
+        };
+
+        const renderBucket = (label, items, open) => {
+            if (!items.length) return '';
+            return `<details class="ll-sessions-bucket" ${open ? 'open' : ''}>
+                <summary class="ll-sessions-bucket-summary">
+                    <span class="ll-sessions-bucket-label">${label}</span>
+                    <span class="ll-sessions-bucket-count">${items.length}</span>
+                </summary>
+                <div class="ll-sessions-bucket-body">${items.map(renderCard).join('')}</div>
+            </details>`;
+        };
+
+        html += renderBucket('📅 Today', buckets.today, true);
+        html += renderBucket('Yesterday', buckets.yesterday, false);
+        html += renderBucket('This Week', buckets.week, false);
+        html += renderBucket('Older (past events)', buckets.older, false);
+
         list.innerHTML = html;
         // 4.5: Async stamp "📦 Tab" badges on sessions that overlap with tracked tab purchases
         _loadSessionTabBadges(lootSessions);
@@ -9447,6 +9533,9 @@ async function showSessionDetail(sessionId) {
     detail.style.display = '';
     detail.innerHTML = '<div class="empty-state"><p>Loading…</p></div>';
     _llCurrentSessionId = sessionId;
+    // Hide the sessions list while viewing one — user asked to declutter.
+    const list = document.getElementById('loot-sessions-list');
+    if (list) list.style.display = 'none';
     try {
         const res = await fetch(`${VPS_BASE}/api/loot-session/${encodeURIComponent(sessionId)}`, { headers: authHeaders() });
         const data = await res.json();
@@ -9459,6 +9548,10 @@ async function showSessionDetail(sessionId) {
 function hideLootSessionDetail() {
     const el = document.getElementById('loot-session-detail');
     if (el) { el.style.display = 'none'; el.innerHTML = ''; }
+    // Restore the sessions list.
+    const list = document.getElementById('loot-sessions-list');
+    if (list) list.style.display = '';
+    _llCurrentSessionId = null;
 }
 
 function clearLootUpload() {
@@ -9548,6 +9641,7 @@ function buildDeathTimeline(events, byPlayer, priceMap, primaryGuild, primaryAll
 // G3: Heatmap timeline above the player cards. Divides the session duration
 // into N buckets, rendering event density as bar height. Deaths get a red dot
 // above their bucket so you can see at a glance when things went sideways.
+// 2026-04-18: hover shows bucket death count + victim names (guild-colored).
 function renderSessionTimeline(events, deaths) {
     if (!events || events.length < 2) return ''; // not enough data for a timeline
     const tsNums = events.map(e => +new Date(e.timestamp)).filter(n => !isNaN(n));
@@ -9559,24 +9653,63 @@ function renderSessionTimeline(events, deaths) {
     const BUCKETS = 30;
     const bucketMs = span / BUCKETS;
     const counts = new Array(BUCKETS).fill(0);
-    const deathFlag = new Array(BUCKETS).fill(false);
+    const deathsPerBucket = Array.from({ length: BUCKETS }, () => []);
+    // Bucket events + attribute deaths from the deaths[] array (not from __DEATH__ events which we reconstruct elsewhere).
     for (const ev of events) {
         const t = +new Date(ev.timestamp);
         if (isNaN(t)) continue;
         let idx = Math.floor((t - minTs) / bucketMs);
         if (idx >= BUCKETS) idx = BUCKETS - 1;
         if (idx < 0) idx = 0;
-        if (ev.item_id === '__DEATH__') deathFlag[idx] = true;
-        else counts[idx]++;
+        if (ev.item_id !== '__DEATH__') counts[idx]++;
     }
+    for (const d of (deaths || [])) {
+        const t = +new Date(d.timestamp);
+        if (isNaN(t)) continue;
+        let idx = Math.floor((t - minTs) / bucketMs);
+        if (idx >= BUCKETS) idx = BUCKETS - 1;
+        if (idx < 0) idx = 0;
+        deathsPerBucket[idx].push(d);
+    }
+    // Guild color palette (same hash function as player cards for consistency).
+    const guildPalette = ['#5b8def','#e06c75','#56b6c2','#c678dd','#e5c07b','#61afef','#98c379','#d19a66','#be5046','#7ec8e3'];
+    const guildColor = (g) => {
+        if (!g) return 'var(--text-muted)';
+        const hash = [...g].reduce((s, c) => s + c.charCodeAt(0), 0);
+        return guildPalette[hash % guildPalette.length];
+    };
     const maxCount = Math.max(1, ...counts);
     const fmtTime = (ts) => new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    // Build rich HTML tooltips — we need them escaped into data attributes; use a JSON-blob trick.
     const bars = counts.map((c, i) => {
         const pct = (c / maxCount) * 100;
         const bucketStart = minTs + i * bucketMs;
         const bucketEnd = bucketStart + bucketMs;
-        const label = `${fmtTime(bucketStart)}\u2013${fmtTime(bucketEnd)} \u2022 ${c} event${c !== 1 ? 's' : ''}${deathFlag[i] ? ' \u2022 \ud83d\udc80 death' : ''}`;
-        return `<div class="ll-timeline-bar${deathFlag[i] ? ' has-death' : ''}${c === 0 ? ' empty' : ''}" style="height:${Math.max(pct, c > 0 ? 6 : 2)}%;" data-tip="${esc(label)}"></div>`;
+        const bucketDeaths = deathsPerBucket[i];
+        const hasDeath = bucketDeaths.length > 0;
+        // Plain-text tip for data-tip (old behavior)
+        let tip = `${fmtTime(bucketStart)}\u2013${fmtTime(bucketEnd)} \u2022 ${c} event${c !== 1 ? 's' : ''}`;
+        if (hasDeath) {
+            tip += ` \u2022 ${bucketDeaths.length} death${bucketDeaths.length !== 1 ? 's' : ''}`;
+        }
+        // Rich tooltip via data-tip-html (consumed by ll-timeline-bar:hover CSS + a small JS hook below).
+        let richTip = '';
+        if (hasDeath) {
+            const lines = bucketDeaths.slice(0, 8).map(d => {
+                const icon = d.wasFriendly ? '🛡️' : '💀';
+                const victim = esc(d.victim);
+                const color = guildColor(d.victimGuild);
+                const guild = d.victimGuild ? ` <span style="color:${color};">[${esc(d.victimGuild)}]</span>` : '';
+                return `${icon} <strong>${victim}</strong>${guild}`;
+            });
+            if (bucketDeaths.length > 8) lines.push(`+${bucketDeaths.length - 8} more`);
+            richTip = `<div class="ll-timeline-tip-title">${fmtTime(bucketStart)}</div>` +
+                lines.map(l => `<div>${l}</div>`).join('') +
+                `<div class="ll-timeline-tip-events">${c} loot event${c !== 1 ? 's' : ''}</div>`;
+        } else {
+            richTip = `<div class="ll-timeline-tip-title">${fmtTime(bucketStart)}</div><div>${c} event${c !== 1 ? 's' : ''}</div>`;
+        }
+        return `<div class="ll-timeline-bar${hasDeath ? ' has-death' : ''}${c === 0 ? ' empty' : ''}" style="height:${Math.max(pct, c > 0 ? 6 : 2)}%;" data-tip="${esc(tip)}" data-tip-html="${encodeURIComponent(richTip)}"></div>`;
     }).join('');
     return `<div class="ll-timeline-wrap">
         <div class="ll-timeline-label">Session timeline</div>
@@ -9589,85 +9722,79 @@ function renderSessionTimeline(events, deaths) {
     </div>`;
 }
 
+// Rewritten 2026-04-18 audit: one-liner rows inside a single collapsible <details>.
+// Each row is itself a nested <details> so clicking the row expands full detail
+// (items recovered, equipment-at-death, looters, Discord copy). Huge space saving
+// on sessions with 20+ deaths where the old card-per-death layout dominated the page.
 function renderDeathsSection(deaths) {
     if (!deaths || deaths.length === 0) return '';
     const filterActive = _llDeathFilterVictim !== null;
     const friendlyCount = deaths.filter(d => d.wasFriendly).length;
     const enemyCount = deaths.length - friendlyCount;
-    const header = `<div class="ll-deaths-header">
-        <div class="ll-deaths-title">
-            <span style="font-size:1.1rem;">☠</span>
-            Deaths <span class="ll-deaths-count">${deaths.length}</span>
-            ${friendlyCount > 0 ? `<span class="ll-deaths-friendly">${friendlyCount} friendly</span>` : ''}
-            ${enemyCount > 0 ? `<span class="ll-deaths-enemy">${enemyCount} enemy</span>` : ''}
-        </div>
-        ${filterActive ? `<button class="btn-small" onclick="clearDeathFilter()">&times; Clear filter (${esc(_llDeathFilterVictim)})</button>` : ''}
-    </div>`;
-    const cards = deaths.map(d => {
+    const rows = deaths.map(d => {
         const safeVictim = esc(d.victim);
         const sideClass = d.wasFriendly ? 'll-death-friendly' : 'll-death-enemy';
-        const sideIcon = d.wasFriendly ? '⚔' : '💀';
+        const sideIcon = d.wasFriendly ? '🛡️' : '💀';
         const sideLabel = d.wasFriendly ? 'friendly' : 'enemy';
-        const when = d.timestamp ? new Date(d.timestamp).toLocaleTimeString() : '—';
-        // Item preview strip (up to 8 unique items)
+        const when = d.timestamp ? new Date(d.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '—';
+        const value = d.estimatedValue > 0 ? formatSilver(d.estimatedValue) : '—';
+        // Expanded details: items + equipment + looters + actions
         const seen = new Set();
-        const uniqueItems = [];
-        for (const li of d.lootedItems) {
-            if (li.item_id && !seen.has(li.item_id)) {
-                seen.add(li.item_id);
-                uniqueItems.push(li);
-            }
-        }
-        const previewHtml = uniqueItems.slice(0, 8).map(li => {
+        const uniqueItems = d.lootedItems.filter(li => li.item_id && !seen.has(li.item_id) && seen.add(li.item_id));
+        const itemsHtml = uniqueItems.map(li => {
             const valEntry = _llPriceMap[li.item_id];
             const valAttr = valEntry && valEntry.price > 0 ? ` data-tip-value="${Math.floor(valEntry.price)}"` : '';
             return `<img src="https://render.albiononline.com/v1/item/${encodeURIComponent(li.item_id)}.png" class="ll-death-item" data-tip-item="${esc(li.item_id)}" data-tip-source="loot"${valAttr} loading="lazy" onerror="this.style.display='none'" alt="">`;
-        }).join('') + (uniqueItems.length > 8 ? `<span class="ll-preview-overflow" data-tip="${uniqueItems.length - 8} more unique">+${uniqueItems.length - 8}</span>` : '');
-        const looters = d.lootedBy.slice(0, 3).map(l =>
-            `${esc(l.name)} <span style="color:var(--text-muted);">(${l.items} item${l.items !== 1 ? 's' : ''}${l.silver > 0 ? ', ' + formatSilver(l.silver) : ''})</span>`
-        ).join(', ');
-        const extra = d.lootedBy.length > 3 ? ` <span style="color:var(--text-muted);">+${d.lootedBy.length - 3} more</span>` : '';
-        // B6: equipment-at-death strip — items the victim was wearing when they died.
-        // Shown above recovered items so users can see "what they had" vs "what was looted".
+        }).join('') || '<span style="color:var(--text-muted);font-size:0.75rem;font-style:italic;">No items recovered</span>';
         let equipmentHtml = '';
         if (Array.isArray(d.equipmentAtDeath) && d.equipmentAtDeath.length > 0) {
-            const equipImgs = d.equipmentAtDeath.slice(0, 12).map(eq => {
+            const equipImgs = d.equipmentAtDeath.map(eq => {
                 const id = eq.itemId || '';
                 if (!id) return '';
                 const valEntry = _llPriceMap[id];
                 const valAttr = valEntry && valEntry.price > 0 ? ` data-tip-value="${Math.floor(valEntry.price)}"` : '';
                 return `<img src="https://render.albiononline.com/v1/item/${encodeURIComponent(id)}.png" class="ll-death-item ll-death-equip" data-tip-item="${esc(id)}" data-tip-source="equipped"${valAttr} loading="lazy" onerror="this.style.display='none'" alt="">`;
             }).join('');
-            const more = d.equipmentAtDeath.length > 12 ? `<span class="ll-preview-overflow">+${d.equipmentAtDeath.length - 12}</span>` : '';
-            equipmentHtml = `<div class="ll-death-equipment-row" title="Equipment the victim was wearing at the moment of death (live capture)">
-                <span class="ll-death-equipment-label">Worn at death:</span>
-                <div class="ll-death-items">${equipImgs}${more}</div>
-            </div>`;
+            equipmentHtml = `<div class="ll-death-equipment-row" title="Equipment worn at death"><span class="ll-death-equipment-label">Worn at death:</span><div class="ll-death-items">${equipImgs}</div></div>`;
         }
-        return `<div class="ll-death-card ${sideClass}${filterActive && _llDeathFilterVictim === d.victim ? ' active-filter' : ''}">
-            <div class="ll-death-top">
-                <div class="ll-death-title">
-                    <span class="ll-death-icon">${sideIcon}</span>
-                    <span class="ll-death-victim">${safeVictim}</span>
-                    <span class="ll-death-sep">died to</span>
-                    <span class="ll-death-killer">${esc(d.killer) || 'unknown'}</span>
-                    <span class="ll-death-time">at ${esc(when)}</span>
-                    <span class="ll-death-badge">${sideLabel}</span>
-                </div>
-                <div class="ll-death-value ${d.wasFriendly ? 'loss' : 'gain'}">${d.estimatedValue > 0 ? formatSilver(d.estimatedValue) : '—'}</div>
-            </div>
-            ${equipmentHtml}
-            <div class="ll-death-middle">
-                <div class="ll-death-items">${previewHtml || '<span style="color:var(--text-muted); font-size:0.75rem; font-style:italic;">No items recovered off corpse</span>'}</div>
+        const looters = d.lootedBy.map(l =>
+            `<span class="ll-looter-chip">${esc(l.name)} <span style="color:var(--text-muted);">(${l.items}×${l.silver > 0 ? ', ' + formatSilver(l.silver) : ''})</span></span>`
+        ).join('');
+        const isActive = filterActive && _llDeathFilterVictim === d.victim;
+        return `<details class="ll-death-row ${sideClass}${isActive ? ' active-filter' : ''}"${isActive ? ' open' : ''}>
+            <summary class="ll-death-row-summary">
+                <span class="ll-death-row-icon">${sideIcon}</span>
+                <span class="ll-death-row-time">${esc(when)}</span>
+                <span class="ll-death-row-victim">${safeVictim}</span>
+                <span class="ll-death-row-sep">→</span>
+                <span class="ll-death-row-killer">${esc(d.killer) || 'unknown'}</span>
+                <span class="ll-death-row-value">${value}</span>
+                <span class="ll-death-badge">${sideLabel}</span>
+            </summary>
+            <div class="ll-death-row-body">
+                ${equipmentHtml}
+                <div class="ll-death-section-label">Recovered items</div>
+                <div class="ll-death-items">${itemsHtml}</div>
+                ${looters ? `<div class="ll-death-section-label">Recovered by</div><div class="ll-death-looters-row">${looters}</div>` : ''}
                 <div class="ll-death-actions">
-                    <button class="btn-small" onclick="filterByDeath('${safeVictim}')" title="Filter main view to this death's loot chain">Filter</button>
-                    <button class="btn-small" onclick="copyDeathReport('${safeVictim}', ${d.timestamp})" title="Copy death report for Discord">📋 Discord</button>
+                    <button class="btn-small" onclick="event.preventDefault();filterByDeath('${safeVictim}')" title="Filter main view to this death's loot chain">Filter main view</button>
+                    <button class="btn-small" onclick="event.preventDefault();copyDeathReport('${safeVictim}', ${d.timestamp})" title="Copy death report for Discord">📋 Discord</button>
                 </div>
             </div>
-            ${d.lootedBy.length > 0 ? `<div class="ll-death-looters"><span class="ll-death-looters-label">Recovered by:</span> ${looters}${extra}</div>` : ''}
-        </div>`;
+        </details>`;
     }).join('');
-    return `<div class="ll-deaths-section">${header}${cards}</div>`;
+    // Whole section wrapped in one <details> — click the summary to collapse the list entirely.
+    return `<details class="ll-deaths-section" open>
+        <summary class="ll-deaths-summary">
+            <span style="font-size:1.1rem;">☠</span>
+            <span class="ll-deaths-title-text">Deaths</span>
+            <span class="ll-deaths-count">${deaths.length}</span>
+            ${friendlyCount > 0 ? `<span class="ll-deaths-friendly-count">🛡️ ${friendlyCount}</span>` : ''}
+            ${enemyCount > 0 ? `<span class="ll-deaths-enemy-count">💀 ${enemyCount}</span>` : ''}
+            ${filterActive ? `<button class="btn-small" style="margin-left:auto;" onclick="event.preventDefault();clearDeathFilter()">&times; Clear filter (${esc(_llDeathFilterVictim)})</button>` : ''}
+        </summary>
+        <div class="ll-deaths-list">${rows}</div>
+    </details>`;
 }
 
 function filterByDeath(victim) {
@@ -10099,25 +10226,35 @@ function _llRenderFiltered() {
         const guildBorder = data.guild && guildColorMap[data.guild]
             ? `border-left: 3px solid ${guildColorMap[data.guild]};` : '';
 
-        // Item icon preview strip (all unique items, capped at 10 with "+N more")
-        const seenIds = new Set();
-        const previewIcons = [];
+        // Item icon preview strip — all unique items (no cap, per user request).
+        // Aggregates quantities per distinct itemId+quality for the tooltip and badge.
+        const itemAgg = new Map(); // key = itemId+_+quality, value = { itemId, quality, qty, totalValue }
         for (const ev of data.items) {
-            if (ev.item_id && !seenIds.has(ev.item_id)) {
-                seenIds.add(ev.item_id);
-                previewIcons.push(ev.item_id);
+            if (!ev.item_id) continue;
+            const q = ev.quality || 1;
+            const key = ev.item_id + '_' + q;
+            const existing = itemAgg.get(key);
+            const qty = ev.quantity || 1;
+            const priceEntry = priceMap[ev.item_id];
+            const valEach = priceEntry && priceEntry.price > 0 ? priceEntry.price : 0;
+            if (existing) {
+                existing.qty += qty;
+                existing.totalValue += valEach * qty;
+            } else {
+                itemAgg.set(key, { itemId: ev.item_id, quality: q, qty, totalValue: valEach * qty });
             }
         }
-        const PREVIEW_CAP = 10;
-        const visiblePreview = previewIcons.slice(0, PREVIEW_CAP);
-        const overflowCount = Math.max(0, previewIcons.length - PREVIEW_CAP);
-        const iconStripHtml = visiblePreview.map(id => {
-            const priceEntry = priceMap[id];
-            const valAttr = priceEntry && priceEntry.price > 0 ? ` data-tip-value="${Math.floor(priceEntry.price)}"` : '';
-            return `<img src="https://render.albiononline.com/v1/item/${encodeURIComponent(id)}.png" class="ll-preview-icon" data-tip-item="${esc(id)}" data-tip-source="loot"${valAttr} loading="lazy" onerror="this.style.display='none'" alt="${esc(getFriendlyName(id) || id)}">`;
-        }).join('') + (overflowCount > 0
-            ? `<span class="ll-preview-overflow" data-tip="${overflowCount} more unique item${overflowCount > 1 ? 's' : ''}">+${overflowCount}</span>`
-            : '');
+        // Sort by total value desc (most valuable first) so the header stripe leads with the big hits.
+        const aggSorted = [...itemAgg.values()].sort((a, b) => b.totalValue - a.totalValue);
+        const iconStripHtml = aggSorted.map(agg => {
+            const valAttr = agg.totalValue > 0 ? ` data-tip-value="${Math.floor(agg.totalValue)}"` : '';
+            const qtyBadge = agg.qty > 1 ? `<span class="ll-preview-qty-badge">${agg.qty}</span>` : '';
+            const qLabel = agg.quality > 1 ? ` q${agg.quality}` : '';
+            return `<div class="ll-preview-slot" data-tip-item="${esc(agg.itemId)}" data-tip-source="loot" data-tip-qty="${agg.qty}"${valAttr}>
+                <img src="https://render.albiononline.com/v1/item/${encodeURIComponent(agg.itemId)}.png?quality=${agg.quality}" class="ll-preview-icon" loading="lazy" onerror="this.style.display='none'" alt="${esc(getFriendlyName(agg.itemId) || agg.itemId)}${qLabel} x${agg.qty}">
+                ${qtyBadge}
+            </div>`;
+        }).join('');
 
         // F2: Build a lookup of item IDs that have been sold recently (after this session's last event).
         // If a sale post-dates a pickup, the pickup LIKELY fed that sale (not guaranteed — could be
@@ -10452,6 +10589,53 @@ function valueMissingItemsInLootBuyer() {
 
 // Cross-link from Loot Logger session view -> Accountability tab with session pre-selected.
 // If the session dropdown hasn't been populated yet, populate it first.
+// Show accountability results in the same per-player event layout used by the normal session view,
+// but with a depositedMap overlaid so items get green/yellow/red dots per their deposit status.
+async function _accShowEventView(sessionId) {
+    const resultEl = document.getElementById('accountability-result');
+    if (!resultEl) return;
+    // Pull captures the user selected.
+    const captureSel = document.getElementById('acc-capture-select');
+    const selectedIdxs = Array.from(captureSel.selectedOptions).map(o => parseInt(o.value)).filter(v => !isNaN(v));
+    const captures = window._chestCaptures || [];
+    const deposited = {};
+    for (const idx of selectedIdxs) {
+        const cap = captures[idx];
+        if (!cap || !cap.items) continue;
+        for (const item of cap.items) deposited[item.itemId] = (deposited[item.itemId] || 0) + (item.quantity || 1);
+    }
+    // Fetch or use live events.
+    let events;
+    if (sessionId === '__live__') {
+        events = liveLootEvents.map(e => ({
+            looted_by_name: e.looted_by_name || e.lootedBy?.name || '',
+            looted_by_guild: e.looted_by_guild || e.lootedBy?.guild || '',
+            looted_by_alliance: e.looted_by_alliance || e.lootedBy?.alliance || '',
+            looted_from_name: e.looted_from_name || e.lootedFrom?.name || '',
+            item_id: e.item_id || e.itemId || '',
+            quantity: e.quantity || 1,
+            timestamp: e.timestamp,
+            weight: e.weight || 0
+        }));
+    } else {
+        try {
+            const res = await fetch(`${VPS_BASE}/api/loot-session/${encodeURIComponent(sessionId)}`, { headers: authHeaders() });
+            const data = await res.json();
+            events = data.events || [];
+        } catch {
+            showToast('Failed to reload session for event view', 'error');
+            return;
+        }
+    }
+    // Swap the accountability result view into an event-style layout.
+    // Prepend a "Back to accountability table" button so users can return.
+    resultEl.innerHTML = `<button class="btn-small" style="margin-bottom:0.5rem;" onclick="runAccountabilityCheck()">← Back to accountability table</button>
+        <div id="acc-event-view"></div>`;
+    const target = document.getElementById('acc-event-view');
+    await renderLootSessionEvents(events, target, deposited);
+    target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
 async function runAccountabilityForSession(sessionId) {
     showLootLoggerMode('accountability');
     // Ensure dropdown has the session as an option, then select it
@@ -10675,8 +10859,18 @@ async function runAccountabilityCheck() {
         <div class="loot-tracked-stat"><span class="loot-tracked-stat-label">Players</span><span class="loot-tracked-stat-value">${playerResults.length}</span></div>
     </div>`;
 
-    // Action buttons: Expand/Collapse All, Copy to Discord (template dropdown), Export CSV
+    // Color legend — explains the item-state dots.
+    html += `<div class="ll-accountability-legend">
+        <span><span class="ll-item-status-dot ll-dot-deposited"></span> Deposited</span>
+        <span><span class="ll-item-status-dot ll-dot-partial"></span> Partial</span>
+        <span><span class="ll-item-status-dot ll-dot-missing"></span> Missing</span>
+        <span><span class="ll-item-status-dot ll-dot-died"></span> Lost on death</span>
+        <span style="color:var(--text-muted);font-style:italic;">Enemy loot shown without status</span>
+    </div>`;
+
+    // Action buttons: view switcher + Expand/Collapse + Discord + Export
     html += `<div style="display:flex; gap:0.4rem; margin-bottom:0.5rem; flex-wrap:wrap;">
+        <button class="btn-small btn-small-accent" onclick="_accShowEventView('${esc(sessionId)}')" title="See the same per-player event layout as the session detail view, with deposit-status colors overlaid on each item">📋 Event View</button>
         <button class="btn-small" onclick="document.querySelectorAll('#accountability-result .ll-player-card').forEach(c=>c.classList.add('expanded'))">Expand All</button>
         <button class="btn-small" onclick="document.querySelectorAll('#accountability-result .ll-player-card').forEach(c=>c.classList.remove('expanded'))">Collapse All</button>
         <div class="ll-discord-dropdown">
@@ -13712,7 +13906,7 @@ function exportTransportCSV() {
 }
 
 function exportLiveFlipsCSV() {
-    const minProfit = parseInt(document.getElementById('flips-min-profit')?.value) || 50000;
+    const minProfit = parseInt(document.getElementById('flips-min-profit')?.value) || 10000;
     const minRoi = parseFloat(document.getElementById('flips-min-roi')?.value) || 3;
     const cityFilter = document.getElementById('flips-city-filter')?.value || 'all';
     const typeFilter = document.getElementById('flips-type-filter')?.value || 'all';
