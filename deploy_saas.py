@@ -1944,7 +1944,9 @@ app.get('/api/sale-notifications', requireAuth, (req, res) => {
 
 // List loot sessions for the current user (LEFT JOIN share tokens for G4 indicator)
 app.get('/api/loot-sessions', requireAuth, (req, res) => {
-  db.all(`SELECT e.session_id,
+  // readDb — read-only aggregation that doesn't need the write connection.
+  // Previously on db; when leaderboard or spread-stats blocked db, this timed out (8s frontend AbortSignal).
+  readDb.all(`SELECT e.session_id,
       MIN(e.timestamp) as started_at,
       MAX(e.timestamp) as ended_at,
       COUNT(*) as event_count,
@@ -2538,8 +2540,11 @@ app.get('/api/leaderboard', (req, res) => {
     return res.json(leaderboardCache);
   }
   const thirtyDaysAgo = now - 30 * 24 * 3600 * 1000;
-  // Join user_activity with user_stats to get username + avatar. Include legacy contributions as scan weight.
-  db.all(`
+  // Heavy LEFT JOIN + GROUP BY across user_stats × user_activity.
+  // MUST run on readDb — otherwise it queues behind the main db connection
+  // and blocks every other user-facing read (Loot Logger, Discord login, etc.).
+  // Pattern from the April 9 Discord-login hotfix.
+  readDb.all(`
     SELECT u.user_id, u.username, u.avatar,
            SUM(CASE WHEN a.activity_type IS NOT NULL THEN a.count * COALESCE(w.weight, 1) ELSE 0 END) AS score,
            MAX(COALESCE(u.scans_30d, 0)) AS scans_30d
@@ -2561,8 +2566,8 @@ app.get('/api/leaderboard', (req, res) => {
   `, [thirtyDaysAgo], (err, rows) => {
     if (err) {
       console.error('[Leaderboard] query failed:', err.message);
-      // Fallback: legacy scans-only ranking so the tab never shows empty.
-      db.all(`SELECT user_id, username, avatar, scans_30d, tier, 0 AS score FROM user_stats WHERE scans_30d > 0 ORDER BY scans_30d DESC LIMIT 20`, [], (err2, fallback) => {
+      // Fallback: legacy scans-only ranking so the tab never shows empty. readDb for the same reason.
+      readDb.all(`SELECT user_id, username, avatar, scans_30d, tier, 0 AS score FROM user_stats WHERE scans_30d > 0 ORDER BY scans_30d DESC LIMIT 20`, [], (err2, fallback) => {
         if (err2) return res.status(500).json({ error: err2.message });
         leaderboardCache = fallback || [];
         leaderboardCacheTime = now;
