@@ -6,7 +6,68 @@
 
 ---
 
-## 0. Latest Session — April 18, 2026 — Crafting & Refining Overhaul v2
+## 0. Latest Session — April 18, 2026 — Big Audit Remediation
+
+Three parallel audit agents (price accuracy, UX polish, feature flows) surfaced ~40 findings across CRITICAL → LOW severity. This session **fixed every CRITICAL + HIGH item** plus the top structural improvements from the MEDIUM tier. See `CHANGELOG.md` 2026-04-18 entry for full feature list.
+
+**Backend (deploy_saas.py) — requires VPS deploy:**
+- New helpers: `taxInstant(isPremium)` / `taxSellOrder(isPremium)`. TAX_RATE constant no longer stale 0.03 — defaults 0.04 premium.
+- `/api/loot-evaluate` accepts `isPremium` in body; uses correct tax-order for patient-sell (previously used instant-tax → inflated BUY verdicts).
+- `/api/transport-routes-live` accepts `premium=0|1` query param.
+- `/api/batch-prices` now accepts `items: [{itemId, quality}]` for per-quality queries. Legacy `itemIds[]` still works.
+- Flip detection got a low-side outlier guard (reject sell < 0.25× global avg — catches 1-silver junk listings).
+- VWAP 7d relabeled "scan-weighted avg" in code comments (was misleadingly named; sample_count is scan frequency not volume).
+
+**Frontend (app.js + db.js):**
+- `db.js mergeEntry` stamps `now` when NATS price wins a merge — fixes the "everything looks stale" complaint.
+- Hardcoded tax labels ("Tax (3%)", "Tax+Setup (5.5%)") now interpolate dynamic TAX_RATE across Market Flipper, BM Flipper, Transport, Crafting.
+- Top-N Ranker + Refining Lab filter `Black Market` out of the sell-city loop for recipes with `category === 'materials'`.
+- Market Browser treats `quality = all` as `quality = 1` for card-level spread math (avoids cross-quality fiction).
+- Item Power: new Quality dropdown; effective IP = base + quality bonus.
+- Portfolio: Quality dropdown on manual form; tracked-tab → portfolio sync splits purchase price per item.
+- VALID_TABS realigned with real data-tab values. `currentTab === 'farm'` fixed to `'farming'`.
+- Live Flips cards now clickable (open chart) + dismiss × button + localStorage filter persistence (`liveFlipsFilters_v1`).
+- Favorites hub: `toggleStarredItem()` + `renderFavStarButton()` — star button auto-appears on Market Browser cards; Favorites rows get action buttons (chart/browser/compare/craft/remove).
+- Loot Buyer tracked tabs get a "📊 Sell Strategy" accordion (`showSellStrategy(tabId)`) — rerun Phase 2 Sell Optimizer on remaining unsold items without restarting from capture.
+- Loot Logger gets a min-value filter (`ll-min-value` input, persisted to localStorage).
+
+**HTML (index.html):**
+- Market Browser pre-seeded empty state with 3 example deep-link queries.
+- "RRR Calculator" → "Return Rate Calculator" nav label.
+- "Station % (old)" and "Base PB 15/18" dev-only fields hidden as `<input type="hidden">` (preserves round-trip of saved setups).
+- "FIND ROUTES" → "Find Routes".
+- Alerts tab gained an inline "How to set this up" wizard: Invite Bot button, Channel ID instructions link, Discord embed preview.
+- Profile tab gained a 5-step "Set up Coldtouch Data Client" wizard with Download button → GitHub Releases.
+- `aria-describedby` / `aria-label` added to key icon-only controls and the Channel ID input.
+- Item Power got a Quality select; Portfolio manual form got a Quality select.
+
+**CSS (style.css):**
+- New sections for `.flip-dismiss-btn`, `.item-fav-btn`, `.fav-row-actions`, `.alerts-wizard`, `.profile-wizard`, `.tracked-tab-accordion`, `.ll-viewer-toolbar`, `.ll-player-table`. Mobile-responsive.
+
+**Go client CI (`D:/Coding/albiondata-client-custom/.github/workflows/`):**
+- **NEW `ci.yml`** — matrix (Ubuntu/Windows/macOS) on every push/PR: `go mod tidy` verify + `go vet` + `go build` + `go test -short`.
+- **NEW `tag-release.yml`** — pushing `v*.*.*` tag auto-creates a GitHub Release with notes; existing `release.yml` then uploads binaries.
+
+**Cache bumped:** `sw.js` v26 → v27.
+
+### What ships as "done" from the audit, ranked:
+- ✅ Backend TAX_RATE + Loot Buyer patient-sell + outlier guard + batch-prices quality + VWAP doc
+- ✅ Frontend: NATS freshness, tax labels, BM exclusion, Q=all default, VALID_TABS, farm tab fire, Item Power quality, Portfolio quality + per-item, Live Flips click + persistence, Favorites hub, Alerts wizard, Profile wizard, Loot Buyer tab-level Sell Strategy, Loot Logger min-value
+- ✅ Go client CI + tag-release workflows
+
+### Audit items intentionally deferred (low-value or bigger-scope):
+- VWAP "real" volume (needs Charts API integration, not just rename)
+- EMA 7d half-life concern (α=0.25 hourly ≈ 2.4h half-life; works for trend indicator, documented)
+- Farm & Breed dual premium checkboxes (niche; user rarely toggles both)
+- Portfolio premium-at-time-of-trade (historic data wasn't captured)
+- Station fee legacy % input (now hidden, legacy fallback kept for backward compat)
+- Emoji nav consistency (commit or drop decision — kept current mix)
+- Four-name Go client consolidation ("Coldtouch Data Client" is canonical; changelog mentions will update naturally)
+- aria-labels across entire 3,500-line HTML (added to highest-impact icon-only controls; full sweep is a separate pass)
+
+---
+
+## 0.1 Previous Session — April 18, 2026 — Crafting & Refining Overhaul v2
 
 Full implementation of `CRAFTING_PLAN.md` (all 8 signed-off decisions, Phases 1-5 + bonus). The crafting area is now best-in-class per Part I of the plan; Phase 6 (Live RRR via Go client packet capture) and Phase 8 (Daily-bonus calendar) remain deferred per DECISION-D9 and DECISION-C8 respectively.
 
@@ -76,7 +137,7 @@ Full implementation of `CRAFTING_PLAN.md` (all 8 signed-off decisions, Phases 1-
 
 ---
 
-## 0.1 Previous Session — April 17, 2026
+## 0.2 Earlier Session — April 17, 2026
 
 ### What Was Done
 

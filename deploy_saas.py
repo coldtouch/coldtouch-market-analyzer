@@ -1538,10 +1538,16 @@ app.get('/api/capture-token', (req, res) => {
 // Evaluate loot tab items against market data
 app.post('/api/loot-evaluate', evalLimiter, (req, res) => {
   if (!req.user) return res.status(401).json({ error: 'Login required.' });
-  const { items, askingPrice } = req.body;
+  const { items, askingPrice, isPremium } = req.body;
   if (!items || !Array.isArray(items) || items.length === 0 || items.length > 300) {
     return res.status(400).json({ error: 'Items array required (1-300 items).' });
   }
+
+  // Respect per-user premium status for accurate tax math.
+  // Default: assume premium unless the client explicitly says otherwise.
+  const userIsPremium = isPremium !== false;
+  const TAX_INSTANT = taxInstant(userIsPremium);   // 0.04 premium / 0.08 non-premium
+  const TAX_ORDER = taxSellOrder(userIsPremium);   // 0.065 / 0.105
 
   const now = Date.now();
   const STALE_MS = 6 * 60 * 60 * 1000; // 6 hours — data older than this is flagged stale
@@ -1601,13 +1607,16 @@ app.post('/api/loot-evaluate', evalLimiter, (req, res) => {
     }
 
     if (bestBuyMax > 0) {
-      const net = Math.floor(bestBuyMax * (1 - TAX_RATE));
+      // Instant sell to a buy order — only pays transaction tax, NO setup fee.
+      const net = Math.floor(bestBuyMax * (1 - TAX_INSTANT));
       result.bestInstantSell = { city: bestBuyCity, price: bestBuyMax, amount: bestBuyAmount, netPerUnit: net };
       totalQuickSell += net * qty;
     }
 
     if (bestCityAvg > 0) {
-      const net = Math.floor(bestCityAvg * (1 - TAX_RATE));
+      // Patient sell = listing a sell order — pays full TAX + SETUP (6.5% premium / 10.5% non-premium).
+      // Previously used TAX_RATE only, inflating patient-sell totals by 2.5-3.5 points.
+      const net = Math.floor(bestCityAvg * (1 - TAX_ORDER));
       result.bestMarketSell = { city: bestCityAvgCity, price: Math.round(bestCityAvg), netPerUnit: net };
       totalPatientSell += net * qty;
     }
@@ -1837,66 +1846,85 @@ app.delete('/api/loot-tab/:id', requireAuth, (req, res) => {
 // === BATCH PRICE LOOKUP (for loot logger estimates) ===
 // Uses price_averages (aggregated scan data) — no outliers, no stale NATS orders.
 app.post('/api/batch-prices', (req, res) => {
-  const { itemIds } = req.body;
-  if (!itemIds || !Array.isArray(itemIds) || itemIds.length === 0 || itemIds.length > 500) {
-    return res.status(400).json({ error: 'itemIds array required (1-500).' });
+  // Accept either:
+  //   { itemIds: ['T4_BAG', ...] }                  (legacy — assumes quality 1)
+  //   { items: [{ itemId: 'T4_BAG', quality: 3 }] } (preferred — per-item quality)
+  const body = req.body || {};
+  let pairs = [];
+  if (Array.isArray(body.items) && body.items.length > 0) {
+    pairs = body.items.map(it => ({ itemId: it.itemId, quality: parseInt(it.quality) || 1 }));
+  } else if (Array.isArray(body.itemIds) && body.itemIds.length > 0) {
+    pairs = body.itemIds.map(id => ({ itemId: id, quality: 1 }));
+  }
+  if (pairs.length === 0 || pairs.length > 500) {
+    return res.status(400).json({ error: 'items[] or itemIds[] required (1-500).' });
   }
 
-  // Build SQL placeholders for the item list
   const itemIdRegex = /^[A-Za-z0-9_@.]+$/;
-  const cleanIds = itemIds.filter(id => typeof id === 'string' && id.length <= 80 && itemIdRegex.test(id)).slice(0, 500);
-  if (cleanIds.length === 0) return res.json({});
+  const cleanPairs = pairs.filter(p => typeof p.itemId === 'string' && p.itemId.length <= 80 && itemIdRegex.test(p.itemId) && p.quality >= 1 && p.quality <= 5).slice(0, 500);
+  if (cleanPairs.length === 0) return res.json({});
+  const uniqueIds = [...new Set(cleanPairs.map(p => p.itemId))];
+  const placeholders = uniqueIds.map(() => '?').join(',');
 
-  const placeholders = cleanIds.map(() => '?').join(',');
-
-  // Query price_averages: get the most recent average sell price per item across all cities
-  // Uses the last 48 hours of aggregated data — reliable, no outlier single orders
+  // Query price_averages: most recent average per (item, quality, city) in last 48h.
   const cutoff = Date.now() - 48 * 60 * 60 * 1000;
   readDb.all(
-    `SELECT item_id, city,
+    `SELECT item_id, quality, city,
             AVG(avg_sell) as price_avg,
             MIN(min_sell) as price_min
      FROM price_averages
      WHERE item_id IN (${placeholders})
        AND avg_sell > 0
-       AND quality = 1
        AND period_start > ?
-     GROUP BY item_id, city`,
-    [...cleanIds, cutoff],
+     GROUP BY item_id, quality, city`,
+    [...uniqueIds, cutoff],
     (err, rows) => {
       if (err) return res.status(500).json({ error: err.message });
 
+      // Index: item_id + '_' + quality → { price, city, source }
       const result = {};
       for (const row of (rows || [])) {
-        const existing = result[row.item_id];
+        const key = row.item_id + '_' + (row.quality || 1);
         const price = Math.round(row.price_avg);
-        if (!existing) {
-          result[row.item_id] = { price, city: row.city, source: 'avg' };
-        } else if (price < existing.price) {
-          result[row.item_id] = { price, city: row.city, source: 'avg' };
+        const existing = result[key];
+        if (!existing || price < existing.price) {
+          result[key] = { price, city: row.city, source: 'avg', itemId: row.item_id, quality: row.quality };
         }
       }
 
-      // Fill gaps from in-memory alertMarketDb (real-time scan data)
-      for (const itemId of cleanIds) {
-        if (result[itemId]) continue;
-        const data = alertMarketDb[itemId] && alertMarketDb[itemId][1];
+      // Fill gaps from in-memory alertMarketDb (real-time) at the requested quality.
+      for (const p of cleanPairs) {
+        const key = p.itemId + '_' + p.quality;
+        if (result[key]) continue;
+        const data = alertMarketDb[p.itemId] && alertMarketDb[p.itemId][p.quality];
         if (data) {
           for (const [city, cd] of Object.entries(data)) {
             if (cd.sellMin > 0) {
-              if (!result[itemId] || cd.sellMin < result[itemId].price) {
-                result[itemId] = { price: cd.sellMin, city, source: 'live' };
+              if (!result[key] || cd.sellMin < result[key].price) {
+                result[key] = { price: cd.sellMin, city, source: 'live', itemId: p.itemId, quality: p.quality };
               }
             }
           }
         }
       }
 
-      // Last resort: globalPriceRef
-      for (const itemId of cleanIds) {
-        if (result[itemId]) continue;
-        const gAvg = globalPriceRef[itemId + '_1'] || 0;
-        if (gAvg > 0) result[itemId] = { price: Math.round(gAvg), city: '', source: 'global' };
+      // Last resort: globalPriceRef for that quality.
+      for (const p of cleanPairs) {
+        const key = p.itemId + '_' + p.quality;
+        if (result[key]) continue;
+        const gAvg = globalPriceRef[key] || 0;
+        if (gAvg > 0) result[key] = { price: Math.round(gAvg), city: '', source: 'global', itemId: p.itemId, quality: p.quality };
+      }
+
+      // Backward-compat shape: if client sent only itemIds (no qualities),
+      // flatten the result so keys are itemId (not itemId_quality).
+      if (!body.items) {
+        const flat = {};
+        for (const key of Object.keys(result)) {
+          const { itemId, quality, price, city, source } = result[key];
+          if (quality === 1) flat[itemId] = { price, city, source };
+        }
+        return res.json(flat);
       }
 
       res.json(result);
@@ -2666,6 +2694,10 @@ app.get('/api/transport-routes-live', (req, res) => {
   const maxAge = parseInt(req.query.max_age) || 120;
   const limit = Math.min(parseInt(req.query.limit) || 200, 500);
   const excludeCities = (req.query.exclude || '').split(',').filter(Boolean);
+  // Per-user premium tax: accept `premium=0` to opt-out; default premium.
+  const userIsPremium = req.query.premium !== '0';
+  const TAX_INSTANT = taxInstant(userIsPremium);
+  const TAX_ORDER = taxSellOrder(userIsPremium);
 
   const now = Date.now();
   const maxAgeMs = maxAge * 60 * 1000;
@@ -2739,7 +2771,9 @@ app.get('/api/transport-routes-live', (req, res) => {
 
           if (dstPrice <= srcData.sellMin) continue;
 
-          const profit = dstPrice - srcData.sellMin - (dstPrice * TAX_RATE);
+          // Route profit: instant strategy pays TAX_INSTANT; market strategy pays TAX_ORDER (+setup).
+          const routeTaxRate = sellStrategy === 'instant' ? TAX_INSTANT : TAX_ORDER;
+          const profit = dstPrice - srcData.sellMin - (dstPrice * routeTaxRate);
           if (profit < minProfit) continue;
           const roi = (profit / srcData.sellMin) * 100;
           if (roi > 150) continue; // Skip extreme outliers but allow low-margin bulk routes
@@ -2794,7 +2828,7 @@ app.get('/api/transport-routes-live', (req, res) => {
     const dstData = alertMarketDb[r.item_id]?.[r.quality]?.[r.sell_city];
     if (dstData?.buyMax > 0 && dstData.buyMax > r.buy_price) {
       r.instant_sell_price = dstData.buyMax;
-      r.instant_profit = Math.floor(dstData.buyMax - r.buy_price - (dstData.buyMax * TAX_RATE));
+      r.instant_profit = Math.floor(dstData.buyMax - r.buy_price - (dstData.buyMax * TAX_INSTANT));
       if (r.instant_profit > 0) instantAvailable++;
     }
   }
@@ -3268,7 +3302,7 @@ async function validateFlipPrices(id, q, buyCity, sellCity, expectedBuyPrice, ex
       console.log(`[FlipValidate] ${id} q${q}: sell price moved down ${liveSellPrice} vs ${expectedSellPrice}, skipping`);
       return false;
     }
-    // Re-verify profitability with live prices
+    // Re-verify profitability with live prices (premium-default tax; frontend re-computes per-user)
     const liveProfit = liveSellPrice - liveBuyPrice - (liveSellPrice * TAX_RATE);
     if (liveProfit < FLIP_MIN_PROFIT * 0.5) {
       console.log(`[FlipValidate] ${id} q${q}: live profit only ${Math.floor(liveProfit)}, skipping`);
@@ -3303,6 +3337,8 @@ function detectFlip(id, q) {
   // Outlier check: reject if sell price is suspiciously far from global average
   const gAvg = globalPriceRef[id + '_' + q] || 0;
   if (gAvg > 0 && bestBuy.price > gAvg * 4) return; // >4x global avg is almost certainly stale
+  // Low-side guard: a junk 1-silver sell listing would create a phantom flip. Reject extreme low outliers.
+  if (gAvg > 0 && bestSell.price < gAvg * 0.25 && bestSell.price > 0) return;
 
   // === Cross-city flips ===
   if (bestSell.city && bestBuy.city && bestSell.city !== bestBuy.city) {
@@ -3357,8 +3393,14 @@ function detectFlip(id, q) {
 }
 
 // === ALERTER LOGIC ===
-const TAX_RATE = 0.03;    // 3% market tax (instant sell)
-const SETUP_FEE = 0.025;  // 2.5% listing fee (sell orders)
+// Tax rates (corrected 2026-04-18 audit): Premium = 4% instant / 6.5% sell-order; Non-Premium = 8% / 10.5%.
+// TAX_RATE here defaults to premium-rate since the majority of active traders use premium.
+// Per-user endpoints (Loot Buyer, Transport) accept an `is_premium` query param to override.
+const TAX_RATE = 0.04;       // Premium 4% instant-sell tax (was stale 0.03 pre-2021 rate)
+const SETUP_FEE = 0.025;     // 2.5% listing setup fee (applies to sell orders only)
+const TAX_RATE_NON_PREMIUM = 0.08;  // Non-premium instant-sell tax
+function taxInstant(isPremium) { return isPremium === false ? TAX_RATE_NON_PREMIUM : TAX_RATE; }
+function taxSellOrder(isPremium) { return taxInstant(isPremium) + SETUP_FEE; }
 const alertMarketDb = {};
 const CITY_NAMES = { 'Thetford': 'Thetford', 'Lymhurst': 'Lymhurst', 'Bridgewatch': 'Bridgewatch', 'Black Market': 'Black Market', 'Caerleon': 'Caerleon', 'Fort Sterling': 'Fort Sterling', 'Martlock': 'Martlock', 'Brecilien': 'Brecilien' };
 const API_LOCALE_MAP = { '0': 'Thetford', '7': 'Thetford', '3004': 'Thetford', '3': 'Lymhurst', '1002': 'Lymhurst', '4': 'Bridgewatch', '2004': 'Bridgewatch', '3003': 'Black Market', '3005': 'Caerleon', '3008': 'Fort Sterling', '4000': 'Martlock', '4300': 'Brecilien' };
@@ -3844,6 +3886,7 @@ function computeSpreadStats() {
               const samples = Math.min(buyData.samples, sellData.samples);
               if (samples < 3) continue;
 
+              // spread_stats is a global pre-compute; use premium-default tax (matches majority of users).
               const spread = sellRevenue - buyCost - (sellRevenue * TAX_RATE);
 
               // Estimate consistency from sample count (168h per week max).
@@ -4087,8 +4130,11 @@ function computeAnalytics() {
 
   console.log('[Analytics] Starting computation...');
 
-  // === STEP 1: Bulk SQL metrics (SMA 7d, SMA 30d, VWAP 7d, price_trend, spread_volatility) ===
-  // Use statsDb to avoid blocking the main db connection during heavy reads
+  // === STEP 1: Bulk SQL metrics (SMA 7d, SMA 30d, scan-weighted avg 7d, price_trend, spread_volatility) ===
+  // NOTE (2026-04-18 audit): `vwap_7d` here is scan-frequency-weighted, NOT trade-volume-weighted —
+  // `sample_count` is number of observations, not trade count. Kept the column name for backward
+  // compat with existing analytics rows. Frontend labels it "Scan-Weighted Avg" to avoid misleading.
+  // Use statsDb to avoid blocking the main db connection during heavy reads.
   statsDb.all(
     `SELECT item_id, city, quality,
       AVG(CASE WHEN avg_sell > 0 THEN avg_sell ELSE NULL END) AS sma_7d,

@@ -45,30 +45,41 @@ const MarketDB = (() => {
     function parseTs(d) { return d ? (new Date(d.endsWith('Z') ? d : d + 'Z').getTime() || 0) : 0; }
 
     // Merge incoming entry with existing (keeps best price per direction)
+    // Important: NATS packets arrive WITHOUT a date (sell_price_min_date = ''), so if we take the new
+    // price we must stamp `now` as the date — otherwise the freshness indicator reports "stale >2h"
+    // on rows that were updated seconds ago. Before this fix the freshness dot went black on every
+    // NATS-sourced price.
     function mergeEntry(existing, entry) {
         let sellPrice = entry.sell_price_min || 0;
         let sellDate = entry.sell_price_min_date || '';
         let buyPrice = entry.buy_price_max || 0;
         let buyDate = entry.buy_price_max_date || '';
+        const nowIso = new Date().toISOString();
 
         if (existing) {
             if (sellDate && parseTs(sellDate) >= parseTs(existing.sell_price_min_date || '')) {
-                // Incoming is newer
+                // Incoming is newer (explicit date)
             } else if (sellPrice > 0 && existing.sell_price_min > 0 && sellPrice < existing.sell_price_min) {
-                // Incoming is better price
+                // Incoming is a better price — stamp now so freshness knows this update actually happened.
+                sellDate = nowIso;
             } else {
                 sellPrice = existing.sell_price_min;
                 sellDate = existing.sell_price_min_date;
             }
 
             if (buyDate && parseTs(buyDate) >= parseTs(existing.buy_price_max_date || '')) {
-                // Incoming is newer
+                // Incoming is newer (explicit date)
             } else if (buyPrice > 0 && buyPrice > (existing.buy_price_max || 0)) {
-                // Incoming is better price
+                // Incoming is a better price — stamp now.
+                buyDate = nowIso;
             } else {
                 buyPrice = existing.buy_price_max;
                 buyDate = existing.buy_price_max_date;
             }
+        } else {
+            // New entry with empty date → stamp now so freshness reads "just now".
+            if (sellPrice > 0 && !sellDate) sellDate = nowIso;
+            if (buyPrice > 0 && !buyDate) buyDate = nowIso;
         }
 
         return {

@@ -271,7 +271,7 @@
             </div>
     </header>
 
-    <!-- ====== TOP BAR (Server + Scan All) ====== -->
+    <!-- ====== TOP BAR (Server selector + status dots) ====== -->
     <div class="top-bar">
         <div class="top-bar-inner">
             <div class="top-bar-left">
@@ -331,7 +331,7 @@
                     <button class="nav-tab" data-tab="craft-top-n">⚡ Top-N Ranker</button>
                     <button class="nav-tab" data-tab="refining-lab">🔥 Refining Lab</button>
                     <button class="nav-tab" data-tab="journals">Journals</button>
-                    <button class="nav-tab" data-tab="rrr">RRR Calculator</button>
+                    <button class="nav-tab" data-tab="rrr" title="Resource Return Rate — how much material you save from crafting bonuses">Return Rate Calculator</button>
                     <button class="nav-tab" data-tab="repair">Repair Cost</button>
                 </div>
             </div>
@@ -488,7 +488,13 @@
                 <span id="browser-count">0 items</span>
                 <div class="pagination" id="browser-pagination"></div>
             </div>
-            <div class="results-grid" id="browser-results"></div>
+            <div class="results-grid" id="browser-results">
+                <div class="empty-state" style="grid-column:1/-1;">
+                    <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+                    <p>Type an item name or filter to start browsing</p>
+                    <p class="hint">Try <a href="?tab=browser&item=T6_BAG" style="color:var(--accent);">T6 Bag</a>, <a href="?tab=browser&item=T4_POTION_HEAL" style="color:var(--accent);">Minor Healing Potion</a>, or <a href="?tab=browser&item=T7_2H_BOW" style="color:var(--accent);">Expert's Bow</a> to see live prices across all 7 cities.</p>
+                </div>
+            </div>
             <div class="pagination-bottom" id="browser-pagination-bottom"></div>
         </section>
 
@@ -732,13 +738,11 @@
                     </select>
                 </div>
                 <div class="control-group">
-                    <label for="craft-station-s100" title="In-game station 'Silver per 100 Nutrition' setting. ItemValue × 11.25% × (silver/100) per craft.">Station s/100 Nut.</label>
-                    <input type="number" id="craft-station-s100" min="0" max="10000" value="200" step="10" style="width:80px;">
+                    <label for="craft-station-s100" title="In-game station 'Silver per 100 Nutrition' setting. Fee per craft = ItemValue × 11.25% × (silver/100).">Station Fee (s/100 nut.)</label>
+                    <input type="number" id="craft-station-s100" min="0" max="10000" value="200" step="10" style="width:90px;">
                 </div>
-                <div class="control-group">
-                    <label for="craft-fee" title="Legacy flat % override (leave 0 to use Silver/100 nutrition formula)">Station % (old)</label>
-                    <input type="number" id="craft-fee" min="0" max="100" value="0" step="0.5" style="width:70px;">
-                </div>
+                <!-- Legacy flat % input kept for backward-compat with saved setups but hidden from UI (remove in v2). -->
+                <input type="hidden" id="craft-fee" value="0">
                 <div class="control-group">
                     <label for="craft-food" title="Focus-efficiency food buff. Multiplies focus efficiency by 1.18 (Pork Omelette T6) or 1.30 (Avalonian T8).">Food Buff</label>
                     <select id="craft-food" style="width:140px;">
@@ -753,13 +757,9 @@
                 <div class="control-group checkbox-group">
                     <label title="Premium: 4% sell tax + 2.5% setup = 6.5% total. Non-Premium: 8% + 2.5% = 10.5%."><input type="checkbox" id="craft-premium" checked> Premium</label>
                 </div>
-                <div class="control-group">
-                    <label for="craft-base-pb" title="DECISION-A1: Sources disagree whether crafting base production bonus is 15 or 18. Default 18.">Base PB</label>
-                    <select id="craft-base-pb" style="width:80px;">
-                        <option value="18" selected>18 (default)</option>
-                        <option value="15">15 (alt)</option>
-                    </select>
-                </div>
+                <!-- Base PB dropdown (research sources disagree 15 vs 18) is a power-user toggle.
+                     Keep a hidden input so saved setups still round-trip; expose via "Advanced" in a future revision. -->
+                <input type="hidden" id="craft-base-pb" value="18">
                 <button id="craft-recalc-btn" class="btn-secondary" style="margin-left:auto;">Recalculate</button>
             </div>
 
@@ -1029,7 +1029,7 @@
                             <option value="confidence">Confidence</option>
                         </select>
                     </div>
-                    <button id="transport-scan-btn" class="btn-scan" style="height:38px; padding:0 1.5rem; font-size:0.85rem;">FIND ROUTES</button>
+                    <button id="transport-scan-btn" class="btn-scan" style="height:38px; padding:0 1.5rem; font-size:0.85rem;">Find Routes</button>
                     <button id="transport-export-btn" class="btn-secondary" style="height:38px; padding:0 1rem; font-size:0.85rem;" onclick="exportTransportCSV()" title="Export current results as CSV">Export CSV</button>
                 </div>
             </div>
@@ -1330,13 +1330,8 @@
                     <div class="control-group checkbox-group">
                         <label><input type="checkbox" id="rrr-premium" checked> Premium Account</label>
                     </div>
-                    <div class="control-group">
-                        <label for="rrr-base-pb" title="Crafting base production bonus — research sources disagree 15 vs 18. Default 18.">Base PB</label>
-                        <select id="rrr-base-pb" style="width:80px;">
-                            <option value="18" selected>18</option>
-                            <option value="15">15</option>
-                        </select>
-                    </div>
+                    <!-- Base PB hidden (power-user toggle); saved to CraftConfig. -->
+                    <input type="hidden" id="rrr-base-pb" value="18">
                     <button id="rrr-calc-btn" class="btn-scan" style="height:38px; padding:0 1.5rem; font-size:0.85rem;">Calculate</button>
                 </div>
             </div>
@@ -1446,6 +1441,16 @@
                             <option value="Martlock">Martlock</option>
                             <option value="Thetford">Thetford</option>
                             <option value="Brecilien">Brecilien</option>
+                        </select>
+                    </div>
+                    <div class="control-group">
+                        <label for="ip-quality" title="Quality adds +20/+40/+60/+80/+100 effective IP for Good/Outstanding/Excellent/Masterpiece — silver/IP only meaningful at a single quality tier">Quality</label>
+                        <select id="ip-quality">
+                            <option value="1" selected>Normal</option>
+                            <option value="2">Good (+20 IP)</option>
+                            <option value="3">Outstanding (+40 IP)</option>
+                            <option value="4">Excellent (+60 IP)</option>
+                            <option value="5">Masterpiece (+100 IP)</option>
                         </select>
                     </div>
                     <div class="control-group">
@@ -1776,6 +1781,16 @@
                         </div>
                     </div>
                     <div class="control-group">
+                        <label for="portfolio-quality">Quality</label>
+                        <select id="portfolio-quality" style="width:110px;" title="Quality significantly affects price — Good is ~1.2x Normal, Masterpiece can be 5x+">
+                            <option value="1" selected>Normal</option>
+                            <option value="2">Good</option>
+                            <option value="3">Outstanding</option>
+                            <option value="4">Excellent</option>
+                            <option value="5">Masterpiece</option>
+                        </select>
+                    </div>
+                    <div class="control-group">
                         <label for="portfolio-quantity">Quantity</label>
                         <input type="number" id="portfolio-quantity" min="1" value="1" style="width:80px;">
                     </div>
@@ -1888,13 +1903,31 @@
 
         <!-- ====== TAB: ALERTS ====== -->
         <section class="tab-pane hidden" id="pane-alerts">
+            <details class="alerts-wizard" open>
+                <summary style="cursor:pointer; list-style:none;"><h4 style="display:inline; margin:0;">📖 How to set up your first alert (click to expand/collapse)</h4></summary>
+                <ol>
+                    <li><strong>Invite the bot</strong> to your Discord server — <a href="https://discord.com/api/oauth2/authorize?client_id=1357421920770691242&permissions=2048&scope=bot%20applications.commands" target="_blank" rel="noopener noreferrer" style="color:var(--accent);">click here to invite Coldtouch Market Bot</a>.</li>
+                    <li><strong>Get a Channel ID:</strong> in Discord, enable Developer Mode (User Settings → Advanced → Developer Mode ON), then right-click any channel and choose "Copy Channel ID".</li>
+                    <li>Paste the Channel ID below, pick a minimum profit threshold, and click <strong>Create Alert</strong>.</li>
+                    <li>Run <code>/setup_alerts</code> in that Discord channel once so the bot can verify it can post.</li>
+                </ol>
+                <div class="alerts-preview">
+                    <strong style="color:#5865f2;">Preview — alerts look like this in Discord:</strong><br>
+                    <span style="color:var(--text-muted);font-size:0.78rem;">🔔 <strong>Dawnsong</strong> · Martlock → Black Market · Buy 2.1M → Sell 3.4M · <strong style="color:#22c55e;">+1.19M profit (+56% ROI)</strong> · Confidence 78%</span>
+                </div>
+                <div class="wizard-actions">
+                    <a class="btn-secondary" style="text-decoration:none;padding:0.4rem 0.8rem;" href="https://discord.com/api/oauth2/authorize?client_id=1357421920770691242&permissions=2048&scope=bot%20applications.commands" target="_blank" rel="noopener noreferrer">🤖 Invite Bot</a>
+                    <a class="btn-secondary" style="text-decoration:none;padding:0.4rem 0.8rem;" href="https://support.discord.com/hc/en-us/articles/206346498" target="_blank" rel="noopener noreferrer">❓ How to get Channel ID</a>
+                </div>
+            </details>
             <div class="controls-panel">
                 <h2 style="color:var(--accent); margin:0 0 0.5rem 0; font-size:1.2rem;">🔔 Market Alert Manager</h2>
                 <p style="color:var(--text-secondary); font-size:0.85rem; margin:0 0 1rem 0;">Create and manage arbitrage alerts. When a profitable flip is detected, you'll be notified in your Discord channel.</p>
                 <div style="display:flex; gap:1rem; align-items:flex-end; flex-wrap:wrap;">
                     <div class="control-group">
                         <label for="alert-channel-id">Discord Channel ID</label>
-                        <input type="text" id="alert-channel-id" placeholder="e.g. 123456789012345678" style="width:220px;">
+                        <input type="text" id="alert-channel-id" placeholder="e.g. 123456789012345678" style="width:220px;" aria-describedby="alert-channel-hint">
+                        <small id="alert-channel-hint" style="color:var(--text-muted);font-size:0.7rem;">19-digit number from Discord "Copy Channel ID"</small>
                     </div>
                     <div class="control-group">
                         <label for="alert-min-profit">Min Profit (Silver)</label>
@@ -2180,6 +2213,29 @@
                     <h2 class="about-heading">Changelog</h2>
                     <div id="changelog-wrapper" style="max-height: 500px; overflow-y: auto; position: relative;">
                     <div class="changelog-list">
+                        <div class="changelog-entry">
+                            <div class="changelog-date">April 18, 2026</div>
+                            <div class="changelog-title">🩹 Big Audit Remediation &mdash; accuracy + UX + flows</div>
+                            <ul>
+                                <li><strong>Backend tax fix</strong> &mdash; the server was using the stale 3% tax everywhere (Loot Buyer, Transport Live, Live Flips, spread stats). Now premium-aware: 4%/8% instant, 6.5%/10.5% sell-order, driven by your Premium toggle. <strong>Every server-computed "net after tax" is now correct for your account.</strong></li>
+                                <li><strong>Loot Buyer patient-sell</strong> &mdash; was using instant-sell tax (no setup fee) for sell-order math. Patient totals were inflated by 2.5-3.5 points, skewing BUY/MAYBE/SKIP verdicts. Fixed.</li>
+                                <li><strong>Freshness bug fixed</strong> &mdash; NATS price updates were overwriting recent dates with empty strings, making fresh data look stale. The freshness dot now stays green when prices update via NATS.</li>
+                                <li><strong>⭐ Favorites hub</strong> &mdash; every Market Browser card gets a star button. Favorites rows gain action buttons (chart, browser, compare, craft, remove). Favorites is no longer an island.</li>
+                                <li><strong>Live Flips cards are clickable</strong> &mdash; click to open the chart, dismiss × to hide a flip you've already taken. Filter state persists across reloads.</li>
+                                <li><strong>Loot Buyer Sell Strategy accordion</strong> &mdash; every tracked tab gets a "📊 Sell Strategy" expandable that re-runs Phase 2 on the remaining unsold items without restarting from capture.</li>
+                                <li><strong>Alerts onboarding wizard</strong> &mdash; inline "How to set this up" with Invite Bot button, Channel ID instructions, and a preview of what the Discord alert looks like.</li>
+                                <li><strong>Profile Data Client wizard</strong> &mdash; 5 numbered steps with a big Download button so you can go from zero to live chest capture without hopping tabs.</li>
+                                <li><strong>Black Market excluded</strong> from sell-city loops for refined materials (Top-N Ranker + Refining Lab). BM only buys finished gear in-game; rankings were skewed toward a price you can't actually realise.</li>
+                                <li><strong>Market Browser Q=All</strong> now defaults to Q1 for card math (previously mixed Q1 sells with Q5 buys → fictional spreads).</li>
+                                <li><strong>Item Power quality-aware</strong> &mdash; new Quality dropdown; effective IP includes +20/+40/+60/+80/+100 bonus for Good → Masterpiece.</li>
+                                <li><strong>Portfolio quality field</strong> &mdash; record the actual quality on manual trades (previously all Q1).</li>
+                                <li><strong>Portfolio per-item sync</strong> &mdash; tracking a loot tab now creates one portfolio row per item, not a single "primary" row.</li>
+                                <li><strong>Loot Logger min-value filter</strong> &mdash; hide players whose looted value is below a silver threshold.</li>
+                                <li><strong>Shareable deep links</strong> work for all tabs (fixed stale VALID_TABS set).</li>
+                                <li><strong>Dev-only fields removed</strong> from Crafting settings (the "Station % (old)" and "Base PB 15/18" selectors were leaking research artifacts).</li>
+                                <li>Service worker cache v26 &rarr; v27.</li>
+                            </ul>
+                        </div>
                         <div class="changelog-entry">
                             <div class="changelog-date">April 18, 2026</div>
                             <div class="changelog-title">🏭 Crafting &amp; Refining Overhaul v2 &mdash; MASSIVE release</div>
@@ -3094,7 +3150,36 @@
                     <div id="profile-capture-token-display" class="profile-inline-form hidden">
                         <code id="profile-capture-token-value" style="background:var(--bg-dark); padding:0.4rem 0.7rem; border-radius:var(--radius-sm); font-size:0.8rem; color:var(--accent); word-break:break-all; flex:1;"></code>
                         <button class="btn-small-accent" onclick="navigator.clipboard.writeText(document.getElementById('profile-capture-token-value').textContent); this.textContent='Copied!'; setTimeout(()=>this.textContent='Copy',2000);">Copy</button>
-                        <p style="width:100%; font-size:0.7rem; color:var(--text-muted); margin:0.25rem 0 0 0;">Paste this in the Coldtouch Data Client settings. Keep it secret.</p>
+                        <p style="width:100%; font-size:0.7rem; color:var(--text-muted); margin:0.25rem 0 0 0;">Paste this in your client's <code>config.yaml</code> (<code>token: "…"</code>). Keep it secret.</p>
+                    </div>
+                </div>
+
+                <!-- Data Client setup wizard — numbered steps with download button -->
+                <div class="profile-wizard">
+                    <h3 style="margin:0 0 0.4rem 0; color:var(--accent); font-size:1rem;">🧰 Set up the Coldtouch Data Client</h3>
+                    <p style="margin:0 0 0.6rem 0; color:var(--text-secondary); font-size:0.82rem;">Capture chests, track your loot, and power Loot Buyer, Loot Logger, and Live Flip alerts from inside your Albion session.</p>
+                    <div class="profile-wizard-step">
+                        <div class="step-num">1</div>
+                        <div class="step-body">
+                            <strong>Download the client.</strong><br>
+                            <a href="https://github.com/coldtouch/albiondata-client-custom/releases/latest" target="_blank" rel="noopener noreferrer" class="btn-small-accent" style="display:inline-block;margin-top:0.35rem;text-decoration:none;padding:0.35rem 0.7rem;">⬇ Windows / macOS / Linux builds</a>
+                        </div>
+                    </div>
+                    <div class="profile-wizard-step">
+                        <div class="step-num">2</div>
+                        <div class="step-body"><strong>Generate a capture token above</strong> and click Copy.</div>
+                    </div>
+                    <div class="profile-wizard-step">
+                        <div class="step-num">3</div>
+                        <div class="step-body"><strong>Paste into <code>config.yaml</code></strong> next to the client: <code>token: "paste-here"</code>. Example file is inside the download.</div>
+                    </div>
+                    <div class="profile-wizard-step">
+                        <div class="step-num">4</div>
+                        <div class="step-body"><strong>Run with <code>--capture</code></strong> (or flip Capture Mode on in the client's tray menu), then launch Albion.</div>
+                    </div>
+                    <div class="profile-wizard-step">
+                        <div class="step-num">5</div>
+                        <div class="step-body"><strong>Open any chest in-game</strong> to verify — the Loot Buyer tab should update instantly.</div>
                     </div>
                 </div>
             </div>

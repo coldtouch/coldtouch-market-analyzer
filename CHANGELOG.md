@@ -2,6 +2,65 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-04-18 — Big Audit Remediation (price accuracy + UX + flows)
+
+Follow-up to the Crafting Overhaul: comprehensive audit across price accuracy, UX polish, and user journeys surfaced ~40 findings. This release fixes all **CRITICAL** and **HIGH** severity items plus the top-ranked structural improvements.
+
+**Backend price accuracy (deploy_saas.py — the single biggest correctness release ever):**
+- **TAX_RATE premium-aware** — was hardcoded 0.03 (pre-2021 rate) site-wide. Now uses `taxInstant(isPremium)` / `taxSellOrder(isPremium)` helpers → 0.04/0.065 Premium, 0.08/0.105 Non-Premium. Fixes server-computed net-after-tax across Loot Buyer, Transport Live routes, Live Flip detection, spread_stats, and all broadcast flip profits.
+- **Loot Buyer patient-sell** (`deploy_saas.py:1610`) was using instant-sell tax (no setup fee) for sell-order math — inflated patient totals by 2.5-3.5 points and skewed BUY/MAYBE/SKIP verdicts toward BUY. Now uses `taxSellOrder()`.
+- **`/api/loot-evaluate`** accepts `isPremium` in body; **`/api/transport-routes-live`** accepts `?premium=0|1`. Frontend auto-sends from `CraftConfig.premium`.
+- **`/api/batch-prices`** now accepts `items: [{itemId, quality}]` for per-quality lookups (backward compatible with legacy `itemIds[]` which defaults to Q1). Loot Logger value estimates no longer treat T8 Masterpiece drops as T8 Normal.
+- **1-silver sell outlier guard** added to flip detection — rejects flips whose sell price is below 25% of the global average (catches junk listings that would create phantom flips).
+- **VWAP 7d** documented honestly in code as "scan-weighted avg" (it's weighted by `sample_count` scan frequency, not trade volume).
+
+**Frontend price accuracy (app.js, db.js):**
+- **NATS freshness bug** — NATS packets arrive with empty `sell_price_min_date`. Previously `mergeEntry` could overwrite a recent AODP date with that empty string → freshness dot went black on every NATS-updated row. Now stamps `now` when NATS wins the merge, or when a new entry has no date.
+- **Hardcoded "Tax (3%)" / "Tax+Setup (5.5%)" labels** across Transport, Market Flipper, Crafting detail, BM Flipper — now interpolate live TAX_RATE so the label always matches the math.
+- **Black Market excluded from sell-city loops for refined materials** (Top-N Ranker + Refining Lab). BM only buys finished equipment in-game; including it skewed rankings toward prices the user cannot realise.
+- **Market Browser Q=All → Q1 default** for card math. Previously mixed Q1 sells with Q5 buys, producing fictional cross-quality spreads.
+- **Item Power now quality-aware** — new Quality dropdown on the tab; effective IP = base + quality bonus (+20/+40/+60/+80/+100). Prevents comparing Masterpiece silver to Normal IP.
+- **Portfolio manual form gains Quality field** — all historical trades default to Q1 (silent); new trades record actual quality.
+- **Loot-tab → Portfolio sync** now splits the purchase price across distinct items proportionally instead of collapsing to a single "primary item" row. P/L attribution preserved.
+- **`VALID_TABS` set realigned** — shareable deep links like `?tab=toptraded`, `?tab=itempower`, `?tab=farming` now actually work. `currentTab === 'farm'` guard corrected to `'farming'`.
+
+**UX / UI polish:**
+- **Market Browser empty state** — first-time visitors now see a helpful hint with 3 example queries instead of a blank grid.
+- **"RRR Calculator" renamed to "Return Rate Calculator"** — less developer jargon.
+- **Hidden dev-only fields** from Crafting settings: legacy "Station % (old)" flat-fee input and "Base PB 18/15" research-disagreement toggle. Both preserved as hidden inputs so saved setups still round-trip.
+- **Transport "FIND ROUTES"** → **"Find Routes"** (was the only ALL-CAPS button on the site).
+- **Discord Channel ID input** now has a `aria-describedby` hint ("19-digit number from Discord 'Copy Channel ID'").
+- **Icon-only buttons** (🗑 delete, ✓ close, etc.) on Loot Logger filter bar got `aria-label` attributes.
+
+**Structural / flow fixes:**
+- **Favorites as a hub.** Every Market Browser card now shows a ⭐/★ star button. One click adds/removes the item from a default "Watchlist" list. Favorites rows grew action buttons: 📈 chart, 🔍 browser, 📊 compare, 🔨 craft (when recipe exists), 🗑 remove. `toggleStarredItem()` and `renderFavStarButton()` are the new primitives.
+- **Live Flips cards are clickable** — clicking opens the price chart modal for that item. Each card also has a small × to dismiss the flip for the session (stops repeating "already-taken" notifications).
+- **Live Flips filter state persists to localStorage** (`liveFlipsFilters_v1`) — re-entering the tab remembers city/profit/ROI filters and sound/desktop toggles.
+- **Loot Buyer Phase 2 accessible from any tracked tab** — new "📊 Sell Strategy" accordion expands inline on every tracked-tab detail card, reloads the Sell Optimizer for remaining unsold items. No more forced restart-from-capture flow.
+- **Loot Logger min-value filter** — hide players whose looted value is below a silver threshold. Persisted to localStorage.
+
+**Onboarding:**
+- **Alerts tab** gets an inline expandable "How to set this up" wizard: numbered steps, Invite Bot button, "How to get a Channel ID" link, and a live-preview of what the Discord embed will look like.
+- **Profile tab** gets a 5-step "Set up the Coldtouch Data Client" wizard with a Download button that jumps to GitHub Releases, token copy, config.yaml guidance, and in-game verification step.
+
+**Go client CI (new):**
+- **`.github/workflows/ci.yml`** — matrix build (Ubuntu/Windows/macOS) on every push/PR: `go mod tidy` verify + `go vet` + `go build` + `go test -short`. Catches regressions before a release tag is cut.
+- **`.github/workflows/tag-release.yml`** — pushing a `v*.*.*` tag auto-creates a GitHub Release with generated notes (last 20 commits since previous tag). The existing release.yml then fires on `release: created` and uploads binaries.
+
+**Files modified:**
+- `deploy_saas.py` (backend tax helpers + premium-aware endpoints + VWAP doc + outlier guard + batch-prices quality)
+- `app.js` (freshness, tax labels, BM exclusion, quality fixes, Item Power quality, Portfolio quality + per-item sync, Live Flips clickable + persistence, Favorites hub, tracked-tab Sell Strategy accordion, Loot Logger min-value filter, Top-N isPremium pass-through, Transport isPremium pass-through)
+- `db.js` (NATS empty-date stamp fix)
+- `index.html` (Market Browser empty state, RRR rename, legacy field removal, ip-quality select, portfolio-quality select, Alerts wizard, Profile client wizard, Transport button case fix)
+- `style.css` (new CSS blocks for flip dismiss, favorites actions, star button, alerts wizard, profile wizard, tracked-tab accordion, loot-logger toolbar)
+- `sw.js` (cache v26 → v27)
+- `.github/workflows/ci.yml` (Go client CI — new)
+- `.github/workflows/tag-release.yml` (Go client tag-based release — new)
+
+**Backend deploy required** — the `deploy_saas.py` changes must land on VPS via `python deploy_saas.py`.
+
+---
+
 ### 2026-04-18 — Crafting & Refining Overhaul v2 (MASSIVE release)
 
 Full implementation of the 13k-word CRAFTING_PLAN.md. Fixes 6 documented formula bugs that were actively misleading users, adds 2 entire new tabs, and delivers the killer features no competitor has.

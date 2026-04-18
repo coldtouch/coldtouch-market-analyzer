@@ -708,7 +708,9 @@ function initTabs() {
             if (currentTab === 'community') { if (typeof loadLeaderboard === 'function') loadLeaderboard(); }
             if (currentTab === 'portfolio') { if (typeof renderPortfolio === 'function') renderPortfolio(); }
             // BENCHED: if (currentTab === 'mounts') { if (typeof renderMountsDatabase === 'function') renderMountsDatabase(); }
-            if (currentTab === 'farm') { if (typeof renderFarmBreed === 'function') renderFarmBreed(); }
+            // Tab name is 'farming' in data-tab, NOT 'farm' — this guard never fired before this fix.
+            if (currentTab === 'farming') { if (typeof renderFarmBreed === 'function') renderFarmBreed(); }
+            if (currentTab === 'loot-logger') { if (typeof renderLootLoggerTab === 'function') renderLootLoggerTab(); }
 
             // Update URL with current tab (shareable deep link)
             const url = new URL(window.location);
@@ -731,7 +733,17 @@ function initTabs() {
     const urlItem = urlParams.get('item');
     const urlFrom = urlParams.get('from');
     const urlTo = urlParams.get('to');
-    const VALID_TABS = new Set(['browser','flipper','bmflipper','compare','top-traded','item-power','favorites','crafting','journals','rrr','repair','transport','live-flips','portfolio','loot-buyer','mounts','farm','builds','alerts','community','profile','feedback','about']);
+    // Must match the actual `data-tab` values in index.html. Previously listed non-existent
+    // 'flipper'/'top-traded'/'item-power'/'farm'/'mounts'/'builds'/'feedback' — these silently
+    // broke shareable deep links like `?tab=toptraded`.
+    const VALID_TABS = new Set([
+        'browser','arbitrage','bmflipper','compare','toptraded','itempower','favorites',
+        'crafting','craft-top-n','refining-lab','journals','rrr','repair',
+        'transport','live-flips','portfolio',
+        'loot-buyer','loot-logger',
+        'farming',
+        'alerts','community','profile','about'
+    ]);
     if (urlTab && VALID_TABS.has(urlTab)) {
         const tabEl = document.querySelector(`.nav-tab[data-tab="${urlTab}"]`);
         if (tabEl) tabEl.click();
@@ -851,6 +863,10 @@ async function renderBrowser() {
     const qualityVal = document.getElementById('browser-quality').value;
     const cityVal = document.getElementById('browser-city').value;
 
+    // When qualityVal === 'all' we historically picked max buyMax across any quality and min sellMin
+    // across any quality — producing a fictional spread (e.g. Q1 sell vs Q5 buy). Default to Q1 for
+    // card-view accuracy; the user can still pick Q2-Q5 explicitly from the dropdown.
+    const cardQualityFilter = qualityVal === 'all' ? '1' : qualityVal;
     if (sortVal === 'name') {
         browserFilteredItems.sort((a, b) => getFriendlyName(a).localeCompare(getFriendlyName(b)));
     } else {
@@ -859,7 +875,7 @@ async function renderBrowser() {
             let bestBuy = 0;
             let bestSell = Infinity;
             for (const p of prices) {
-                if (qualityVal !== 'all' && p.quality.toString() !== qualityVal) continue;
+                if (p.quality.toString() !== cardQualityFilter) continue;
                 if (cityVal !== 'all' && p.city !== cityVal) continue;
                 if (p.sell_price_min > 0 && p.sell_price_min < bestSell) bestSell = p.sell_price_min;
                 if (p.buy_price_max > 0 && p.buy_price_max > bestBuy) bestBuy = p.buy_price_max;
@@ -913,10 +929,11 @@ async function renderBrowser() {
         const tier = extractTier(id);
         const prices = priceMap[id] || [];
 
-        // Find best sell (lowest sell_price_min) and best buy (highest buy_price_max)
+        // Find best sell (lowest sell_price_min) and best buy (highest buy_price_max).
+        // Respect the same "default to Q1 when All" rule to avoid cross-quality spreads on cards.
         let bestSell = null, bestBuy = null;
         for (const p of prices) {
-            if (qualityVal !== 'all' && p.quality.toString() !== qualityVal) continue;
+            if (p.quality.toString() !== cardQualityFilter) continue;
             if (cityVal !== 'all' && p.city !== cityVal) continue;
             if (p.sell_price_min > 0 && (!bestSell || p.sell_price_min < bestSell.sell_price_min)) bestSell = p;
             if (p.buy_price_max > 0 && (!bestBuy || p.buy_price_max > bestBuy.buy_price_max)) bestBuy = p;
@@ -958,7 +975,9 @@ async function renderBrowser() {
 
         const card = document.createElement('div');
         card.className = 'item-card';
+        card.style.position = 'relative';
         card.innerHTML = `
+            ${renderFavStarButton(id)}
             <div class="item-card-header">
                 <div style="position: relative;">
                     <img class="item-card-icon" src="https://render.albiononline.com/v1/item/${id}.png" alt="" loading="lazy">
@@ -1439,14 +1458,14 @@ function buildArbitrageCardDOM(trade) {
         </div>
         <div class="profit-section">
             <div style="font-size:0.85rem; font-weight:bold; color:var(--text-muted); margin-bottom:0.3rem;">Instant Sell Profit</div>
-            <div class="profit-row"><span>Tax (3%):</span><span class="text-red">-${Math.floor(trade.tax).toLocaleString()} 💰</span></div>
+            <div class="profit-row"><span>Tax (${(TAX_RATE*100).toFixed(1)}%):</span><span class="text-red">-${Math.floor(trade.tax).toLocaleString()} 💰</span></div>
             <div class="profit-row total"><span>Net Profit:</span><strong class="${trade.profit >= 0 ? 'text-green' : 'text-red'}">${Math.floor(trade.profit).toLocaleString()} 💰</strong></div>
             <div class="roi-row"><span>ROI:</span><strong class="${trade.roi >= 0 ? 'text-green' : 'text-red'}">${trade.roi.toFixed(1)}%</strong></div>
         </div>
         ${trade.destSellOrder > 0 ? `
         <div class="profit-section" style="border-top:1px solid var(--border); margin-top:0.5rem; padding-top:0.5rem;">
             <div style="font-size:0.85rem; font-weight:bold; color:var(--text-muted); margin-bottom:0.3rem;">Sell Order Profit</div>
-            <div class="profit-row"><span>Tax+Setup (5.5%):</span><span class="text-red">-${Math.floor(trade.soTax).toLocaleString()} 💰</span></div>
+            <div class="profit-row"><span>Tax+Setup (${((TAX_RATE+SETUP_FEE)*100).toFixed(1)}%):</span><span class="text-red">-${Math.floor(trade.soTax).toLocaleString()} 💰</span></div>
             <div class="profit-row total"><span>Net Profit:</span><strong class="${trade.soProfit >= 0 ? 'text-green' : 'text-red'}">${Math.floor(trade.soProfit).toLocaleString()} 💰</strong></div>
             <div class="roi-row"><span>ROI:</span><strong class="${trade.soRoi >= 0 ? 'text-green' : 'text-red'}">${trade.soRoi.toFixed(1)}%</strong></div>
         </div>
@@ -2948,7 +2967,7 @@ function renderCrafting(crafts) {
                 <span class="price text-accent">${Math.floor(craft.sellPrice).toLocaleString()} 💰</span>
             </div>
             <div class="profit-section">
-                <div class="profit-row"><span>Tax+Setup (5.5%):</span><span class="text-red">-${Math.floor(craft.tax).toLocaleString()} 💰</span></div>
+                <div class="profit-row"><span>Tax+Setup (${((TAX_RATE+SETUP_FEE)*100).toFixed(1)}%):</span><span class="text-red">-${Math.floor(craft.tax).toLocaleString()} 💰</span></div>
                 ${craft.fee > 0 ? `<div class="profit-row"><span>Station Fee:</span><span class="text-red">-${Math.floor(craft.fee).toLocaleString()} 💰</span></div>` : ''}
                 <div class="profit-row total"><span>Net Profit:</span><strong class="${craft.profit >= 0 ? 'text-green' : 'text-red'}">${Math.floor(craft.profit).toLocaleString()} 💰</strong></div>
                 <div class="roi-row"><span>ROI:</span><strong class="${craft.roi >= 0 ? 'text-green' : 'text-red'}">${craft.roi.toFixed(1)}%</strong></div>
@@ -3158,9 +3177,13 @@ async function doTopNRank() {
         if (category !== 'all' && (recipe.category || 'other') !== category) continue;
         if (!priceIndex[itemId]) continue;
 
-        // Pick best sell city for this item
+        // Pick best sell city for this item.
+        // IMPORTANT: Black Market only buys finished equipment, NOT refined materials.
+        // Including BM for refined materials pulled rankings toward a price the user cannot actually realise.
+        const isRefinedMaterial = recipe.category === 'materials';
+        const sellCityList = isRefinedMaterial ? CITIES.filter(c => c !== 'Black Market') : CITIES;
         let bestSellPrice = 0, bestSellCity = '';
-        for (const c of CITIES) {
+        for (const c of sellCityList) {
             const p = priceIndex[itemId][c];
             if (p && p.buyMax > bestSellPrice) { bestSellPrice = p.buyMax; bestSellCity = c; }
         }
@@ -3168,8 +3191,8 @@ async function doTopNRank() {
 
         // Pick specialty city for max PB (if specialty matches) else user's default (0% bonus)
         const cityDetect = recipe.category === 'materials'
-            ? CITIES.map(c => ({ c, d: getCityRefineBonus(c, itemId) }))
-            : CITIES.map(c => ({ c, d: getCityCraftBonus(c, itemId) }));
+            ? sellCityList.map(c => ({ c, d: getCityRefineBonus(c, itemId) }))
+            : sellCityList.map(c => ({ c, d: getCityCraftBonus(c, itemId) }));
         const bestSpecialty = cityDetect.reduce((best, x) => x.d.bonus > best.d.bonus ? x : best, { c: '', d: { bonus: 0, autoApplied: false } });
         const cityBonus = bestSpecialty.d.bonus || 0;
 
@@ -3358,18 +3381,20 @@ async function doRefineScan() {
         refineRecipes.push([itemId, recipe]);
     }
 
-    // For each refine recipe, compute best profit at specialty city
+    // For each refine recipe, compute best profit at specialty city.
+    // Refined materials can't be sold to BM in-game — exclude from sell city consideration.
+    const refineCities = CITIES.filter(c => c !== 'Black Market');
     const rows = [];
     for (const [itemId, recipe] of refineRecipes) {
         if (!priceIndex[itemId]) continue;
         let bestSellPrice = 0, bestSellCity = '';
-        for (const c of CITIES) {
+        for (const c of refineCities) {
             const p = priceIndex[itemId][c];
             if (p && p.buyMax > bestSellPrice) { bestSellPrice = p.buyMax; bestSellCity = c; }
         }
         if (bestSellPrice === 0) continue;
 
-        const specBonus = CITIES.reduce((best, c) => {
+        const specBonus = refineCities.reduce((best, c) => {
             const d = getCityRefineBonus(c, itemId);
             return d.bonus > best.bonus ? { ...d, city: c } : best;
         }, { bonus: 0, city: '' });
@@ -4685,7 +4710,7 @@ function renderBMFlips(trades) {
                 </div>
             </div>
             <div class="profit-section">
-                <div class="profit-row"><span>Tax (3%):</span><span class="text-red">-${Math.floor(trade.tax).toLocaleString()} silver</span></div>
+                <div class="profit-row"><span>Tax (${(TAX_RATE*100).toFixed(1)}%):</span><span class="text-red">-${Math.floor(trade.tax).toLocaleString()} silver</span></div>
                 <div class="profit-row total"><span>Net Profit:</span><strong class="${trade.profit >= 0 ? 'text-green' : 'text-red'}">${Math.floor(trade.profit).toLocaleString()} silver</strong></div>
                 <div class="roi-row"><span>ROI:</span><strong class="${trade.roi >= 0 ? 'text-green' : 'text-red'}">${trade.roi.toFixed(1)}%</strong></div>
             </div>
@@ -5719,6 +5744,7 @@ async function init() {
     initTopNRankerEvents();
     initCrafterProfileEvents();
     initCraftSimEvents();
+    initLiveFlipsFilterPersistence();
 
     // Server switch: clear cached prices and reload for the new server
     document.getElementById('server-select').addEventListener('change', onServerChange);
@@ -6530,7 +6556,11 @@ function renderLiveFlips(isNewFlip = false) {
         }
     }
 
-    container.innerHTML = filtered.map((flip, i) => {
+    // Filter out "dismissed" flips this session (user can click a dismiss X on a card).
+    const dismissed = window._dismissedFlips || new Set();
+    const visible = filtered.filter(f => !dismissed.has(f.id));
+
+    container.innerHTML = visible.map((flip, i) => {
         const ago = timeAgo(new Date(flip.detectedAt).toISOString());
         const isNew = isNewFlip && i === 0;
         const qualName = flip.quality > 1 ? ` q${flip.quality}` : '';
@@ -6541,7 +6571,7 @@ function renderLiveFlips(isNewFlip = false) {
         const routeArrow = flipType === 'instant'
             ? '<span style="margin:0 4px; color:var(--purple);">&#8634;</span>'
             : '<span style="margin:0 4px; color:var(--text-muted);">&#10142;</span>';
-        return `<div class="flip-card${isNew ? ' new' : ''}">
+        return `<div class="flip-card${isNew ? ' new' : ''}" data-flip-item="${esc(flip.itemId)}" data-flip-quality="${flip.quality}" data-flip-id="${esc(flip.id)}" style="cursor:pointer;" title="Click to view chart; × to dismiss">
             <img class="flip-icon" src="https://render.albiononline.com/v1/item/${flip.itemId}.png?quality=${flip.quality}" alt="" loading="lazy">
             <div style="min-width:0;">
                 <div style="display:flex; align-items:center; gap:0.4rem; font-weight:600; font-size:0.88rem; color:var(--text-primary); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${esc(flip.name)}${qualName} ${typeBadge}</div>
@@ -6558,8 +6588,29 @@ function renderLiveFlips(isNewFlip = false) {
                 <div class="amount">+${flip.profit.toLocaleString()}</div>
                 <div class="roi">${flip.roi}% ROI</div>
             </div>
+            <button class="flip-dismiss-btn" data-dismiss-id="${esc(flip.id)}" aria-label="Dismiss this flip" title="Mark as taken / hide">×</button>
         </div>`;
     }).join('');
+
+    // Wire up click-to-chart and dismiss buttons (delegation: single listener).
+    if (!container._flipClickHandler) {
+        container._flipClickHandler = (e) => {
+            const dismissBtn = e.target.closest('[data-dismiss-id]');
+            if (dismissBtn) {
+                e.stopPropagation();
+                window._dismissedFlips = window._dismissedFlips || new Set();
+                window._dismissedFlips.add(dismissBtn.dataset.dismissId);
+                const card = dismissBtn.closest('.flip-card');
+                if (card) card.remove();
+                return;
+            }
+            const card = e.target.closest('.flip-card');
+            if (!card) return;
+            const itemId = card.dataset.flipItem;
+            if (itemId && typeof showGraph === 'function') showGraph(itemId);
+        };
+        container.addEventListener('click', container._flipClickHandler);
+    }
 
     // Remove 'new' class after animation
     if (isNewFlip) {
@@ -6567,6 +6618,36 @@ function renderLiveFlips(isNewFlip = false) {
             const newCard = container.querySelector('.flip-card.new');
             if (newCard) newCard.classList.remove('new');
         }, 3000);
+    }
+}
+
+// Persist Live Flips filter state across tab re-entries / reloads.
+function initLiveFlipsFilterPersistence() {
+    const FILTER_KEY = 'liveFlipsFilters_v1';
+    const ids = ['flips-city-buy','flips-city-sell','flips-type','flips-min-profit','flips-min-roi','flips-sound-toggle','flips-desktop-notify-toggle'];
+    // Restore
+    try {
+        const saved = JSON.parse(localStorage.getItem(FILTER_KEY) || '{}');
+        for (const id of ids) {
+            const el = document.getElementById(id);
+            if (!el || saved[id] == null) continue;
+            if (el.type === 'checkbox') el.checked = !!saved[id];
+            else el.value = saved[id];
+        }
+    } catch {}
+    // Persist on change
+    const save = () => {
+        const out = {};
+        for (const id of ids) {
+            const el = document.getElementById(id);
+            if (!el) continue;
+            out[id] = el.type === 'checkbox' ? el.checked : el.value;
+        }
+        try { localStorage.setItem(FILTER_KEY, JSON.stringify(out)); } catch {}
+    };
+    for (const id of ids) {
+        const el = document.getElementById(id);
+        if (el) el.addEventListener('change', save);
     }
 }
 
@@ -7335,7 +7416,7 @@ async function analyzeLoot() {
         const res = await fetch(`${VPS_BASE}/api/loot-evaluate`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', ...authHeaders() },
-            body: JSON.stringify({ items: lootSelectedCapture.items, askingPrice })
+            body: JSON.stringify({ items: lootSelectedCapture.items, askingPrice, isPremium: !!CraftConfig.premium })
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || 'Failed');
@@ -8250,18 +8331,82 @@ function renderTrackedTabDetail(tab) {
             </div>
             <div style="display:flex; gap:0.5rem; align-items:center;" onclick="event.stopPropagation()">
                 <button class="btn-small-accent" onclick="showSaleForm(${tab.id})">+ Record Sale</button>
-                <select class="loot-status-select" onchange="updateTabStatus(${tab.id}, this.value)">
+                <button class="btn-small" onclick="showSellStrategy(${tab.id})" title="Reopen Phase 2 Sell Optimizer for this tab's unsold items">📊 Sell Strategy</button>
+                <select class="loot-status-select" onchange="updateTabStatus(${tab.id}, this.value)" aria-label="Tab status">
                     <option value="open" ${tab.status === 'open' ? 'selected' : ''}>Open</option>
                     <option value="partial" ${tab.status === 'partial' ? 'selected' : ''}>Partial</option>
                     <option value="sold" ${tab.status === 'sold' ? 'selected' : ''}>Sold</option>
                 </select>
-                <button class="btn-small-danger" onclick="deleteTrackedTab(${tab.id}, this)" title="Delete this tab">Delete</button>
+                <button class="btn-small-danger" onclick="deleteTrackedTab(${tab.id}, this)" title="Delete this tab" aria-label="Delete tab">Delete</button>
             </div>
         </div>
         <div style="font-size:0.78rem; color:var(--text-muted); margin-bottom:0.35rem;">${tab.sales.length} sale record${tab.sales.length !== 1 ? 's' : ''}</div>
+        <details class="tracked-tab-accordion" id="sell-strategy-accordion-${tab.id}" onclick="event.stopPropagation()">
+            <summary>📊 Sell Strategy for unsold items</summary>
+            <div class="accordion-body" id="sell-strategy-body-${tab.id}">
+                <p style="color:var(--text-muted);font-size:0.8rem;margin:0;">Click to compute the best sell route for each remaining item in this tab.</p>
+            </div>
+        </details>
         ${salesHtml}
         ${itemsChecklistHtml}
     </div>`;
+}
+
+// Open the Phase 2 Sell Optimizer view for a tracked tab without forcing a capture restart.
+async function showSellStrategy(tabId) {
+    const acc = document.getElementById(`sell-strategy-accordion-${tabId}`);
+    const body = document.getElementById(`sell-strategy-body-${tabId}`);
+    if (!acc || !body) return;
+    if (!acc.open) acc.open = true;
+    body.innerHTML = '<div class="spinner" style="margin:0.5rem auto;width:20px;height:20px;"></div>';
+    try {
+        const tabRes = await fetch(`${VPS_BASE}/api/loot-tab/${tabId}`, { headers: authHeaders() });
+        const tab = await tabRes.json();
+        if (!tabRes.ok) throw new Error(tab.error || 'Failed to load tab');
+        // Filter to unsold items (not in the sold-marks set)
+        const soldKey = `albion_sold_items_${tabId}`;
+        let soldSet;
+        try { soldSet = new Set(JSON.parse(localStorage.getItem(soldKey) || '[]')); } catch { soldSet = new Set(); }
+        const unsold = (tab.items || []).filter(it => !soldSet.has(((it.itemId || '') + '_' + (it.quality || 1))));
+        if (unsold.length === 0) { body.innerHTML = '<p style="color:var(--text-muted);font-size:0.8rem;">All items marked sold — nothing to optimize.</p>'; return; }
+
+        // Call loot-evaluate as if Phase 2; use existing renderer in lightweight mode.
+        const evalRes = await fetch(`${VPS_BASE}/api/loot-evaluate`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', ...authHeaders() },
+            body: JSON.stringify({ items: unsold, askingPrice: 0, isPremium: !!CraftConfig.premium }),
+        });
+        const data = await evalRes.json();
+        if (!evalRes.ok) throw new Error(data.error || 'Evaluation failed');
+
+        // Inline mini Sell Plan table
+        let html = `<table class="compare-table" style="width:100%;margin-top:0.4rem;"><thead>
+            <tr><th>Item</th><th>Qty</th><th>Best Instant</th><th>Best Patient</th><th>Recommended</th></tr></thead><tbody>`;
+        for (const r of (data.results || [])) {
+            const instant = r.bestInstantSell;
+            const patient = r.bestMarketSell;
+            let rec = 'N/A';
+            if (instant && patient) {
+                const instantTotal = instant.netPerUnit * r.quantity;
+                const patientTotal = patient.netPerUnit * r.quantity;
+                // 85% rule: take instant if >= 85% of patient.
+                if (instantTotal >= patientTotal * 0.85) rec = `⚡ Instant @ ${esc(instant.city)}`;
+                else rec = `📋 List @ ${esc(patient.city)}`;
+            } else if (instant) rec = `⚡ Instant @ ${esc(instant.city)}`;
+            else if (patient) rec = `📋 List @ ${esc(patient.city)}`;
+            html += `<tr>
+                <td>${esc(r.name)}${r.quality > 1 ? ' q'+r.quality : ''}</td>
+                <td>×${r.quantity}</td>
+                <td>${instant ? instant.netPerUnit.toLocaleString()+'s @ '+esc(instant.city) : '—'}</td>
+                <td>${patient ? patient.netPerUnit.toLocaleString()+'s @ '+esc(patient.city) : '—'}</td>
+                <td><strong class="text-green">${rec}</strong></td>
+            </tr>`;
+        }
+        html += '</tbody></table>';
+        body.innerHTML = html;
+    } catch (e) {
+        body.innerHTML = `<p style="color:var(--loss-red);font-size:0.8rem;">${esc(e.message)}</p>`;
+    }
 }
 
 function showSaleForm(tabId) {
@@ -9721,6 +9866,14 @@ function _llRenderFiltered() {
             });
         });
     }
+    // Min-value filter (silver threshold)
+    const minValEl = document.getElementById('ll-min-value');
+    const minValRaw = minValEl ? parseInt(minValEl.value) : 0;
+    const minVal = isNaN(minValRaw) ? 0 : minValRaw;
+    try { if (minVal > 0) localStorage.setItem('albion_ll_min_value', String(minVal)); else localStorage.removeItem('albion_ll_min_value'); } catch {}
+    if (minVal > 0) {
+        entries = entries.filter(([, data]) => (data.totalValue || 0) >= minVal);
+    }
     // Item tier filter helper
     function getItemTier(itemId) {
         const m = (itemId || '').match(/^T(\d)/);
@@ -9870,18 +10023,20 @@ function _llRenderFiltered() {
     } else {
         try { localStorage.setItem('albion_ll_filter', filterVal); } catch {}
     }
+    const minValVal = (() => { try { return parseInt(localStorage.getItem('albion_ll_min_value')) || 0; } catch { return 0; } })();
     html += `<div class="ll-filter-bar">
         <div class="search-input-wrapper" style="flex:1; min-width:160px;">
             <span class="search-icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg></span>
-            <input type="text" id="ll-search" placeholder="Search player, guild, or item..." value="${esc(searchVal)}" oninput="_llDebouncedRender(300)">
+            <input type="text" id="ll-search" placeholder="Search player, guild, or item..." value="${esc(searchVal)}" oninput="_llDebouncedRender(300)" aria-label="Search players, guilds, or items">
         </div>
-        <select id="ll-filter-tier" class="transport-select" style="min-width:80px;" onchange="_llDebouncedRender(100)" title="Filter items by tier">
+        <select id="ll-filter-tier" class="transport-select" style="min-width:80px;" onchange="_llDebouncedRender(100)" title="Filter items by tier" aria-label="Filter by tier">
             <option value="all"${filterVal === 'all' ? ' selected' : ''}>All Tiers</option>
             <option value="t5+"${filterVal === 't5+' ? ' selected' : ''}>T5+</option>
             <option value="t6+"${filterVal === 't6+' ? ' selected' : ''}>T6+</option>
             <option value="nobags"${filterVal === 'nobags' ? ' selected' : ''}>No Bags</option>
         </select>
-        <select id="ll-sort" class="transport-select" style="min-width:100px;" onchange="_llDebouncedRender(100)">
+        <input type="number" id="ll-min-value" class="transport-select" style="width:110px;" placeholder="Min value (s)" value="${minValVal || ''}" oninput="_llDebouncedRender(300)" aria-label="Minimum total value to display" title="Hide players whose looted value is below this silver threshold">
+        <select id="ll-sort" class="transport-select" style="min-width:100px;" onchange="_llDebouncedRender(100)" aria-label="Sort players by">
             <option value="value"${sortVal === 'value' ? ' selected' : ''}>Value ↓</option>
             <option value="items"${sortVal === 'items' ? ' selected' : ''}>Items ↓</option>
             <option value="weight"${sortVal === 'weight' ? ' selected' : ''}>Weight ↓</option>
@@ -10891,7 +11046,8 @@ async function doTransportScan() {
             const params = new URLSearchParams({
                 sell_strategy: sellStrategy,
                 max_age: maxAge,
-                limit: 300
+                limit: 300,
+                premium: CraftConfig.premium ? '1' : '0',
             });
             if (buyCity) params.set('buy_city', buyCity);
             if (sellCity) params.set('sell_city', sellCity);
@@ -11840,9 +11996,18 @@ async function doItemPowerScan() {
             return;
         }
 
-        // Build price map: item_id -> { city -> sell_price_min }
+        // Read the Quality filter from the tab (falls back to Q1 for gear-comparison accuracy).
+        const ipQuality = parseInt(document.getElementById('ip-quality')?.value) || 1;
+
+        // Build price map: (item_id, quality) -> { city -> sell_price_min }.
+        // Previously this collapsed all qualities into one bucket — silver/IP then compared
+        // Masterpiece silver to Normal IP, an apples-to-oranges comparison.
+        // Quality also boosts effective IP: +20/+40/+60/+80/+100 per Good/Outstanding/Excellent/Masterpiece.
+        const QUALITY_IP_BONUS = { 1: 0, 2: 20, 3: 40, 4: 60, 5: 100 };
         const priceMap = {};
         for (const p of cachedData) {
+            const q = p.quality || 1;
+            if (q !== ipQuality) continue;
             if (!priceMap[p.item_id]) priceMap[p.item_id] = {};
             if (p.sell_price_min > 0) {
                 if (!priceMap[p.item_id][p.city] || p.sell_price_min < priceMap[p.item_id][p.city]) {
@@ -11859,8 +12024,9 @@ async function doItemPowerScan() {
             if (seenItems.has(itemId)) continue;
             seenItems.add(itemId);
 
-            const ip = getItemPower(itemId);
-            if (ip === 0) continue;
+            const baseIp = getItemPower(itemId);
+            if (baseIp === 0) continue;
+            const ip = baseIp + (QUALITY_IP_BONUS[ipQuality] || 0);
 
             // Filter by category
             if (category !== 'all') {
@@ -12182,6 +12348,7 @@ function renderFavoritePrices(items, priceMap) {
                     <th style="width:48px;"></th>
                     <th>Item</th>
                     ${cities.map(c => `<th>${c}</th>`).join('')}
+                    <th style="width:180px;">Actions</th>
                 </tr>
             </thead>
             <tbody>
@@ -12191,10 +12358,11 @@ function renderFavoritePrices(items, priceMap) {
                     const validPrices = prices.filter(p => p > 0);
                     const minPrice = validPrices.length > 0 ? Math.min(...validPrices) : 0;
                     const maxPrice = validPrices.length > 0 ? Math.max(...validPrices) : 0;
+                    const hasRecipe = !!recipesData[itemId];
 
                     return `
-                        <tr>
-                            <td style="padding:0.25rem;"><img src="https://render.albiononline.com/v1/item/${itemId}.png" style="width:40px;height:40px;" loading="lazy"></td>
+                        <tr data-fav-row="${esc(itemId)}">
+                            <td style="padding:0.25rem;"><img src="https://render.albiononline.com/v1/item/${esc(itemId)}.png" style="width:40px;height:40px;" loading="lazy"></td>
                             <td><strong>${esc(getFriendlyName(itemId))}</strong><br><span style="font-size:0.65rem;color:var(--text-muted);">${getTierEnchLabel(itemId)}</span></td>
                             ${cities.map((c, i) => {
                                 const p = prices[i];
@@ -12206,11 +12374,97 @@ function renderFavoritePrices(items, priceMap) {
                                 }
                                 return `<td style="color:${color};font-weight:${p === minPrice ? 'bold' : 'normal'};">${Math.floor(p).toLocaleString()}</td>`;
                             }).join('')}
+                            <td><div class="fav-row-actions">
+                                <button data-fav-action="chart" data-item="${esc(itemId)}" title="Open price chart">📈</button>
+                                <button data-fav-action="browser" data-item="${esc(itemId)}" title="View in Market Browser">🔍</button>
+                                <button data-fav-action="compare" data-item="${esc(itemId)}" title="Compare across cities">📊</button>
+                                ${hasRecipe ? `<button data-fav-action="craft" data-item="${esc(itemId)}" title="Check crafting profit">🔨</button>` : ''}
+                                <button data-fav-action="remove" data-item="${esc(itemId)}" title="Remove from this list">🗑</button>
+                            </div></td>
                         </tr>`;
                 }).join('')}
             </tbody>
         </table>`;
     container.appendChild(table);
+
+    // Delegation-based action wiring (avoids N handlers).
+    if (!container._favActionHandler) {
+        container._favActionHandler = (e) => {
+            const btn = e.target.closest('[data-fav-action]');
+            if (!btn) return;
+            const act = btn.dataset.favAction;
+            const itemId = btn.dataset.item;
+            if (!itemId) return;
+            if (act === 'chart' && typeof showGraph === 'function') return showGraph(itemId);
+            if (act === 'browser' && typeof switchToBrowser === 'function') return switchToBrowser(itemId);
+            if (act === 'compare') {
+                document.querySelector('[data-tab="compare"]')?.click();
+                setTimeout(() => {
+                    const inp = document.getElementById('compare-search');
+                    if (inp) { inp.value = getFriendlyName(itemId); compareSelectedId = itemId; }
+                    const btn = document.getElementById('compare-fetch-btn');
+                    if (btn) btn.click();
+                }, 150);
+                return;
+            }
+            if (act === 'craft' && typeof switchToCraft === 'function') return switchToCraft(itemId);
+            if (act === 'remove') {
+                // Remove from the selected list (not chip editor).
+                const select = document.getElementById('fav-list-select');
+                const name = select ? select.value : '';
+                if (!name) return;
+                const lists = JSON.parse(localStorage.getItem(FAV_STORAGE_KEY) || '{}');
+                if (!lists[name]) return;
+                lists[name].items = (lists[name].items || []).filter(x => (typeof x === 'string' ? x : (x.itemId || x.id)) !== itemId);
+                localStorage.setItem(FAV_STORAGE_KEY, JSON.stringify(lists));
+                _invalidateFavoriteCache();
+                loadFavoriteListPrices();
+                showToast(`Removed ${getFriendlyName(itemId)} from "${name}"`, 'info');
+            }
+        };
+        container.addEventListener('click', container._favActionHandler);
+    }
+}
+
+// === Favorites HUB — site-wide "Add to Favorites" star button ===
+// Call toggleStarredItem(itemId) from any card. It picks (or creates) a default "Watchlist" list.
+function toggleStarredItem(itemId, listName = 'Watchlist') {
+    if (!itemId) return false;
+    const lists = JSON.parse(localStorage.getItem(FAV_STORAGE_KEY) || '{}');
+    if (!lists[listName]) lists[listName] = { items: [], created: Date.now() };
+    const existing = lists[listName].items || [];
+    const idx = existing.findIndex(x => (typeof x === 'string' ? x : (x.itemId || x.id)) === itemId);
+    let added = false;
+    if (idx >= 0) { existing.splice(idx, 1); added = false; }
+    else { existing.push(itemId); added = true; }
+    lists[listName].items = existing;
+    localStorage.setItem(FAV_STORAGE_KEY, JSON.stringify(lists));
+    _invalidateFavoriteCache();
+    showToast(added ? `⭐ Added to ${listName}` : `Removed from ${listName}`, added ? 'success' : 'info');
+    // Update any visible star buttons on the page
+    document.querySelectorAll(`.item-fav-btn[data-star-item="${itemId}"]`).forEach(btn => {
+        btn.classList.toggle('is-fav', added);
+        btn.textContent = added ? '★' : '☆';
+    });
+    return added;
+}
+
+// Return HTML for a star button — paste into any item card.
+function renderFavStarButton(itemId) {
+    const isFav = getAllFavoriteItemIds().has(itemId);
+    return `<button class="item-fav-btn ${isFav ? 'is-fav' : ''}" data-star-item="${esc(itemId)}" title="${isFav ? 'Remove from Watchlist' : 'Add to Watchlist'}" aria-label="Toggle favorite">${isFav ? '★' : '☆'}</button>`;
+}
+
+// Global click handler — wired once — delegates star-button clicks.
+if (typeof document !== 'undefined' && !window._starBtnHandlerWired) {
+    document.addEventListener('click', (e) => {
+        const btn = e.target.closest('.item-fav-btn[data-star-item]');
+        if (!btn) return;
+        e.stopPropagation();
+        e.preventDefault();
+        toggleStarredItem(btn.dataset.starItem);
+    });
+    window._starBtnHandlerWired = true;
 }
 
 // ============================================================
@@ -12570,20 +12824,40 @@ function _addPortfolioBuyFromTab(tabId, tabName, purchasePrice, items) {
     const trades = getPortfolioTrades();
     // Check for duplicate by tabId
     if (trades.some(t => t._lootTabId === tabId)) return;
-    // Use the primary item as the portfolio item ID
-    const primaryItem = items && items.length > 0 ? items[0].itemId : 'LOOT_TAB';
-    trades.push({
-        id: Date.now(),
-        _lootTabId: tabId,
-        _source: 'loot_buyer',
-        type: 'buy',
-        itemId: primaryItem,
-        itemName: tabName,
-        quantity: items ? items.reduce((s, it) => s + (it.quantity || 1), 0) : 1,
-        price: purchasePrice,
-        city: '',
-        date: new Date().toISOString()
-    });
+    if (!items || items.length === 0) {
+        trades.push({
+            id: Date.now(), _lootTabId: tabId, _source: 'loot_buyer',
+            type: 'buy', itemId: 'LOOT_TAB_' + tabId, itemName: tabName,
+            quantity: 1, price: purchasePrice, city: '',
+            date: new Date().toISOString(),
+        });
+        savePortfolioTrades(trades);
+        return;
+    }
+    // Split the purchase price across distinct items proportionally by count — previously this
+    // collapsed a 40-item chest into ONE "primary item" entry, destroying per-item P/L attribution.
+    const totalQty = items.reduce((s, it) => s + (it.quantity || 1), 0) || 1;
+    const now = Date.now();
+    let idx = 0;
+    for (const it of items) {
+        const qty = it.quantity || 1;
+        const allocPrice = Math.round(purchasePrice * (qty / totalQty));
+        const unitPrice = qty > 0 ? Math.round(allocPrice / qty) : 0;
+        trades.push({
+            id: now + idx++,
+            _lootTabId: tabId,
+            _source: 'loot_buyer',
+            type: 'buy',
+            itemId: it.itemId,
+            itemName: it.name || getFriendlyName(it.itemId),
+            quality: it.quality || 1,
+            quantity: qty,
+            price: unitPrice,
+            city: '',
+            date: new Date().toISOString(),
+            _allocatedFromTab: true,
+        });
+    }
     savePortfolioTrades(trades);
 }
 
@@ -12672,6 +12946,7 @@ function addPortfolioTrade() {
     const quantity = parseInt(document.getElementById('portfolio-quantity').value) || 0;
     const price = parseInt(document.getElementById('portfolio-price').value) || 0;
     const city = document.getElementById('portfolio-city').value;
+    const quality = parseInt(document.getElementById('portfolio-quality')?.value) || 1;
 
     if (!itemId || quantity <= 0 || price <= 0) {
         showToast('Please fill in all fields.', 'warn');
@@ -12689,6 +12964,7 @@ function addPortfolioTrade() {
         id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
         type,
         itemId: resolvedId,
+        quality, // silent-default 1 for older trades; visible in new form
         quantity,
         price,
         city,

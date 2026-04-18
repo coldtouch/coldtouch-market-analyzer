@@ -6120,6 +6120,193 @@ footer {
 }
 
 /* ============================================================
+ * AUDIT REMEDIATION — Apr 18, 2026
+ * Live Flips dismiss button, Favorites hub, Alerts wizard
+ * ============================================================ */
+.flip-card { position: relative; }
+.flip-dismiss-btn {
+    position: absolute;
+    top: 2px;
+    right: 4px;
+    background: transparent;
+    border: none;
+    color: var(--text-muted);
+    font-size: 1.1rem;
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity 0.15s, background 0.15s;
+    line-height: 1;
+}
+.flip-card:hover .flip-dismiss-btn { opacity: 0.6; }
+.flip-dismiss-btn:hover { opacity: 1 !important; background: rgba(239, 68, 68, 0.2); color: #ef4444; }
+
+/* Favorites row action buttons */
+.fav-row-actions {
+    display: flex;
+    gap: 0.25rem;
+    align-items: center;
+}
+.fav-row-actions button {
+    padding: 0.2rem 0.45rem;
+    font-size: 0.75rem;
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid var(--border);
+    color: var(--text-secondary);
+    border-radius: 4px;
+    cursor: pointer;
+    transition: all 0.12s;
+}
+.fav-row-actions button:hover {
+    background: var(--accent);
+    color: #0a0a0a;
+    border-color: var(--accent);
+}
+
+/* "Add to favorites" star button (appears on all item cards site-wide) */
+.item-fav-btn {
+    position: absolute;
+    top: 6px;
+    right: 6px;
+    background: rgba(0, 0, 0, 0.45);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    color: #f0c040;
+    width: 26px;
+    height: 26px;
+    border-radius: 50%;
+    cursor: pointer;
+    font-size: 0.85rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    opacity: 0.7;
+    transition: all 0.12s;
+    z-index: 2;
+}
+.item-fav-btn:hover { opacity: 1; background: var(--accent); color: #0a0a0a; }
+.item-fav-btn.is-fav { opacity: 1; background: #f0c040; color: #0a0a0a; }
+
+/* Alerts setup wizard */
+.alerts-wizard {
+    background: linear-gradient(135deg, rgba(109, 40, 217, 0.06), rgba(240, 192, 64, 0.04));
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 0.9rem 1rem;
+    margin-bottom: 0.75rem;
+}
+.alerts-wizard h4 { margin: 0 0 0.4rem 0; color: var(--accent); font-size: 0.95rem; }
+.alerts-wizard ol {
+    margin: 0.25rem 0 0.5rem 1.2rem;
+    padding: 0;
+    color: var(--text-secondary);
+    font-size: 0.85rem;
+}
+.alerts-wizard ol li { margin-bottom: 0.25rem; }
+.alerts-wizard .wizard-actions {
+    display: flex;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+    margin-top: 0.5rem;
+}
+.alerts-preview {
+    background: rgba(88, 101, 242, 0.08);
+    border-left: 3px solid #5865f2;
+    padding: 0.6rem 0.75rem;
+    border-radius: 4px;
+    font-size: 0.8rem;
+    margin-top: 0.5rem;
+}
+
+/* Profile client-setup wizard */
+.profile-wizard {
+    background: rgba(0, 0, 0, 0.2);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 0.9rem 1rem;
+    margin: 0.75rem 0;
+}
+.profile-wizard-step {
+    display: flex;
+    gap: 0.75rem;
+    padding: 0.5rem 0;
+    border-bottom: 1px dashed rgba(255, 255, 255, 0.05);
+}
+.profile-wizard-step:last-child { border-bottom: none; }
+.profile-wizard-step .step-num {
+    flex: 0 0 28px;
+    height: 28px;
+    border-radius: 50%;
+    background: var(--accent);
+    color: #0a0a0a;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.85rem;
+}
+.profile-wizard-step .step-body { flex: 1 1 auto; font-size: 0.85rem; color: var(--text-secondary); }
+.profile-wizard-step .step-body strong { color: var(--text-primary); }
+
+/* Loot Buyer Phase 2 accordion on tracked tab */
+.tracked-tab-accordion {
+    margin-top: 0.5rem;
+    border-top: 1px dashed var(--border);
+    padding-top: 0.4rem;
+}
+.tracked-tab-accordion summary {
+    cursor: pointer;
+    padding: 0.3rem 0;
+    font-weight: 600;
+    color: var(--accent);
+    font-size: 0.82rem;
+    list-style: none;
+}
+.tracked-tab-accordion summary::-webkit-details-marker { display: none; }
+.tracked-tab-accordion summary::before { content: '▸ '; margin-right: 0.25rem; transition: transform 0.15s; display: inline-block; }
+.tracked-tab-accordion[open] summary::before { transform: rotate(90deg); }
+.tracked-tab-accordion .accordion-body { padding: 0.5rem 0 0 0; }
+
+/* Loot Logger Viewer UX enhancements */
+.ll-viewer-toolbar {
+    display: flex;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    padding: 0.6rem;
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    margin-bottom: 0.75rem;
+}
+.ll-viewer-toolbar .control-group { margin: 0; }
+.ll-player-table {
+    width: 100%;
+    border-collapse: collapse;
+}
+.ll-player-table th,
+.ll-player-table td {
+    padding: 0.4rem 0.6rem;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+    font-size: 0.85rem;
+    text-align: left;
+}
+.ll-player-table th {
+    color: var(--text-muted);
+    text-transform: uppercase;
+    font-size: 0.7rem;
+    letter-spacing: 0.04em;
+    user-select: none;
+    cursor: pointer;
+}
+.ll-player-table th:hover { color: var(--accent); }
+.ll-player-table tr:hover td { background: rgba(255, 255, 255, 0.02); }
+.ll-player-table .player-name { font-weight: 600; color: var(--text-primary); }
+.ll-player-table .player-guild { font-size: 0.7rem; color: var(--text-muted); margin-left: 0.3rem; }
+.ll-player-table .value-cell { color: var(--accent); font-weight: 700; font-variant-numeric: tabular-nums; }
+
+/* ============================================================
  * CRAFTING REVAMP v2 — Apr 18, 2026
  * City Heatmap, Sub-recipe Tree, Inverse Calc, Refining Lab,
  * Top-N Ranker, Crafter Profiles
