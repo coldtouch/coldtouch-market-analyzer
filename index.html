@@ -328,6 +328,8 @@
                 </button>
                 <div class="nav-dropdown">
                     <button class="nav-tab" data-tab="crafting">Crafting Profits</button>
+                    <button class="nav-tab" data-tab="craft-top-n">⚡ Top-N Ranker</button>
+                    <button class="nav-tab" data-tab="refining-lab">🔥 Refining Lab</button>
                     <button class="nav-tab" data-tab="journals">Journals</button>
                     <button class="nav-tab" data-tab="rrr">RRR Calculator</button>
                     <button class="nav-tab" data-tab="repair">Repair Cost</button>
@@ -730,8 +732,33 @@
                     </select>
                 </div>
                 <div class="control-group">
-                    <label for="craft-fee">Station Fee %</label>
+                    <label for="craft-station-s100" title="In-game station 'Silver per 100 Nutrition' setting. ItemValue × 11.25% × (silver/100) per craft.">Station s/100 Nut.</label>
+                    <input type="number" id="craft-station-s100" min="0" max="10000" value="200" step="10" style="width:80px;">
+                </div>
+                <div class="control-group">
+                    <label for="craft-fee" title="Legacy flat % override (leave 0 to use Silver/100 nutrition formula)">Station % (old)</label>
                     <input type="number" id="craft-fee" min="0" max="100" value="0" step="0.5" style="width:70px;">
+                </div>
+                <div class="control-group">
+                    <label for="craft-food" title="Focus-efficiency food buff. Multiplies focus efficiency by 1.18 (Pork Omelette T6) or 1.30 (Avalonian T8).">Food Buff</label>
+                    <select id="craft-food" style="width:140px;">
+                        <option value="none">None</option>
+                        <option value="pork">Pork Omelette (+18%)</option>
+                        <option value="avalonian">Avalonian Pork (+30%)</option>
+                    </select>
+                </div>
+                <div class="control-group checkbox-group">
+                    <label title="Expected avg sell price weighted by quality distribution at your spec — valuable for masterpiece-target items"><input type="checkbox" id="craft-quality-ev"> Quality EV</label>
+                </div>
+                <div class="control-group checkbox-group">
+                    <label title="Premium: 4% sell tax + 2.5% setup = 6.5% total. Non-Premium: 8% + 2.5% = 10.5%."><input type="checkbox" id="craft-premium" checked> Premium</label>
+                </div>
+                <div class="control-group">
+                    <label for="craft-base-pb" title="DECISION-A1: Sources disagree whether crafting base production bonus is 15 or 18. Default 18.">Base PB</label>
+                    <select id="craft-base-pb" style="width:80px;">
+                        <option value="18" selected>18 (default)</option>
+                        <option value="15">15 (alt)</option>
+                    </select>
                 </div>
                 <button id="craft-recalc-btn" class="btn-secondary" style="margin-left:auto;">Recalculate</button>
             </div>
@@ -1075,6 +1102,158 @@
             </div>
         </section>
 
+        <!-- ====== TAB: TOP-N CRAFTING RANKER ====== -->
+        <section class="tab-pane hidden" id="pane-craft-top-n">
+            <div class="topn-hero">
+                <h3>⚡ Top-N Craft Right Now</h3>
+                <p>Ranks every recipe by profit against your spec, city, and focus budget. <strong>The killer competitive feature</strong> — no other tool does this.</p>
+                <div class="topn-filters">
+                    <div class="control-group">
+                        <label for="topn-sort">Sort By</label>
+                        <select id="topn-sort" style="width:160px;">
+                            <option value="silver_per_focus" selected>Silver / Focus</option>
+                            <option value="silver_per_hour">Silver / Hour</option>
+                            <option value="net_profit">Net Profit</option>
+                            <option value="roi">ROI %</option>
+                        </select>
+                    </div>
+                    <div class="control-group">
+                        <label for="topn-tier">Tier</label>
+                        <select id="topn-tier" style="width:100px;">
+                            <option value="all">All Tiers</option>
+                            <option value="4">T4</option>
+                            <option value="5">T5</option>
+                            <option value="6" selected>T6</option>
+                            <option value="7">T7</option>
+                            <option value="8">T8</option>
+                        </select>
+                    </div>
+                    <div class="control-group">
+                        <label for="topn-category">Category</label>
+                        <select id="topn-category" style="width:130px;">
+                            <option value="all">All</option>
+                            <option value="materials">Refining</option>
+                            <option value="weapons">Weapons</option>
+                            <option value="armor">Armor</option>
+                            <option value="offhand">Off-Hand</option>
+                            <option value="accessories">Accessories</option>
+                            <option value="consumables">Consumables</option>
+                        </select>
+                    </div>
+                    <div class="control-group">
+                        <label for="topn-ench">Enchant</label>
+                        <select id="topn-ench" style="width:110px;">
+                            <option value="any" selected>Any</option>
+                            <option value="0">@0 (normal)</option>
+                            <option value="1">@1</option>
+                            <option value="2">@2</option>
+                            <option value="3">@3</option>
+                            <option value="4">@4</option>
+                        </select>
+                    </div>
+                    <div class="control-group checkbox-group">
+                        <label><input type="checkbox" id="topn-focus" checked> Use Focus</label>
+                    </div>
+                    <div class="control-group">
+                        <label for="topn-spec">Spec</label>
+                        <input type="number" id="topn-spec" min="0" max="100" value="100" style="width:70px;">
+                    </div>
+                    <div class="control-group">
+                        <label for="topn-mastery">Mastery</label>
+                        <input type="number" id="topn-mastery" min="0" max="100" value="0" style="width:70px;">
+                    </div>
+                    <div class="control-group">
+                        <label for="topn-liquidity" title="Hide recipes whose finished item has low recent trading activity — avoids crafting 200 items you can't sell">Min Liquidity</label>
+                        <select id="topn-liquidity" style="width:120px;">
+                            <option value="0">No filter</option>
+                            <option value="10" selected>≥10 / day</option>
+                            <option value="50">≥50 / day</option>
+                            <option value="200">≥200 / day</option>
+                        </select>
+                    </div>
+                    <button id="topn-scan-btn" class="btn-primary">Rank Now</button>
+                </div>
+            </div>
+            <div id="topn-spinner" class="loading-state hidden">
+                <div class="spinner"></div>
+                <p>Ranking recipes against live prices...</p>
+            </div>
+            <div id="topn-results" class="topn-grid">
+                <div class="empty-state" style="grid-column:1/-1;"><p>Click <strong>Rank Now</strong> to score every recipe against your spec/city/focus and surface the most profitable crafts right now.</p></div>
+            </div>
+        </section>
+
+        <!-- ====== TAB: REFINING LAB ====== -->
+        <section class="tab-pane hidden" id="pane-refining-lab">
+            <div class="topn-hero">
+                <h3>🔥 Refining Lab</h3>
+                <p>Refining is a different game from crafting — different city, different focus loop, different time horizon. This tab is tuned for daily-focus refiners.</p>
+                <div class="refine-mode-bar">
+                    <button class="refine-mode-btn active" data-refine-mode="best">📈 Today's Best</button>
+                    <button class="refine-mode-btn" data-refine-mode="deepdive">🔍 Single Material Deep-Dive</button>
+                    <button class="refine-mode-btn" data-refine-mode="planner">🗓️ Daily Focus Planner</button>
+                </div>
+                <div class="topn-filters">
+                    <div class="control-group">
+                        <label for="refine-family">Family</label>
+                        <select id="refine-family" style="width:140px;">
+                            <option value="all">All Families</option>
+                            <option value="PLANKS">Planks (wood)</option>
+                            <option value="METALBAR">Bars (ore)</option>
+                            <option value="CLOTH">Cloth (fiber)</option>
+                            <option value="LEATHER">Leather (hide)</option>
+                            <option value="STONEBLOCK">Stone (rock)</option>
+                        </select>
+                    </div>
+                    <div class="control-group">
+                        <label for="refine-tier">Tier</label>
+                        <select id="refine-tier" style="width:100px;">
+                            <option value="all">All</option>
+                            <option value="4">T4</option>
+                            <option value="5">T5</option>
+                            <option value="6" selected>T6</option>
+                            <option value="7">T7</option>
+                            <option value="8">T8</option>
+                        </select>
+                    </div>
+                    <div class="control-group">
+                        <label for="refine-ench">Enchant</label>
+                        <select id="refine-ench" style="width:110px;">
+                            <option value="any" selected>Any</option>
+                            <option value="0">@0</option>
+                            <option value="1">@1</option>
+                            <option value="2">@2</option>
+                            <option value="3">@3</option>
+                            <option value="4">@4</option>
+                        </select>
+                    </div>
+                    <div class="control-group checkbox-group">
+                        <label><input type="checkbox" id="refine-focus" checked> Use Focus</label>
+                    </div>
+                    <div class="control-group">
+                        <label for="refine-spec">Spec</label>
+                        <input type="number" id="refine-spec" min="0" max="100" value="100" style="width:70px;">
+                    </div>
+                    <div class="control-group">
+                        <label for="refine-mastery">Mastery</label>
+                        <input type="number" id="refine-mastery" min="0" max="100" value="0" style="width:70px;">
+                    </div>
+                    <div class="control-group">
+                        <label for="refine-budget" title="Daily focus budget (10000 passive, up to 30000 with premium)">Focus Budget</label>
+                        <input type="number" id="refine-budget" min="0" max="60000" value="10000" step="1000" style="width:90px;">
+                    </div>
+                    <button id="refine-scan-btn" class="btn-primary">Refresh</button>
+                </div>
+            </div>
+            <div id="refine-spinner" class="loading-state hidden">
+                <div class="spinner"></div>
+                <p>Scanning refining recipes...</p>
+            </div>
+            <div id="refine-results">
+                <div class="empty-state"><p>Click <strong>Refresh</strong> to rank today's best refines or switch to Daily Focus Planner to allocate your focus budget.</p></div>
+            </div>
+        </section>
+
         <!-- ====== TAB: JOURNALS CALCULATOR ====== -->
         <section class="tab-pane hidden" id="pane-journals">
             <div class="controls-panel">
@@ -1150,6 +1329,13 @@
                     </div>
                     <div class="control-group checkbox-group">
                         <label><input type="checkbox" id="rrr-premium" checked> Premium Account</label>
+                    </div>
+                    <div class="control-group">
+                        <label for="rrr-base-pb" title="Crafting base production bonus — research sources disagree 15 vs 18. Default 18.">Base PB</label>
+                        <select id="rrr-base-pb" style="width:80px;">
+                            <option value="18" selected>18</option>
+                            <option value="15">15</option>
+                        </select>
                     </div>
                     <button id="rrr-calc-btn" class="btn-scan" style="height:38px; padding:0 1.5rem; font-size:0.85rem;">Calculate</button>
                 </div>
@@ -1994,6 +2180,25 @@
                     <h2 class="about-heading">Changelog</h2>
                     <div id="changelog-wrapper" style="max-height: 500px; overflow-y: auto; position: relative;">
                     <div class="changelog-list">
+                        <div class="changelog-entry">
+                            <div class="changelog-date">April 18, 2026</div>
+                            <div class="changelog-title">🏭 Crafting &amp; Refining Overhaul v2 &mdash; MASSIVE release</div>
+                            <ul>
+                                <li><strong>Tax rate bug fixed</strong> (was hardcoded 3% from pre-2021). Now correctly shows <strong>4% Premium / 8% Non-Premium</strong> via a live Premium toggle. Every tab that uses tax (Transport, BM Flipper, Portfolio) auto-updates. Non-premium users were being under-projected on tax by 167%.</li>
+                                <li><strong>⚡ Top-N Crafting Ranker (new tab)</strong> &mdash; ranks every recipe by silver/focus, silver/hour, profit, or ROI against live prices + your spec. Auto-applies city specialty bonuses. Min liquidity filter keeps you from crafting items you can't sell. <em>No other tool does this.</em></li>
+                                <li><strong>🔥 Refining Lab (new tab)</strong> &mdash; three modes: Today's Best (sorted grid), Single Material Deep-Dive, and Daily Focus Planner (allocates your 10k-30k daily focus across refines).</li>
+                                <li><strong>🗺️ City Heatmap</strong> &mdash; on any crafting detail, see a 7&times;2 matrix (7 cities &times; focus on/off) with profit + RRR per cell. Best cell highlighted.</li>
+                                <li><strong>🌳 Sub-recipe Tree with buy-vs-craft toggles</strong> &mdash; expand any material into its own recipe. Toggle each node 🛒 Buy or 🔨 Craft. "Auto-optimize" picks the cheaper path per node. Savings counter vs all-buy baseline.</li>
+                                <li><strong>🎯 Inverse Calc</strong> &mdash; target-margin slider shows max unit price you can pay per material.</li>
+                                <li><strong>🧑‍🔧 Crafter Profiles</strong> &mdash; multiple named profiles (e.g. "Plate Specialist", "Cloth Refiner"). Spec/mastery/city/food buff/premium all propagate across Crafting, RRR, Refining Lab, Top-N simultaneously. Nav pill shows active profile.</li>
+                                <li><strong>🎲 Monte-Carlo Craft Simulator (bonus)</strong> &mdash; simulates 400 crafting sessions with your RRR + quality distribution. Shows silver-earned histogram + p5/p50/p95 outcomes. Turns "expected profit" into "expected profit &plusmn; realistic range".</li>
+                                <li><strong>Focus formula fixed</strong> &mdash; was linear (wrong slope), now exponential <code>cost = base &times; 0.5^(efficiency/10000)</code> per wiki &amp; forum research.</li>
+                                <li><strong>Item Value + Station Fee</strong> helpers added &mdash; new "Station s/100 Nutrition" input replaces the flat % and matches the in-game station UI.</li>
+                                <li><strong>Quality EV mode</strong> &mdash; optional toggle weights sell prices across the quality distribution at your spec. Huge for masterpiece-target items.</li>
+                                <li><strong>Food buff</strong> &mdash; Pork Omelette (+18%) / Avalonian Pork (+30%) focus efficiency.</li>
+                                <li>Service worker cache v25 &rarr; v26.</li>
+                            </ul>
+                        </div>
                         <div class="changelog-entry">
                             <div class="changelog-date">April 17, 2026</div>
                             <div class="changelog-title">💰 Loot Split Calculator + ⚔ Equipment-at-Death + 🛠 DevOps</div>

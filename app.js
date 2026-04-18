@@ -15,8 +15,246 @@ const CHART_API_URLS = {
 };
 
 const CITIES = ['Martlock', 'Thetford', 'Fort Sterling', 'Lymhurst', 'Bridgewatch', 'Caerleon', 'Brecilien', 'Black Market'];
-const TAX_RATE = 0.03;      // 3% market transaction tax (insta-sell to buy orders)
-const SETUP_FEE = 0.025;    // 2.5% listing setup fee (sell orders only; combined = 5.5%)
+// === TAX + CRAFTING CONFIG ===
+// Tax rates depend on Premium status (per 2023 Lands Awakened + forum 169251 / devtracker 510446ae).
+// Premium: 4% instant-sell (to buy orders), 4% + 2.5% setup = 6.5% sell-order.
+// Non-Premium: 8% instant-sell, 8% + 2.5% setup = 10.5% sell-order.
+// (Previous 3%/5.5% hardcode was stale pre-2021 data and under-projected tax by 33-167%.)
+// TAX_RATE/SETUP_FEE are `let` so Premium toggle live-updates every existing reference.
+let TAX_RATE = 0.04;        // Current active insta-sell / market tax (premium default)
+const SETUP_FEE = 0.025;    // 2.5% listing setup fee (applied on sell orders only)
+
+// Runtime crafting/refining config — persisted to localStorage, shared across tabs
+const CraftConfig = {
+    premium: true,              // assume premium; first-interaction persists
+    craftingBasePB: 18,         // DECISION-A1: sources disagree 15 vs 18; default 18, user-configurable
+    refiningBasePB: 18,         // refining is unambiguous at 18
+    foodBuff: 'none',           // 'none' | 'pork' (T6, +18% focus eff) | 'avalonian' (T8, +30%)
+    qualityEV: false,           // toggle weighted-avg sell across quality distribution
+    stationSilverPer100: 200,   // default station "silver per 100 nutrition" — typical city prime
+    liquidityMin: 50,           // default daily-volume gate for Top-N ranker (items/day)
+};
+
+function loadCraftConfig() {
+    try {
+        const saved = JSON.parse(localStorage.getItem('craftConfig_v1') || '{}');
+        Object.assign(CraftConfig, saved);
+    } catch {}
+    TAX_RATE = CraftConfig.premium ? 0.04 : 0.08;
+}
+function saveCraftConfig() {
+    try { localStorage.setItem('craftConfig_v1', JSON.stringify(CraftConfig)); } catch {}
+    TAX_RATE = CraftConfig.premium ? 0.04 : 0.08;
+}
+function setPremium(isPremium) {
+    CraftConfig.premium = !!isPremium;
+    saveCraftConfig();
+}
+
+// --- City Specialty Map (DECISION-A2) ---
+// Applies +15/+20% production bonus in Royal cities / +20% Caerleon when recipe category matches.
+// Refining specialty = +40% PB when raw material family matches city.
+const CITY_CRAFT_SPECIALTY = {
+    'Lymhurst':       { categories: ['bow','cursedstaff','mage_robe','mage_shoes','mage_helmet'], bonus: 15, label: 'Cloth Armor, Bow, Cursed' },
+    'Bridgewatch':    { categories: ['crossbow','dagger','plate_helmet','plate_shoes','plate_armor','cursedstaff'], bonus: 15, label: 'Plate Armor, Crossbow, Dagger' },
+    'Fort Sterling':  { categories: ['hammer','quarterstaff','holystaff','plate_helmet','plate_shoes','plate_armor'], bonus: 15, label: 'Plate, Hammer, Quarterstaff' },
+    'Thetford':       { categories: ['cursedstaff','firestaff','leather_helmet','leather_shoes','leather_armor','mage_helmet','mage_robe','mage_shoes'], bonus: 15, label: 'Cloth Armor, Fire, Cursed' },
+    'Martlock':       { categories: ['axe','quarterstaff','froststaff','leather_helmet','leather_shoes','leather_armor'], bonus: 15, label: 'Leather, Axe, Frost' },
+    'Caerleon':       { categories: ['cape','bag','offhand_torch','offhand_book','offhand_shield','food','naturestaff','arcanestaff','holystaff','firestaff','froststaff','cursedstaff'], bonus: 20, label: 'Capes, Bags, Magic Staves' },
+    'Brecilien':      { categories: [], bonus: 0, label: 'No crafting specialty' },
+};
+// Raw material → refining specialty city
+const CITY_REFINE_SPECIALTY = {
+    'Fort Sterling':  { family: 'WOOD',   refined: 'PLANKS',     bonus: 40 },
+    'Thetford':       { family: 'ORE',    refined: 'METALBAR',   bonus: 40 },
+    'Lymhurst':       { family: 'FIBER',  refined: 'CLOTH',      bonus: 40 },
+    'Bridgewatch':    { family: 'HIDE',   refined: 'LEATHER',    bonus: 40 },
+    'Martlock':       { family: 'ROCK',   refined: 'STONEBLOCK', bonus: 40 },
+    'Caerleon':       { family: null,    refined: null,         bonus: 0  },
+    'Brecilien':      { family: null,    refined: null,         bonus: 0  },
+};
+
+// Heuristic category-from-itemId (used when recipe doesn't carry the specific slot).
+// Falls back through known patterns in the Albion item-id namespace.
+function detectRecipeCategory(itemId) {
+    if (!itemId) return null;
+    const id = itemId.toUpperCase();
+    if (id.includes('2H_BOW') || id.includes('_BOW_')) return 'bow';
+    if (id.includes('CROSSBOW')) return 'crossbow';
+    if (id.includes('AXE')) return 'axe';
+    if (id.includes('HAMMER')) return 'hammer';
+    if (id.includes('DAGGER')) return 'dagger';
+    if (id.includes('QUARTERSTAFF') || id.includes('_SPEAR_') || id.includes('SPEAR')) return 'quarterstaff';
+    if (id.includes('HOLYSTAFF')) return 'holystaff';
+    if (id.includes('FIRESTAFF')) return 'firestaff';
+    if (id.includes('FROSTSTAFF')) return 'froststaff';
+    if (id.includes('CURSEDSTAFF')) return 'cursedstaff';
+    if (id.includes('NATURESTAFF')) return 'naturestaff';
+    if (id.includes('ARCANESTAFF')) return 'arcanestaff';
+    if (id.includes('_SHIELD')) return 'offhand_shield';
+    if (id.includes('_BOOK') || id.includes('TOME_')) return 'offhand_book';
+    if (id.includes('_TORCH')) return 'offhand_torch';
+    if (id.includes('PLATE_SET1') || id.includes('ARMOR_PLATE')) return 'plate_armor';
+    if (id.includes('PLATE_HEAD') || id.includes('HEAD_PLATE')) return 'plate_helmet';
+    if (id.includes('PLATE_SHOES') || id.includes('SHOES_PLATE')) return 'plate_shoes';
+    if (id.includes('LEATHER_SET1') || id.includes('ARMOR_LEATHER')) return 'leather_armor';
+    if (id.includes('LEATHER_HEAD') || id.includes('HEAD_LEATHER')) return 'leather_helmet';
+    if (id.includes('LEATHER_SHOES') || id.includes('SHOES_LEATHER')) return 'leather_shoes';
+    if (id.includes('CLOTH_SET1') || id.includes('ARMOR_CLOTH')) return 'mage_robe';
+    if (id.includes('CLOTH_HEAD') || id.includes('HEAD_CLOTH')) return 'mage_helmet';
+    if (id.includes('CLOTH_SHOES') || id.includes('SHOES_CLOTH')) return 'mage_shoes';
+    if (id.includes('CAPEITEM_') || id.includes('_CAPE')) return 'cape';
+    if (id.includes('_BAG')) return 'bag';
+    if (id.includes('MEAL_') || id.includes('_POTION')) return 'food';
+    return null;
+}
+
+// City craft bonus auto-detect: returns {bonus, reason, autoApplied} given city+item.
+function getCityCraftBonus(cityName, itemId) {
+    const specialty = CITY_CRAFT_SPECIALTY[cityName];
+    if (!specialty) return { bonus: 0, reason: '', autoApplied: false };
+    const cat = detectRecipeCategory(itemId);
+    if (!cat) return { bonus: 0, reason: '', autoApplied: false };
+    if (specialty.categories.includes(cat)) {
+        return { bonus: specialty.bonus, reason: `${cityName} specialty (${cat})`, autoApplied: true };
+    }
+    return { bonus: 0, reason: '', autoApplied: false };
+}
+
+// Refining city bonus: T6_PLANKS @ Fort Sterling = 40% PB
+function getCityRefineBonus(cityName, itemId) {
+    const specialty = CITY_REFINE_SPECIALTY[cityName];
+    if (!specialty || !specialty.family) return { bonus: 0, reason: '', autoApplied: false };
+    const id = itemId.toUpperCase();
+    // Match on "refined" suffix: T6_PLANKS, T6_METALBAR etc.
+    if (specialty.refined && id.includes('_' + specialty.refined)) {
+        return { bonus: specialty.bonus, reason: `${cityName} refining specialty`, autoApplied: true };
+    }
+    return { bonus: 0, reason: '', autoApplied: false };
+}
+
+// --- Item Value (DECISION-A5) ---
+// Per wiki Item_Value page: sum of non-artifact material values + artifact values at item's tier.
+// Base unit = 16 × 2^(tier + enchant - 4). T4=16, T5=32, T6=64, T7=128, T8=256 (enchant 0).
+const IV_BASE = (tier, ench) => 16 * Math.pow(2, Math.max(0, tier + ench - 4));
+// Crude artifact detector: artifact material IDs typically contain ARTEFACT or specific suffixes.
+function isArtifactId(id) {
+    if (!id) return false;
+    const u = id.toUpperCase();
+    return u.includes('ARTEFACT') || u.includes('RUNE_') || u.includes('SOUL_') || u.includes('RELIC_') || u.includes('AVALONIAN_');
+}
+function parseTierEnch(itemId) {
+    const m = /^T(\d)/.exec(itemId || '');
+    const tier = m ? parseInt(m[1]) : 0;
+    const em = /@(\d)/.exec(itemId || '');
+    const ench = em ? parseInt(em[1]) : 0;
+    return { tier, ench };
+}
+function itemValue(itemId) {
+    const recipe = recipesData[itemId];
+    if (!recipe || !recipe.materials) return 0;
+    const { tier, ench } = parseTierEnch(itemId);
+    if (!tier) return 0;
+    const base = IV_BASE(tier, ench);
+    let nonArtifactMats = 0;
+    let artifactValue = 0;
+    for (const m of recipe.materials) {
+        if (isArtifactId(m.id)) {
+            // Artifact material: rough IV = 16 × 2^(matTier + matEnch - 4) × artifact premium (~5×)
+            const mt = parseTierEnch(m.id);
+            artifactValue += IV_BASE(mt.tier || tier, mt.ench || ench) * 5 * (m.qty || 1);
+        } else {
+            nonArtifactMats += (m.qty || 0);
+        }
+    }
+    return Math.round(nonArtifactMats * base + artifactValue);
+}
+
+// --- Station fee (DECISION-A6) ---
+// Station fee per craft = ItemValue × 0.1125 × (silverPer100Nutrition / 100)
+function stationFeePerCraft(itemId, silverPer100Nutrition) {
+    const iv = itemValue(itemId);
+    const sp100 = (silverPer100Nutrition == null ? CraftConfig.stationSilverPer100 : silverPer100Nutrition);
+    return Math.round(iv * 0.1125 * (sp100 / 100));
+}
+
+// --- Focus formula (DECISION-A3) ---
+// Correct exponential: cost = base × 0.5^(efficiency/10000)
+// efficiency = masteryLevel × 30 + mainSpecLevel × 250 + otherSpecLevels × 30
+// Food buffs (Pork +18%, Avalonian +30%) multiply efficiency by 1.18 / 1.30.
+function calculateFocusCostV2(baseCost, mainSpecLevel, masteryLevel, otherSpecLevels = 0, foodBuff = null) {
+    if (!baseCost || baseCost <= 0) return 0;
+    const buff = foodBuff || CraftConfig.foodBuff || 'none';
+    const buffMult = buff === 'avalonian' ? 1.30 : (buff === 'pork' ? 1.18 : 1.0);
+    const efficiency = (masteryLevel * 30 + mainSpecLevel * 250 + otherSpecLevels * 30) * buffMult;
+    return Math.max(1, Math.ceil(baseCost * Math.pow(0.5, efficiency / 10000)));
+}
+
+// --- Quality distribution (DECISION-A7) ---
+// Base table (wiki, forum 67684): Normal 68.9%, Good 25.0%, Outstanding 5.0%, Excellent 1.0%, Masterpiece 0.1%
+// Each +100 quality points from spec/city/food = 1 re-roll. Maxed ≈ 50% Outstanding+.
+const QUALITY_BASE_DIST = [0.689, 0.250, 0.050, 0.010, 0.001];
+function qualityDistribution(qualityPoints = 0) {
+    // qualityPoints divided by 100 = rerolls (keep best). Approximation: shift mass rightward.
+    const rerolls = Math.max(0, Math.min(5, qualityPoints / 100));
+    const dist = QUALITY_BASE_DIST.slice();
+    if (rerolls > 0) {
+        // For each reroll, P(at least one ≥ Q) = 1 - (1 - P(single ≥ Q))^(1 + rerolls)
+        // Work from the tail down.
+        let cumAbove = 0; // cumulative prob of Q+ (starting from masterpiece)
+        const tailProbs = [];
+        for (let q = 4; q >= 0; q--) {
+            const singleQPlus = dist[q] + cumAbove;
+            const rerolledQPlus = 1 - Math.pow(1 - singleQPlus, 1 + rerolls);
+            tailProbs[q] = rerolledQPlus;
+            cumAbove += dist[q];
+        }
+        // Convert back to per-quality
+        const out = [0, 0, 0, 0, 0];
+        for (let q = 0; q < 5; q++) {
+            const qPlus = tailProbs[q] || 0;
+            const qPlusNext = (q < 4 ? tailProbs[q + 1] : 0) || 0;
+            out[q] = Math.max(0, qPlus - qPlusNext);
+        }
+        out[0] = Math.max(0, 1 - out[1] - out[2] - out[3] - out[4]); // renormalise
+        return out;
+    }
+    return dist;
+}
+function qualityEVPrice(pricesByQuality, qualityPoints = 0) {
+    // pricesByQuality: { 1: price, 2: price, 3: price, 4: price, 5: price }
+    if (!pricesByQuality) return 0;
+    const dist = qualityDistribution(qualityPoints);
+    let ev = 0;
+    for (let q = 1; q <= 5; q++) {
+        const p = pricesByQuality[q] || pricesByQuality[1] || 0; // fall back to Q1 if quality price missing
+        ev += p * dist[q - 1];
+    }
+    return Math.round(ev);
+}
+
+// --- Focus costs lookup (refining + crafting base values) ---
+// Research-derived per-tier base focus; verify at one tier in-game after rollout.
+const FOCUS_COSTS = {
+    refining: {
+        2: 1, 3: 3, 4: 48, 5: 96, 6: 192, 7: 384, 8: 768,
+    },
+    crafting: {
+        4: 14, 5: 30, 6: 62, 7: 126, 8: 254,
+    },
+};
+function baseFocusForItem(itemId, activity /* 'crafting' | 'refining' */) {
+    const { tier, ench } = parseTierEnch(itemId);
+    if (!tier) return 0;
+    // Enchanted items cost 2^ench × base
+    const tierBase = (FOCUS_COSTS[activity] && FOCUS_COSTS[activity][tier]) || 0;
+    return Math.round(tierBase * Math.pow(2, ench));
+}
+
+// --- Effective tax rate helper ---
+function effectiveTaxRate(sellMode /* 'instant' | 'order' */) {
+    return sellMode === 'instant' ? TAX_RATE : (TAX_RATE + SETUP_FEE);
+}
 
 // Transport mount carry-weight table. Mounts only add weight capacity — slots come from player inventory only.
 // "none" = player base carry capacity with a standard bag (600 kg).
@@ -1808,16 +2046,17 @@ async function doCompare() {
 // CRAFTING PROFITS
 // ============================================================
 
-function calculateRRR(useFocus, cityBonusPct) {
-    const basePB = 18; // Royal city base production bonus
+function calculateRRR(useFocus, cityBonusPct, activity = 'crafting') {
+    const basePB = activity === 'refining' ? CraftConfig.refiningBasePB : CraftConfig.craftingBasePB;
     const focusPB = useFocus ? 59 : 0;
-    const totalPB = basePB + cityBonusPct + focusPB;
+    const totalPB = basePB + (cityBonusPct || 0) + focusPB;
     return 1 - 1 / (1 + totalPB / 100);
 }
 
+// Backward-compat shim: old call-sites passed (baseCost, specLevel, masteryLevel).
+// New V2 is exposed as calculateFocusCostV2 and uses exponential formula per wiki.
 function calculateFocusCost(baseCost, specLevel, masteryLevel) {
-    const reduction = (specLevel * 0.6 + masteryLevel * 0.3);
-    return Math.max(1, Math.floor(baseCost * (1 - reduction / 100)));
+    return calculateFocusCostV2(baseCost, specLevel, masteryLevel, 0, CraftConfig.foodBuff);
 }
 
 // ====== SINGLE ITEM CRAFTING CALCULATOR ======
@@ -1904,20 +2143,35 @@ function renderCraftDetail(itemId, recipe, data) {
     const masteryLevel = parseInt(document.getElementById('craft-mastery').value) || 0;
     const cityBonusPct = parseFloat(document.getElementById('craft-city-bonus').value) || 0;
     const stationFee = parseFloat(document.getElementById('craft-fee').value) || 0;
+    const stationS100 = parseFloat(document.getElementById('craft-station-s100')?.value) || 0;
     const craftQuality = parseInt(document.getElementById('craft-quality')?.value) || 1;
-    const rrr = calculateRRR(useFocus, cityBonusPct);
+    const qualityEV = !!document.getElementById('craft-quality-ev')?.checked;
+    const isRefining = (recipe.category === 'materials');
+    const rrr = calculateRRR(useFocus, cityBonusPct, isRefining ? 'refining' : 'crafting');
     const effectiveMultiplier = 1 - rrr;
 
-    // Index prices by item_id → city (filter finished item by selected quality)
+    // Index prices by item_id → city (filter finished item by selected quality, unless Quality EV)
+    // When qualityEV is on, finishedPricesByQuality[city] = { 1: {...}, 2: {...}, ... } for EV calc.
     const priceIndex = {};
+    const finishedPricesByQuality = {}; // city → { quality(1-5): { buyMax, sellMin } }
     for (const entry of data) {
         const id = entry.item_id;
         const q = entry.quality || 1;
-        // For the finished item, only include prices matching selected quality
-        // For materials, include all qualities (materials are always Q1)
-        if (id === itemId && q !== craftQuality) continue;
         let city = entry.city;
         if (city && city.includes('Black Market')) city = 'Black Market';
+
+        // For the finished item in quality-EV mode, collect per-quality prices.
+        if (id === itemId && qualityEV) {
+            if (!finishedPricesByQuality[city]) finishedPricesByQuality[city] = {};
+            if (!finishedPricesByQuality[city][q]) finishedPricesByQuality[city][q] = { sellMin: 0, buyMax: 0 };
+            const slot = finishedPricesByQuality[city][q];
+            if (entry.sell_price_min > 0 && (slot.sellMin === 0 || entry.sell_price_min < slot.sellMin)) slot.sellMin = entry.sell_price_min;
+            if (entry.buy_price_max > 0 && entry.buy_price_max > slot.buyMax) slot.buyMax = entry.buy_price_max;
+        }
+
+        // For the finished item (non-EV), filter by selected quality.
+        // For materials, include all qualities (materials are always Q1).
+        if (id === itemId && !qualityEV && q !== craftQuality) continue;
         if (!priceIndex[id]) priceIndex[id] = {};
         const existing = priceIndex[id][city];
         if (!existing) {
@@ -1934,6 +2188,24 @@ function renderCraftDetail(itemId, recipe, data) {
             if (entry.buy_price_max > 0 && entry.buy_price_max > existing.buyMax) {
                 existing.buyMax = entry.buy_price_max;
             }
+        }
+    }
+
+    // If Quality EV mode on, overwrite finished-item priceIndex with EV-weighted prices per city.
+    if (qualityEV) {
+        if (!priceIndex[itemId]) priceIndex[itemId] = {};
+        // Quality points: rough heuristic — masteryLevel + specLevel contributes via Albion table.
+        // Mastery 100 ≈ 30 quality points per tier, spec 100 ≈ 50 quality points. Simple blend:
+        const qPoints = (masteryLevel + specLevel) * 0.8;
+        for (const city of Object.keys(finishedPricesByQuality)) {
+            const byQ = finishedPricesByQuality[city];
+            const buyByQ = {}; const sellByQ = {};
+            for (let q = 1; q <= 5; q++) { buyByQ[q] = byQ[q]?.buyMax || 0; sellByQ[q] = byQ[q]?.sellMin || 0; }
+            priceIndex[itemId][city] = {
+                sellMin: qualityEVPrice(sellByQ, qPoints),
+                buyMax: qualityEVPrice(buyByQ, qPoints),
+                sellDate: '', buyDate: '', qualityEV: true,
+            };
         }
     }
 
@@ -2058,7 +2330,9 @@ function renderCraftDetail(itemId, recipe, data) {
     });
     sellHTML += `</tr>`;
 
-    // Profit row (using cheapest materials)
+    // Profit row (using cheapest materials). Station fee uses new ItemValue × 11.25% × (s/100) formula
+    // if stationS100 is set; else falls back to legacy flat % input.
+    const sFeePerCraft = stationS100 > 0 ? stationFeePerCraft(itemId, stationS100) : 0;
     if (cheapestTotal !== Infinity) {
         sellHTML += `<tr class="total-row"><td><strong>Net Profit</strong></td>`;
         CITIES.forEach(c => {
@@ -2066,8 +2340,8 @@ function renderCraftDetail(itemId, recipe, data) {
             const sellPrice = p ? p.buyMax : 0;
             if (sellPrice > 0) {
                 const totalRevenue = sellPrice * outputQty;
-                const tax = totalRevenue * (TAX_RATE + SETUP_FEE); // 5.5% for sell orders
-                const fee = totalRevenue * (stationFee / 100);     // station fee on item value
+                const tax = totalRevenue * (TAX_RATE + SETUP_FEE); // premium-aware
+                const fee = sFeePerCraft > 0 ? sFeePerCraft : totalRevenue * (stationFee / 100);
                 const profit = totalRevenue - cheapestTotal - tax - fee;
                 const cls = profit >= 0 ? 'text-green' : 'text-red';
                 sellHTML += `<td class="${cls}"><strong>${Math.floor(profit).toLocaleString()}</strong></td>`;
@@ -2097,6 +2371,25 @@ function renderCraftDetail(itemId, recipe, data) {
         }
     });
 
+    // Recompute bestProfit using per-craft station fee (stationFeePerCraft) and per-city auto-specialty.
+    let bestProfit2 = -Infinity, bestCity2 = '', bestSellPrice2 = 0, bestCityRRR = rrr;
+    for (const c of CITIES) {
+        const p = finishedPrices[c];
+        const sellPrice = p ? p.buyMax : 0;
+        if (sellPrice > 0 && cheapestTotal !== Infinity) {
+            const detect = isRefining ? getCityRefineBonus(c, itemId) : getCityCraftBonus(c, itemId);
+            const cityRRR = detect.autoApplied ? calculateRRR(useFocus, detect.bonus, isRefining ? 'refining' : 'crafting') : rrr;
+            // Note: existing matCostByCity is already computed at the user-selected cityBonusPct.
+            // Auto-applied specialty adjustment is informational; primary ranking still uses matCostByCity.
+            const tax = sellPrice * effectiveTaxRate('order');
+            const fee = sFeePerCraft > 0 ? sFeePerCraft : sellPrice * (stationFee / 100);
+            const profit = sellPrice - cheapestTotal - tax - fee;
+            if (profit > bestProfit2) { bestProfit2 = profit; bestCity2 = c; bestSellPrice2 = sellPrice; bestCityRRR = cityRRR; }
+        }
+    }
+    if (bestProfit2 > -Infinity) { bestProfit = bestProfit2; bestCity = bestCity2; bestSellPrice = bestSellPrice2; }
+    const cityDetect = isRefining ? getCityRefineBonus(bestCity, itemId) : getCityCraftBonus(bestCity, itemId);
+
     let summaryHTML = `<div class="craft-summary-card">
         <div class="craft-summary-header">
             <div style="position:relative;display:flex;">
@@ -2104,24 +2397,30 @@ function renderCraftDetail(itemId, recipe, data) {
                 ${getEnchantmentBadge(itemId)}
             </div>
             <div>
-                <h2>${name} <span class="tier-badge">${getTierEnchLabel(itemId)}</span></h2>
-                <span style="color:var(--text-muted);font-size:0.8rem;">${itemId}</span>
+                <h2>${esc(name)} <span class="tier-badge">${getTierEnchLabel(itemId)}</span></h2>
+                <span style="color:var(--text-muted);font-size:0.8rem;">${esc(itemId)}</span>
+                ${cityDetect.autoApplied ? `<span class="badge-specialty" title="City auto-applied +${cityDetect.bonus}% production bonus">🏙️ ${esc(cityDetect.reason)} +${cityDetect.bonus}% PB</span>` : ''}
+                ${qualityEV ? '<span class="badge-specialty" style="background:#6d28d9;" title="Prices shown are expected value across quality distribution at your spec">🎯 Quality EV</span>' : ''}
+                ${!CraftConfig.premium ? '<span class="badge-specialty" style="background:#ea580c;" title="Non-premium tax: 8% + 2.5% setup = 10.5%">💎 Non-Premium (10.5% tax)</span>' : '<span class="badge-specialty" style="background:#0d9488;" title="Premium tax: 4% + 2.5% setup = 6.5%">💎 Premium (6.5% tax)</span>'}
             </div>
         </div>`;
 
     if (bestProfit > -Infinity) {
         const roi = cheapestTotal > 0 ? (bestProfit / cheapestTotal * 100).toFixed(1) : '0.0';
         const gaugeWidth = Math.min(100, Math.abs(parseFloat(roi)));
-        // Focus cost calculation
-        const baseFocusCost = recipe.focusCost || 0;
-        const focusCost = baseFocusCost > 0 ? calculateFocusCost(baseFocusCost, specLevel, masteryLevel) : 0;
-        const qualityLabel = craftQuality > 1 ? ` (Q${craftQuality})` : '';
+        // Focus cost calculation — V2 exponential, food-buff aware.
+        const baseFocusCost = recipe.focusCost || baseFocusForItem(itemId, isRefining ? 'refining' : 'crafting');
+        const focusCost = baseFocusCost > 0 ? calculateFocusCostV2(baseFocusCost, specLevel, masteryLevel, 0, CraftConfig.foodBuff) : 0;
+        const qualityLabel = craftQuality > 1 && !qualityEV ? ` (Q${craftQuality})` : (qualityEV ? ' (EV)' : '');
+        const taxPct = ((TAX_RATE + SETUP_FEE) * 100).toFixed(1);
+        const feeLabel = sFeePerCraft > 0 ? `Station Fee (IV)` : (stationFee > 0 ? `Station Fee (${stationFee}%)` : null);
+        const feeAmount = sFeePerCraft > 0 ? sFeePerCraft : (stationFee > 0 ? Math.floor(bestSellPrice * stationFee / 100) : 0);
         summaryHTML += `
         <div class="craft-summary-stats">
             <div class="stat-box"><div class="stat-label">Cheapest Materials</div><div class="stat-value">${cheapestTotal.toLocaleString()} s</div></div>
-            <div class="stat-box"><div class="stat-label">Best Sell${qualityLabel} (${bestCity})</div><div class="stat-value text-accent">${bestSellPrice.toLocaleString()} s</div></div>
-            <div class="stat-box"><div class="stat-label">Tax+Setup (5.5%)</div><div class="stat-value text-red">-${Math.floor(bestSellPrice * (TAX_RATE + SETUP_FEE)).toLocaleString()}</div></div>
-            ${stationFee > 0 ? `<div class="stat-box"><div class="stat-label">Station Fee (${stationFee}%)</div><div class="stat-value text-red">-${Math.floor(bestSellPrice * stationFee / 100).toLocaleString()}</div></div>` : ''}
+            <div class="stat-box"><div class="stat-label">Best Sell${qualityLabel} (${esc(bestCity)})</div><div class="stat-value text-accent">${bestSellPrice.toLocaleString()} s</div></div>
+            <div class="stat-box"><div class="stat-label">Tax+Setup (${taxPct}%)</div><div class="stat-value text-red">-${Math.floor(bestSellPrice * (TAX_RATE + SETUP_FEE)).toLocaleString()}</div></div>
+            ${feeLabel ? `<div class="stat-box"><div class="stat-label">${esc(feeLabel)}</div><div class="stat-value text-red">-${feeAmount.toLocaleString()}</div></div>` : ''}
             <div class="stat-box highlight"><div class="stat-label">Net Profit</div><div class="stat-value ${bestProfit >= 0 ? 'text-green' : 'text-red'}">${Math.floor(bestProfit).toLocaleString()} s</div></div>
             <div class="stat-box"><div class="stat-label">ROI</div><div class="stat-value ${bestProfit >= 0 ? 'text-green' : 'text-red'}">${roi}%</div></div>
             ${useFocus && focusCost > 0 ? `<div class="stat-box"><div class="stat-label">Focus Cost</div><div class="stat-value" style="color:#a78bfa;">${focusCost.toLocaleString()} focus</div></div>
@@ -2133,10 +2432,352 @@ function renderCraftDetail(itemId, recipe, data) {
     }
     summaryHTML += `</div>`;
 
-    container.innerHTML = summaryHTML + matTableHTML + sellHTML;
+    // ===== City Heatmap (C4) — 7 cities × (focus on/off) matrix =====
+    const heatmapHTML = renderCityHeatmap(itemId, recipe, priceIndex, specLevel, masteryLevel, stationS100, stationFee, sFeePerCraft, isRefining, cheapestTotal);
+
+    // ===== Sub-recipe tree with buy-vs-craft toggles (C2) =====
+    const treeHTML = renderSubRecipeTree(itemId, recipe, priceIndex, { useFocus, specLevel, masteryLevel, cityBonusPct, isRefining });
+
+    // ===== Inverse calc — max material prices for target margin (C5) =====
+    const inverseHTML = renderInverseCalc(itemId, recipe, priceIndex, { bestSellPrice, bestCity, effectiveMultiplier, sFeePerCraft, stationFee });
+
+    container.innerHTML = summaryHTML + matTableHTML + sellHTML + heatmapHTML + treeHTML + inverseHTML;
+
+    // Wire up sub-recipe tree toggle buttons now that the HTML is mounted
+    wireSubRecipeTreeEvents(itemId, recipe, priceIndex, { useFocus, specLevel, masteryLevel, cityBonusPct, isRefining });
+
+    // Wire up inverse calc slider
+    wireInverseCalcEvents(itemId, recipe, priceIndex, { bestSellPrice, bestCity, effectiveMultiplier, sFeePerCraft, stationFee });
 
     // Generate shopping list grouped by cheapest city
     generateShoppingList(recipe, itemId, priceIndex, effectiveMultiplier);
+}
+
+// ============================================================
+// CRAFTING — City Heatmap (C4)
+// ============================================================
+// 7 cities × (focus-off, focus-on) = 14-cell matrix of profit / RRR / liquidity.
+// Uses per-city specialty auto-detection for PB.
+function renderCityHeatmap(itemId, recipe, priceIndex, specLevel, masteryLevel, stationS100, stationFee, sFeePerCraft, isRefining, matCostBaseline) {
+    const cities = ['Caerleon','Bridgewatch','Fort Sterling','Lymhurst','Martlock','Thetford','Brecilien'];
+    const outputQty = recipe.output || 1;
+    let html = `<div class="craft-detail-section">
+        <h3>🗺️ City Heatmap — Profit by City × Focus</h3>
+        <p style="color:var(--text-muted);font-size:0.8rem;margin:0 0 0.5rem 0;">Best city shown in green. Auto-applied specialty bonus badges on each row.</p>
+        <div class="table-scroll-wrapper">
+        <table class="compare-table craft-cost-table city-heatmap">
+            <thead><tr><th>City</th><th>Specialty</th><th>No Focus</th><th>With Focus</th></tr></thead>
+            <tbody>`;
+
+    let globalBest = -Infinity;
+    const cells = cities.map(c => {
+        const detect = isRefining ? getCityRefineBonus(c, itemId) : getCityCraftBonus(c, itemId);
+        const cityBonus = detect.bonus || 0;
+        const row = { city: c, specialty: detect };
+        for (const focusOn of [false, true]) {
+            const cityRRR = calculateRRR(focusOn, cityBonus, isRefining ? 'refining' : 'crafting');
+            const effMult = 1 - cityRRR;
+            // Recompute mat cost at this city's RRR using cheapest-per-mat prices from priceIndex.
+            let matCost = 0; let missing = false;
+            for (const mat of recipe.materials) {
+                const byCity = priceIndex[mat.id] || {};
+                let cheapest = Infinity;
+                for (const cityName of Object.keys(byCity)) {
+                    if (cityName === 'Black Market') continue;
+                    const sp = byCity[cityName].sellMin;
+                    if (sp > 0 && sp < cheapest) cheapest = sp;
+                }
+                if (cheapest === Infinity) { missing = true; break; }
+                matCost += cheapest * mat.qty * effMult;
+            }
+            const p = priceIndex[itemId] && priceIndex[itemId][c];
+            const sellPrice = p ? p.buyMax : 0;
+            if (sellPrice > 0 && !missing) {
+                const tax = sellPrice * effectiveTaxRate('order');
+                const fee = sFeePerCraft > 0 ? sFeePerCraft : sellPrice * (stationFee / 100);
+                const profit = sellPrice * outputQty - matCost - tax - fee;
+                const rrrPct = (cityRRR * 100).toFixed(1);
+                row[focusOn ? 'focus' : 'nofocus'] = { profit: Math.floor(profit), rrr: rrrPct };
+                if (profit > globalBest) globalBest = profit;
+            } else {
+                row[focusOn ? 'focus' : 'nofocus'] = null;
+            }
+        }
+        return row;
+    });
+
+    for (const r of cells) {
+        html += `<tr>
+            <td><strong>${esc(r.city)}</strong></td>
+            <td style="font-size:0.75rem;color:var(--text-muted);">${r.specialty.autoApplied ? `+${r.specialty.bonus}% ${esc(r.specialty.reason.replace(r.city + ' ', ''))}` : '—'}</td>`;
+        for (const key of ['nofocus', 'focus']) {
+            const cell = r[key];
+            if (!cell) { html += `<td class="text-muted">—</td>`; continue; }
+            const isBest = cell.profit === globalBest && globalBest > 0;
+            const cls = cell.profit < 0 ? 'text-red' : (isBest ? 'best-price text-green' : 'text-green');
+            html += `<td class="${cls}"><strong>${cell.profit.toLocaleString()} s</strong><br><small style="color:var(--text-muted);font-weight:normal;">RRR ${cell.rrr}%</small></td>`;
+        }
+        html += `</tr>`;
+    }
+    html += `</tbody></table></div></div>`;
+    return html;
+}
+
+// ============================================================
+// CRAFTING — Sub-recipe Tree with Buy-vs-Craft Toggles (C2)
+// ============================================================
+// Persisted per-session via window._craftTreeState: { [materialId]: 'buy' | 'craft' } (default 'buy').
+// Recursive — "craft" node expands into its own children. Auto-optimize picks cheapest path per node.
+function renderSubRecipeTree(itemId, recipe, priceIndex, ctx) {
+    if (!recipe || !recipe.materials) return '';
+    window._craftTreeState = window._craftTreeState || {};
+    // Walk the tree at render time.
+    const state = window._craftTreeState;
+    let html = `<div class="craft-detail-section" id="craft-subtree-section">
+        <h3>🌳 Sub-recipe Tree — Buy vs Craft per Node</h3>
+        <p style="color:var(--text-muted);font-size:0.8rem;margin:0 0 0.5rem 0;">Toggle each material to craft locally (applies your RRR) or buy at current cheapest city. "Auto-optimize" picks the cheaper path for each node.</p>
+        <div style="display:flex;gap:0.5rem;margin-bottom:0.5rem;">
+            <button class="btn-secondary" id="craft-tree-auto-btn">✨ Auto-optimize</button>
+            <button class="btn-secondary" id="craft-tree-reset-btn">Reset all to Buy</button>
+            <span id="craft-tree-savings" style="align-self:center;color:var(--text-muted);font-size:0.85rem;"></span>
+        </div>
+        <div id="craft-subtree-view" class="subtree-view">`;
+    html += renderSubRecipeNode(itemId, recipe, priceIndex, ctx, 0, true);
+    html += `</div></div>`;
+    return html;
+}
+
+function renderSubRecipeNode(itemId, recipe, priceIndex, ctx, depth, isRoot) {
+    if (!recipe || !recipe.materials) return '';
+    const state = window._craftTreeState || {};
+    const effMult = 1 - calculateRRR(ctx.useFocus, ctx.cityBonusPct, ctx.isRefining ? 'refining' : 'crafting');
+    let html = '';
+    for (const mat of recipe.materials) {
+        const matRecipe = recipesData[mat.id];
+        const canCraft = !!matRecipe;
+        const nodeState = canCraft ? (state[mat.id] || 'buy') : 'buy';
+        const effQty = mat.qty * (isRoot ? effMult : 1); // root mats multiply by RRR; downstream assumes exact need
+        // Get cheapest price across cities (excluding Black Market)
+        const byCity = priceIndex[mat.id] || {};
+        let cheapest = Infinity, cheapestCity = '—';
+        for (const cityName of Object.keys(byCity)) {
+            if (cityName === 'Black Market') continue;
+            const sp = byCity[cityName].sellMin;
+            if (sp > 0 && sp < cheapest) { cheapest = sp; cheapestCity = cityName; }
+        }
+        const buyCost = cheapest === Infinity ? 0 : cheapest * effQty;
+        // Craft cost: sum of child mats (approx — own RRR applied)
+        let craftCost = null;
+        if (canCraft) {
+            // Recursive leaf-cost estimate: sum(mat.id * mat.qty * cheapest price)
+            let cc = 0;
+            for (const sub of matRecipe.materials) {
+                const sByCity = priceIndex[sub.id] || {};
+                let subCheap = Infinity;
+                for (const cn of Object.keys(sByCity)) {
+                    if (cn === 'Black Market') continue;
+                    const sp = sByCity[cn].sellMin;
+                    if (sp > 0 && sp < subCheap) subCheap = sp;
+                }
+                if (subCheap === Infinity) { cc = null; break; }
+                cc += subCheap * sub.qty;
+            }
+            if (cc != null) craftCost = cc * effQty;
+        }
+        const chosenCost = nodeState === 'craft' && craftCost != null ? craftCost : buyCost;
+        const savings = (canCraft && craftCost != null && buyCost > 0) ? (buyCost - craftCost) : 0;
+        const matName = getFriendlyName(mat.id);
+        html += `<div class="subtree-node" style="margin-left:${depth * 1.5}rem;" data-mat-id="${esc(mat.id)}">
+            <div class="subtree-row">
+                <img class="mat-icon-sm" src="https://render.albiononline.com/v1/item/${esc(mat.id)}.png" alt="" loading="lazy">
+                <span class="subtree-qty">${effQty.toFixed(1)}×</span>
+                <span class="subtree-name">${esc(matName)}</span>
+                <span class="subtree-cost">${Math.round(chosenCost).toLocaleString()}s</span>
+                ${canCraft && craftCost != null ? `
+                    <button class="subtree-toggle ${nodeState === 'buy' ? 'active' : ''}" data-action="buy" data-mat="${esc(mat.id)}" title="Buy at ${esc(cheapestCity)} — ${Math.round(buyCost).toLocaleString()}s">🛒 Buy ${cheapest !== Infinity ? '('+Math.round(buyCost).toLocaleString()+')' : ''}</button>
+                    <button class="subtree-toggle ${nodeState === 'craft' ? 'active' : ''}" data-action="craft" data-mat="${esc(mat.id)}" title="Craft locally — ${Math.round(craftCost).toLocaleString()}s">🔨 Craft (${Math.round(craftCost).toLocaleString()})</button>
+                    ${savings > 0 ? `<span class="subtree-savings text-green" title="Savings if crafted">−${Math.round(savings).toLocaleString()}s</span>` : ''}
+                ` : `<span class="subtree-buy-only" style="color:var(--text-muted);font-size:0.75rem;">${cheapest !== Infinity ? '🛒 '+esc(cheapestCity) : '—'}</span>`}
+            </div>`;
+        if (nodeState === 'craft' && matRecipe) {
+            html += renderSubRecipeNode(mat.id, matRecipe, priceIndex, ctx, depth + 1, false);
+        }
+        html += `</div>`;
+    }
+    return html;
+}
+
+function wireSubRecipeTreeEvents(itemId, recipe, priceIndex, ctx) {
+    const section = document.getElementById('craft-subtree-section');
+    if (!section) return;
+    const rerender = () => {
+        const view = document.getElementById('craft-subtree-view');
+        if (view) view.innerHTML = renderSubRecipeNode(itemId, recipe, priceIndex, ctx, 0, true);
+        // Recompute savings summary
+        updateSubRecipeSavings(itemId, recipe, priceIndex, ctx);
+        // Re-wire (new buttons)
+        const newView = document.getElementById('craft-subtree-view');
+        if (newView) newView.addEventListener('click', onClick);
+    };
+    const onClick = (e) => {
+        const btn = e.target.closest('.subtree-toggle');
+        if (!btn) return;
+        const mat = btn.dataset.mat;
+        const action = btn.dataset.action;
+        if (!mat || !action) return;
+        window._craftTreeState = window._craftTreeState || {};
+        window._craftTreeState[mat] = action;
+        rerender();
+    };
+    const autoBtn = document.getElementById('craft-tree-auto-btn');
+    if (autoBtn) autoBtn.addEventListener('click', () => {
+        // Pick cheaper per-node greedy
+        window._craftTreeState = window._craftTreeState || {};
+        const walk = (r) => {
+            if (!r || !r.materials) return;
+            for (const mat of r.materials) {
+                const matRecipe = recipesData[mat.id];
+                if (!matRecipe) continue;
+                const byCity = priceIndex[mat.id] || {};
+                let cheapest = Infinity;
+                for (const cityName of Object.keys(byCity)) {
+                    if (cityName === 'Black Market') continue;
+                    const sp = byCity[cityName].sellMin;
+                    if (sp > 0 && sp < cheapest) cheapest = sp;
+                }
+                let craftSum = 0; let valid = true;
+                for (const sub of matRecipe.materials) {
+                    const sBy = priceIndex[sub.id] || {};
+                    let subCheap = Infinity;
+                    for (const cn of Object.keys(sBy)) {
+                        if (cn === 'Black Market') continue;
+                        const sp = sBy[cn].sellMin;
+                        if (sp > 0 && sp < subCheap) subCheap = sp;
+                    }
+                    if (subCheap === Infinity) { valid = false; break; }
+                    craftSum += subCheap * sub.qty;
+                }
+                window._craftTreeState[mat.id] = (valid && craftSum < cheapest) ? 'craft' : 'buy';
+                walk(matRecipe);
+            }
+        };
+        walk(recipe);
+        rerender();
+        showToast('Auto-optimized sub-recipe tree ✓', 'success');
+    });
+    const resetBtn = document.getElementById('craft-tree-reset-btn');
+    if (resetBtn) resetBtn.addEventListener('click', () => { window._craftTreeState = {}; rerender(); });
+    const view = document.getElementById('craft-subtree-view');
+    if (view) view.addEventListener('click', onClick);
+    updateSubRecipeSavings(itemId, recipe, priceIndex, ctx);
+}
+
+function updateSubRecipeSavings(itemId, recipe, priceIndex, ctx) {
+    const el = document.getElementById('craft-tree-savings');
+    if (!el) return;
+    // Compare all-buy baseline vs current state
+    const state = window._craftTreeState || {};
+    const effMult = 1 - calculateRRR(ctx.useFocus, ctx.cityBonusPct, ctx.isRefining ? 'refining' : 'crafting');
+    let buyTotal = 0, currentTotal = 0, valid = true;
+    const walk = (r, effQtyMult, depth) => {
+        for (const mat of r.materials) {
+            const effQty = mat.qty * effQtyMult;
+            const byCity = priceIndex[mat.id] || {};
+            let cheapest = Infinity;
+            for (const cityName of Object.keys(byCity)) {
+                if (cityName === 'Black Market') continue;
+                const sp = byCity[cityName].sellMin;
+                if (sp > 0 && sp < cheapest) cheapest = sp;
+            }
+            const matRecipe = recipesData[mat.id];
+            const node = state[mat.id] || 'buy';
+            if (cheapest === Infinity && node !== 'craft') { valid = false; return; }
+            // Baseline always buy.
+            if (cheapest !== Infinity) buyTotal += cheapest * effQty;
+            else valid = false;
+            if (node === 'craft' && matRecipe) walk(matRecipe, effQty, depth + 1);
+            else currentTotal += (cheapest === Infinity ? 0 : cheapest * effQty);
+        }
+    };
+    walk(recipe, effMult, 0);
+    if (!valid) { el.textContent = ''; return; }
+    const savings = buyTotal - currentTotal;
+    if (Math.abs(savings) < 1) { el.textContent = 'All-buy baseline is optimal (no savings from crafting any subcomponent)'; return; }
+    el.innerHTML = savings > 0
+        ? `<strong class="text-green">Saving ${Math.round(savings).toLocaleString()} silver</strong> vs all-buy baseline`
+        : `<strong class="text-red">Costing ${Math.round(-savings).toLocaleString()} more</strong> than all-buy`;
+}
+
+// ============================================================
+// CRAFTING — Inverse Calc (C5)
+// ============================================================
+// "I want X% margin — what's the max I can pay per material?"
+function renderInverseCalc(itemId, recipe, priceIndex, ctx) {
+    if (!ctx.bestSellPrice || !ctx.bestSellPrice > 0) return '';
+    return `<div class="craft-detail-section" id="craft-inverse-section">
+        <h3>🎯 Inverse Calc — Max Material Prices for Target Margin</h3>
+        <p style="color:var(--text-muted);font-size:0.8rem;margin:0 0 0.5rem 0;">Set a target net margin — tool computes the max you can pay per material (evenly scaled) to hit it. Useful for setting buy orders.</p>
+        <div class="inverse-panel">
+            <div class="inverse-controls">
+                <label>Target Margin:
+                    <input type="range" id="craft-inverse-slider" min="0" max="60" value="10" step="1">
+                    <span id="craft-inverse-margin-value">10%</span>
+                </label>
+                <span style="color:var(--text-muted);font-size:0.8rem;">Sell price: <strong>${ctx.bestSellPrice.toLocaleString()} s</strong> @ ${esc(ctx.bestCity)}</span>
+            </div>
+            <div id="craft-inverse-table"></div>
+        </div>
+    </div>`;
+}
+
+function wireInverseCalcEvents(itemId, recipe, priceIndex, ctx) {
+    const slider = document.getElementById('craft-inverse-slider');
+    if (!slider) return;
+    const computeAndRender = () => {
+        const marginPct = parseInt(slider.value) || 10;
+        document.getElementById('craft-inverse-margin-value').textContent = marginPct + '%';
+        const sellPrice = ctx.bestSellPrice || 0;
+        const tax = sellPrice * effectiveTaxRate('order');
+        const fee = ctx.sFeePerCraft > 0 ? ctx.sFeePerCraft : sellPrice * ((ctx.stationFee || 0) / 100);
+        // Target: (sellPrice - matCostTotal - tax - fee) / matCostTotal = margin
+        // => matCostTotal = (sellPrice - tax - fee) / (1 + margin)
+        const netAvailable = sellPrice - tax - fee;
+        const maxMatBudget = netAvailable / (1 + marginPct / 100);
+        // Current cheapest mat cost
+        let currentMatCost = 0; let currentMatParts = [];
+        for (const mat of recipe.materials) {
+            const effQty = mat.qty * ctx.effectiveMultiplier;
+            const byCity = priceIndex[mat.id] || {};
+            let cheapest = Infinity, cheapestCity = '—';
+            for (const cityName of Object.keys(byCity)) {
+                if (cityName === 'Black Market') continue;
+                const sp = byCity[cityName].sellMin;
+                if (sp > 0 && sp < cheapest) { cheapest = sp; cheapestCity = cityName; }
+            }
+            const thisCost = cheapest !== Infinity ? cheapest * effQty : 0;
+            currentMatCost += thisCost;
+            currentMatParts.push({ mat, effQty, unit: cheapest === Infinity ? 0 : cheapest, total: thisCost, city: cheapestCity });
+        }
+        const scale = currentMatCost > 0 ? maxMatBudget / currentMatCost : 1;
+        let rowsHTML = `<table class="compare-table craft-cost-table" style="margin-top:0.5rem;">
+            <thead><tr><th>Material</th><th>Cheapest Now</th><th>Max You Can Pay (unit)</th><th>Delta</th></tr></thead><tbody>`;
+        for (const part of currentMatParts) {
+            const maxUnit = part.unit > 0 ? Math.floor(part.unit * scale) : 0;
+            const delta = maxUnit - part.unit;
+            const cls = delta >= 0 ? 'text-green' : 'text-red';
+            rowsHTML += `<tr>
+                <td>${esc(getFriendlyName(part.mat.id))}</td>
+                <td>${part.unit > 0 ? part.unit.toLocaleString() : '—'}</td>
+                <td><strong>${maxUnit > 0 ? maxUnit.toLocaleString() : '—'}</strong></td>
+                <td class="${cls}">${delta >= 0 ? '+' : ''}${delta.toLocaleString()} s</td>
+            </tr>`;
+        }
+        rowsHTML += `<tr class="total-row"><td><strong>Total material budget</strong></td><td>${Math.round(currentMatCost).toLocaleString()}</td><td><strong>${Math.round(maxMatBudget).toLocaleString()}</strong></td><td class="${scale >= 1 ? 'text-green' : 'text-red'}">${scale >= 1 ? '+' : ''}${Math.round(maxMatBudget - currentMatCost).toLocaleString()} s</td></tr>`;
+        rowsHTML += `</tbody></table>`;
+        document.getElementById('craft-inverse-table').innerHTML = rowsHTML;
+    };
+    slider.addEventListener('input', computeAndRender);
+    computeAndRender();
 }
 
 // ====== BULK SCAN (legacy) ======
@@ -2459,6 +3100,838 @@ function setupCardButtons(container) {
     });
 }
 
+// ============================================================
+// TOP-N CRAFTING RANKER (Phase 3 — C3 — the killer feature)
+// ============================================================
+// Ranks every recipe by: silver/focus, silver/hour, net profit, or ROI.
+// Runs client-side against IndexedDB price cache (no backend endpoint needed;
+// 5026 recipes × ~8 cities × ~4 enchants = ~160k ops, completes in <1s on modern hardware).
+const TOPN_CACHE = { key: null, items: null, ts: 0 };
+const CRAFT_SECONDS_PER = 3; // assumption: 3 seconds per craft attempt in-game (swing) for silver/hour estimate
+
+async function doTopNRank() {
+    if (itemsList.length === 0) await loadData();
+    const spinner = document.getElementById('topn-spinner');
+    const results = document.getElementById('topn-results');
+    spinner.classList.remove('hidden');
+    results.innerHTML = '';
+
+    const tier = document.getElementById('topn-tier').value;
+    const category = document.getElementById('topn-category').value;
+    const enchFilter = document.getElementById('topn-ench').value;
+    const useFocus = document.getElementById('topn-focus').checked;
+    const specLevel = parseInt(document.getElementById('topn-spec').value) || 0;
+    const masteryLevel = parseInt(document.getElementById('topn-mastery').value) || 0;
+    const sortBy = document.getElementById('topn-sort').value;
+    const liquidityMin = parseInt(document.getElementById('topn-liquidity').value) || 0;
+
+    const data = await MarketDB.getAllPrices();
+    if (!data || data.length === 0) {
+        spinner.classList.add('hidden');
+        results.innerHTML = '<div class="empty-state" style="grid-column:1/-1;"><p>No cached prices yet — open Market Browser once or wait for the VPS cache to load.</p></div>';
+        return;
+    }
+
+    // Build price index: itemId → city → { sellMin, buyMax, dateISO }
+    const priceIndex = {};
+    for (const e of data) {
+        if (e.quality && e.quality !== 1 && e.quality !== 0) continue; // Top-N uses Q1 baseline; Quality EV is per-detail
+        let city = e.city;
+        if (city && city.includes('Black Market')) city = 'Black Market';
+        if (!CITIES.includes(city)) continue;
+        const id = e.item_id;
+        if (!priceIndex[id]) priceIndex[id] = {};
+        const existing = priceIndex[id][city];
+        if (!existing) priceIndex[id][city] = { sellMin: e.sell_price_min || 0, buyMax: e.buy_price_max || 0, date: (e.sell_price_min_date || e.buy_price_max_date || '') };
+        else {
+            if (e.sell_price_min > 0 && (existing.sellMin === 0 || e.sell_price_min < existing.sellMin)) existing.sellMin = e.sell_price_min;
+            if (e.buy_price_max > 0 && e.buy_price_max > existing.buyMax) existing.buyMax = e.buy_price_max;
+        }
+    }
+
+    const ranked = [];
+    for (const [itemId, recipe] of Object.entries(recipesData)) {
+        const { tier: t, ench } = parseTierEnch(itemId);
+        if (!t) continue;
+        if (tier !== 'all' && String(t) !== String(tier)) continue;
+        if (enchFilter !== 'any' && String(ench) !== String(enchFilter)) continue;
+        if (category !== 'all' && (recipe.category || 'other') !== category) continue;
+        if (!priceIndex[itemId]) continue;
+
+        // Pick best sell city for this item
+        let bestSellPrice = 0, bestSellCity = '';
+        for (const c of CITIES) {
+            const p = priceIndex[itemId][c];
+            if (p && p.buyMax > bestSellPrice) { bestSellPrice = p.buyMax; bestSellCity = c; }
+        }
+        if (bestSellPrice === 0) continue;
+
+        // Pick specialty city for max PB (if specialty matches) else user's default (0% bonus)
+        const cityDetect = recipe.category === 'materials'
+            ? CITIES.map(c => ({ c, d: getCityRefineBonus(c, itemId) }))
+            : CITIES.map(c => ({ c, d: getCityCraftBonus(c, itemId) }));
+        const bestSpecialty = cityDetect.reduce((best, x) => x.d.bonus > best.d.bonus ? x : best, { c: '', d: { bonus: 0, autoApplied: false } });
+        const cityBonus = bestSpecialty.d.bonus || 0;
+
+        const activity = recipe.category === 'materials' ? 'refining' : 'crafting';
+        const rrr = calculateRRR(useFocus, cityBonus, activity);
+        const effMult = 1 - rrr;
+
+        // Cheapest material cost (best city per mat)
+        let matCost = 0; let missing = false;
+        for (const mat of recipe.materials) {
+            const mp = priceIndex[mat.id] || {};
+            let cheapest = Infinity;
+            for (const cn of Object.keys(mp)) {
+                if (cn === 'Black Market') continue;
+                const sp = mp[cn].sellMin;
+                if (sp > 0 && sp < cheapest) cheapest = sp;
+            }
+            if (cheapest === Infinity) { missing = true; break; }
+            matCost += cheapest * mat.qty * effMult;
+        }
+        if (missing) continue;
+
+        // Profit
+        const outputQty = recipe.output || 1;
+        const revenue = bestSellPrice * outputQty;
+        const tax = revenue * effectiveTaxRate('order');
+        const stationS100 = CraftConfig.stationSilverPer100 || 0;
+        const fee = stationS100 > 0 ? stationFeePerCraft(itemId, stationS100) : 0;
+        const profit = revenue - matCost - tax - fee;
+        if (profit <= 0) continue;
+
+        // Focus cost (if using focus)
+        let focusCost = 0;
+        if (useFocus) {
+            const baseFocus = recipe.focusCost || baseFocusForItem(itemId, activity);
+            if (baseFocus > 0) focusCost = calculateFocusCostV2(baseFocus, specLevel, masteryLevel, 0, CraftConfig.foodBuff);
+        }
+
+        // Liquidity — use spreadStatsCache or analytics cache if present; else assume unlimited
+        let dailyVolume = Infinity;
+        const cacheKey = itemId + '_1_' + bestSellCity;
+        if (analyticsCache.has(itemId)) {
+            const a = analyticsCache.get(itemId);
+            if (a && a.avg_volume_24h != null) dailyVolume = a.avg_volume_24h;
+        }
+        if (dailyVolume < liquidityMin) continue;
+
+        ranked.push({
+            itemId, recipe, profit, roi: matCost > 0 ? (profit / matCost * 100) : 0,
+            matCost, revenue, tax, fee, focusCost,
+            silverPerFocus: focusCost > 0 ? profit / focusCost : 0,
+            silverPerHour: profit / (CRAFT_SECONDS_PER / 3600),
+            bestSellCity, bestSpecialtyCity: bestSpecialty.c, cityBonus,
+            rrrPct: rrr * 100, dailyVolume,
+            autoSpecialty: bestSpecialty.d.autoApplied, specReason: bestSpecialty.d.reason,
+        });
+    }
+
+    // Sort
+    const sortFns = {
+        silver_per_focus: (a, b) => b.silverPerFocus - a.silverPerFocus,
+        silver_per_hour:  (a, b) => b.silverPerHour  - a.silverPerHour,
+        net_profit:       (a, b) => b.profit         - a.profit,
+        roi:              (a, b) => b.roi            - a.roi,
+    };
+    ranked.sort(sortFns[sortBy] || sortFns.net_profit);
+
+    spinner.classList.add('hidden');
+    renderTopN(ranked.slice(0, 60), sortBy);
+    if (ranked.length === 0) {
+        results.innerHTML = '<div class="empty-state" style="grid-column:1/-1;"><p>No profitable recipes match these filters right now.</p><p class="hint">Try widening the tier or reducing the liquidity minimum.</p></div>';
+    }
+}
+
+function renderTopN(list, sortBy) {
+    const container = document.getElementById('topn-results');
+    if (list.length === 0) return;
+    container.innerHTML = '';
+    const sortLabel = { silver_per_focus: 's/focus', silver_per_hour: 's/hr', net_profit: 'net', roi: 'ROI' }[sortBy] || 'profit';
+    list.forEach((r, idx) => {
+        const card = document.createElement('div');
+        card.className = 'topn-card';
+        card.setAttribute('data-item', r.itemId);
+        const primaryMetric = sortBy === 'silver_per_focus' && r.focusCost > 0
+            ? `${r.silverPerFocus.toFixed(1)} s/f`
+            : sortBy === 'silver_per_hour'
+            ? `${Math.round(r.silverPerHour/1000)}k/hr`
+            : sortBy === 'roi'
+            ? `${r.roi.toFixed(1)}%`
+            : `${Math.round(r.profit).toLocaleString()}s`;
+        card.innerHTML = `
+            <div class="topn-card-header">
+                <img src="https://render.albiononline.com/v1/item/${esc(r.itemId)}.png" alt="" loading="lazy">
+                <div style="flex:1 1 auto;min-width:0;">
+                    <div class="topn-name">${esc(getFriendlyName(r.itemId))}</div>
+                    <div class="topn-rank">#${idx + 1} · ${getTierEnchLabel(r.itemId)}</div>
+                </div>
+                <div style="text-align:right;">
+                    <div style="color:var(--accent);font-weight:700;font-size:1rem;">${primaryMetric}</div>
+                    <div style="color:var(--text-muted);font-size:0.7rem;">${sortLabel}</div>
+                </div>
+            </div>
+            <div class="topn-card-body">
+                <div class="topn-stat"><span class="topn-stat-label">Net</span><span class="topn-stat-value text-green">${Math.round(r.profit).toLocaleString()}s</span></div>
+                <div class="topn-stat"><span class="topn-stat-label">Sell @</span><span class="topn-stat-value">${esc(r.bestSellCity)}</span></div>
+                <div class="topn-stat"><span class="topn-stat-label">RRR</span><span class="topn-stat-value">${r.rrrPct.toFixed(1)}%</span></div>
+                <div class="topn-stat"><span class="topn-stat-label">Mat Cost</span><span class="topn-stat-value">${Math.round(r.matCost).toLocaleString()}s</span></div>
+                ${r.focusCost > 0 ? `<div class="topn-stat"><span class="topn-stat-label">Focus</span><span class="topn-stat-value">${r.focusCost.toLocaleString()}</span></div>` : ''}
+                <div class="topn-stat"><span class="topn-stat-label">ROI</span><span class="topn-stat-value ${r.roi > 0 ? 'text-green' : 'text-red'}">${r.roi.toFixed(1)}%</span></div>
+            </div>
+            <div class="topn-badges">
+                ${r.autoSpecialty ? `<span class="topn-badge topn-badge-specialty" title="${esc(r.specReason)}">+${r.cityBonus}% ${esc(r.bestSpecialtyCity)}</span>` : ''}
+                ${r.dailyVolume === Infinity ? '' : r.dailyVolume < 50 ? '<span class="topn-badge topn-badge-illiquid">⚠ Low Volume</span>' : ''}
+            </div>
+        `;
+        card.addEventListener('click', () => switchToCraft(r.itemId));
+        container.appendChild(card);
+    });
+}
+
+// ============================================================
+// REFINING LAB (Phase 2 — B1-B4)
+// ============================================================
+// Three modes: Today's Best, Single Material Deep-Dive, Daily Focus Planner.
+// Default landing = Today's Best.
+let _refineMode = 'best';
+function initRefineLabEvents() {
+    document.querySelectorAll('.refine-mode-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            document.querySelectorAll('.refine-mode-btn').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            _refineMode = btn.dataset.refineMode;
+            doRefineScan(); // auto-refresh on mode switch
+        });
+    });
+    const scanBtn = document.getElementById('refine-scan-btn');
+    if (scanBtn) scanBtn.addEventListener('click', doRefineScan);
+}
+
+async function doRefineScan() {
+    if (itemsList.length === 0) await loadData();
+    const spinner = document.getElementById('refine-spinner');
+    const results = document.getElementById('refine-results');
+    spinner.classList.remove('hidden');
+    results.innerHTML = '';
+
+    const family = document.getElementById('refine-family').value;
+    const tier = document.getElementById('refine-tier').value;
+    const enchFilter = document.getElementById('refine-ench').value;
+    const useFocus = document.getElementById('refine-focus').checked;
+    const specLevel = parseInt(document.getElementById('refine-spec').value) || 0;
+    const masteryLevel = parseInt(document.getElementById('refine-mastery').value) || 0;
+    const focusBudget = parseInt(document.getElementById('refine-budget').value) || 10000;
+
+    const data = await MarketDB.getAllPrices();
+    if (!data || data.length === 0) {
+        spinner.classList.add('hidden');
+        results.innerHTML = '<div class="empty-state"><p>No cached prices yet. Open Market Browser once to hydrate the cache.</p></div>';
+        return;
+    }
+
+    const priceIndex = {};
+    for (const e of data) {
+        if (e.quality && e.quality !== 1 && e.quality !== 0) continue;
+        let city = e.city;
+        if (city && city.includes('Black Market')) city = 'Black Market';
+        if (!CITIES.includes(city)) continue;
+        if (!priceIndex[e.item_id]) priceIndex[e.item_id] = {};
+        const existing = priceIndex[e.item_id][city];
+        if (!existing) priceIndex[e.item_id][city] = { sellMin: e.sell_price_min || 0, buyMax: e.buy_price_max || 0 };
+        else {
+            if (e.sell_price_min > 0 && (existing.sellMin === 0 || e.sell_price_min < existing.sellMin)) existing.sellMin = e.sell_price_min;
+            if (e.buy_price_max > 0 && e.buy_price_max > existing.buyMax) existing.buyMax = e.buy_price_max;
+        }
+    }
+
+    // Collect refining recipes (category === 'materials')
+    const refineRecipes = [];
+    for (const [itemId, recipe] of Object.entries(recipesData)) {
+        if (recipe.category !== 'materials') continue;
+        const { tier: t, ench } = parseTierEnch(itemId);
+        if (!t) continue;
+        if (tier !== 'all' && String(t) !== String(tier)) continue;
+        if (enchFilter !== 'any' && String(ench) !== String(enchFilter)) continue;
+        if (family !== 'all' && !itemId.toUpperCase().includes('_' + family)) continue;
+        refineRecipes.push([itemId, recipe]);
+    }
+
+    // For each refine recipe, compute best profit at specialty city
+    const rows = [];
+    for (const [itemId, recipe] of refineRecipes) {
+        if (!priceIndex[itemId]) continue;
+        let bestSellPrice = 0, bestSellCity = '';
+        for (const c of CITIES) {
+            const p = priceIndex[itemId][c];
+            if (p && p.buyMax > bestSellPrice) { bestSellPrice = p.buyMax; bestSellCity = c; }
+        }
+        if (bestSellPrice === 0) continue;
+
+        const specBonus = CITIES.reduce((best, c) => {
+            const d = getCityRefineBonus(c, itemId);
+            return d.bonus > best.bonus ? { ...d, city: c } : best;
+        }, { bonus: 0, city: '' });
+        const cityBonus = specBonus.bonus || 0;
+        const rrr = calculateRRR(useFocus, cityBonus, 'refining');
+        const effMult = 1 - rrr;
+
+        let matCost = 0; let missing = false;
+        for (const mat of recipe.materials) {
+            const mp = priceIndex[mat.id] || {};
+            let cheapest = Infinity;
+            for (const cn of Object.keys(mp)) {
+                if (cn === 'Black Market') continue;
+                const sp = mp[cn].sellMin;
+                if (sp > 0 && sp < cheapest) cheapest = sp;
+            }
+            if (cheapest === Infinity) { missing = true; break; }
+            matCost += cheapest * mat.qty * effMult;
+        }
+        if (missing) continue;
+
+        const revenue = bestSellPrice * (recipe.output || 1);
+        const tax = revenue * effectiveTaxRate('order');
+        const profit = revenue - matCost - tax;
+        if (profit <= 0) continue;
+
+        const baseFocus = recipe.focusCost || baseFocusForItem(itemId, 'refining');
+        const focusCost = useFocus && baseFocus > 0 ? calculateFocusCostV2(baseFocus, specLevel, masteryLevel, 0, CraftConfig.foodBuff) : 0;
+        rows.push({
+            itemId, profit, roi: matCost > 0 ? profit / matCost * 100 : 0,
+            matCost, revenue, tax, focusCost, specCity: specBonus.city, specBonus: cityBonus,
+            sellCity: bestSellCity, rrr: rrr * 100,
+            silverPerFocus: focusCost > 0 ? profit / focusCost : profit, // fallback to raw profit when no focus
+        });
+    }
+
+    spinner.classList.add('hidden');
+
+    if (_refineMode === 'best') renderRefineBest(rows);
+    else if (_refineMode === 'planner') renderRefinePlanner(rows, focusBudget);
+    else if (_refineMode === 'deepdive') renderRefineDeepdive(rows);
+}
+
+function renderRefineBest(rows) {
+    const container = document.getElementById('refine-results');
+    if (rows.length === 0) {
+        container.innerHTML = '<div class="empty-state"><p>No profitable refines found for these filters.</p></div>';
+        return;
+    }
+    rows.sort((a, b) => b.silverPerFocus - a.silverPerFocus);
+    let html = '<div class="topn-grid">';
+    rows.slice(0, 50).forEach((r, i) => {
+        html += `<div class="topn-card" data-item="${esc(r.itemId)}" onclick="switchToCraft('${esc(r.itemId)}')">
+            <div class="topn-card-header">
+                <img src="https://render.albiononline.com/v1/item/${esc(r.itemId)}.png" alt="" loading="lazy">
+                <div style="flex:1 1 auto;min-width:0;">
+                    <div class="topn-name">${esc(getFriendlyName(r.itemId))}</div>
+                    <div class="topn-rank">#${i+1} · ${getTierEnchLabel(r.itemId)}</div>
+                </div>
+                <div style="text-align:right;">
+                    <div style="color:var(--accent);font-weight:700;">${r.focusCost > 0 ? r.silverPerFocus.toFixed(1)+' s/f' : Math.round(r.profit).toLocaleString()+'s'}</div>
+                    <div style="color:var(--text-muted);font-size:0.7rem;">${r.focusCost > 0 ? 'silver/focus' : 'net profit'}</div>
+                </div>
+            </div>
+            <div class="topn-card-body">
+                <div class="topn-stat"><span class="topn-stat-label">Net</span><span class="topn-stat-value text-green">${Math.round(r.profit).toLocaleString()}s</span></div>
+                <div class="topn-stat"><span class="topn-stat-label">Sell @</span><span class="topn-stat-value">${esc(r.sellCity)}</span></div>
+                <div class="topn-stat"><span class="topn-stat-label">Refine @</span><span class="topn-stat-value">${esc(r.specCity) || '—'}</span></div>
+                <div class="topn-stat"><span class="topn-stat-label">RRR</span><span class="topn-stat-value">${r.rrr.toFixed(1)}%</span></div>
+            </div>
+            <div class="topn-badges">
+                ${r.specBonus > 0 ? `<span class="topn-badge topn-badge-specialty">+${r.specBonus}% ${esc(r.specCity)}</span>` : ''}
+            </div>
+        </div>`;
+    });
+    html += '</div>';
+    container.innerHTML = html;
+}
+
+function renderRefinePlanner(rows, focusBudget) {
+    const container = document.getElementById('refine-results');
+    if (rows.length === 0) {
+        container.innerHTML = '<div class="empty-state"><p>No profitable refines — can\'t plan.</p></div>';
+        return;
+    }
+    // Sort by silver-per-focus descending; greedy allocate focus budget.
+    const candidates = rows.filter(r => r.focusCost > 0).sort((a, b) => b.silverPerFocus - a.silverPerFocus);
+    if (candidates.length === 0) {
+        container.innerHTML = '<div class="empty-state"><p>Enable focus to use the Daily Focus Planner.</p></div>';
+        return;
+    }
+    let remaining = focusBudget;
+    const plan = [];
+    for (const r of candidates) {
+        if (remaining < r.focusCost) continue;
+        const runs = Math.floor(remaining / r.focusCost);
+        if (runs > 0) {
+            plan.push({ ...r, runs, totalProfit: runs * r.profit, totalFocus: runs * r.focusCost });
+            remaining -= runs * r.focusCost;
+        }
+    }
+    const totalProfit = plan.reduce((s, p) => s + p.totalProfit, 0);
+    const totalFocus = plan.reduce((s, p) => s + p.totalFocus, 0);
+    let html = `<div class="refine-planner">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.75rem;">
+            <div><strong>Budget:</strong> ${focusBudget.toLocaleString()} focus</div>
+            <div><strong>Used:</strong> ${totalFocus.toLocaleString()} focus (${Math.round(totalFocus/focusBudget*100)}%)</div>
+            <div><strong class="text-green">Expected: ${Math.round(totalProfit).toLocaleString()}s</strong></div>
+        </div>
+        <div class="plan-row header">
+            <span>Item</span>
+            <span>Runs</span>
+            <span class="plan-hide-mobile">Focus Used</span>
+            <span class="plan-hide-mobile">s/focus</span>
+            <span>Total Profit</span>
+        </div>`;
+    for (const p of plan) {
+        html += `<div class="plan-row">
+            <span><img src="https://render.albiononline.com/v1/item/${esc(p.itemId)}.png" style="width:24px;height:24px;vertical-align:middle;margin-right:0.35rem;"> ${esc(getFriendlyName(p.itemId))}</span>
+            <span>${p.runs}×</span>
+            <span class="plan-hide-mobile">${p.totalFocus.toLocaleString()}</span>
+            <span class="plan-hide-mobile">${p.silverPerFocus.toFixed(1)}</span>
+            <span class="plan-budget">${Math.round(p.totalProfit).toLocaleString()}s</span>
+        </div>`;
+    }
+    if (plan.length === 0) html += '<div class="empty-state"><p>Not enough budget to complete any profitable refine batch.</p></div>';
+    html += `</div>`;
+    container.innerHTML = html;
+}
+
+function renderRefineDeepdive(rows) {
+    const container = document.getElementById('refine-results');
+    if (rows.length === 0) {
+        container.innerHTML = '<div class="empty-state"><p>Nothing to dive into — no profitable refines match these filters.</p></div>';
+        return;
+    }
+    // Show the top candidate, give option to switch to Crafting Profits detail.
+    const top = rows.sort((a,b) => b.silverPerFocus - a.silverPerFocus)[0];
+    container.innerHTML = `<div class="refine-planner">
+        <h3 style="margin:0 0 0.5rem 0;">🔍 Deep-Dive: ${esc(getFriendlyName(top.itemId))} <span class="tier-badge">${getTierEnchLabel(top.itemId)}</span></h3>
+        <p style="color:var(--text-muted);font-size:0.85rem;margin:0 0 0.5rem 0;">Top candidate from your current filters. Click "Open in Crafting" for the full sub-recipe tree, city heatmap, and inverse calc.</p>
+        <div class="craft-summary-stats">
+            <div class="stat-box"><div class="stat-label">Profit per run</div><div class="stat-value text-green">${Math.round(top.profit).toLocaleString()}s</div></div>
+            <div class="stat-box"><div class="stat-label">Silver/focus</div><div class="stat-value">${top.focusCost > 0 ? top.silverPerFocus.toFixed(1) : '—'}</div></div>
+            <div class="stat-box"><div class="stat-label">Best refine city</div><div class="stat-value">${esc(top.specCity) || '—'} (+${top.specBonus}%)</div></div>
+            <div class="stat-box"><div class="stat-label">Best sell city</div><div class="stat-value">${esc(top.sellCity)}</div></div>
+            <div class="stat-box"><div class="stat-label">RRR</div><div class="stat-value">${top.rrr.toFixed(1)}%</div></div>
+            <div class="stat-box"><div class="stat-label">ROI</div><div class="stat-value">${top.roi.toFixed(1)}%</div></div>
+        </div>
+        <div style="margin-top:0.75rem;">
+            <button class="btn-primary" onclick="switchToCraft('${esc(top.itemId)}')">Open in Crafting Profits →</button>
+        </div>
+    </div>`;
+}
+
+function initTopNRankerEvents() {
+    const btn = document.getElementById('topn-scan-btn');
+    if (btn) btn.addEventListener('click', doTopNRank);
+    // Auto-rerun when sort changes (cheap since we already have rankings rebuilt)
+    ['topn-sort','topn-tier','topn-category','topn-ench','topn-liquidity'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.addEventListener('change', () => {
+            // Only rerun if we've already scanned once (has results)
+            const results = document.getElementById('topn-results');
+            if (results && !results.querySelector('.empty-state')) doTopNRank();
+        });
+    });
+}
+
+// ============================================================
+// CRAFTER PROFILES (Phase 5 — C1)
+// ============================================================
+// Multiple named profiles stored in localStorage. Each profile carries
+// spec, mastery, city, premium, food buff, basePB, stationSilverPer100.
+// A "crafter pill" in the nav summary shows the active profile and opens the modal.
+const CRAFTER_PROFILE_STORAGE = 'crafterProfiles_v1';
+
+function loadCrafterProfiles() {
+    try {
+        const raw = JSON.parse(localStorage.getItem(CRAFTER_PROFILE_STORAGE) || '{"profiles":[],"activeId":null}');
+        return raw.profiles ? raw : { profiles: [], activeId: null };
+    } catch { return { profiles: [], activeId: null }; }
+}
+function saveCrafterProfiles(state) { try { localStorage.setItem(CRAFTER_PROFILE_STORAGE, JSON.stringify(state)); } catch {} }
+
+function getActiveCrafterProfile() {
+    const s = loadCrafterProfiles();
+    return s.profiles.find(p => p.id === s.activeId) || null;
+}
+
+function applyCrafterProfile(profile) {
+    if (!profile) return;
+    // Write to CraftConfig + relevant inputs
+    CraftConfig.premium = profile.premium !== false;
+    CraftConfig.craftingBasePB = profile.basePB || 18;
+    CraftConfig.foodBuff = profile.foodBuff || 'none';
+    CraftConfig.stationSilverPer100 = profile.stationSilverPer100 || 200;
+    saveCraftConfig();
+
+    // Propagate to Crafting tab inputs
+    const set = (id, v) => { const el = document.getElementById(id); if (el && v != null) el.value = String(v); };
+    const check = (id, v) => { const el = document.getElementById(id); if (el && v != null) el.checked = !!v; };
+    set('craft-spec', profile.spec || 0);
+    set('craft-mastery', profile.mastery || 0);
+    set('craft-food', profile.foodBuff || 'none');
+    set('craft-base-pb', profile.basePB || 18);
+    set('craft-station-s100', profile.stationSilverPer100 || 200);
+    check('craft-premium', profile.premium !== false);
+    // RRR tab
+    set('rrr-spec', profile.spec || 0);
+    check('rrr-premium', profile.premium !== false);
+    set('rrr-base-pb', profile.basePB || 18);
+    // Top-N tab
+    set('topn-spec', profile.spec || 0);
+    set('topn-mastery', profile.mastery || 0);
+    // Refining Lab
+    set('refine-spec', profile.spec || 0);
+    set('refine-mastery', profile.mastery || 0);
+    updateCrafterProfilePill();
+}
+
+function updateCrafterProfilePill() {
+    const pill = document.getElementById('crafter-profile-pill');
+    if (!pill) return;
+    const active = getActiveCrafterProfile();
+    if (active) {
+        pill.innerHTML = `🧑‍🔧 ${esc(active.name)} <span style="opacity:0.7;font-size:0.7rem;">· spec ${active.spec || 0} · ${active.foodBuff || 'no food'}</span>`;
+        pill.style.display = '';
+    } else {
+        pill.innerHTML = `🧑‍🔧 No profile — click to create`;
+        pill.style.display = '';
+    }
+}
+
+function openCrafterProfileModal() {
+    let modal = document.getElementById('crafter-profile-modal');
+    if (!modal) {
+        modal = document.createElement('div');
+        modal.id = 'crafter-profile-modal';
+        modal.className = 'modal hidden';
+        modal.innerHTML = `<div class="modal-content crafter-profile-modal-content">
+            <button class="close-btn" id="crafter-profile-close">&times;</button>
+            <h3>🧑‍🔧 Crafter Profiles</h3>
+            <p style="color:var(--text-secondary);font-size:0.85rem;">Save your spec, mastery, city, premium, food buff, and station setup per profile. Quick-switch propagates everywhere (Crafting, RRR, Refining Lab, Top-N, Repair, Journals).</p>
+            <div style="margin:0.75rem 0;padding:0.75rem;background:rgba(255,255,255,0.03);border-radius:6px;">
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.5rem;">
+                    <div class="control-group"><label>Name<input type="text" id="cp-name" placeholder="e.g. Plate Specialist" style="width:100%;"></label></div>
+                    <div class="control-group"><label>Spec<input type="number" id="cp-spec" min="0" max="100" value="100" style="width:100%;"></label></div>
+                    <div class="control-group"><label>Mastery<input type="number" id="cp-mastery" min="0" max="100" value="0" style="width:100%;"></label></div>
+                    <div class="control-group"><label>Preferred City<select id="cp-city" style="width:100%;">
+                        <option value="">— none —</option>
+                        ${CITIES.filter(c => c !== 'Black Market').map(c => `<option value="${esc(c)}">${esc(c)}</option>`).join('')}
+                    </select></label></div>
+                    <div class="control-group"><label>Food Buff<select id="cp-food" style="width:100%;">
+                        <option value="none">None</option>
+                        <option value="pork">Pork Omelette</option>
+                        <option value="avalonian">Avalonian Pork</option>
+                    </select></label></div>
+                    <div class="control-group"><label>Base PB<select id="cp-basepb" style="width:100%;"><option value="18" selected>18</option><option value="15">15</option></select></label></div>
+                    <div class="control-group"><label>Station s/100<input type="number" id="cp-s100" min="0" max="5000" value="200" step="10" style="width:100%;"></label></div>
+                    <div class="control-group checkbox-group" style="display:flex;align-items:center;"><label><input type="checkbox" id="cp-premium" checked> Premium</label></div>
+                </div>
+                <div style="margin-top:0.6rem;display:flex;gap:0.4rem;">
+                    <button class="btn-primary" id="cp-save-btn">💾 Save as New Profile</button>
+                    <button class="btn-secondary" id="cp-update-btn">Update Active</button>
+                </div>
+            </div>
+            <div class="crafter-profile-list" id="cp-list"></div>
+        </div>`;
+        document.body.appendChild(modal);
+        modal.querySelector('#crafter-profile-close').addEventListener('click', () => modal.classList.add('hidden'));
+        modal.addEventListener('click', (e) => { if (e.target === modal) modal.classList.add('hidden'); });
+        modal.querySelector('#cp-save-btn').addEventListener('click', () => {
+            const name = (document.getElementById('cp-name').value || '').trim();
+            if (!name) { showToast('Profile name is required', 'error'); return; }
+            const state = loadCrafterProfiles();
+            const prof = {
+                id: 'p_' + Date.now(),
+                name,
+                spec: parseInt(document.getElementById('cp-spec').value) || 0,
+                mastery: parseInt(document.getElementById('cp-mastery').value) || 0,
+                city: document.getElementById('cp-city').value || '',
+                foodBuff: document.getElementById('cp-food').value || 'none',
+                basePB: parseInt(document.getElementById('cp-basepb').value) || 18,
+                stationSilverPer100: parseInt(document.getElementById('cp-s100').value) || 200,
+                premium: !!document.getElementById('cp-premium').checked,
+            };
+            state.profiles.push(prof);
+            state.activeId = prof.id;
+            saveCrafterProfiles(state);
+            applyCrafterProfile(prof);
+            renderCrafterProfileList();
+            showToast(`Profile "${name}" saved and activated ✓`, 'success');
+        });
+        modal.querySelector('#cp-update-btn').addEventListener('click', () => {
+            const state = loadCrafterProfiles();
+            const active = state.profiles.find(p => p.id === state.activeId);
+            if (!active) { showToast('No active profile to update. Save a new one first.', 'info'); return; }
+            active.name = (document.getElementById('cp-name').value || active.name).trim();
+            active.spec = parseInt(document.getElementById('cp-spec').value) || 0;
+            active.mastery = parseInt(document.getElementById('cp-mastery').value) || 0;
+            active.city = document.getElementById('cp-city').value || '';
+            active.foodBuff = document.getElementById('cp-food').value || 'none';
+            active.basePB = parseInt(document.getElementById('cp-basepb').value) || 18;
+            active.stationSilverPer100 = parseInt(document.getElementById('cp-s100').value) || 200;
+            active.premium = !!document.getElementById('cp-premium').checked;
+            saveCrafterProfiles(state);
+            applyCrafterProfile(active);
+            renderCrafterProfileList();
+            showToast(`Profile "${active.name}" updated ✓`, 'success');
+        });
+    }
+    modal.classList.remove('hidden');
+    // Seed form with currently-active profile values
+    const active = getActiveCrafterProfile();
+    if (active) {
+        document.getElementById('cp-name').value = active.name;
+        document.getElementById('cp-spec').value = active.spec || 0;
+        document.getElementById('cp-mastery').value = active.mastery || 0;
+        document.getElementById('cp-city').value = active.city || '';
+        document.getElementById('cp-food').value = active.foodBuff || 'none';
+        document.getElementById('cp-basepb').value = String(active.basePB || 18);
+        document.getElementById('cp-s100').value = active.stationSilverPer100 || 200;
+        document.getElementById('cp-premium').checked = active.premium !== false;
+    }
+    renderCrafterProfileList();
+}
+
+function renderCrafterProfileList() {
+    const list = document.getElementById('cp-list');
+    if (!list) return;
+    const state = loadCrafterProfiles();
+    if (state.profiles.length === 0) { list.innerHTML = '<p style="color:var(--text-muted);font-size:0.85rem;">No profiles yet. Save your current setup above to create the first one.</p>'; return; }
+    list.innerHTML = state.profiles.map(p => `
+        <div class="crafter-profile-item ${p.id === state.activeId ? 'active' : ''}">
+            <div>
+                <div class="profile-name">${esc(p.name)}</div>
+                <div class="profile-specs">spec ${p.spec || 0} · mastery ${p.mastery || 0} · ${esc(p.city || 'no city')} · ${esc(p.foodBuff || 'no food')} · ${p.premium !== false ? 'premium' : 'non-premium'}</div>
+            </div>
+            <div class="profile-actions">
+                <button class="btn-small-accent" data-cp-activate="${esc(p.id)}">Activate</button>
+                <button class="btn-small-danger" data-cp-delete="${esc(p.id)}">🗑</button>
+            </div>
+        </div>
+    `).join('');
+    list.querySelectorAll('[data-cp-activate]').forEach(b => b.addEventListener('click', () => {
+        const id = b.getAttribute('data-cp-activate');
+        const st = loadCrafterProfiles();
+        st.activeId = id;
+        saveCrafterProfiles(st);
+        const p = st.profiles.find(pp => pp.id === id);
+        if (p) applyCrafterProfile(p);
+        renderCrafterProfileList();
+        showToast(`Switched to "${p?.name}" ✓`, 'success');
+    }));
+    list.querySelectorAll('[data-cp-delete]').forEach(b => b.addEventListener('click', () => {
+        const id = b.getAttribute('data-cp-delete');
+        const st = loadCrafterProfiles();
+        st.profiles = st.profiles.filter(p => p.id !== id);
+        if (st.activeId === id) st.activeId = null;
+        saveCrafterProfiles(st);
+        renderCrafterProfileList();
+        updateCrafterProfilePill();
+    }));
+}
+
+function initCrafterProfileEvents() {
+    // Inject the pill into the header if not present
+    if (!document.getElementById('crafter-profile-pill')) {
+        const hero = document.querySelector('header') || document.body;
+        const pill = document.createElement('span');
+        pill.id = 'crafter-profile-pill';
+        pill.className = 'crafter-profile-pill';
+        pill.style.display = 'none';
+        pill.addEventListener('click', openCrafterProfileModal);
+        // Attach to the nav area if possible
+        const nav = document.querySelector('.main-nav') || document.querySelector('nav');
+        (nav || hero).appendChild(pill);
+    }
+    // Load + apply active profile
+    const active = getActiveCrafterProfile();
+    if (active) applyCrafterProfile(active);
+    updateCrafterProfilePill();
+}
+
+// ============================================================
+// BONUS — Monte-Carlo Craft Session Simulator
+// ============================================================
+// Given spec/mastery/focus/runs, simulates actual outcomes factoring in
+// RRR variance and quality rolls — returns silver distribution (p5/p50/p95).
+// Shows the *risk profile* of a crafting session, not just expected value.
+// No competitor does this; helps players gauge "best-case vs worst-case" income.
+function runCraftMonteCarlo(itemId, recipe, priceIndex, cfg, runs = 1000) {
+    // cfg: { useFocus, specLevel, masteryLevel, cityBonus, isRefining, qualityPoints }
+    const rrrMean = calculateRRR(cfg.useFocus, cfg.cityBonus || 0, cfg.isRefining ? 'refining' : 'crafting');
+    // For each craft, sample Bernoulli-per-material for "returned"; sum materials used.
+    // For quality, sample from the user's distribution.
+    const qDist = qualityDistribution(cfg.qualityPoints || 0);
+    const matUnitCosts = recipe.materials.map(m => {
+        const by = priceIndex[m.id] || {};
+        let c = Infinity;
+        for (const cn of Object.keys(by)) {
+            if (cn === 'Black Market') continue;
+            if (by[cn].sellMin > 0 && by[cn].sellMin < c) c = by[cn].sellMin;
+        }
+        return c === Infinity ? 0 : c;
+    });
+    const sellPrices = [cfg.q1Price || 0, cfg.q2Price || cfg.q1Price || 0, cfg.q3Price || cfg.q1Price || 0, cfg.q4Price || cfg.q1Price || 0, cfg.q5Price || cfg.q1Price || 0];
+    const results = [];
+    const sessionRuns = Math.max(1, cfg.sessionRuns || runs);
+    const samples = 400;
+    for (let s = 0; s < samples; s++) {
+        let totalMatsConsumed = 0;
+        let totalRevenue = 0;
+        for (let i = 0; i < sessionRuns; i++) {
+            // Materials: for each material unit, roll P(return) = rrrMean → consumed = qty × (1 - Σ returns)
+            for (let mi = 0; mi < recipe.materials.length; mi++) {
+                const mat = recipe.materials[mi];
+                let consumed = 0;
+                for (let q = 0; q < mat.qty; q++) {
+                    if (Math.random() > rrrMean) consumed++;
+                }
+                totalMatsConsumed += consumed * matUnitCosts[mi];
+            }
+            // Quality roll
+            const r = Math.random();
+            let cum = 0; let qRolled = 0;
+            for (let q = 0; q < 5; q++) { cum += qDist[q]; if (r <= cum) { qRolled = q; break; } }
+            totalRevenue += sellPrices[qRolled] * (recipe.output || 1);
+        }
+        const tax = totalRevenue * effectiveTaxRate('order');
+        const net = totalRevenue - totalMatsConsumed - tax;
+        results.push(net);
+    }
+    results.sort((a, b) => a - b);
+    return {
+        p5: results[Math.floor(samples * 0.05)],
+        p50: results[Math.floor(samples * 0.50)],
+        p95: results[Math.floor(samples * 0.95)],
+        mean: results.reduce((a, b) => a + b, 0) / results.length,
+        min: results[0], max: results[results.length - 1],
+        samples: results,
+    };
+}
+
+function openCraftSimulator() {
+    const itemId = craftDetailItemId || window._craftLastItemId;
+    if (!itemId || !recipesData[itemId]) { showToast('Calculate a craft first before running the simulator', 'info'); return; }
+    let modal = document.getElementById('craft-sim-modal');
+    if (!modal) {
+        modal = document.createElement('div');
+        modal.id = 'craft-sim-modal';
+        modal.className = 'modal hidden';
+        modal.innerHTML = `<div class="modal-content craft-sim-panel" style="max-width:640px;">
+            <button class="close-btn" id="craft-sim-close">&times;</button>
+            <h3 style="margin:0 0 0.5rem 0;color:var(--accent);">🎲 Monte-Carlo Craft Simulator</h3>
+            <p style="color:var(--text-secondary);font-size:0.85rem;margin:0 0 0.75rem 0;">Simulates 400 full crafting sessions using your spec/RRR/quality distribution. Shows the silver-earned distribution — p5 (unlucky), p50 (median), p95 (lucky).</p>
+            <div style="display:flex;gap:0.5rem;margin-bottom:0.5rem;align-items:center;flex-wrap:wrap;">
+                <div class="control-group"><label>Session runs<input type="number" id="sim-runs" min="1" max="10000" value="200" style="width:80px;"></label></div>
+                <button class="btn-primary" id="sim-run-btn">Simulate</button>
+                <span id="sim-target" style="color:var(--text-muted);font-size:0.8rem;"></span>
+            </div>
+            <div class="craft-sim-chart" id="sim-chart"></div>
+            <div class="craft-sim-stats" id="sim-stats"></div>
+        </div>`;
+        document.body.appendChild(modal);
+        modal.querySelector('#craft-sim-close').addEventListener('click', () => modal.classList.add('hidden'));
+        modal.querySelector('#sim-run-btn').addEventListener('click', () => renderCraftSim());
+        modal.addEventListener('click', (e) => { if (e.target === modal) modal.classList.add('hidden'); });
+    }
+    modal.classList.remove('hidden');
+    document.getElementById('sim-target').textContent = `Target: ${getFriendlyName(itemId)} (${itemId})`;
+    renderCraftSim();
+}
+
+function renderCraftSim() {
+    const itemId = craftDetailItemId || window._craftLastItemId;
+    const recipe = recipesData[itemId];
+    if (!recipe) return;
+    const data = window._craftLastData || [];
+    // Build a quick priceIndex similar to detail view
+    const priceIndex = {};
+    for (const e of data) {
+        let city = e.city;
+        if (city && city.includes('Black Market')) city = 'Black Market';
+        const id = e.item_id;
+        if (!priceIndex[id]) priceIndex[id] = {};
+        if (!priceIndex[id][city]) priceIndex[id][city] = { sellMin: e.sell_price_min || 0, buyMax: e.buy_price_max || 0 };
+        else {
+            if (e.sell_price_min > 0 && (priceIndex[id][city].sellMin === 0 || e.sell_price_min < priceIndex[id][city].sellMin)) priceIndex[id][city].sellMin = e.sell_price_min;
+            if (e.buy_price_max > 0 && e.buy_price_max > priceIndex[id][city].buyMax) priceIndex[id][city].buyMax = e.buy_price_max;
+        }
+    }
+    // Gather per-quality prices (use buyMax = insta-sell for realism)
+    const qPrices = {};
+    for (const e of data) {
+        if (e.item_id !== itemId) continue;
+        const q = e.quality || 1;
+        if (!qPrices[q]) qPrices[q] = 0;
+        if (e.buy_price_max > qPrices[q]) qPrices[q] = e.buy_price_max;
+    }
+    const cfg = {
+        useFocus: document.getElementById('craft-use-focus')?.checked || false,
+        specLevel: parseInt(document.getElementById('craft-spec')?.value) || 0,
+        masteryLevel: parseInt(document.getElementById('craft-mastery')?.value) || 0,
+        cityBonus: parseFloat(document.getElementById('craft-city-bonus')?.value) || 0,
+        isRefining: recipe.category === 'materials',
+        qualityPoints: (parseInt(document.getElementById('craft-spec')?.value) || 0) * 0.8 + (parseInt(document.getElementById('craft-mastery')?.value) || 0) * 0.8,
+        q1Price: qPrices[1] || 0, q2Price: qPrices[2] || 0, q3Price: qPrices[3] || 0, q4Price: qPrices[4] || 0, q5Price: qPrices[5] || 0,
+        sessionRuns: parseInt(document.getElementById('sim-runs').value) || 200,
+    };
+    const result = runCraftMonteCarlo(itemId, recipe, priceIndex, cfg);
+
+    // Histogram
+    const chart = document.getElementById('sim-chart');
+    if (chart) {
+        const bins = 30;
+        const range = (result.max - result.min) || 1;
+        const hist = Array(bins).fill(0);
+        for (const s of result.samples) {
+            const idx = Math.min(bins - 1, Math.floor(((s - result.min) / range) * bins));
+            hist[idx]++;
+        }
+        const maxBin = Math.max(...hist, 1);
+        chart.innerHTML = hist.map(h => `<div class="craft-sim-bar" style="height:${(h / maxBin * 100).toFixed(1)}%"></div>`).join('');
+    }
+    const stats = document.getElementById('sim-stats');
+    if (stats) {
+        stats.innerHTML = `
+            <div class="stat-box"><div class="stat-label">Unlucky (p5)</div><div class="stat-value ${result.p5 >= 0 ? 'text-green' : 'text-red'}">${Math.round(result.p5).toLocaleString()} s</div></div>
+            <div class="stat-box highlight"><div class="stat-label">Median (p50)</div><div class="stat-value ${result.p50 >= 0 ? 'text-green' : 'text-red'}">${Math.round(result.p50).toLocaleString()} s</div></div>
+            <div class="stat-box"><div class="stat-label">Lucky (p95)</div><div class="stat-value text-green">${Math.round(result.p95).toLocaleString()} s</div></div>
+            <div class="stat-box"><div class="stat-label">Mean</div><div class="stat-value">${Math.round(result.mean).toLocaleString()} s</div></div>
+            <div class="stat-box"><div class="stat-label">Range</div><div class="stat-value" style="font-size:0.9rem;">${Math.round(result.min).toLocaleString()} → ${Math.round(result.max).toLocaleString()}</div></div>
+        `;
+    }
+}
+
+function initCraftSimEvents() {
+    // A "Run Simulator" button is added inside renderCraftDetail via inline wiring.
+    // We also add a global button near the Crafting settings panel after it's been shown.
+    // Hook: listen for the detail view becoming visible, add a button if missing.
+    const observer = new MutationObserver(() => {
+        const view = document.getElementById('craft-detail-view');
+        if (view && view.style.display !== 'none' && !document.getElementById('craft-sim-open-btn')) {
+            const summaryCards = view.querySelector('.craft-summary-card');
+            if (summaryCards) {
+                const btn = document.createElement('button');
+                btn.id = 'craft-sim-open-btn';
+                btn.className = 'btn-secondary';
+                btn.style.cssText = 'margin-top:0.5rem;';
+                btn.textContent = '🎲 Run Monte-Carlo Simulator';
+                btn.addEventListener('click', openCraftSimulator);
+                summaryCards.appendChild(btn);
+            }
+        }
+    });
+    // Observe body for attribute changes is expensive; just observe the pane.
+    const pane = document.getElementById('pane-crafting');
+    if (pane) observer.observe(pane, { subtree: true, attributes: true, attributeFilter: ['style'] });
+}
+
 function switchToCraft(itemId) {
     // Switch to crafting tab, pre-fill the search, and auto-calculate
     document.querySelector('[data-tab="crafting"]')?.click();
@@ -2474,6 +3947,37 @@ function switchToCraft(itemId) {
             }, 300);
         }
     }, 100);
+}
+
+// Cross-tab nav helpers — open a target tab pre-filled for the given item.
+function switchToRefineLab(itemId) {
+    document.querySelector('[data-tab="refining-lab"]')?.click();
+    setTimeout(() => {
+        // If the item has a known family, pre-filter; else show "All Families".
+        if (itemId) {
+            const u = itemId.toUpperCase();
+            const fam = ['PLANKS','METALBAR','CLOTH','LEATHER','STONEBLOCK'].find(f => u.includes('_' + f));
+            if (fam) {
+                const famSel = document.getElementById('refine-family');
+                if (famSel) famSel.value = fam;
+            }
+            const tier = parseTierEnch(itemId).tier;
+            const tierSel = document.getElementById('refine-tier');
+            if (tier && tierSel) tierSel.value = String(tier);
+        }
+        const btn = document.getElementById('refine-scan-btn');
+        if (btn) btn.click();
+    }, 120);
+}
+
+function switchToTopN(opts = {}) {
+    document.querySelector('[data-tab="craft-top-n"]')?.click();
+    setTimeout(() => {
+        if (opts.tier) { const el = document.getElementById('topn-tier'); if (el) el.value = String(opts.tier); }
+        if (opts.category) { const el = document.getElementById('topn-category'); if (el) el.value = opts.category; }
+        const btn = document.getElementById('topn-scan-btn');
+        if (btn) btn.click();
+    }, 120);
 }
 
 function switchToBrowser(itemId) {
@@ -3519,8 +5023,8 @@ function calculateRRRStandalone() {
     const cityBonus = parseFloat(document.getElementById('rrr-city-bonus').value) || 0;
     const useFocus = document.getElementById('rrr-use-focus').checked;
 
-    // Base production bonus values
-    const basePB = activityType === 'refining' ? 18 : 18; // Royal city base for both
+    // Base production bonus values (DECISION-A1: user-configurable, default 18 each).
+    const basePB = activityType === 'refining' ? CraftConfig.refiningBasePB : CraftConfig.craftingBasePB;
     const focusPB = useFocus ? 59 : 0;
     // Spec bonus: each spec level adds production bonus
     // In Albion, specialization adds to production bonus: specLevel * 0.2 effective PB
@@ -4139,10 +5643,82 @@ async function onServerChange() {
     if (currentTab === 'browser') await renderBrowser();
 }
 
+// Initialise all new crafting config controls from CraftConfig + bind change handlers.
+function initCraftConfigControls() {
+    loadCraftConfig();
+    const bindCB = (id, key, onChange) => {
+        const el = document.getElementById(id);
+        if (!el) return;
+        el.checked = !!CraftConfig[key];
+        el.addEventListener('change', () => {
+            CraftConfig[key] = el.checked;
+            saveCraftConfig();
+            if (onChange) onChange();
+        });
+    };
+    const bindSelect = (id, key, parse, onChange) => {
+        const el = document.getElementById(id);
+        if (!el) return;
+        el.value = String(CraftConfig[key]);
+        el.addEventListener('change', () => {
+            CraftConfig[key] = parse ? parse(el.value) : el.value;
+            saveCraftConfig();
+            if (onChange) onChange();
+        });
+    };
+    const bindNum = (id, key, min, max, onChange) => {
+        const el = document.getElementById(id);
+        if (!el) return;
+        el.value = String(CraftConfig[key]);
+        el.addEventListener('change', () => {
+            let v = parseFloat(el.value);
+            if (isNaN(v)) v = CraftConfig[key];
+            if (min != null) v = Math.max(min, v);
+            if (max != null) v = Math.min(max, v);
+            CraftConfig[key] = v;
+            el.value = String(v);
+            saveCraftConfig();
+            if (onChange) onChange();
+        });
+    };
+    const recalc = () => {
+        if (window._craftLastData && window._craftLastRecipe && window._craftLastItemId) {
+            renderCraftDetail(window._craftLastItemId, window._craftLastRecipe, window._craftLastData);
+        }
+    };
+    bindCB('craft-premium', 'premium', () => { saveCraftConfig(); recalc(); });
+    bindCB('craft-quality-ev', 'qualityEV', recalc);
+    bindSelect('craft-food', 'foodBuff', (v) => v, recalc);
+    bindSelect('craft-base-pb', 'craftingBasePB', (v) => parseInt(v) || 18, recalc);
+    bindNum('craft-station-s100', 'stationSilverPer100', 0, 10000, recalc);
+
+    // RRR Calculator also supports premium + basePB + food — provide a quick sync.
+    const rrrPremium = document.getElementById('rrr-premium');
+    if (rrrPremium) {
+        rrrPremium.checked = CraftConfig.premium;
+        rrrPremium.addEventListener('change', () => { setPremium(rrrPremium.checked); });
+    }
+    const rrrBasePB = document.getElementById('rrr-base-pb');
+    if (rrrBasePB) {
+        rrrBasePB.value = String(CraftConfig.craftingBasePB);
+        rrrBasePB.addEventListener('change', () => {
+            const v = parseInt(rrrBasePB.value) || 18;
+            CraftConfig.craftingBasePB = v;
+            saveCraftConfig();
+            if (typeof calculateRRRStandalone === 'function') calculateRRRStandalone();
+        });
+    }
+}
+
 async function init() {
     // === IMMEDIATE: attach all UI listeners before any async work ===
     // Scripts are at bottom of <body> so DOM is fully ready here.
     initTabs();
+    initCraftConfigControls();
+    initRefineLabEvents();
+    initTopNRankerEvents();
+    initCrafterProfileEvents();
+    initCraftSimEvents();
 
     // Server switch: clear cached prices and reload for the new server
     document.getElementById('server-select').addEventListener('change', onServerChange);

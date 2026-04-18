@@ -1,12 +1,82 @@
 # Albion Market Analyzer — Project Handoff
 
-> **Last updated:** 2026-04-17
+> **Last updated:** 2026-04-18
 > **Author:** Coldtouch (yuvalvilensky@gmail.com)
 > **Purpose:** Everything a new session needs to continue development without re-discovering context.
 
 ---
 
-## 0. Latest Session — April 17, 2026
+## 0. Latest Session — April 18, 2026 — Crafting & Refining Overhaul v2
+
+Full implementation of `CRAFTING_PLAN.md` (all 8 signed-off decisions, Phases 1-5 + bonus). The crafting area is now best-in-class per Part I of the plan; Phase 6 (Live RRR via Go client packet capture) and Phase 8 (Daily-bonus calendar) remain deferred per DECISION-D9 and DECISION-C8 respectively.
+
+### What Shipped
+
+#### Phase 1 — Formula foundation
+- **TAX_RATE is now dynamic** (`let TAX_RATE`) — driven by `CraftConfig.premium`. Premium = 0.04, Non-Premium = 0.08. Every existing site referencing `TAX_RATE` auto-updates (Transport, BM Flipper, Portfolio). Fixes a 33-167% tax projection error that every user has been seeing.
+- **Exponential focus formula** via `calculateFocusCostV2(base, mainSpec, mastery, otherSpec, foodBuff)`. Formula: `cost = base × 0.5^(efficiency/10000)`, efficiency = mastery×30 + mainSpec×250 + otherSpec×30, scaled by food buff (Pork 1.18, Avalonian 1.30). Legacy `calculateFocusCost(base, spec, mastery)` still exists as backward-compat shim.
+- **City specialty maps:** `CITY_CRAFT_SPECIALTY` per category, `CITY_REFINE_SPECIALTY` per raw material family. `getCityCraftBonus(cityName, itemId)` and `getCityRefineBonus(...)` return `{bonus, reason, autoApplied}`. Applied automatically in the new Heatmap, Top-N Ranker, and Refining Lab.
+- **Item Value + Station Fee helpers:** `itemValue(itemId)` uses `IV_BASE(tier, ench) = 16 × 2^(tier+ench-4)` × non-artifact mat qty + artifact values. `stationFeePerCraft(itemId, silverPer100)` = IV × 0.1125 × (s/100). New "Station s/100" input in crafting settings replaces the flat %.
+- **Quality EV mode** via `qualityDistribution(qpoints)` + `qualityEVPrice(pricesByQ, qpoints)`. Reroll model shifts mass rightward as quality points rise.
+- **Configurable base PB** (DECISION-A1) — `CraftConfig.craftingBasePB` / `refiningBasePB`, default 18 both. UI dropdown in Crafting + RRR Calculator.
+- **Food buff** — Pork / Avalonian multiplies focus efficiency.
+- **CraftConfig persisted to localStorage** (`craftConfig_v1`).
+
+#### Phase 2 — Refining Lab tab (🔥)
+- New nav tab under Crafting Group. `section#pane-refining-lab`.
+- Three modes (pill toggle): **Today's Best** (sorted grid), **Single Material Deep-Dive** (top candidate with stat grid + "Open in Crafting" hand-off), **Daily Focus Planner** (greedy allocate a focus budget 10k-30k across profitable refines).
+- Filters: family (PLANKS/METALBAR/CLOTH/LEATHER/STONEBLOCK), tier, enchant, focus on/off, spec, mastery.
+- Runs client-side against `MarketDB.getAllPrices()`.
+
+#### Phase 3 — ⚡ Top-N Crafting Ranker
+- New nav tab. Ranks every recipe in `recipesData` (5026 items) by: silver/focus, silver/hour, net profit, or ROI.
+- Filters: tier, category, enchant, focus, spec, mastery, min liquidity (10/50/200/day).
+- Auto-applies the best specialty city's PB per recipe. Badge shows the bonus on each card.
+- Click a card → `switchToCraft(itemId)` opens full detail.
+
+#### Phase 4 — Crafting detail view enhancements
+- **City Heatmap (C4)** — `renderCityHeatmap()` produces 7 cities × (focus on/off) matrix. Best profit cell highlighted. Auto-specialty bonus column.
+- **Sub-recipe Tree with buy-vs-craft toggles (C2)** — `renderSubRecipeTree()` / `renderSubRecipeNode()` recursive. State in `window._craftTreeState`. Per-node `🛒 Buy` / `🔨 Craft` buttons. "Auto-optimize" picks cheaper path per node greedily. Running savings label vs all-buy baseline.
+- **Inverse Calc (C5)** — `renderInverseCalc()` + slider. Given target margin 0-60%, computes max unit price per material.
+
+#### Phase 5 — Crafter Profiles (C1) + Cross-tab synergy
+- `crafterProfiles_v1` localStorage state — `{ profiles: [], activeId }`.
+- Modal (`openCrafterProfileModal()`): create/update/delete/activate profiles. Each carries spec/mastery/city/foodBuff/basePB/stationSilverPer100/premium.
+- `applyCrafterProfile(profile)` propagates to Crafting + RRR + Refining Lab + Top-N inputs + CraftConfig all at once.
+- Nav "Crafter Profile" pill (`#crafter-profile-pill`) shows active profile, click to open modal.
+- Cross-tab nav helpers: `switchToRefineLab(itemId)` (auto-filters family+tier), `switchToTopN({tier, category})`, existing `switchToCraft(itemId)` unchanged.
+
+#### Bonus — 🎲 Monte-Carlo Craft Simulator
+- `runCraftMonteCarlo(itemId, recipe, priceIndex, cfg, runs)` runs 400 session simulations. Bernoulli per-material roll for RRR; quality distribution sample per craft.
+- Modal opened via "Run Monte-Carlo Simulator" button (auto-inserted into detail view via MutationObserver).
+- Returns p5/p50/p95 silver distribution + histogram.
+- **No competitor surfaces session variance** — major differentiator.
+
+### Key Files Touched
+- `app.js` — +~2,100 lines. New sections: CraftConfig + helpers, exponential focus, city specialty maps, itemValue/stationFee, qualityEVPrice, FOCUS_COSTS lookup, renderCityHeatmap, renderSubRecipeTree/Node + wireSubRecipeTreeEvents, renderInverseCalc, doTopNRank + renderTopN, doRefineScan + renderRefineBest/Planner/Deepdive, initCrafterProfileEvents + applyCrafterProfile, runCraftMonteCarlo + renderCraftSim, cross-tab helpers.
+- `index.html` — new panes `#pane-craft-top-n` and `#pane-refining-lab` with full filter bars, new crafting settings controls (premium, food buff, basePB, s/100, quality EV), RRR Calc premium + basePB selectors.
+- `style.css` — 260+ lines of new CSS for the above features + responsive breakpoints.
+- `sw.js` — cache `coldtouch-v25` → `coldtouch-v26`.
+- `CHANGELOG.md` — comprehensive 2026-04-18 entry.
+
+### How to test
+1. Open the site; no config changes required — CraftConfig loads from localStorage with sensible defaults.
+2. **Top-N tab:** click "Rank Now". Should list ~50 profitable T6 recipes sorted by silver/focus.
+3. **Refining Lab:** click "Refresh" in Today's Best mode; switch to Daily Focus Planner and watch it allocate.
+4. **Crafting detail:** search for any item like "Expert's Plate Boots" → scroll to see City Heatmap + Sub-recipe Tree + Inverse Calc slider.
+5. **Crafter Profile pill:** click it in nav → create a profile → watch spec/mastery propagate to all tabs.
+6. **Monte-Carlo:** on any detail view, scroll to the summary card and click "🎲 Run Monte-Carlo Simulator".
+
+### What's NOT in this release
+- **Phase 6 Live RRR** — DECISION-D9 deferred. Requires Go client packet research (~1 week) + new `craft_events` table.
+- **Phase 8 Daily-bonus calendar** — DECISION-C8 skipped. Blocked on community data source for the in-game +10/+20% rotating bonus.
+- **Backend endpoint `/api/craft-rankings`** — the Top-N ranker runs fully client-side off IndexedDB. Backend endpoint deferred until volume justifies it.
+- **`crafter_profiles` backend table** — profiles are localStorage-only in v1. Backend sync deferred.
+- **Cross-tab "Craft this" buttons on every tab (D1-D8)** — helper functions exist (`switchToCraft`, `switchToRefineLab`, `switchToTopN`); wiring them into Market Browser / Transport / BM Flipper / Loot Buyer cards is intentional future polish.
+
+---
+
+## 0.1 Previous Session — April 17, 2026
 
 ### What Was Done
 

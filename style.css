@@ -6119,3 +6119,286 @@ footer {
     opacity: 0.5; cursor: not-allowed; pointer-events: none;
 }
 
+/* ============================================================
+ * CRAFTING REVAMP v2 — Apr 18, 2026
+ * City Heatmap, Sub-recipe Tree, Inverse Calc, Refining Lab,
+ * Top-N Ranker, Crafter Profiles
+ * ============================================================ */
+
+/* Inline badge on craft summary header (specialty auto-applied, premium, Quality EV) */
+.badge-specialty {
+    display: inline-block;
+    padding: 0.15rem 0.55rem;
+    background: #1e40af;
+    color: #fff;
+    font-size: 0.7rem;
+    font-weight: 700;
+    border-radius: 12px;
+    margin-left: 0.35rem;
+    vertical-align: middle;
+    letter-spacing: 0.02em;
+}
+
+/* City Heatmap cells — emphasise the best-profit cell, dim the negatives */
+.city-heatmap td {
+    text-align: center;
+    vertical-align: middle;
+}
+.city-heatmap td small {
+    font-size: 0.7rem;
+    color: var(--text-muted);
+    font-weight: normal;
+}
+.city-heatmap .best-price {
+    background: rgba(34, 197, 94, 0.12);
+    outline: 1px solid rgba(34, 197, 94, 0.4);
+}
+
+/* Sub-recipe tree view */
+.subtree-view {
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 0.75rem;
+    background: rgba(0, 0, 0, 0.15);
+    max-height: 420px;
+    overflow-y: auto;
+}
+.subtree-node { padding: 0.2rem 0; border-left: 2px solid transparent; }
+.subtree-node[data-mat-id] { border-left: 2px solid rgba(255, 255, 255, 0.08); padding-left: 0.4rem; }
+.subtree-row {
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+    flex-wrap: wrap;
+    padding: 0.25rem 0;
+}
+.subtree-row .mat-icon-sm { width: 28px; height: 28px; flex-shrink: 0; }
+.subtree-qty { color: var(--accent); font-weight: 700; min-width: 3rem; text-align: right; }
+.subtree-name { flex: 1 1 12rem; color: var(--text-primary); }
+.subtree-cost { color: var(--accent); font-weight: 700; min-width: 5rem; text-align: right; }
+.subtree-toggle {
+    padding: 0.18rem 0.55rem;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid var(--border);
+    color: var(--text-secondary);
+    font-size: 0.72rem;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: all 0.15s;
+}
+.subtree-toggle:hover { background: rgba(255, 255, 255, 0.1); color: var(--text-primary); }
+.subtree-toggle.active {
+    background: var(--accent);
+    color: #0a0a0a;
+    border-color: var(--accent);
+    font-weight: 700;
+}
+.subtree-savings {
+    font-size: 0.72rem;
+    font-weight: 700;
+    margin-left: 0.3rem;
+}
+.subtree-buy-only { font-style: italic; }
+
+/* Inverse calc panel */
+.inverse-panel { padding: 0.5rem 0; }
+.inverse-controls {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    padding: 0.5rem;
+    background: rgba(0, 0, 0, 0.2);
+    border-radius: 6px;
+    margin-bottom: 0.5rem;
+    flex-wrap: wrap;
+}
+.inverse-controls input[type="range"] {
+    width: 220px;
+    accent-color: var(--accent);
+}
+.inverse-controls #craft-inverse-margin-value {
+    color: var(--accent);
+    font-weight: 700;
+    min-width: 3rem;
+    display: inline-block;
+}
+
+/* Top-N Ranker */
+.topn-hero {
+    background: linear-gradient(135deg, rgba(240, 192, 64, 0.08), rgba(109, 40, 217, 0.08));
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 1rem;
+    margin-bottom: 0.75rem;
+}
+.topn-hero h3 { margin: 0 0 0.35rem 0; color: var(--accent); font-size: 1.1rem; }
+.topn-hero p { margin: 0 0 0.75rem 0; color: var(--text-secondary); font-size: 0.85rem; }
+.topn-filters {
+    display: flex;
+    gap: 0.5rem;
+    align-items: flex-end;
+    flex-wrap: wrap;
+    margin-bottom: 0.5rem;
+}
+.topn-filters .control-group { margin: 0; }
+.topn-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    gap: 0.6rem;
+}
+.topn-card {
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 0.7rem;
+    cursor: pointer;
+    transition: all 0.15s;
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+}
+.topn-card:hover { background: rgba(255, 255, 255, 0.06); border-color: var(--accent); transform: translateY(-1px); }
+.topn-card-header { display: flex; align-items: center; gap: 0.5rem; }
+.topn-card-header img { width: 42px; height: 42px; }
+.topn-card-header .topn-name { flex: 1 1 auto; font-weight: 600; font-size: 0.85rem; line-height: 1.2; }
+.topn-card-header .topn-rank { font-size: 0.7rem; color: var(--accent); font-weight: 700; }
+.topn-card-body { display: flex; justify-content: space-between; gap: 0.5rem; font-size: 0.8rem; flex-wrap: wrap; }
+.topn-card-body .topn-stat { display: flex; flex-direction: column; min-width: 40%; }
+.topn-card-body .topn-stat-label { font-size: 0.65rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.03em; }
+.topn-card-body .topn-stat-value { font-weight: 700; color: var(--text-primary); }
+.topn-card-body .topn-stat-value.text-green { color: var(--accent-green, #22c55e); }
+.topn-card-body .topn-stat-value.text-red { color: var(--loss-red, #ef4444); }
+.topn-badges { display: flex; gap: 0.3rem; flex-wrap: wrap; }
+.topn-badge {
+    font-size: 0.65rem;
+    padding: 0.1rem 0.4rem;
+    border-radius: 10px;
+    background: rgba(240, 192, 64, 0.15);
+    color: var(--accent);
+    font-weight: 700;
+}
+.topn-badge.topn-badge-specialty { background: #1e40af; color: #fff; }
+.topn-badge.topn-badge-volatile { background: #ea580c; color: #fff; }
+.topn-badge.topn-badge-illiquid { background: #6b7280; color: #fff; }
+
+/* Refining Lab tab */
+.refine-mode-bar {
+    display: flex;
+    gap: 0.4rem;
+    margin-bottom: 0.75rem;
+    padding: 0.35rem;
+    background: rgba(0, 0, 0, 0.2);
+    border-radius: 8px;
+}
+.refine-mode-btn {
+    flex: 1 1 auto;
+    padding: 0.55rem 0.75rem;
+    background: transparent;
+    border: 1px solid transparent;
+    color: var(--text-secondary);
+    font-weight: 600;
+    cursor: pointer;
+    border-radius: 6px;
+    transition: all 0.15s;
+    font-size: 0.85rem;
+}
+.refine-mode-btn:hover { background: rgba(255, 255, 255, 0.04); color: var(--text-primary); }
+.refine-mode-btn.active {
+    background: var(--accent);
+    color: #0a0a0a;
+    border-color: var(--accent);
+}
+.refine-planner {
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 0.75rem;
+}
+.refine-planner .plan-row {
+    display: grid;
+    grid-template-columns: 2fr 1fr 1fr 1fr 1fr;
+    gap: 0.4rem;
+    padding: 0.35rem 0;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+    align-items: center;
+}
+.refine-planner .plan-row.header { font-weight: 700; color: var(--text-muted); font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.03em; }
+.refine-planner .plan-row .plan-budget { color: var(--accent); font-weight: 700; }
+
+/* Crafter profiles nav pill */
+.crafter-profile-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.2rem 0.7rem;
+    background: rgba(109, 40, 217, 0.25);
+    border: 1px solid rgba(109, 40, 217, 0.5);
+    color: #c4b5fd;
+    font-size: 0.75rem;
+    font-weight: 600;
+    border-radius: 14px;
+    margin-left: 0.5rem;
+    cursor: pointer;
+}
+.crafter-profile-pill:hover { background: rgba(109, 40, 217, 0.4); }
+
+/* Profile modal */
+.crafter-profile-modal-content { max-width: 560px; padding: 1.25rem; }
+.crafter-profile-modal-content h3 { margin: 0 0 0.5rem 0; color: var(--accent); }
+.crafter-profile-list { display: flex; flex-direction: column; gap: 0.4rem; margin-top: 0.75rem; }
+.crafter-profile-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.45rem 0.6rem;
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+}
+.crafter-profile-item.active { border-color: var(--accent); background: rgba(240, 192, 64, 0.08); }
+.crafter-profile-item .profile-name { font-weight: 600; }
+.crafter-profile-item .profile-specs { font-size: 0.72rem; color: var(--text-muted); }
+.crafter-profile-item .profile-actions { display: flex; gap: 0.3rem; }
+
+/* Monte-Carlo simulator */
+.craft-sim-panel {
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 0.9rem;
+    margin-top: 0.75rem;
+}
+.craft-sim-chart {
+    height: 180px;
+    display: flex;
+    align-items: flex-end;
+    gap: 2px;
+    background: rgba(0, 0, 0, 0.25);
+    border-radius: 6px;
+    padding: 0.5rem;
+    overflow: hidden;
+}
+.craft-sim-bar {
+    flex: 1 1 auto;
+    background: linear-gradient(to top, var(--accent), #6d28d9);
+    border-radius: 2px 2px 0 0;
+    min-width: 2px;
+    transition: height 0.3s;
+}
+.craft-sim-stats {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+    gap: 0.5rem;
+    margin-top: 0.6rem;
+}
+
+/* Mobile polish */
+@media (max-width: 768px) {
+    .topn-grid { grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); }
+    .refine-planner .plan-row { grid-template-columns: 2fr 1fr 1fr; }
+    .refine-planner .plan-row .plan-hide-mobile { display: none; }
+    .inverse-controls input[type="range"] { width: 100%; }
+    .subtree-name { flex: 1 1 100%; }
+    .subtree-row { font-size: 0.8rem; }
+}
+
