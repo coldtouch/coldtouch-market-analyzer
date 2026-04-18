@@ -265,7 +265,7 @@ Full implementation of `CRAFTING_PLAN.md` (all 8 signed-off decisions, Phases 1-
 - **Test chest capture on guild island** — only verified on personal island
 - **Death events 164/165** — not yet handled in Go client
 - **GUID matching in live guild context** — only tested on personal island
-- **Fix `operation_read_mail.go:103`** — expiry notification sets `ItemID = body[1]` (total amount, not item ID)
+- ~~**Fix `operation_read_mail.go:103`**~~ — **FIXED** (commit d49dcc8): body[1]=total_amount, body[2]=item_id
 - **Negative item ID cosmetic names** — IDs -56, -59, -62, -63, -64, -65, -68, -71, -121 unidentified
 - **Go client standalone repo migration** — future work
 - **Monitor first compaction run ~April 11** — `price_hourly` has 0 rows until then, expected
@@ -330,10 +330,8 @@ Ran 4 parallel audit sessions covering the entire project.
 
 #### 2. Data & Analytics Audit (COMPLETED)
 
-**CRITICAL:**
-- `computeAnalytics` silently fails every run. `price_analytics` has 0 rows.
-- Error handler: `if (err || !rows7d || rows7d.length === 0)` logs "No 7d data, skipping" without logging `err`.
-- Real error is likely `SQLITE_BUSY` — runs on main `db` connection. **Fix:** add `console.error(err)` + move to `statsDb` (same fix used for SpreadStats).
+**CRITICAL (RESOLVED):**
+- ~~`computeAnalytics` silently fails every run~~ — **FIXED** in prior session: fully migrated to `statsDb`, error logging added. `price_analytics` now populates correctly.
 
 **Data Quality (Healthy):**
 - 14.1M rows in `price_averages`, 9,799 unique items, 8 cities
@@ -352,12 +350,12 @@ Ran 4 parallel audit sessions covering the entire project.
 Blocked on workspace approval during session. Needs re-run with PC access. Should check: CPU/RAM/disk health, Node process, journalctl logs, NATS connectivity, CORS config, rate limiting, JWT expiry policy.
 
 #### 4. Git/DevOps/Go Client Audit (INCOMPLETE)
-Session ran but report not fully captured. Needs re-run. Known issue from prior work: `operation_read_mail.go:103` — expiry notification sets `ItemID = body[1]` (total amount, not item ID). Go client also needs GitHub Actions for automated builds.
+Session ran but report not fully captured. Needs re-run. ~~Known issue: `operation_read_mail.go:103` — expiry ItemID bug~~ **FIXED** (commit d49dcc8). Go client still needs GitHub Actions for automated builds.
 
 ### Recommended Fix Order
 | # | Task | Effort | Impact |
 |---|------|--------|--------|
-| 1 | Fix `computeAnalytics` — log error + move to `statsDb` | 30 min | Unlocks trend arrows, SMA chart, VWAP/EMA |
+| 1 | ~~Fix `computeAnalytics` — log error + move to `statsDb`~~ | — | **DONE** |
 | 2 | Fix `itemNames` → `ITEM_NAMES` at `app.js:5261` | 5 min | Fixes Loot Buyer sale form |
 | 3 | Fix `plan.buyCity`/`plan.sellCity` XSS — add `esc()` at `app.js:5819,5928` | 5 min | Security hardening |
 | 4 | Wire up `scanAbortController` in all scan functions | 1 hour | Scan stability |
@@ -373,7 +371,7 @@ Session ran but report not fully captured. Needs re-run. Known issue from prior 
 - Device Auth end-to-end test (never tested)
 - Test chest capture on guild island with updated itemmap
 - ReadMail opcode → auto-match sold items to tracked loot tabs (research done)
-- Fix `operation_read_mail.go:103` expiry notification ItemID bug
+- ~~Fix `operation_read_mail.go:103` expiry notification ItemID bug~~ **FIXED** (commit d49dcc8)
 - Loot Logger Viewer UX improvements (better layout, sorting, filtering, player search, total value estimates)
 - Negative item ID cosmetic names (need to identify -56, -59, -62, -63, -64, -65, -68, -71, -121 from in-game bank quantities)
 - Re-run backend + git/devops audit sections (were blocked on workspace approval)

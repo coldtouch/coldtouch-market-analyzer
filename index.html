@@ -2283,6 +2283,20 @@
                         </div>
                         <div class="changelog-entry">
                             <div class="changelog-date">April 16, 2026</div>
+                            <div class="changelog-title">🔒 Security &amp; Quality Audit Fixes</div>
+                            <ul>
+                                <li><strong>JWT hardened</strong> &mdash; all <code>jwt.verify()</code> calls pinned to HS256; server crashes on missing <code>SESSION_SECRET</code> instead of silently continuing.</li>
+                                <li><strong>Discord OAuth state HMAC-signed</strong> &mdash; prevents account-linking hijack via forged state parameter.</li>
+                                <li><strong>Rate limits added</strong> &mdash; device authorization (10/15min), loot evaluation (10/min per user).</li>
+                                <li><strong>XSS eliminated</strong> &mdash; news banner no longer injects server data into inline <code>onclick</code> attributes; URL <code>?tab=</code> now validated against a whitelist before use in <code>querySelector</code>.</li>
+                                <li><strong>No more blocking dialogs</strong> &mdash; all <code>confirm()</code>/<code>prompt()</code> calls replaced with non-blocking toast dialogs (<code>showConfirm</code>/<code>showPrompt</code>).</li>
+                                <li><strong>Analytics cache capped</strong> at 500 entries with FIFO eviction; concurrent fetches for the same item deduplicated.</li>
+                                <li><strong>Go client</strong> &mdash; <code>matchContainerToVaultTab</code> now holds <code>vaultMu.RLock()</code>, fixing a data race in vault tab lookups.</li>
+                                <li>All external links now include <code>rel="noopener noreferrer"</code>; mobile menu button adds ARIA attributes.</li>
+                            </ul>
+                        </div>
+                        <div class="changelog-entry">
+                            <div class="changelog-date">April 16, 2026</div>
                             <div class="changelog-title">📊 Per-player trends across saved sessions (G6)</div>
                             <ul>
                                 <li>Every player card now shows a compact lifetime trend line when the player has appeared in 2+ of your saved sessions: <em>"📊 8 sessions &middot; 1,250 items lifetime &middot; 💀 3 &middot; last seen 2d ago"</em>.</li>
