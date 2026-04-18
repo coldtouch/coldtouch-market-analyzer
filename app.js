@@ -9220,6 +9220,7 @@ function resetLiveSession() {
     resetLiveSessionFlags();
     _llRemovedPlayers.clear();
     _llResolvedDeaths.clear();
+    if (window._liveSessionIds) window._liveSessionIds.clear();
     const nameInput = document.getElementById('ll-session-name-input');
     if (nameInput) nameInput.value = '';
     const st = document.getElementById('ll-autosave-status');
@@ -9252,6 +9253,36 @@ async function saveLiveSession() {
     const btn = document.getElementById('ll-save-btn');
     if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
     try {
+        // NEW (2026-04-18): if the events arrived from a live Go-client stream, they're
+        // already persisted in the DB under one or more session_ids. Instead of POSTing
+        // the full event list (which duplicates every row under a new session_id),
+        // consolidate the existing session_ids into one.
+        const liveIds = Array.from(window._liveSessionIds || []).filter(Boolean);
+        if (liveIds.length > 0) {
+            const res = await fetch(`${VPS_BASE}/api/loot-session/consolidate`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', ...authHeaders() },
+                body: JSON.stringify({ sessionIds: liveIds, sessionName: liveSessionName || '' })
+            });
+            if (res.ok) {
+                const data = await res.json();
+                liveSessionSaved = true;
+                const sid = data.sessionId;
+                if (sid && liveSessionName) setSavedSessionName(sid, liveSessionName);
+                try { localStorage.removeItem(LL_DRAFT_KEY); } catch {}
+                const msg = data.merged > 0
+                    ? `Session saved — merged ${data.fragmentCount} fragment${data.fragmentCount > 1 ? 's' : ''} (${data.merged} rows consolidated)${liveSessionName ? ` as "${liveSessionName}"` : ''}`
+                    : `Session saved (already one session${liveSessionName ? ` — renamed to "${liveSessionName}"` : ''})`;
+                showToast(msg, 'success');
+                trackActivity('loot_session', 1);
+                if (lootLoggerMode === 'live') loadLootSessions();
+                return;
+            }
+            // Fall through to upload if consolidate failed for some reason (older backend etc.).
+        }
+
+        // Legacy / fallback path: if we have no session_ids (e.g. from a file-upload draft)
+        // or consolidate failed, upload the raw event list as a new session.
         const lines = liveLootEvents.map(e => {
             const ts = new Date(e.timestamp || Date.now()).toISOString();
             const byAlliance = e.looted_by_alliance || e.lootedBy?.alliance || '';
@@ -9273,11 +9304,8 @@ async function saveLiveSession() {
         if (res.ok) {
             const data = await res.json();
             liveSessionSaved = true;
-            // Map custom session name to whichever session_id the server assigned.
-            // Server may return `sessionId` or `session_id` depending on version — try both.
             const sid = data.sessionId || data.session_id;
             if (sid && liveSessionName) setSavedSessionName(sid, liveSessionName);
-            // Clear the autosave draft — this data is now durable server-side.
             try { localStorage.removeItem(LL_DRAFT_KEY); } catch {}
             showToast(`Session saved (${data.eventsImported} events)${liveSessionName ? ` as "${liveSessionName}"` : ''}`, 'success');
             trackActivity('loot_session', 1);
@@ -11159,8 +11187,14 @@ const LIVE_EVENT_CAP = 10000;
 const LIVE_EVENT_WARN_THRESHOLD = 9000;
 let _liveEventWarnedAt = 0;
 let _liveEventDropCounter = 0;
+// Track the set of backend session_ids seen during this live session.
+// Events stream in with `sessionId` from the backend; a WS reconnect creates a new
+// session_id mid-session. We collect them all, and when the user clicks Save, we ask
+// the backend to consolidate them into one (rather than uploading duplicates).
+window._liveSessionIds = window._liveSessionIds || new Set();
 function _pushLiveEvent(ev) {
     liveLootEvents.push(ev);
+    if (ev && ev.sessionId) window._liveSessionIds.add(ev.sessionId);
     if (liveLootEvents.length === LIVE_EVENT_WARN_THRESHOLD && _liveEventWarnedAt < LIVE_EVENT_WARN_THRESHOLD) {
         _liveEventWarnedAt = LIVE_EVENT_WARN_THRESHOLD;
         showToast(`Live session approaching ${LIVE_EVENT_CAP.toLocaleString()} events — Save Session soon to avoid dropped data`, 'warn');

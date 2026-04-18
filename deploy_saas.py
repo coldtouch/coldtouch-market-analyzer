@@ -2256,6 +2256,59 @@ app.post('/api/loot-upload', requireAuth, (req, res) => {
   res.json({ success: true, sessionId, eventsImported: count });
 });
 
+// Consolidate multiple already-persisted session IDs into one.
+// Used by "Save Session" when the events were already streamed live from the Go client —
+// previously Save Session re-uploaded every event creating duplicate rows under a new
+// session_id. Now it just renames existing session_ids to a single canonical one.
+// Also fixes the "fractured" case where a WS reconnect split one PvP session into
+// multiple session_ids.
+app.post('/api/loot-session/consolidate', requireAuth, (req, res) => {
+  const { sessionIds, sessionName } = req.body || {};
+  if (!Array.isArray(sessionIds) || sessionIds.length === 0) {
+    return res.status(400).json({ error: 'sessionIds array required' });
+  }
+  if (sessionIds.length > 20) {
+    return res.status(400).json({ error: 'too many session ids (max 20)' });
+  }
+  // Validate each session_id belongs to this user before touching anything.
+  const placeholders = sessionIds.map(() => '?').join(',');
+  db.all(`SELECT DISTINCT session_id FROM loot_events WHERE user_id = ? AND session_id IN (${placeholders})`,
+    [req.user.id, ...sessionIds], (err, rows) => {
+      if (err) return res.status(500).json({ error: err.message });
+      const ownedIds = (rows || []).map(r => r.session_id);
+      if (ownedIds.length === 0) {
+        return res.status(404).json({ error: 'No matching sessions found for this user' });
+      }
+      // Canonical id = earliest session (by timestamp of first event). Keeps the existing
+      // session's data intact and just absorbs the reconnect fragments into it.
+      db.get(`SELECT session_id, MIN(timestamp) as min_ts FROM loot_events WHERE user_id = ? AND session_id IN (${ownedIds.map(() => '?').join(',')}) GROUP BY session_id ORDER BY min_ts ASC LIMIT 1`,
+        [req.user.id, ...ownedIds], (err2, canon) => {
+          if (err2) return res.status(500).json({ error: err2.message });
+          if (!canon) return res.status(404).json({ error: 'No events found' });
+          const canonicalId = canon.session_id;
+          const others = ownedIds.filter(id => id !== canonicalId);
+          if (others.length === 0) {
+            // Nothing to consolidate — already one session. Return canonical.
+            return res.json({ success: true, sessionId: canonicalId, merged: 0, alreadyOne: true });
+          }
+          // Update all non-canonical session_ids to the canonical one.
+          const otherPlaceholders = others.map(() => '?').join(',');
+          db.run(`UPDATE loot_events SET session_id = ? WHERE user_id = ? AND session_id IN (${otherPlaceholders})`,
+            [canonicalId, req.user.id, ...others], function(err3) {
+              if (err3) return res.status(500).json({ error: err3.message });
+              console.log(`[Consolidate] User ${req.user.id}: merged ${others.length} session fragments (${this.changes} rows) into ${canonicalId}`);
+              res.json({
+                success: true,
+                sessionId: canonicalId,
+                merged: this.changes,
+                fragmentCount: others.length,
+                sessionName: sessionName || null,
+              });
+            });
+        });
+    });
+});
+
 // Delete a loot session
 app.delete('/api/loot-session/:sessionId', requireAuth, (req, res) => {
   const sessionId = req.params.sessionId;
