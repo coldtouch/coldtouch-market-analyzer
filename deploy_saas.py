@@ -392,6 +392,26 @@ db.serialize(() => {
   db.run(`CREATE INDEX IF NOT EXISTS idx_loot_events_user_session ON loot_events(user_id, session_id)`);
   db.run(`CREATE INDEX IF NOT EXISTS idx_loot_events_session ON loot_events(session_id, timestamp)`);
 
+  // Dedupe migration (2026-04-18): loot_events had no unique constraint, so
+  // WS reconnects + Save Session + file uploads could create identical rows.
+  // Delete older duplicates keyed on the "physically impossible collision" tuple,
+  // then add a UNIQUE INDEX so future INSERT OR IGNORE silently drops replays.
+  db.run(`DELETE FROM loot_events
+    WHERE rowid NOT IN (
+      SELECT MIN(rowid) FROM loot_events
+      GROUP BY user_id, session_id, timestamp, looted_by_name, item_id, looted_from_name, quantity
+    )`, (dErr) => {
+      if (dErr) { console.log(`[Dedup] loot_events dedupe delete failed: ${dErr.message}`); return; }
+      // Fires only once per DB lifetime on the first startup after this deploy;
+      // subsequent startups are no-ops because the unique index prevents dupes.
+      db.run(`CREATE UNIQUE INDEX IF NOT EXISTS idx_loot_events_dedupe
+        ON loot_events(user_id, session_id, timestamp, looted_by_name, item_id, looted_from_name, quantity)`,
+        (iErr) => {
+          if (iErr) console.log(`[Dedup] loot_events unique index create failed: ${iErr.message}`);
+          else console.log(`[Dedup] loot_events: cleaned duplicates + installed unique index`);
+        });
+    });
+
   // === LOOT SESSION SHARE TOKENS (G4) ===
   // Maps a session_id to an unauthenticated public-view token. One row per
   // shared session; removing the row revokes sharing. The session_id owner
@@ -2185,8 +2205,9 @@ app.post('/api/loot-sessions/merge', requireAuth, (req, res) => {
       const foundIds = new Set((found || []).map(r => r.session_id));
       const missing = sessionIds.filter(id => !foundIds.has(id));
       if (missing.length > 0) return res.status(404).json({ error: 'Sessions not found: ' + missing.join(', ') });
-      // Copy all events to the new session_id, preserving original timestamps
-      db.run(`INSERT INTO loot_events (user_id, session_id, timestamp, looted_by_name, looted_by_guild, looted_by_alliance,
+      // Copy all events to the new session_id, preserving original timestamps.
+      // INSERT OR IGNORE — if the same event (by dedupe key) already exists in the target session, skip.
+      db.run(`INSERT OR IGNORE INTO loot_events (user_id, session_id, timestamp, looted_by_name, looted_by_guild, looted_by_alliance,
               looted_from_name, looted_from_guild, looted_from_alliance, item_id, numeric_id, quantity, weight, is_silver)
               SELECT ?, ?, timestamp, looted_by_name, looted_by_guild, looted_by_alliance,
               looted_from_name, looted_from_guild, looted_from_alliance, item_id, numeric_id, quantity, weight, is_silver
@@ -2238,7 +2259,9 @@ app.post('/api/loot-upload', requireAuth, (req, res) => {
     return res.status(400).json({ error: 'No loot data provided.' });
   }
   const sessionId = req.user.id + '_upload_' + Date.now();
-  const stmt = db.prepare(`INSERT INTO loot_events (user_id, session_id, timestamp, looted_by_name, looted_by_guild, looted_by_alliance, looted_from_name, looted_from_guild, looted_from_alliance, item_id, numeric_id, quantity, weight, is_silver)
+  // INSERT OR IGNORE — deduped by idx_loot_events_dedupe. Re-uploading a file that
+  // overlaps with live-streamed events will silently skip the duplicates.
+  const stmt = db.prepare(`INSERT OR IGNORE INTO loot_events (user_id, session_id, timestamp, looted_by_name, looted_by_guild, looted_by_alliance, looted_from_name, looted_from_guild, looted_from_alliance, item_id, numeric_id, quantity, weight, is_silver)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0)`);
   let count = 0;
   for (const line of lines) {
@@ -3201,7 +3224,9 @@ wss.on('connection', ws => {
           ws.lootSessionId = ws.user.id + '_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
         }
 
-        db.run(`INSERT INTO loot_events (user_id, session_id, timestamp, looted_by_name, looted_by_guild, looted_by_alliance, looted_from_name, looted_from_guild, looted_from_alliance, item_id, numeric_id, quantity, weight, is_silver)
+        // INSERT OR IGNORE — if the Go client WS reconnects and replays the same event,
+        // the dedupe index drops the replay silently.
+        db.run(`INSERT OR IGNORE INTO loot_events (user_id, session_id, timestamp, looted_by_name, looted_by_guild, looted_by_alliance, looted_from_name, looted_from_guild, looted_from_alliance, item_id, numeric_id, quantity, weight, is_silver)
           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           [ws.user.id, ws.lootSessionId, ev.timestamp || Date.now(),
            ev.lootedBy.name, ev.lootedBy.guild || '', ev.lootedBy.alliance || '',
@@ -3228,7 +3253,7 @@ wss.on('connection', ws => {
         if (Array.isArray(ev.equipmentAtDeath) && ev.equipmentAtDeath.length > 0) {
           try { equipJson = JSON.stringify(ev.equipmentAtDeath.slice(0, 32)); } catch {}
         }
-        db.run(`INSERT INTO loot_events (user_id, session_id, timestamp, looted_by_name, looted_by_guild, looted_by_alliance, looted_from_name, looted_from_guild, looted_from_alliance, item_id, numeric_id, quantity, weight, is_silver, equipment_json)
+        db.run(`INSERT OR IGNORE INTO loot_events (user_id, session_id, timestamp, looted_by_name, looted_by_guild, looted_by_alliance, looted_from_name, looted_from_guild, looted_from_alliance, item_id, numeric_id, quantity, weight, is_silver, equipment_json)
           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '__DEATH__', 0, 0, 0, 0, ?)`,
           [ws.user.id, ws.lootSessionId, ev.timestamp || Date.now(),
            ev.killerName || '', ev.killerGuild || '', '',

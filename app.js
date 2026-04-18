@@ -9232,6 +9232,7 @@ function resetLiveSession() {
     _llRemovedPlayers.clear();
     _llResolvedDeaths.clear();
     if (window._liveSessionIds) window._liveSessionIds.clear();
+    if (window._liveEventKeys) window._liveEventKeys.clear();
     const nameInput = document.getElementById('ll-session-name-input');
     if (nameInput) nameInput.value = '';
     const st = document.getElementById('ll-autosave-status');
@@ -9925,7 +9926,34 @@ function copyDeathReport(victim, timestamp) {
     openCopyPreview(`Preview — ${d.victim}'s Death`, lines.join('\n'), 'Death report copied');
 }
 
+// Defensive client-side dedup — matches backend's UNIQUE INDEX tuple so any old
+// duplicate rows in the DB (from before the April 18 dedupe migration) don't
+// inflate looter totals in the UI. Also hardens against double-pushes from WS
+// reconnects that sneak past the backend.
+function _dedupeLootEvents(events) {
+    if (!Array.isArray(events)) return events;
+    const seen = new Set();
+    const out = [];
+    for (const e of events) {
+        const key = [
+            String(e.timestamp || e.ts || ''),
+            (e.looted_by_name || e.lootedBy?.name || '').toLowerCase(),
+            (e.item_id || e.itemId || '').toLowerCase(),
+            (e.looted_from_name || e.lootedFrom?.name || '').toLowerCase(),
+            String(e.quantity || 1),
+        ].join('|');
+        if (seen.has(key)) continue;
+        seen.add(key);
+        out.push(e);
+    }
+    return out;
+}
+
 async function renderLootSessionEvents(events, targetEl, depositedMap) {
+    // Dedupe before any aggregation — prevents phantom doubled totals when old
+    // duplicate rows exist in the DB (dedupe migration hasn't run yet or the
+    // session predated it).
+    events = _dedupeLootEvents(events);
     // depositedMap: optional { itemId: qty } for accountability coloring
     const isDetail = !targetEl;
     const detail = targetEl || document.getElementById('loot-session-detail');
@@ -10967,49 +10995,28 @@ async function runAccountabilityCheck() {
     }
     // Add a synthetic "you" row if the logged-in user isn't already in the list.
     // Albion's protocol doesn't broadcast the local player's own pickups, so Coldtouch
-    // (or whoever is logged in) would otherwise be missing from the accountability list
-    // even if they picked items up + deposited. Add a row marked "pickups not tracked"
-    // so they at least show up with an explanation.
-    //
-    // WORKAROUND for local-player loot: chest items that exceed the total tracked
-    // pickups are likely deposits FROM the local player (since no other player's
-    // loot stream would account for them). Attribute them to the "you" row as
-    // inferred deposits — not 100% accurate (could be items already in the chest
-    // from a prior run) but it lets the user see their contribution in accountability.
+    // (or whoever is logged in) would otherwise be missing from the accountability list.
+    // The previous version attempted to attribute "unclaimed" chest items (deposited qty
+    // exceeding tracked pickups) to the local user — but the user correctly pointed out
+    // that unclaimed items can come from any number of untracked sources (castle chests,
+    // outpost chests, out-of-range players, vault transfers, items already in the chest
+    // from a prior run). So we now show a placeholder row WITHOUT any inferred attribution.
     const selfName = (discordUser?.username || window._userData?.user?.username || '').trim();
     if (selfName) {
         const already = playerResults.some(p => p.name.toLowerCase() === selfName.toLowerCase());
         if (!already) {
-            // Compute unclaimed deposits: chest qty - sum of tracked player pickups per item.
-            const inferredItems = [];
-            let inferredLooted = 0, inferredDeposited = 0;
-            for (const [itemId, depositQty] of Object.entries(deposited)) {
-                const trackedQty = totalLootedPerItem[itemId] || 0;
-                const residual = depositQty - trackedQty;
-                if (residual > 0) {
-                    inferredItems.push({
-                        itemId,
-                        looted: residual,
-                        inChest: residual,
-                        missing: 0,
-                        isInferred: true, // visual marker
-                    });
-                    inferredLooted += residual;
-                    inferredDeposited += residual;
-                }
-            }
             playerResults.push({
                 name: selfName,
                 guild: primaryGuild || '',
-                totalLooted: inferredLooted,
-                totalDeposited: inferredDeposited,
+                totalLooted: 0,
+                totalDeposited: 0,
                 totalMissing: 0,
-                pct: inferredLooted > 0 ? 100 : -1,
-                items: inferredItems,
+                pct: -1,
+                items: [],
                 isEnemy: false,
                 died: false,
                 isSelfUntracked: true,
-                hasInferredItems: inferredItems.length > 0,
+                hasInferredItems: false, // explicit false — no auto-attribution
             });
         }
     }
@@ -11452,7 +11459,25 @@ let _liveEventDropCounter = 0;
 // session_id mid-session. We collect them all, and when the user clicks Save, we ask
 // the backend to consolidate them into one (rather than uploading duplicates).
 window._liveSessionIds = window._liveSessionIds || new Set();
+// Content-based dedup for live events — WebSocket reconnects can replay the
+// same event as a different JS object, so reference-equality dedup (`includes`)
+// misses them. Keep a Set of content keys for O(1) lookup.
+window._liveEventKeys = window._liveEventKeys || new Set();
+function _liveEventKey(ev) {
+    return [
+        String(ev.timestamp || ev.ts || ''),
+        (ev.looted_by_name || ev.lootedBy?.name || '').toLowerCase(),
+        (ev.item_id || ev.itemId || '').toLowerCase(),
+        (ev.looted_from_name || ev.lootedFrom?.name || '').toLowerCase(),
+        String(ev.quantity || 1),
+    ].join('|');
+}
+
 function _pushLiveEvent(ev) {
+    // Skip if we've already seen this exact event (replayed via WS reconnect, etc.)
+    const key = _liveEventKey(ev);
+    if (window._liveEventKeys.has(key)) return;
+    window._liveEventKeys.add(key);
     liveLootEvents.push(ev);
     if (ev && ev.sessionId) window._liveSessionIds.add(ev.sessionId);
     if (liveLootEvents.length === LIVE_EVENT_WARN_THRESHOLD && _liveEventWarnedAt < LIVE_EVENT_WARN_THRESHOLD) {
