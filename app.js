@@ -10087,6 +10087,16 @@ function _llRenderFiltered() {
     if (minVal > 0) {
         entries = entries.filter(([, data]) => (data.totalValue || 0) >= minVal);
     }
+    // Guild filter (dropdown)
+    const guildFilter = document.getElementById('ll-filter-guild')?.value || '';
+    if (guildFilter) {
+        entries = entries.filter(([, data]) => (data.guild || '') === guildFilter);
+    }
+    // Single-player filter (dropdown)
+    const playerFilter = document.getElementById('ll-filter-player')?.value || '';
+    if (playerFilter) {
+        entries = entries.filter(([name]) => name === playerFilter);
+    }
     // Item tier filter helper
     function getItemTier(itemId) {
         const m = (itemId || '').match(/^T(\d)/);
@@ -10237,11 +10247,25 @@ function _llRenderFiltered() {
         try { localStorage.setItem('albion_ll_filter', filterVal); } catch {}
     }
     const minValVal = (() => { try { return parseInt(localStorage.getItem('albion_ll_min_value')) || 0; } catch { return 0; } })();
+    // Build a sorted list of unique guilds + players for dedicated dropdowns.
+    // Much faster than typing a name into the freeform search when sessions have many players.
+    const uniqueGuilds = [...new Set(Object.values(byPlayer).map(d => d.guild).filter(Boolean))].sort();
+    const uniquePlayers = [...Object.keys(byPlayer)].sort();
+    const selectedGuild = document.getElementById('ll-filter-guild')?.value || '';
+    const selectedPlayer = document.getElementById('ll-filter-player')?.value || '';
     html += `<div class="ll-filter-bar">
         <div class="search-input-wrapper" style="flex:1; min-width:160px;">
             <span class="search-icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg></span>
             <input type="text" id="ll-search" placeholder="Search player, guild, or item..." value="${esc(searchVal)}" oninput="_llDebouncedRender(300)" aria-label="Search players, guilds, or items">
         </div>
+        <select id="ll-filter-guild" class="transport-select" style="min-width:140px;" onchange="_llDebouncedRender(100)" aria-label="Filter by guild" title="Show only players in this guild">
+            <option value="">All guilds</option>
+            ${uniqueGuilds.map(g => `<option value="${esc(g)}"${selectedGuild === g ? ' selected' : ''}>${esc(g)}</option>`).join('')}
+        </select>
+        <select id="ll-filter-player" class="transport-select" style="min-width:140px;" onchange="_llDebouncedRender(100)" aria-label="Filter to single player" title="Jump straight to one player's loot">
+            <option value="">All players</option>
+            ${uniquePlayers.map(p => `<option value="${esc(p)}"${selectedPlayer === p ? ' selected' : ''}>${esc(p)}</option>`).join('')}
+        </select>
         <select id="ll-filter-tier" class="transport-select" style="min-width:80px;" onchange="_llDebouncedRender(100)" title="Filter items by tier" aria-label="Filter by tier">
             <option value="all"${filterVal === 'all' ? ' selected' : ''}>All Tiers</option>
             <option value="t5+"${filterVal === 't5+' ? ' selected' : ''}>T5+</option>
@@ -10712,6 +10736,29 @@ function valueMissingItemsInLootBuyer() {
 
 // Cross-link from Loot Logger session view -> Accountability tab with session pre-selected.
 // If the session dropdown hasn't been populated yet, populate it first.
+// Apply the Accountability result filter controls (search, guild, player).
+// Works by toggling .ll-hidden-by-filter on each .ll-player-card based on dataset attrs.
+function _accApplyFilter() {
+    const search = (document.getElementById('acc-result-search')?.value || '').toLowerCase().trim();
+    const guild = (document.getElementById('acc-result-guild')?.value || '').toLowerCase();
+    const player = (document.getElementById('acc-result-player')?.value || '').toLowerCase();
+    const cards = document.querySelectorAll('#accountability-result .ll-player-card');
+    let visible = 0;
+    cards.forEach(c => {
+        const n = c.getAttribute('data-player-name') || '';
+        const g = c.getAttribute('data-player-guild') || '';
+        let show = true;
+        if (search) show = show && (n.includes(search) || g.includes(search));
+        if (guild) show = show && (g === guild);
+        if (player) show = show && (n === player);
+        c.style.display = show ? '' : 'none';
+        if (show) visible++;
+    });
+    // Also add a small count badge to the right of the filter bar
+    const badge = document.getElementById('acc-result-filter-count');
+    if (badge) badge.textContent = `${visible} / ${cards.length}`;
+}
+
 // Show accountability results in the same per-player event layout used by the normal session view,
 // but with a depositedMap overlaid so items get green/yellow/red dots per their deposit status.
 async function _accShowEventView(sessionId) {
@@ -10923,21 +10970,46 @@ async function runAccountabilityCheck() {
     // (or whoever is logged in) would otherwise be missing from the accountability list
     // even if they picked items up + deposited. Add a row marked "pickups not tracked"
     // so they at least show up with an explanation.
+    //
+    // WORKAROUND for local-player loot: chest items that exceed the total tracked
+    // pickups are likely deposits FROM the local player (since no other player's
+    // loot stream would account for them). Attribute them to the "you" row as
+    // inferred deposits — not 100% accurate (could be items already in the chest
+    // from a prior run) but it lets the user see their contribution in accountability.
     const selfName = (discordUser?.username || window._userData?.user?.username || '').trim();
     if (selfName) {
         const already = playerResults.some(p => p.name.toLowerCase() === selfName.toLowerCase());
         if (!already) {
+            // Compute unclaimed deposits: chest qty - sum of tracked player pickups per item.
+            const inferredItems = [];
+            let inferredLooted = 0, inferredDeposited = 0;
+            for (const [itemId, depositQty] of Object.entries(deposited)) {
+                const trackedQty = totalLootedPerItem[itemId] || 0;
+                const residual = depositQty - trackedQty;
+                if (residual > 0) {
+                    inferredItems.push({
+                        itemId,
+                        looted: residual,
+                        inChest: residual,
+                        missing: 0,
+                        isInferred: true, // visual marker
+                    });
+                    inferredLooted += residual;
+                    inferredDeposited += residual;
+                }
+            }
             playerResults.push({
                 name: selfName,
                 guild: primaryGuild || '',
-                totalLooted: 0,
-                totalDeposited: 0,
+                totalLooted: inferredLooted,
+                totalDeposited: inferredDeposited,
                 totalMissing: 0,
-                pct: -1,
-                items: [],
+                pct: inferredLooted > 0 ? 100 : -1,
+                items: inferredItems,
                 isEnemy: false,
                 died: false,
-                isSelfUntracked: true, // special flag — render with explanation
+                isSelfUntracked: true,
+                hasInferredItems: inferredItems.length > 0,
             });
         }
     }
@@ -11027,6 +11099,44 @@ async function runAccountabilityCheck() {
         <div class="loot-tracked-stat"><span class="loot-tracked-stat-label">Players</span><span class="loot-tracked-stat-value">${playerResults.length}</span></div>
     </div>`;
 
+    // Deaths section — reconstructed from __DEATH__ events in the session.
+    // Previously missing from accountability; users couldn't see who died in the list even
+    // though death info is useful for allocating gear/regear responsibility.
+    try {
+        const deathPriceMap = priceMap;
+        const deathByPlayer = {};
+        for (const [n, d] of Object.entries(lootedByPlayer)) deathByPlayer[n] = { ...d, items: Object.entries(d.items).map(([id, q]) => ({ item_id: id, quantity: q, timestamp: 0 })) };
+        const deaths = buildDeathTimeline(lootEvents, deathByPlayer, deathPriceMap, primaryGuild, primaryAlliance);
+        if (deaths && deaths.length > 0) {
+            // Stash so renderDeathsSection can use _llPriceMap for tooltips
+            _llPriceMap = deathPriceMap;
+            html += `<details open class="ll-deaths-section" style="margin-bottom:0.75rem;">
+                <summary class="ll-deaths-summary">
+                    <span style="font-size:1.1rem;">☠</span>
+                    <span class="ll-deaths-title-text">Deaths during session</span>
+                    <span class="ll-deaths-count">${deaths.length}</span>
+                    ${deaths.filter(d => d.wasFriendly).length > 0 ? `<span class="ll-deaths-friendly-count">🛡️ ${deaths.filter(d => d.wasFriendly).length}</span>` : ''}
+                    ${deaths.filter(d => !d.wasFriendly).length > 0 ? `<span class="ll-deaths-enemy-count">💀 ${deaths.filter(d => !d.wasFriendly).length}</span>` : ''}
+                </summary>
+                <div class="ll-deaths-list">${deaths.map(d => {
+                    const sideClass = d.wasFriendly ? 'll-death-friendly' : 'll-death-enemy';
+                    const sideIcon = d.wasFriendly ? '🛡️' : '💀';
+                    const when = d.timestamp ? new Date(d.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '—';
+                    const value = d.estimatedValue > 0 ? formatSilver(d.estimatedValue) : '—';
+                    return `<div class="ll-death-row ${sideClass}"><div class="ll-death-row-summary" style="cursor:default;">
+                        <span class="ll-death-row-icon">${sideIcon}</span>
+                        <span class="ll-death-row-time">${esc(when)}</span>
+                        <span class="ll-death-row-victim">${esc(d.victim)}</span>
+                        <span class="ll-death-row-sep">→</span>
+                        <span class="ll-death-row-killer">${esc(d.killer) || 'unknown'}</span>
+                        <span class="ll-death-row-value">${value}</span>
+                        <span class="ll-death-badge">${d.wasFriendly ? 'friendly' : 'enemy'}</span>
+                    </div></div>`;
+                }).join('')}</div>
+            </details>`;
+        }
+    } catch(e) { /* deaths section is optional — don't break the whole view */ }
+
     // Color legend — explains the item-state dots.
     html += `<div class="ll-accountability-legend">
         <span><span class="ll-item-status-dot ll-dot-deposited"></span> Deposited</span>
@@ -11034,6 +11144,23 @@ async function runAccountabilityCheck() {
         <span><span class="ll-item-status-dot ll-dot-missing"></span> Missing</span>
         <span><span class="ll-item-status-dot ll-dot-died"></span> Lost on death</span>
         <span style="color:var(--text-muted);font-style:italic;">Enemy loot shown without status</span>
+    </div>`;
+
+    // Filter bar for Accountability — lets user drill into a guild or single player quickly.
+    const accGuilds = [...new Set(playerResults.map(p => p.guild).filter(Boolean))].sort();
+    const accPlayers = playerResults.map(p => p.name).sort();
+    const savedAccGuild = document.getElementById('acc-result-guild')?.value || '';
+    const savedAccPlayer = document.getElementById('acc-result-player')?.value || '';
+    html += `<div class="ll-filter-bar" style="margin-bottom:0.5rem;">
+        <input type="text" id="acc-result-search" class="transport-select" placeholder="Search player / guild…" value="${esc(document.getElementById('acc-result-search')?.value || '')}" style="min-width:180px; flex:1;" oninput="_accApplyFilter()">
+        <select id="acc-result-guild" class="transport-select" style="min-width:140px;" onchange="_accApplyFilter()" title="Show only players in this guild">
+            <option value="">All guilds</option>
+            ${accGuilds.map(g => `<option value="${esc(g)}"${savedAccGuild === g ? ' selected' : ''}>${esc(g)}</option>`).join('')}
+        </select>
+        <select id="acc-result-player" class="transport-select" style="min-width:140px;" onchange="_accApplyFilter()" title="Filter to one player">
+            <option value="">All players</option>
+            ${accPlayers.map(p => `<option value="${esc(p)}"${savedAccPlayer === p ? ' selected' : ''}>${esc(p)}</option>`).join('')}
+        </select>
     </div>`;
 
     // Action buttons: view switcher + Expand/Collapse + Discord + Export
@@ -11053,19 +11180,37 @@ async function runAccountabilityCheck() {
 
     html += playerResults.map(p => {
         // Self-untracked placeholder row — show the user that they're in the session,
-        // but explain pickups aren't tracked. Render a simplified card.
+        // but explain pickups aren't tracked. Render a simplified card with optional
+        // inferred-items strip when residual chest deposits can be attributed to them.
         if (p.isSelfUntracked) {
-            return `<div class="ll-player-card ll-card-self-untracked" style="border-left:3px solid #5865f2; background:rgba(88,101,242,0.06);">
+            const inferredStrip = p.hasInferredItems
+                ? `<div style="padding:0.5rem 0.8rem; border-top:1px solid rgba(88,101,242,0.15); background:rgba(88,101,242,0.04);">
+                    <div style="font-size:0.72rem; color:#c7d2ff; margin-bottom:0.3rem; font-weight:600; text-transform:uppercase; letter-spacing:0.03em;">🎯 Inferred deposits (${p.items.length} items · ${formatSilver(p.items.reduce((s, it) => s + ((priceMap[it.itemId]?.price || 0) * it.looted), 0))})</div>
+                    <div style="font-size:0.72rem; color:var(--text-muted); margin-bottom:0.35rem; font-style:italic;">Chest items that don't match any other player's tracked pickups. Best-effort attribution to you.</div>
+                    <div style="display:flex; flex-wrap:wrap; gap:0.3rem;">
+                        ${p.items.map(it => {
+                            const iName = getFriendlyName(it.itemId) || it.itemId;
+                            const iconUrl = `https://render.albiononline.com/v1/item/${encodeURIComponent(it.itemId)}.png`;
+                            const pe = priceMap[it.itemId];
+                            const val = pe ? formatSilver(pe.price * it.looted) : '—';
+                            return `<div style="display:flex; align-items:center; gap:0.3rem; padding:0.25rem 0.45rem; background:rgba(255,255,255,0.03); border-radius:4px; font-size:0.75rem;" title="${esc(iName)} ×${it.looted} · ${val}"><img src="${iconUrl}" style="width:24px; height:24px;" loading="lazy" onerror="this.style.display='none'"><span>${esc(iName)}</span><span style="color:var(--accent); font-weight:700;">×${it.looted}</span></div>`;
+                        }).join('')}
+                    </div>
+                </div>`
+                : '';
+            return `<div class="ll-player-card ll-card-self-untracked" style="border-left:3px solid #5865f2; background:rgba(88,101,242,0.06);" data-player-name="${esc(p.name.toLowerCase())}" data-player-guild="${esc((p.guild || '').toLowerCase())}">
                 <div class="ll-player-header" style="display:flex; align-items:center; gap:0.6rem; padding:0.6rem 0.8rem;">
                     <div style="width:36px; height:36px; border-radius:50%; background:#5865f2; color:#fff; display:flex; align-items:center; justify-content:center; font-weight:700; font-size:0.82rem;">${esc(p.name.substring(0, 2).toUpperCase())}</div>
                     <div style="flex:1; min-width:0;">
                         <div style="font-weight:600; color:var(--text-primary); display:flex; align-items:center; gap:0.4rem;">
                             ${esc(p.name)}
                             <span class="tier-badge" style="background:rgba(88,101,242,0.18); color:#c7d2ff;">You</span>
+                            ${p.hasInferredItems ? `<span class="tier-badge" style="background:rgba(240,192,64,0.18); color:var(--accent);" title="Chest items that don't match any tracked player's pickups — best-effort attribution">+${p.items.length} inferred</span>` : ''}
                         </div>
-                        <div style="font-size:0.72rem; color:var(--text-muted);">Your pickups aren't tracked by Albion's protocol — only other players' loot. Deposits you made are counted in the chest total.</div>
+                        <div style="font-size:0.72rem; color:var(--text-muted);">Your pickups aren't tracked by Albion's protocol. Items below are "unclaimed" deposits attributed to you as a best-effort.</div>
                     </div>
                 </div>
+                ${inferredStrip}
             </div>`;
         }
         const barColor = p.pct >= 80 ? 'var(--profit-green)' : p.pct >= 40 ? '#fbbf24' : 'var(--loss-red)';
@@ -11114,7 +11259,7 @@ async function runAccountabilityCheck() {
             : '';
         const deathTag = p.died ? '<span title="Died — lost items" style="color:var(--loss-red); margin-left:0.3rem;">💀</span>' : '';
 
-        return `<div class="ll-player-card" style="${enemyBorder}">
+        return `<div class="ll-player-card" style="${enemyBorder}" data-player-name="${esc(p.name.toLowerCase())}" data-player-guild="${esc((p.guild || '').toLowerCase())}">
             <div class="ll-player-header" onclick="this.closest('.ll-player-card').classList.toggle('expanded')">
                 <div class="ll-player-avatar">${esc(initials)}</div>
                 <div class="ll-player-info">
