@@ -424,6 +424,19 @@ db.serialize(() => {
   )`);
   db.run(`CREATE INDEX IF NOT EXISTS idx_loot_session_shares_token ON loot_session_shares(public_token)`);
 
+  // Accountability share tokens — snapshots session + selected chest captures
+  // so anyone with the link can view the breakdown (before/after accountability).
+  db.run(`CREATE TABLE IF NOT EXISTS accountability_shares (
+    token TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    captures_json TEXT NOT NULL,
+    session_name TEXT DEFAULT '',
+    created_at INTEGER NOT NULL,
+    view_count INTEGER DEFAULT 0
+  )`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_acc_shares_user ON accountability_shares(user_id)`);
+
   // === ANALYTICS TABLES ===
   db.run(`CREATE TABLE IF NOT EXISTS price_analytics (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1989,6 +2002,80 @@ app.get('/api/loot-sessions', requireAuth, (req, res) => {
 // G4: Generate/refresh a share token for a session the user owns.
 // Idempotent per session — re-calling returns the existing token (so sharing
 // the same link repeatedly doesn't churn tokens). To rotate, call unshare first.
+// === ACCOUNTABILITY SHARING ===
+// Create a public share link for an accountability check. Snapshot the selected
+// chest captures into the row (they're ephemeral in the Go client otherwise).
+// Viewers get session events + captures and can toggle before/after views.
+app.post('/api/accountability/share', requireAuth, (req, res) => {
+    const { sessionId, captures, sessionName } = req.body || {};
+    if (!sessionId || typeof sessionId !== 'string') return res.status(400).json({ error: 'sessionId required' });
+    if (!Array.isArray(captures) || captures.length === 0) return res.status(400).json({ error: 'At least one capture required' });
+    if (captures.length > 20) return res.status(400).json({ error: 'Too many captures (max 20)' });
+
+    // Verify the session belongs to this user (live session is handled by resolving __live__ to the latest ws.lootSessionId at share time)
+    const resolvedSessionId = sessionId === '__live__' ? null : sessionId;
+    const verifyQuery = resolvedSessionId
+        ? 'SELECT 1 FROM loot_events WHERE session_id = ? AND user_id = ? LIMIT 1'
+        : 'SELECT session_id FROM loot_events WHERE user_id = ? ORDER BY timestamp DESC LIMIT 1';
+    const verifyParams = resolvedSessionId ? [resolvedSessionId, req.user.id] : [req.user.id];
+    db.get(verifyQuery, verifyParams, (err, row) => {
+        if (err) return res.status(500).json({ error: err.message });
+        if (!row) return res.status(404).json({ error: 'Session not found' });
+        const finalSessionId = resolvedSessionId || row.session_id;
+        // Serialize captures (trim to essentials + cap item count per capture for size safety)
+        const trimmedCaptures = captures.map((c, i) => ({
+            tabName: (c.tabName || `Capture ${i + 1}`).slice(0, 80),
+            capturedAt: c.capturedAt || 0,
+            containerId: c.containerId || '',
+            items: Array.isArray(c.items) ? c.items.slice(0, 500).map(it => ({
+                itemId: (it.itemId || '').slice(0, 80),
+                quality: parseInt(it.quality) || 1,
+                quantity: parseInt(it.quantity) || 1,
+            })) : [],
+        }));
+        const capturesJson = JSON.stringify(trimmedCaptures);
+        if (capturesJson.length > 500000) return res.status(400).json({ error: 'Captures payload too large (max 500KB)' });
+        const token = require('crypto').randomBytes(24).toString('base64url');
+        db.run(`INSERT INTO accountability_shares (token, user_id, session_id, captures_json, session_name, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
+            [token, req.user.id, finalSessionId, capturesJson, (sessionName || '').slice(0, 120), Date.now()],
+            function(iErr) {
+                if (iErr) return res.status(500).json({ error: iErr.message });
+                res.json({ token, url: `/?accShare=${token}` });
+            });
+    });
+});
+
+// Public — no auth. Viewer fetches session events + captures from the share token.
+app.get('/api/accountability/public/:token', (req, res) => {
+    const token = req.params.token;
+    if (!token || !/^[A-Za-z0-9_-]{20,40}$/.test(token)) return res.status(400).json({ error: 'Invalid token' });
+    readDb.get(`SELECT user_id, session_id, captures_json, session_name, created_at FROM accountability_shares WHERE token = ?`, [token], (err, row) => {
+        if (err) return res.status(500).json({ error: err.message });
+        if (!row) return res.status(404).json({ error: 'Share not found or revoked' });
+        readDb.all(`SELECT timestamp, looted_by_name, looted_by_guild, looted_by_alliance, looted_from_name, looted_from_guild, looted_from_alliance, item_id, numeric_id, quantity, weight, equipment_json FROM loot_events WHERE session_id = ? AND user_id = ? ORDER BY timestamp ASC`,
+            [row.session_id, row.user_id], (err2, events) => {
+                if (err2) return res.status(500).json({ error: err2.message });
+                // Bump view counter (fire-and-forget)
+                db.run(`UPDATE accountability_shares SET view_count = view_count + 1 WHERE token = ?`, [token]);
+                let captures = [];
+                try { captures = JSON.parse(row.captures_json || '[]'); } catch {}
+                res.json({
+                    sessionName: row.session_name || '',
+                    createdAt: row.created_at,
+                    events: events || [],
+                    captures,
+                });
+            });
+    });
+});
+
+app.delete('/api/accountability/share/:token', requireAuth, (req, res) => {
+    db.run(`DELETE FROM accountability_shares WHERE token = ? AND user_id = ?`, [req.params.token, req.user.id], function(err) {
+        if (err) return res.status(500).json({ error: err.message });
+        res.json({ success: true, revoked: this.changes });
+    });
+});
+
 app.post('/api/loot-session/:sessionId/share', requireAuth, (req, res) => {
   const sessionId = req.params.sessionId;
   // Verify the session belongs to this user before minting a token

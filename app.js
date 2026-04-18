@@ -10764,6 +10764,44 @@ function valueMissingItemsInLootBuyer() {
 
 // Cross-link from Loot Logger session view -> Accountability tab with session pre-selected.
 // If the session dropdown hasn't been populated yet, populate it first.
+// Create a public share link for the current accountability check.
+// Snapshots the session + selected chest captures to the backend so viewers
+// can render the breakdown without needing access to live capture data.
+async function shareAccountability(sessionId) {
+    const captureSel = document.getElementById('acc-capture-select');
+    const selectedIdxs = Array.from(captureSel.selectedOptions).map(o => parseInt(o.value)).filter(v => !isNaN(v));
+    if (!sessionId) { showToast('No session selected', 'warn'); return; }
+    if (selectedIdxs.length === 0) { showToast('Select at least one chest capture first', 'warn'); return; }
+    const captures = window._chestCaptures || [];
+    const selectedCaptures = selectedIdxs.map(i => captures[i]).filter(Boolean);
+    if (selectedCaptures.length === 0) { showToast('Selected captures no longer available', 'warn'); return; }
+    // Get the session name from saved names if available.
+    let sessionName = '';
+    try {
+        const savedNames = typeof getSavedSessionNames === 'function' ? getSavedSessionNames() : {};
+        sessionName = savedNames[sessionId] || '';
+    } catch {}
+    try {
+        const res = await fetch(`${VPS_BASE}/api/accountability/share`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', ...authHeaders() },
+            body: JSON.stringify({ sessionId, captures: selectedCaptures, sessionName })
+        });
+        const data = await res.json();
+        if (!res.ok) { showToast('Share failed: ' + (data.error || res.status), 'error'); return; }
+        const fullUrl = `${window.location.origin}${window.location.pathname}?accShare=${encodeURIComponent(data.token)}`;
+        // Open the existing copy-preview modal if present, else show a toast with the link.
+        if (typeof openCopyPreview === 'function') {
+            openCopyPreview('Accountability share link', fullUrl, 'Link copied — share with anyone');
+        } else {
+            navigator.clipboard.writeText(fullUrl);
+            showToast(`Link copied to clipboard: ${fullUrl}`, 'success');
+        }
+    } catch (e) {
+        showToast('Share failed: ' + e.message, 'error');
+    }
+}
+
 // Apply the Accountability result filter controls (search, guild, player).
 // Works by toggling .ll-hidden-by-filter on each .ll-player-card based on dataset attrs.
 function _accApplyFilter() {
@@ -11170,9 +11208,10 @@ async function runAccountabilityCheck() {
         </select>
     </div>`;
 
-    // Action buttons: view switcher + Expand/Collapse + Discord + Export
+    // Action buttons: view switcher + Share + Expand/Collapse + Discord + Export
     html += `<div style="display:flex; gap:0.4rem; margin-bottom:0.5rem; flex-wrap:wrap;">
         <button class="btn-small btn-small-accent" onclick="_accShowEventView('${esc(sessionId)}')" title="See the same per-player event layout as the session detail view, with deposit-status colors overlaid on each item">📋 Event View</button>
+        <button class="btn-small" onclick="shareAccountability('${esc(sessionId)}')" title="Create a public link for this accountability check — viewers can toggle before/after view">🔗 Share</button>
         <button class="btn-small" onclick="document.querySelectorAll('#accountability-result .ll-player-card').forEach(c=>c.classList.add('expanded'))">Expand All</button>
         <button class="btn-small" onclick="document.querySelectorAll('#accountability-result .ll-player-card').forEach(c=>c.classList.remove('expanded'))">Collapse All</button>
         <div class="ll-discord-dropdown">
@@ -15174,13 +15213,26 @@ function _copyShareUrl() {
 }
 
 // G4: if the URL has ?share=xxx, fetch + render the public session view.
+// 2026-04-18: also handles ?accShare=xxx for accountability shares.
 // Runs on load before any login check so guild members without accounts can view.
 async function _handlePublicShareLoad() {
     const params = new URLSearchParams(window.location.search);
-    const token = params.get('share');
-    if (!token) return;
+    const sessionToken = params.get('share');
+    const accToken = params.get('accShare');
+    if (!sessionToken && !accToken) return;
     try {
-        const res = await fetch(`${VPS_BASE}/api/public/loot-session/${encodeURIComponent(token)}`);
+        if (accToken) {
+            const res = await fetch(`${VPS_BASE}/api/accountability/public/${encodeURIComponent(accToken)}`);
+            if (!res.ok) {
+                const data = await res.json();
+                _renderPublicShareError(data.error || 'Failed to load shared accountability');
+                return;
+            }
+            const data = await res.json();
+            _renderPublicAccountabilityView(data);
+            return;
+        }
+        const res = await fetch(`${VPS_BASE}/api/public/loot-session/${encodeURIComponent(sessionToken)}`);
         if (!res.ok) {
             const data = await res.json();
             _renderPublicShareError(data.error || 'Failed to load shared session');
@@ -15189,8 +15241,60 @@ async function _handlePublicShareLoad() {
         const data = await res.json();
         _renderPublicShareView(data);
     } catch(e) {
-        _renderPublicShareError('Network error loading shared session');
+        _renderPublicShareError('Network error loading shared link');
     }
+}
+
+// Render shared ACCOUNTABILITY view with a "Before" / "With accountability" toggle.
+// Before = normal session event breakdown (no deposit tracking).
+// With accountability = same view but with deposit-status dots overlaid on each item.
+function _renderPublicAccountabilityView(data) {
+    const overlay = document.createElement('div');
+    overlay.id = 'public-share-overlay';
+    const when = data.createdAt ? new Date(data.createdAt).toLocaleString() : '';
+    overlay.innerHTML = `
+        <div class="public-share-banner">
+            <span>🔗 Viewing a shared accountability check — read-only${data.sessionName ? ` · <strong>${esc(data.sessionName)}</strong>` : ''}${when ? ` · created ${esc(when)}` : ''}</span>
+            <a href="${window.location.pathname}" class="btn-small">Continue to Coldtouch &rarr;</a>
+        </div>
+        <div style="padding:1rem; max-width:1200px; margin:0 auto;">
+            <div style="display:flex; gap:0.5rem; margin-bottom:0.75rem; padding:0.5rem; background:rgba(255,255,255,0.03); border:1px solid var(--border); border-radius:8px;">
+                <button class="btn-small btn-small-accent" id="acc-share-before">📋 Before — session events</button>
+                <button class="btn-small" id="acc-share-after">✓ With accountability check</button>
+                <span style="margin-left:auto; font-size:0.75rem; color:var(--text-muted);">${data.captures.length} chest capture${data.captures.length !== 1 ? 's' : ''} · ${data.events.length} events</span>
+            </div>
+            <div id="public-share-container"></div>
+        </div>`;
+    document.body.appendChild(overlay);
+
+    // Build the deposited map from the serialized captures
+    const depositedMap = {};
+    for (const cap of (data.captures || [])) {
+        for (const it of (cap.items || [])) {
+            depositedMap[it.itemId] = (depositedMap[it.itemId] || 0) + (it.quantity || 1);
+        }
+    }
+
+    const target = document.getElementById('public-share-container');
+    _llTargetEl = target;
+    _llIsDetail = true;
+
+    const renderBefore = async () => {
+        document.getElementById('acc-share-before').classList.add('btn-small-accent');
+        document.getElementById('acc-share-after').classList.remove('btn-small-accent');
+        target.innerHTML = '<div class="empty-state"><p>Loading…</p></div>';
+        await renderLootSessionEvents(data.events || [], target, null);
+    };
+    const renderAfter = async () => {
+        document.getElementById('acc-share-after').classList.add('btn-small-accent');
+        document.getElementById('acc-share-before').classList.remove('btn-small-accent');
+        target.innerHTML = '<div class="empty-state"><p>Loading…</p></div>';
+        await renderLootSessionEvents(data.events || [], target, depositedMap);
+    };
+    document.getElementById('acc-share-before').addEventListener('click', renderBefore);
+    document.getElementById('acc-share-after').addEventListener('click', renderAfter);
+    // Default to After view — that's the point of an accountability share.
+    renderAfter();
 }
 
 function _renderPublicShareError(msg) {
