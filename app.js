@@ -10918,9 +10918,35 @@ async function runAccountabilityCheck() {
             died: deathVictims.has(name)
         });
     }
-    // Guild members sorted by deposit % (worst first), enemies at the end
+    // Add a synthetic "you" row if the logged-in user isn't already in the list.
+    // Albion's protocol doesn't broadcast the local player's own pickups, so Coldtouch
+    // (or whoever is logged in) would otherwise be missing from the accountability list
+    // even if they picked items up + deposited. Add a row marked "pickups not tracked"
+    // so they at least show up with an explanation.
+    const selfName = (discordUser?.username || window._userData?.user?.username || '').trim();
+    if (selfName) {
+        const already = playerResults.some(p => p.name.toLowerCase() === selfName.toLowerCase());
+        if (!already) {
+            playerResults.push({
+                name: selfName,
+                guild: primaryGuild || '',
+                totalLooted: 0,
+                totalDeposited: 0,
+                totalMissing: 0,
+                pct: -1,
+                items: [],
+                isEnemy: false,
+                died: false,
+                isSelfUntracked: true, // special flag — render with explanation
+            });
+        }
+    }
+
+    // Guild members sorted by deposit % (worst first), enemies at the end.
+    // isSelfUntracked rows float to the top of guild members (to be visible).
     playerResults.sort((a, b) => {
         if (a.isEnemy !== b.isEnemy) return a.isEnemy ? 1 : -1;
+        if (a.isSelfUntracked !== b.isSelfUntracked) return a.isSelfUntracked ? -1 : 1;
         return a.pct - b.pct;
     });
 
@@ -10951,6 +10977,23 @@ async function runAccountabilityCheck() {
     let html = '';
     if (selectedTabNames.length > 0) {
         html += `<div style="font-size:0.78rem; color:var(--text-muted); margin-bottom:0.75rem;">Comparing against: <strong>${selectedTabNames.map(n => esc(n)).join(', ')}</strong></div>`;
+    }
+
+    // Known-limitation banner: Albion's protocol never broadcasts the LOCAL player's
+    // own loot pickups — only OTHER players in range. So the account holder won't
+    // appear as a looter in the list even when they picked up items. We surface that
+    // here so it doesn't look like a bug.
+    const myName = (discordUser?.username || window._userData?.user?.username || '').trim();
+    const foundMe = myName && playerResults.some(p => p.name.toLowerCase() === myName.toLowerCase());
+    if (myName && !foundMe) {
+        html += `<div style="background:rgba(88,101,242,0.10); border:1px solid rgba(88,101,242,0.35); border-radius:8px; padding:0.65rem 0.9rem; margin-bottom:0.75rem; font-size:0.82rem; color:var(--text-secondary); display:flex; gap:0.6rem; align-items:flex-start;">
+            <span style="font-size:1.1rem; line-height:1;">ℹ️</span>
+            <div>
+                <strong style="color:#c7d2ff;">"${esc(myName)}" not in the list? That's expected.</strong><br>
+                Albion's network protocol only broadcasts OTHER players' loot pickups — your own pickups aren't sent as events, so the Go client can't record them.
+                If you deposited items into the tracked chest, they're counted in the total but aren't attributed to you individually.
+            </div>
+        </div>`;
     }
 
     // Suspects banner
@@ -11009,6 +11052,22 @@ async function runAccountabilityCheck() {
     </div>`;
 
     html += playerResults.map(p => {
+        // Self-untracked placeholder row — show the user that they're in the session,
+        // but explain pickups aren't tracked. Render a simplified card.
+        if (p.isSelfUntracked) {
+            return `<div class="ll-player-card ll-card-self-untracked" style="border-left:3px solid #5865f2; background:rgba(88,101,242,0.06);">
+                <div class="ll-player-header" style="display:flex; align-items:center; gap:0.6rem; padding:0.6rem 0.8rem;">
+                    <div style="width:36px; height:36px; border-radius:50%; background:#5865f2; color:#fff; display:flex; align-items:center; justify-content:center; font-weight:700; font-size:0.82rem;">${esc(p.name.substring(0, 2).toUpperCase())}</div>
+                    <div style="flex:1; min-width:0;">
+                        <div style="font-weight:600; color:var(--text-primary); display:flex; align-items:center; gap:0.4rem;">
+                            ${esc(p.name)}
+                            <span class="tier-badge" style="background:rgba(88,101,242,0.18); color:#c7d2ff;">You</span>
+                        </div>
+                        <div style="font-size:0.72rem; color:var(--text-muted);">Your pickups aren't tracked by Albion's protocol — only other players' loot. Deposits you made are counted in the chest total.</div>
+                    </div>
+                </div>
+            </div>`;
+        }
         const barColor = p.pct >= 80 ? 'var(--profit-green)' : p.pct >= 40 ? '#fbbf24' : 'var(--loss-red)';
         const initials = p.name.substring(0, 2).toUpperCase();
 
