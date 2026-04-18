@@ -10634,6 +10634,16 @@ async function processLootFiles(files) {
         if (res.ok) {
             const data = await res.json();
             status.textContent += ` — saved (${data.eventsImported} events)`;
+            // Remember the just-uploaded session_id so the Accountability dropdown can
+            // highlight it and auto-select when the user switches to that tab.
+            if (data.sessionId || data.session_id) {
+                window._justUploadedSessionId = data.sessionId || data.session_id;
+                window._justUploadedAt = Date.now();
+                // Auto-stamp the session name to the first file uploaded (user can rename later).
+                if (typeof setSavedSessionName === 'function' && fileNames.length > 0) {
+                    setSavedSessionName(window._justUploadedSessionId, fileNames[0].replace(/\.txt$/i, ''));
+                }
+            }
         }
     } catch { /* silent — viewing works without login */ }
 }
@@ -10648,13 +10658,109 @@ function populateAccountabilityDropdowns() {
     fetch(`${VPS_BASE}/api/loot-sessions`, { headers: authHeaders() })
         .then(r => r.json())
         .then(data => {
+            const sessions = (data.sessions || []);
+            // Already ORDER BY started_at DESC server-side, but sort defensively so newest is on top.
+            sessions.sort((a, b) => (b.started_at || 0) - (a.started_at || 0));
+
+            // Detect likely duplicate uploads of the same file: identical (started_at minute,
+            // event_count, player_count, total_weight) tuple is almost certainly the same data.
+            // We keep all rows but flag the later ones as duplicates so the user can clean up.
+            const fingerprintSeen = new Map(); // fingerprint → earliest session_id
+            for (const s of sessions) {
+                const fp = `${Math.floor((s.started_at || 0) / 60000)}_${s.event_count}_${s.player_count}_${Math.round(s.total_weight || 0)}`;
+                if (!fingerprintSeen.has(fp)) fingerprintSeen.set(fp, s.session_id);
+            }
+
+            const savedNames = typeof getSavedSessionNames === 'function' ? getSavedSessionNames() : {};
+            const justUploaded = window._justUploadedSessionId;
+            const recentUpload = window._justUploadedAt && (Date.now() - window._justUploadedAt < 3 * 60000); // highlight for 3 min
+
             let opts = '<option value="">-- Select session --</option>';
-            if (liveLootEvents.length > 0) opts += `<option value="__live__">Live Session (${liveLootEvents.length} events)</option>`;
-            (data.sessions || []).forEach(s => {
-                const d = new Date(s.started_at).toLocaleString();
-                opts += `<option value="${esc(s.session_id)}">${d} (${s.event_count} events, ${s.player_count} players)</option>`;
-            });
+            if (liveLootEvents.length > 0) opts += `<option value="__live__">🔴 LIVE — ${liveLootEvents.length} events</option>`;
+
+            // Build separate groups: newly uploaded (top), live, today, yesterday, older + duplicates at the end.
+            const now = Date.now();
+            const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0);
+            const todayMs = todayStart.getTime();
+            const yesterdayMs = todayMs - 86400000;
+            const weekMs = todayMs - 6 * 86400000;
+
+            const groupJust = [], groupToday = [], groupYesterday = [], groupWeek = [], groupOlder = [], groupDups = [];
+            for (const s of sessions) {
+                const fp = `${Math.floor((s.started_at || 0) / 60000)}_${s.event_count}_${s.player_count}_${Math.round(s.total_weight || 0)}`;
+                const isFirstOfFingerprint = fingerprintSeen.get(fp) === s.session_id;
+                const isDup = !isFirstOfFingerprint;
+                const isNewlyUploaded = s.session_id === justUploaded && recentUpload;
+                if (isNewlyUploaded) { groupJust.push(s); continue; }
+                if (isDup) { groupDups.push(s); continue; }
+                const ts = s.started_at || 0;
+                if (ts >= todayMs) groupToday.push(s);
+                else if (ts >= yesterdayMs) groupYesterday.push(s);
+                else if (ts >= weekMs) groupWeek.push(s);
+                else groupOlder.push(s);
+            }
+
+            const renderOpt = (s, extraPrefix = '') => {
+                const customName = savedNames[s.session_id];
+                const rel = timeAgo(new Date(s.started_at).toISOString());
+                const label = customName ? `"${customName}"` : rel;
+                return `<option value="${esc(s.session_id)}">${extraPrefix}${esc(label)} — ${s.event_count} events · ${s.player_count} players</option>`;
+            };
+
+            if (groupJust.length > 0) {
+                opts += `<optgroup label="🆕 Just uploaded">`;
+                groupJust.forEach(s => opts += renderOpt(s, '🆕 '));
+                opts += `</optgroup>`;
+            }
+            if (groupToday.length > 0) {
+                opts += `<optgroup label="📅 Today">`;
+                groupToday.forEach(s => opts += renderOpt(s));
+                opts += `</optgroup>`;
+            }
+            if (groupYesterday.length > 0) {
+                opts += `<optgroup label="Yesterday">`;
+                groupYesterday.forEach(s => opts += renderOpt(s));
+                opts += `</optgroup>`;
+            }
+            if (groupWeek.length > 0) {
+                opts += `<optgroup label="This week">`;
+                groupWeek.forEach(s => opts += renderOpt(s));
+                opts += `</optgroup>`;
+            }
+            if (groupOlder.length > 0) {
+                opts += `<optgroup label="Older">`;
+                groupOlder.forEach(s => opts += renderOpt(s));
+                opts += `</optgroup>`;
+            }
+            if (groupDups.length > 0) {
+                opts += `<optgroup label="⚠ Possible duplicates (${groupDups.length})">`;
+                groupDups.forEach(s => opts += renderOpt(s, '⚠ '));
+                opts += `</optgroup>`;
+            }
+
             sessionSel.innerHTML = opts;
+
+            // Auto-select the newly-uploaded session if present
+            if (justUploaded && recentUpload) {
+                sessionSel.value = justUploaded;
+                // Visual cue: flash the select briefly
+                sessionSel.style.boxShadow = '0 0 0 2px var(--accent)';
+                setTimeout(() => { sessionSel.style.boxShadow = ''; }, 2500);
+            }
+
+            // Show a hint bar above the dropdowns if there are duplicates.
+            let dupBar = document.getElementById('acc-dup-bar');
+            if (groupDups.length > 0) {
+                if (!dupBar) {
+                    dupBar = document.createElement('div');
+                    dupBar.id = 'acc-dup-bar';
+                    dupBar.style.cssText = 'background:rgba(251,191,36,0.10); border:1px solid rgba(251,191,36,0.35); border-radius:6px; padding:0.45rem 0.7rem; margin-bottom:0.5rem; font-size:0.78rem; color:var(--text-secondary); display:flex; gap:0.5rem; align-items:center; flex-wrap:wrap;';
+                    sessionSel.parentElement?.parentElement?.prepend(dupBar);
+                }
+                dupBar.innerHTML = `⚠ Detected <strong>${groupDups.length}</strong> likely duplicate session${groupDups.length > 1 ? 's' : ''} (same timestamp, event count, player count). <button class="btn-small" style="padding:0.15rem 0.5rem; font-size:0.7rem;" onclick="_accDeleteDuplicates()">🗑 Clean up duplicates</button>`;
+            } else if (dupBar) {
+                dupBar.remove();
+            }
         }).catch(() => {});
 
     // E2: lootBuyerCaptures IS window._chestCaptures — no seeding needed
@@ -10764,6 +10870,53 @@ function valueMissingItemsInLootBuyer() {
 
 // Cross-link from Loot Logger session view -> Accountability tab with session pre-selected.
 // If the session dropdown hasn't been populated yet, populate it first.
+// Delete all sessions flagged as possible duplicates (not the earliest of each fingerprint).
+// Uses the existing DELETE /api/loot-session/:id endpoint (one call per duplicate).
+async function _accDeleteDuplicates() {
+    // Re-pull the current sessions list so we act on fresh data.
+    let sessions;
+    try {
+        const res = await fetch(`${VPS_BASE}/api/loot-sessions`, { headers: authHeaders() });
+        const data = await res.json();
+        sessions = (data.sessions || []).sort((a, b) => (b.started_at || 0) - (a.started_at || 0));
+    } catch {
+        showToast('Failed to refresh sessions', 'error');
+        return;
+    }
+    // Group by fingerprint, keep the earliest session_id (first-seen) in each group.
+    const fpMap = new Map();
+    for (const s of sessions) {
+        const fp = `${Math.floor((s.started_at || 0) / 60000)}_${s.event_count}_${s.player_count}_${Math.round(s.total_weight || 0)}`;
+        if (!fpMap.has(fp)) fpMap.set(fp, []);
+        fpMap.get(fp).push(s);
+    }
+    const toDelete = [];
+    for (const [fp, group] of fpMap) {
+        if (group.length > 1) {
+            // Keep the one with the lowest session_id (stable) or first-inserted — using started_at ASC means oldest first
+            group.sort((a, b) => (a.started_at || 0) - (b.started_at || 0));
+            // All except the earliest are duplicates
+            for (let i = 1; i < group.length; i++) toDelete.push(group[i]);
+        }
+    }
+    if (toDelete.length === 0) { showToast('No duplicates found', 'info'); return; }
+    showConfirm(`Delete ${toDelete.length} duplicate session${toDelete.length > 1 ? 's' : ''}? (Kept the earliest of each group.)`, async () => {
+        let ok = 0, fail = 0;
+        for (const s of toDelete) {
+            try {
+                const r = await fetch(`${VPS_BASE}/api/loot-session/${encodeURIComponent(s.session_id)}`, {
+                    method: 'DELETE',
+                    headers: authHeaders(),
+                });
+                if (r.ok) ok++; else fail++;
+            } catch { fail++; }
+        }
+        showToast(`Deleted ${ok} duplicate${ok !== 1 ? 's' : ''}${fail > 0 ? ` (${fail} failed)` : ''}`, ok > 0 ? 'success' : 'warn');
+        populateAccountabilityDropdowns();
+        if (typeof loadLootSessions === 'function') loadLootSessions();
+    });
+}
+
 // Create a public share link for the current accountability check.
 // Snapshots the session + selected chest captures to the backend so viewers
 // can render the breakdown without needing access to live capture data.
