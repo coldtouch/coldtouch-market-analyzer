@@ -11315,30 +11315,8 @@ async function runAccountabilityCheck() {
         if (deaths && deaths.length > 0) {
             // Stash so renderDeathsSection can use _llPriceMap for tooltips
             _llPriceMap = deathPriceMap;
-            html += `<details open class="ll-deaths-section" style="margin-bottom:0.75rem;">
-                <summary class="ll-deaths-summary">
-                    <span style="font-size:1.1rem;">☠</span>
-                    <span class="ll-deaths-title-text">Deaths during session</span>
-                    <span class="ll-deaths-count">${deaths.length}</span>
-                    ${deaths.filter(d => d.wasFriendly).length > 0 ? `<span class="ll-deaths-friendly-count">🛡️ ${deaths.filter(d => d.wasFriendly).length}</span>` : ''}
-                    ${deaths.filter(d => !d.wasFriendly).length > 0 ? `<span class="ll-deaths-enemy-count">💀 ${deaths.filter(d => !d.wasFriendly).length}</span>` : ''}
-                </summary>
-                <div class="ll-deaths-list">${deaths.map(d => {
-                    const sideClass = d.wasFriendly ? 'll-death-friendly' : 'll-death-enemy';
-                    const sideIcon = d.wasFriendly ? '🛡️' : '💀';
-                    const when = d.timestamp ? new Date(d.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '—';
-                    const value = d.estimatedValue > 0 ? formatSilver(d.estimatedValue) : '—';
-                    return `<div class="ll-death-row ${sideClass}"><div class="ll-death-row-summary" style="cursor:default;">
-                        <span class="ll-death-row-icon">${sideIcon}</span>
-                        <span class="ll-death-row-time">${esc(when)}</span>
-                        <span class="ll-death-row-victim">${esc(d.victim)}</span>
-                        <span class="ll-death-row-sep">→</span>
-                        <span class="ll-death-row-killer">${esc(d.killer) || 'unknown'}</span>
-                        <span class="ll-death-row-value">${value}</span>
-                        <span class="ll-death-badge">${d.wasFriendly ? 'friendly' : 'enemy'}</span>
-                    </div></div>`;
-                }).join('')}</div>
-            </details>`;
+            _llDeaths = deaths;
+            html += renderDeathsSection(deaths);
         }
     } catch(e) { /* deaths section is optional — don't break the whole view */ }
 

@@ -2,6 +2,14 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-04-18 — Accountability deaths now expandable with items
+
+- **Shared Accountability view:** each death row is now clickable — expanding shows Recovered items (48×48 icons with qty badges and price tooltips), Worn-at-death equipment, and who looted the corpse. Previously the share link only showed a flat "victim → killer" strip with no way to see what was dropped or recovered.
+- Replaced the inline deaths section in `runAccountabilityCheck` with the same `renderDeathsSection(deaths)` helper the main Loot Logger session view uses, so owner view and shared view now render identically.
+- **sw.js cache:** v39 → v40. Frontend-only change, no backend deploy.
+
+---
+
 ### 2026-04-18 — Community leaderboard + Profile overhaul + Transport deferred items
 
 **Community page:**
