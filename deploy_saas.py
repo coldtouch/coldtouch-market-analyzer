@@ -3387,8 +3387,18 @@ wss.on('connection', (ws, req) => {
           ws.user = { id: user.id, username: user.username };
           ws.isAuthenticated = true;
           ws.clientType = 'game-client';
+          // Honor client-provided sessionID (UUIDv4 from Go client >= v0.7.1) — pins ws.lootSessionId
+          // so loot events across reconnects land in the SAME session instead of fragmenting.
+          // Validate format strictly to prevent session collision or injection.
+          // Accepted shape: alphanumeric + hyphens, 8..64 chars (covers UUIDv4 = 36 chars).
+          if (typeof msg.sessionID === 'string' && /^[a-zA-Z0-9-]{8,64}$/.test(msg.sessionID)) {
+            // Namespace under user id so two users can never collide on the same session_id.
+            ws.lootSessionId = user.id + '_' + msg.sessionID;
+            console.log(`[ClientAuth] Game client authenticated for user ${user.username} (sessionID=${msg.sessionID})`);
+          } else {
+            console.log(`[ClientAuth] Game client authenticated for user ${user.username} (legacy — no sessionID)`);
+          }
           wsSafeSend(ws, { type: 'client-auth', success: true, username: user.username });
-          console.log(`[ClientAuth] Game client authenticated for user ${user.username}`);
         });
       }
 

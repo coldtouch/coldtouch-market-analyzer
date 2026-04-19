@@ -2,6 +2,19 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-04-19 — Session_id stability across WS reconnects (no more fragmented PvP sessions)
+
+**Found by analyzing a real PvP log:** 37 `[VPSRelay] Authenticated` reconnects in 50 minutes meant one PvP fight fragmented into ~37 Loot Logger sessions — one per reconnect. Root cause: `ws.lootSessionId` was generated server-side per WS connection, so every reconnect got a new ID.
+
+**Fix:**
+- Go client (v0.7.1) generates a UUIDv4 once per game run in `InitVPSRelay`, stores on the relay struct, and sends it in every `client-auth` handshake.
+- Backend honors it: if a valid `sessionID` is present in the auth message, `ws.lootSessionId` is pinned to `user.id + "_" + sessionID`. On reconnect, the same UUID comes back → same session. Strict regex (`^[a-zA-Z0-9-]{8,64}$`) prevents injection.
+- Old clients (pre-v0.7.1) continue to use the server-assigned ID — no breaking change.
+
+**Backend deploy required** (`20260419-151641`). Go client release `v0.7.1`.
+
+---
+
 ### 2026-04-19 — Audit pass: recipes, transport, contributions, itemmap, security, DB hygiene, flip validation
 
 **User-reported bugs fixed:**
