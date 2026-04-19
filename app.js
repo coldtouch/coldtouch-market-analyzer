@@ -1711,37 +1711,95 @@ async function doArbScan(targetItemId = null) {
 // ============================================================
 // UPGRADE FLIPS (cross-enchantment arbitrage)
 // ============================================================
-// Rough rune/soul/relic cost estimate per upgrade level for weapons/armor.
-// These are ballpark numbers — actual costs shift with market prices, so we
-// show them as a conservative estimate and flag results as "gross" in the UI.
-// Tier key → array indexed by target enchantment (1, 2, 3).
-const UPGRADE_MATERIAL_COST = {
-    4: [3000,  15000,  40000],
-    5: [5000,  25000,  70000],
-    6: [10000, 45000, 120000],
-    7: [18000, 80000, 220000],
-    8: [30000,150000, 400000]
+// Exact rune/soul/relic counts to upgrade one enchantment step (N → N+1)
+// per item slot category. Extracted from ao-bin-dumps items.xml
+// <upgraderequirements> blocks. Identical at every tier 4–8; only the
+// material type changes per step:
+//   0 → 1 : T{tier}_RUNE
+//   1 → 2 : T{tier}_SOUL
+//   2 → 3 : T{tier}_RELIC
+const UPGRADE_MATERIAL_COUNT = {
+    '2H':    384,   // two-hand weapons
+    '1H':    288,   // one-hand weapons (MAIN_)
+    'CHEST': 192,   // chest armor
+    'BAG':   192,
+    'HEAD':  96,
+    'SHOES': 96,
+    'OFF':   96,    // off-hands (shield / book / torch / orb etc.)
+    'CAPE':  96,
+    'TOOL':  96,
 };
+
+// Per-step material class by enchantment level we're upgrading TO.
+// e.g. upgrading 0 → 1 uses the "RUNE" class, so index 1 → 'RUNE'.
+const UPGRADE_MATERIAL_CLASS = { 1: 'RUNE', 2: 'SOUL', 3: 'RELIC' };
 
 function getBaseItemId(itemId) {
     if (!itemId) return '';
     return itemId.split('@')[0];
 }
 
-function estimateUpgradeCost(itemId, fromEnch, toEnch) {
-    // Only handle single-step upgrades (N → N+1). Multi-step sums each step.
+// Classify an item id (base or enchanted) into one of the slot buckets above.
+// Returns null for items we don't know how to upgrade (pets, food, etc.).
+function upgradeSlotOf(itemId) {
+    if (!itemId) return null;
+    const base = getBaseItemId(itemId);
+    if (/^T[3-8]_2H_TOOL_/.test(base)) return 'TOOL';
+    if (/^T[3-8]_2H_/.test(base)) return '2H';
+    if (/^T[3-8]_MAIN_/.test(base)) return '1H';
+    if (/^T[3-8]_OFF_/.test(base)) return 'OFF';
+    if (/^T[3-8]_HEAD_/.test(base)) return 'HEAD';
+    if (/^T[3-8]_ARMOR_/.test(base)) return 'CHEST';
+    if (/^T[3-8]_SHOES_/.test(base)) return 'SHOES';
+    if (/^T[3-8]_BAG/.test(base)) return 'BAG';
+    if (/^T[3-8]_CAPE/.test(base) || /^T[3-8]_CAPEITEM_/.test(base)) return 'CAPE';
+    return null;
+}
+
+// Look up the cheapest sell_price_min for (itemId, city [, quality]) in the cached market data.
+// Returns 0 if not found. Used to price a specific rune/soul/relic at the upgrade step's city.
+function _lookupLivePrice(cachedData, itemId, city) {
+    let best = 0;
+    for (const entry of cachedData) {
+        if (entry.item_id !== itemId) continue;
+        if (city && entry.city !== city) continue;
+        if (!entry.sell_price_min || entry.sell_price_min <= 0) continue;
+        if (!best || entry.sell_price_min < best) best = entry.sell_price_min;
+    }
+    return best;
+}
+
+// Compute the full upgrade cost from `fromEnch` → `toEnch` for an item.
+// Returns { totalSilver, breakdown: [{itemId, count, unitPrice, subtotal, step}], missingPrices: [ids] }
+// Returns null if the slot isn't upgradable OR any material price is missing
+// (we refuse to show a misleading flip if we can't price the materials).
+function estimateUpgradeCost(itemId, fromEnch, toEnch, cachedData, city) {
     const tierMatch = itemId.match(/^T(\d)/);
     if (!tierMatch) return null;
     const tier = parseInt(tierMatch[1]);
-    const costs = UPGRADE_MATERIAL_COST[tier];
-    if (!costs) return null;
+    const slot = upgradeSlotOf(itemId);
+    if (!slot) return null;
+    const count = UPGRADE_MATERIAL_COUNT[slot];
+    if (!count) return null;
+
+    const breakdown = [];
     let total = 0;
+    const missing = [];
     for (let e = fromEnch + 1; e <= toEnch; e++) {
-        const c = costs[e - 1];
-        if (!c) return null;
-        total += c;
+        const cls = UPGRADE_MATERIAL_CLASS[e];
+        if (!cls) return null; // Enchant level 4 not supported (avalonian shard path)
+        const matId = `T${tier}_${cls}`;
+        const unit = _lookupLivePrice(cachedData || [], matId, city);
+        if (!unit) {
+            missing.push(matId);
+            continue;
+        }
+        const subtotal = unit * count;
+        total += subtotal;
+        breakdown.push({ itemId: matId, count, unitPrice: unit, subtotal, step: e });
     }
-    return total;
+    if (missing.length > 0) return { totalSilver: null, breakdown, missingPrices: missing, slot };
+    return { totalSilver: total, breakdown, missingPrices: [], slot };
 }
 
 function processUpgradeFlips(data, opts = {}) {
@@ -1778,9 +1836,12 @@ function processUpgradeFlips(data, opts = {}) {
                 if (!low || !high) continue;
                 const buyPrice = low.sell_price_min;
                 const sellPrice = high.sell_price_min;
-                // Sell at instant-sell price of the enchant version (can't know buy order without more data)
-                const upgradeCost = estimateUpgradeCost(base, levels[i], levels[j]);
-                if (upgradeCost == null) continue;
+                // Price upgrade materials at the LIVE rune/soul/relic cost in the same city as the flip.
+                const costInfo = estimateUpgradeCost(base, levels[i], levels[j], data, city);
+                if (!costInfo) continue;
+                // If any material price is missing we skip the flip — profit math would lie.
+                if (costInfo.totalSilver == null) continue;
+                const upgradeCost = costInfo.totalSilver;
                 const tax = sellPrice * 0.055; // Sell order tax+setup
                 const profit = sellPrice - buyPrice - upgradeCost - tax;
                 const cost = buyPrice + upgradeCost;
@@ -1808,6 +1869,8 @@ function processUpgradeFlips(data, opts = {}) {
                     sampleCount: 0,
                     isUpgradeFlip: true,
                     upgradeCost,
+                    upgradeBreakdown: costInfo.breakdown, // [{ itemId, count, unitPrice, subtotal, step }]
+                    upgradeSlot: costInfo.slot,
                     fromEnch: levels[i],
                     toEnch: levels[j],
                     baseItemId: base
@@ -1843,33 +1906,60 @@ async function scanUpgradeFlips() {
         });
         if (flips.length === 0) {
             container.innerHTML = `<div class="empty-state"><p>No profitable enchantment upgrades found.</p>
-                <p class="hint">Try a broader city filter, or scan more items first. Upgrade costs are estimated — check in-game rune/soul/relic prices before committing.</p></div>`;
+                <p class="hint">Try a broader city filter, or run a normal market scan so rune/soul/relic prices are cached too — they're used to price each upgrade step.</p></div>`;
             _lastArbTrades = [];
             return;
         }
         // Reuse the arbitrage card renderer — flag each card with an upgrade badge.
         renderArbitrage(flips, false);
-        // Decorate each card with the upgrade badge + material cost row
+        // Decorate each card with the upgrade badge + material breakdown
+        // querySelectorAll('.trade-card') matches cards in order (countBar has a different class),
+        // so flips[idx] maps 1:1 to cards[idx].
         flips.forEach((f, idx) => {
             const cards = container.querySelectorAll('.trade-card');
-            const card = cards[idx + 1]; // +1 because countBar is first child
+            const card = cards[idx];
             if (!card) return;
             const nameEl = card.querySelector('.item-name');
             if (nameEl && !nameEl.querySelector('.upgrade-flip-badge')) {
                 nameEl.insertAdjacentHTML('beforeend', `<span class="upgrade-flip-badge">UPGRADE @${f.fromEnch}→@${f.toEnch}</span>`);
             }
-            // Insert the upgrade cost row inside the profit section
+            // Insert the upgrade cost breakdown inside the profit section.
+            // Shows one row per material step (rune / soul / relic) with count, unit price and subtotal,
+            // followed by a summary line so the user knows what to actually buy.
             const profitSection = card.querySelector('.profit-section');
             if (profitSection) {
-                const row = document.createElement('div');
-                row.className = 'profit-row';
-                row.innerHTML = `<span>Upgrade materials (est.):</span><span class="text-red">-${Math.floor(f.upgradeCost).toLocaleString()} 💰</span>`;
-                profitSection.insertBefore(row, profitSection.querySelector('.profit-row.total'));
+                const totalRow = profitSection.querySelector('.profit-row.total');
+                const MAT_LABEL = { RUNE: '🔷 Runes', SOUL: '💜 Souls', RELIC: '🔮 Relics' };
+                const MAT_EMOJI = { RUNE: '🔷', SOUL: '💜', RELIC: '🔮' };
+                const breakdown = Array.isArray(f.upgradeBreakdown) ? f.upgradeBreakdown : [];
+                // Header row — makes the block visually distinct
+                const header = document.createElement('div');
+                header.className = 'profit-row';
+                header.style.cssText = 'border-top:1px dashed var(--border); margin-top:0.3rem; padding-top:0.3rem; font-size:0.72rem; color:var(--text-muted);';
+                header.innerHTML = `<span>Upgrade materials (${esc(f.upgradeSlot || '?')} × ${breakdown.length} step${breakdown.length !== 1 ? 's' : ''})</span><span></span>`;
+                profitSection.insertBefore(header, totalRow);
+                // One row per material step
+                for (const step of breakdown) {
+                    const matMatch = step.itemId.match(/^T\d_(RUNE|SOUL|RELIC)$/);
+                    const matClass = matMatch ? matMatch[1] : '?';
+                    const label = MAT_LABEL[matClass] || step.itemId;
+                    const row = document.createElement('div');
+                    row.className = 'profit-row';
+                    row.style.cssText = 'font-size:0.78rem; padding-left:0.5rem;';
+                    row.innerHTML = `<span>&nbsp;&nbsp;${esc(step.itemId)} × ${step.count.toLocaleString()} @ ${Math.floor(step.unitPrice).toLocaleString()}</span><span class="text-red">-${Math.floor(step.subtotal).toLocaleString()} 💰</span>`;
+                    row.title = `${label}: ${step.count} × ${Math.floor(step.unitPrice).toLocaleString()} silver = ${Math.floor(step.subtotal).toLocaleString()} silver (enchant ${step.step - 1} → ${step.step})`;
+                    profitSection.insertBefore(row, totalRow);
+                }
+                // Summary row — the total material cost (already factored into profit)
+                const sumRow = document.createElement('div');
+                sumRow.className = 'profit-row';
+                sumRow.innerHTML = `<span>Upgrade materials total:</span><span class="text-red">-${Math.floor(f.upgradeCost).toLocaleString()} 💰</span>`;
+                profitSection.insertBefore(sumRow, totalRow);
             }
         });
         // Update count bar to reflect upgrade context
         const countBar = container.querySelector('.result-count-bar');
-        if (countBar) countBar.innerHTML = `Showing <strong>${flips.length}</strong> enchantment upgrades <span style="font-size:0.7rem; color:var(--text-muted);">• costs estimated • verify rune/soul prices in-game</span>`;
+        if (countBar) countBar.innerHTML = `Showing <strong>${flips.length}</strong> enchantment upgrades <span style="font-size:0.7rem; color:var(--text-muted);">• material costs use live rune/soul/relic prices in the buy city</span>`;
     } catch (e) {
         spinner.classList.add('hidden');
         showError(errorEl, 'Upgrade scan failed: ' + e.message);

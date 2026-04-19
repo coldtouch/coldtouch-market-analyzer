@@ -2,6 +2,31 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-04-19 — Upgrade Flips show exact rune/soul/relic breakdown
+
+**Before:** Upgrade Flips in Market Flipping showed a single hardcoded "Upgrade materials (est.): -X silver" line. Numbers were ballpark estimates baked into the frontend — never updated, never checked against real market prices.
+
+**After:** each flip card lists the actual materials needed per step, priced at the live sell offer in the buy city:
+
+```
+Upgrade materials (2H × 3 steps)
+  T6_RUNE  × 384 @ 150       -57,600
+  T6_SOUL  × 384 @ 800      -307,200
+  T6_RELIC × 384 @ 3,000  -1,152,000
+Upgrade materials total:   -1,516,800
+```
+
+**Implementation:**
+- Counts extracted from `ao-bin-dumps/items.xml` `<upgraderequirements>` blocks. Identical across tiers 4–8; only the material class changes per enchant step. Slot counts: HEAD/SHOES/OFF/CAPE = 96, CHEST/BAG = 192, 1H = 288, 2H = 384.
+- Material class per step: 0→1 uses `T{tier}_RUNE`, 1→2 uses `T{tier}_SOUL`, 2→3 uses `T{tier}_RELIC`.
+- `estimateUpgradeCost()` rewritten to look up live `sell_price_min` in the cached market data for the same city as the flip. Returns `{ totalSilver, breakdown, missingPrices, slot }`.
+- If any material price is missing from cache, the flip is SKIPPED — profit math would lie otherwise. Empty-state hint now advises running a normal scan first so rune/soul/relic prices are cached.
+- Fixed a pre-existing off-by-one bug: the decorator loop used `cards[idx + 1]` (skipped the first card) because it assumed `countBar` was a `.trade-card`. It isn't.
+
+**sw.js cache:** v43 → v44. Frontend-only.
+
+---
+
 ### 2026-04-19 — Offline .txt upload now carries deaths (fixes "0 deaths, all loot missing")
 
 **Symptom found in a real shared accountability link:** 522 loot events, 0 deaths, most loot red-dotted as missing. Root cause: the `.txt` file format only captured loot pickups. Offline uploads rebuilt the session without deaths, so the accountability view's "lost on death" subtraction had nothing to subtract → everything looked missing.
