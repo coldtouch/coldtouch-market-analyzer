@@ -2265,6 +2265,22 @@
                     <div id="changelog-wrapper" style="max-height: 500px; overflow-y: auto; position: relative;">
                     <div class="changelog-list">
                         <div class="changelog-entry">
+                            <div class="changelog-date">April 19, 2026</div>
+                            <div class="changelog-title">🛠 Big audit pass &mdash; recipes, transport, contributions, item mismatches, security</div>
+                            <ul>
+                                <li><strong>Bear Paws + ~70 other artifact weapons now have recipes</strong> &mdash; Market Browser Craft button now renders on every weapon, Crafting Profits opens every artifact. Previously KEEPER/HELL/MORGANA/AVALON/CRYSTAL faction variants were silently missing from the recipe generator.</li>
+                                <li><strong>Transport Routes now shows food, potions, raw materials</strong>. Backend was filtering out anything under 100&nbsp;silver/unit profit &mdash; bulk cargo has 5&ndash;60&nbsp;s/unit margins but dominates total trip profit. Dropped the floor to 1; the frontend's ROI cap + sort-by-trip-profit still handle outliers.</li>
+                                <li><strong>Community + Profile contribution score updates again</strong>. The contributions endpoint required a different payload than what the frontend sent, and the Transport activity was weighted but never tracked. Both fixed.</li>
+                                <li><strong>Loot Logger item-mismatch fix</strong> &mdash; "Assassin Hood 6.3" that was actually a different item came from a stale itemmap (game shipped Protocol18 on April 13; our map was from April 1). Regenerated item/weight maps from the latest dump and rebuilt the Go client exe.</li>
+                                <li><strong>In-game chest log capture prep</strong>. The Go client now dumps the authoritative chest log packets when you open the Log tab in-game (with <code>LogUnknownEvents</code> on). Next session we'll use that data to cross-check our loot capture and flag mismatches in real time.</li>
+                                <li><strong>Security pack</strong>: leaderboard avatar XSS closed, device-auth no longer kicks your other client offline, WebSocket auth now rate-limited per IP, leaderboard score can no longer be gamed (per-type daily caps), device-token endpoint returns uniform errors to stop token enumeration.</li>
+                                <li><strong>Latency wins</strong>: chart opens, Profile tab, analytics reads moved off the main DB connection &mdash; they were queueing behind NATS batch writes. Chart modal should feel instant now.</li>
+                                <li><strong>Live Flips reliability</strong>: validation runs 5-at-a-time (was 1 serial); stale flips are dropped instead of broadcast; when AODP is down, flips are marked unverified instead of silently passing through.</li>
+                                <li><strong>Transport accuracy</strong>: trophies/furniture/mount tokens/bags are no longer treated as 999-stackable (no more "buy 20k Mammoth kits"); weapon categorization operator precedence fixed.</li>
+                                <li>Service worker cache v40 &rarr; v41.</li>
+                            </ul>
+                        </div>
+                        <div class="changelog-entry">
                             <div class="changelog-date">April 18, 2026</div>
                             <div class="changelog-title">☠ Shared Accountability &mdash; deaths expandable + share-on-big-content fix</div>
                             <ul>

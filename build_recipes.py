@@ -125,110 +125,162 @@ CLOTH_ARMOR = [
 WEAPONS_1H = [
     # Swords (metal + leather)
     ('MAIN_SWORD', [('METALBAR', 16), ('LEATHER', 8)]),
+    ('MAIN_SWORD_CRYSTAL', [('METALBAR', 16), ('LEATHER', 8)]),
+    ('MAIN_RAPIER_MORGANA', [('METALBAR', 16), ('LEATHER', 8)]),
+    ('MAIN_SCIMITAR_MORGANA', [('METALBAR', 16), ('LEATHER', 8)]),
     # Axes
     ('MAIN_AXE', [('METALBAR', 16), ('LEATHER', 8)]),
     # Maces
     ('MAIN_MACE', [('METALBAR', 16), ('LEATHER', 8)]),
+    ('MAIN_MACE_CRYSTAL', [('METALBAR', 16), ('LEATHER', 8)]),
+    ('MAIN_MACE_HELL', [('METALBAR', 16), ('LEATHER', 8)]),
+    ('MAIN_ROCKMACE_KEEPER', [('METALBAR', 16), ('LEATHER', 8)]),
     # Hammers
     ('MAIN_HAMMER', [('METALBAR', 16), ('PLANKS', 8)]),
     # Daggers
     ('MAIN_DAGGER', [('METALBAR', 16), ('LEATHER', 8)]),
+    ('MAIN_DAGGER_HELL', [('METALBAR', 16), ('LEATHER', 8)]),
     # Spears
     ('MAIN_SPEAR', [('METALBAR', 16), ('PLANKS', 8)]),
+    ('MAIN_SPEAR_KEEPER', [('METALBAR', 16), ('PLANKS', 8)]),
+    ('MAIN_SPEAR_LANCE_AVALON', [('METALBAR', 16), ('PLANKS', 8)]),
     # Nature staffs
     ('MAIN_NATURESTAFF', [('PLANKS', 16), ('CLOTH', 8)]),
+    ('MAIN_NATURESTAFF_AVALON', [('PLANKS', 16), ('CLOTH', 8)]),
+    ('MAIN_NATURESTAFF_CRYSTAL', [('PLANKS', 16), ('CLOTH', 8)]),
+    ('MAIN_NATURESTAFF_KEEPER', [('PLANKS', 16), ('CLOTH', 8)]),
     # Fire staffs
     ('MAIN_FIRESTAFF', [('PLANKS', 16), ('METALBAR', 8)]),
+    ('MAIN_FIRESTAFF_CRYSTAL', [('PLANKS', 16), ('METALBAR', 8)]),
+    ('MAIN_FIRESTAFF_KEEPER', [('PLANKS', 16), ('METALBAR', 8)]),
     # Holy staffs
     ('MAIN_HOLYSTAFF', [('PLANKS', 16), ('CLOTH', 8)]),
+    ('MAIN_HOLYSTAFF_AVALON', [('PLANKS', 16), ('CLOTH', 8)]),
+    ('MAIN_HOLYSTAFF_MORGANA', [('PLANKS', 16), ('CLOTH', 8)]),
     # Arcane staffs
     ('MAIN_ARCANESTAFF', [('PLANKS', 16), ('METALBAR', 8)]),
+    ('MAIN_ARCANESTAFF_UNDEAD', [('PLANKS', 16), ('METALBAR', 8)]),
     # Frost staffs
     ('MAIN_FROSTSTAFF', [('PLANKS', 16), ('CLOTH', 8)]),
+    ('MAIN_FROSTSTAFF_AVALON', [('PLANKS', 16), ('CLOTH', 8)]),
+    ('MAIN_FROSTSTAFF_KEEPER', [('PLANKS', 16), ('CLOTH', 8)]),
     # Cursed staffs
     ('MAIN_CURSEDSTAFF', [('PLANKS', 16), ('CLOTH', 8)]),
-    # Crossbows
-    ('MAIN_CROSSBOW', [('METALBAR', 16), ('PLANKS', 8)]),
+    ('MAIN_CURSEDSTAFF_AVALON', [('PLANKS', 16), ('CLOTH', 8)]),
+    ('MAIN_CURSEDSTAFF_CRYSTAL', [('PLANKS', 16), ('CLOTH', 8)]),
+    ('MAIN_CURSEDSTAFF_UNDEAD', [('PLANKS', 16), ('CLOTH', 8)]),
 ]
 
 # 2H weapons: 32 primary (or mixed)
 WEAPONS_2H = [
-    # 2H Swords
+    # 2H Swords (metal + leather)
     ('2H_CLAYMORE', [('METALBAR', 20), ('LEATHER', 12)]),
     ('2H_DUALSWORD', [('METALBAR', 20), ('LEATHER', 12)]),
-    ('2H_CLEAVER', [('METALBAR', 20), ('LEATHER', 12)]),
+    ('2H_CLEAVER_HELL', [('METALBAR', 20), ('LEATHER', 12)]),
     ('2H_DUALSCIMITAR_UNDEAD', [('METALBAR', 20), ('LEATHER', 12)]),
     ('2H_CLAYMORE_AVALON', [('METALBAR', 20), ('LEATHER', 12)]),
-    # 2H Axes
+    # 2H Axes (metal + leather)
+    ('2H_AXE', [('METALBAR', 20), ('LEATHER', 12)]),
+    ('2H_AXE_AVALON', [('METALBAR', 20), ('LEATHER', 12)]),
     ('2H_HALBERD', [('METALBAR', 20), ('LEATHER', 12)]),
-    ('2H_SCYTHE', [('METALBAR', 20), ('LEATHER', 12)]),
-    ('2H_DUALAXE', [('METALBAR', 20), ('LEATHER', 12)]),
     ('2H_HALBERD_MORGANA', [('METALBAR', 20), ('LEATHER', 12)]),
-    # 2H Maces
+    ('2H_DUALAXE_KEEPER', [('METALBAR', 20), ('LEATHER', 12)]),  # Bear Paws
+    ('2H_SCYTHE_CRYSTAL', [('METALBAR', 20), ('LEATHER', 12)]),
+    ('2H_SCYTHE_HELL', [('METALBAR', 20), ('LEATHER', 12)]),
+    ('2H_DUALSICKLE_UNDEAD', [('METALBAR', 20), ('LEATHER', 12)]),
+    ('2H_TWINSCYTHE_HELL', [('METALBAR', 20), ('LEATHER', 12)]),
+    # 2H Maces (metal + leather)
     ('2H_MACE', [('METALBAR', 20), ('LEATHER', 12)]),
     ('2H_FLAIL', [('METALBAR', 20), ('LEATHER', 12)]),
-    ('2H_DUALMACE', [('METALBAR', 20), ('LEATHER', 12)]),
-    # Quarterstaffs
+    ('2H_MACE_MORGANA', [('METALBAR', 20), ('LEATHER', 12)]),
+    ('2H_DUALMACE_AVALON', [('METALBAR', 20), ('LEATHER', 12)]),
+    ('2H_RAM_KEEPER', [('METALBAR', 20), ('PLANKS', 12)]),
+    # Quarterstaffs (wood + leather)
     ('2H_QUARTERSTAFF', [('PLANKS', 20), ('LEATHER', 12)]),
+    ('2H_QUARTERSTAFF_AVALON', [('PLANKS', 20), ('LEATHER', 12)]),
     ('2H_IRONCLADEDSTAFF', [('PLANKS', 20), ('LEATHER', 12)]),
     ('2H_DOUBLEBLADEDSTAFF', [('PLANKS', 20), ('LEATHER', 12)]),
+    ('2H_DOUBLEBLADEDSTAFF_CRYSTAL', [('PLANKS', 20), ('LEATHER', 12)]),
     ('2H_COMBATSTAFF_MORGANA', [('PLANKS', 20), ('LEATHER', 12)]),
-    # Hammers
+    # Hammers (metal + wood)
     ('2H_POLEHAMMER', [('METALBAR', 20), ('PLANKS', 12)]),
     ('2H_HAMMER', [('METALBAR', 20), ('PLANKS', 12)]),
+    ('2H_HAMMER_AVALON', [('METALBAR', 20), ('PLANKS', 12)]),
+    ('2H_HAMMER_CRYSTAL', [('METALBAR', 20), ('PLANKS', 12)]),
     ('2H_HAMMER_UNDEAD', [('METALBAR', 20), ('PLANKS', 12)]),
-    ('2H_DUALHAMMER', [('METALBAR', 20), ('PLANKS', 12)]),
-    # Daggers
+    ('2H_DUALHAMMER_HELL', [('METALBAR', 20), ('PLANKS', 12)]),
+    # Daggers (metal + leather)
     ('2H_CLAWPAIR', [('METALBAR', 20), ('LEATHER', 12)]),
-    ('2H_DAGGER_KATAR', [('METALBAR', 20), ('LEATHER', 12)]),
     ('2H_DAGGERPAIR', [('METALBAR', 20), ('LEATHER', 12)]),
-    # Spears
+    ('2H_DAGGERPAIR_CRYSTAL', [('METALBAR', 20), ('LEATHER', 12)]),
+    ('2H_DAGGER_KATAR_AVALON', [('METALBAR', 20), ('LEATHER', 12)]),
+    # Monk/Fist weapons (metal + leather)
+    ('2H_KNUCKLES_AVALON', [('METALBAR', 20), ('LEATHER', 12)]),
+    ('2H_KNUCKLES_CRYSTAL', [('METALBAR', 20), ('LEATHER', 12)]),
+    ('2H_KNUCKLES_HELL', [('METALBAR', 20), ('LEATHER', 12)]),
+    ('2H_KNUCKLES_KEEPER', [('METALBAR', 20), ('LEATHER', 12)]),
+    ('2H_KNUCKLES_MORGANA', [('METALBAR', 20), ('LEATHER', 12)]),
+    ('2H_IRONGAUNTLETS_HELL', [('METALBAR', 20), ('LEATHER', 12)]),
+    # Spears (metal + wood)
+    ('2H_SPEAR', [('METALBAR', 20), ('PLANKS', 12)]),
     ('2H_GLAIVE', [('METALBAR', 20), ('PLANKS', 12)]),
-    ('2H_PIKE', [('METALBAR', 20), ('PLANKS', 12)]),
+    ('2H_GLAIVE_CRYSTAL', [('METALBAR', 20), ('PLANKS', 12)]),
     ('2H_TRIDENT_UNDEAD', [('METALBAR', 20), ('PLANKS', 12)]),
     ('2H_HARPOON_HELL', [('METALBAR', 20), ('PLANKS', 12)]),
-    # Bows
-    ('2H_BOW', [('PLANKS', 32)]),
+    # Bows (wood + leather)
+    ('2H_BOW', [('PLANKS', 20), ('LEATHER', 12)]),
     ('2H_LONGBOW', [('PLANKS', 20), ('LEATHER', 12)]),
     ('2H_WARBOW', [('PLANKS', 20), ('LEATHER', 12)]),
     ('2H_BOW_KEEPER', [('PLANKS', 20), ('LEATHER', 12)]),
+    ('2H_BOW_CRYSTAL', [('PLANKS', 20), ('LEATHER', 12)]),
+    ('2H_BOW_HELL', [('PLANKS', 20), ('LEATHER', 12)]),
     ('2H_LONGBOW_UNDEAD', [('PLANKS', 20), ('LEATHER', 12)]),
     ('2H_BOW_AVALON', [('PLANKS', 20), ('LEATHER', 12)]),
-    # Crossbows
+    # Crossbows (metal + wood)
     ('2H_CROSSBOW', [('METALBAR', 20), ('PLANKS', 12)]),
     ('2H_CROSSBOWLARGE', [('METALBAR', 20), ('PLANKS', 12)]),
+    ('2H_CROSSBOWLARGE_MORGANA', [('METALBAR', 20), ('PLANKS', 12)]),
+    ('2H_CROSSBOW_CANNON_AVALON', [('METALBAR', 20), ('PLANKS', 12)]),
+    ('2H_DUALCROSSBOW_CRYSTAL', [('METALBAR', 20), ('PLANKS', 12)]),
+    ('2H_DUALCROSSBOW_HELL', [('METALBAR', 20), ('PLANKS', 12)]),
     ('2H_REPEATINGCROSSBOW_UNDEAD', [('METALBAR', 20), ('PLANKS', 12)]),
-    # Fire staffs
+    # Fire staffs (wood + metal)
     ('2H_FIRESTAFF', [('PLANKS', 20), ('METALBAR', 12)]),
     ('2H_INFERNOSTAFF', [('PLANKS', 20), ('METALBAR', 12)]),
-    ('2H_FIRESTAFF_KEEPER', [('PLANKS', 20), ('METALBAR', 12)]),
+    ('2H_INFERNOSTAFF_MORGANA', [('PLANKS', 20), ('METALBAR', 12)]),
+    ('2H_FIRESTAFF_HELL', [('PLANKS', 20), ('METALBAR', 12)]),
     ('2H_FIRE_RINGPAIR_AVALON', [('PLANKS', 20), ('METALBAR', 12)]),
-    # Holy staffs
+    # Holy staffs (wood + cloth)
     ('2H_HOLYSTAFF', [('PLANKS', 20), ('CLOTH', 12)]),
     ('2H_DIVINESTAFF', [('PLANKS', 20), ('CLOTH', 12)]),
     ('2H_HOLYSTAFF_UNDEAD', [('PLANKS', 20), ('CLOTH', 12)]),
     ('2H_HOLYSTAFF_HELL', [('PLANKS', 20), ('CLOTH', 12)]),
-    ('2H_HOLYSTAFF_MORGANA', [('PLANKS', 20), ('CLOTH', 12)]),
-    # Nature staffs
+    ('2H_HOLYSTAFF_CRYSTAL', [('PLANKS', 20), ('CLOTH', 12)]),
+    # Nature staffs (wood + cloth)
     ('2H_NATURESTAFF', [('PLANKS', 20), ('CLOTH', 12)]),
     ('2H_WILDSTAFF', [('PLANKS', 20), ('CLOTH', 12)]),
     ('2H_NATURESTAFF_KEEPER', [('PLANKS', 20), ('CLOTH', 12)]),
     ('2H_NATURESTAFF_HELL', [('PLANKS', 20), ('CLOTH', 12)]),
-    # Frost staffs
+    ('2H_ROCKSTAFF_KEEPER', [('PLANKS', 20), ('CLOTH', 12)]),
+    # Frost staffs (wood + cloth)
     ('2H_FROSTSTAFF', [('PLANKS', 20), ('CLOTH', 12)]),
     ('2H_GLACIALSTAFF', [('PLANKS', 20), ('CLOTH', 12)]),
-    ('2H_ICEGAUNTLETS', [('PLANKS', 20), ('CLOTH', 12)]),
-    ('2H_FROSTSTAFF_KEEPER', [('PLANKS', 20), ('CLOTH', 12)]),
-    # Arcane staffs
+    ('2H_FROSTSTAFF_CRYSTAL', [('PLANKS', 20), ('CLOTH', 12)]),
+    ('2H_ICECRYSTAL_UNDEAD', [('PLANKS', 20), ('CLOTH', 12)]),
+    ('2H_ICEGAUNTLETS_HELL', [('PLANKS', 20), ('CLOTH', 12)]),
+    # Arcane staffs (wood + metal)
     ('2H_ARCANESTAFF', [('PLANKS', 20), ('METALBAR', 12)]),
+    ('2H_ARCANESTAFF_CRYSTAL', [('PLANKS', 20), ('METALBAR', 12)]),
+    ('2H_ARCANESTAFF_HELL', [('PLANKS', 20), ('METALBAR', 12)]),
     ('2H_ENIGMATICSTAFF', [('PLANKS', 20), ('METALBAR', 12)]),
     ('2H_ENIGMATICORB_MORGANA', [('PLANKS', 20), ('METALBAR', 12)]),
-    # Cursed staffs
+    ('2H_ARCANE_RINGPAIR_AVALON', [('PLANKS', 20), ('METALBAR', 12)]),
+    # Cursed staffs (wood + cloth)
     ('2H_CURSEDSTAFF', [('PLANKS', 20), ('CLOTH', 12)]),
+    ('2H_CURSEDSTAFF_MORGANA', [('PLANKS', 20), ('CLOTH', 12)]),
     ('2H_DEMONICSTAFF', [('PLANKS', 20), ('CLOTH', 12)]),
     ('2H_SKULLORB_HELL', [('PLANKS', 20), ('CLOTH', 12)]),
-    ('2H_CURSEDSTAFF_UNDEAD', [('PLANKS', 20), ('CLOTH', 12)]),
-    # Shapeshifter staffs (20 Wood + 12 Leather)
+    # Shapeshifter staffs (wood + leather)
     ('2H_SHAPESHIFTER_SET1', [('PLANKS', 20), ('LEATHER', 12)]),
     ('2H_SHAPESHIFTER_SET2', [('PLANKS', 20), ('LEATHER', 12)]),
     ('2H_SHAPESHIFTER_SET3', [('PLANKS', 20), ('LEATHER', 12)]),
@@ -241,12 +293,17 @@ WEAPONS_2H = [
 
 OFFHANDS = [
     ('OFF_SHIELD', [('METALBAR', 8)]),
+    ('OFF_SHIELD_CRYSTAL', [('METALBAR', 8)]),
     ('OFF_TOWERSHIELD_UNDEAD', [('METALBAR', 8)]),
     ('OFF_SPIKEDSHIELD_MORGANA', [('METALBAR', 8)]),
     ('OFF_SHIELD_HELL', [('METALBAR', 8)]),
     ('OFF_SHIELD_AVALON', [('METALBAR', 8)]),
     ('OFF_BOOK', [('CLOTH', 8)]),
+    ('OFF_TOME_CRYSTAL', [('CLOTH', 8)]),
+    ('OFF_ORB_MORGANA', [('CLOTH', 8)]),
+    ('OFF_DEMONSKULL_HELL', [('CLOTH', 8)]),
     ('OFF_TORCH', [('LEATHER', 8)]),
+    ('OFF_TORCH_CRYSTAL', [('LEATHER', 8)]),
     ('OFF_HORN_KEEPER', [('LEATHER', 8)]),
     ('OFF_JESTERCANE_HELL', [('PLANKS', 8)]),
     ('OFF_LAMP_UNDEAD', [('METALBAR', 8)]),

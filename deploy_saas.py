@@ -1493,10 +1493,11 @@ app.post('/api/device/token', (req, res) => {
     if (entry.deviceCode === device_code) { found = { code, entry }; break; }
   }
 
-  if (!found) return res.status(404).json({ error: 'expired_token' });
+  // Uniform 428 for unknown / expired / pending — prevents token enumeration via status-code diff.
+  if (!found) return res.status(428).json({ error: 'authorization_pending' });
   if (Date.now() > found.entry.expiresAt) {
     delete deviceCodes[found.code];
-    return res.status(410).json({ error: 'expired_token' });
+    return res.status(428).json({ error: 'authorization_pending' });
   }
   if (!found.entry.authorized) {
     return res.status(428).json({ error: 'authorization_pending' });
@@ -1525,18 +1526,26 @@ app.post('/api/device/authorize', deviceAuthLimiter, (req, res) => {
     return res.status(410).json({ error: 'Code expired. Request a new one from the client.' });
   }
 
-  // Generate capture token for this user
-  const captureToken = require('crypto').randomBytes(24).toString('hex');
-  db.run(`UPDATE users SET capture_token = ? WHERE id = ?`, [captureToken, req.user.id], (err) => {
-    if (err) return res.status(500).json({ error: 'Failed to generate token.' });
-
-    entry.authorized = true;
-    entry.userId = req.user.id;
-    entry.username = req.user.username;
-    entry.captureToken = captureToken;
-
-    console.log(`[DeviceAuth] Code ${user_code} authorized by ${req.user.username}`);
-    res.json({ success: true, username: req.user.username });
+  // Reuse existing capture token if the user already has one — generating a fresh token on every
+  // device authorize was kicking the user's OTHER running Go client offline (WS stale-auth).
+  // Users who want rotation can call /api/generate-capture-token from Profile explicitly.
+  readDb.get(`SELECT capture_token FROM users WHERE id = ?`, [req.user.id], (qErr, row) => {
+    if (qErr) return res.status(500).json({ error: 'Failed to read token.' });
+    const existing = row && row.capture_token;
+    const captureToken = existing || require('crypto').randomBytes(24).toString('hex');
+    const persist = (next) => {
+      if (existing) return next(null);
+      db.run(`UPDATE users SET capture_token = ? WHERE id = ?`, [captureToken, req.user.id], next);
+    };
+    persist((err) => {
+      if (err) return res.status(500).json({ error: 'Failed to generate token.' });
+      entry.authorized = true;
+      entry.userId = req.user.id;
+      entry.username = req.user.username;
+      entry.captureToken = captureToken;
+      console.log(`[DeviceAuth] Code ${user_code} authorized by ${req.user.username} (token ${existing ? 'reused' : 'generated'})`);
+      res.json({ success: true, username: req.user.username });
+    });
   });
 });
 
@@ -2540,14 +2549,21 @@ let leaderboardCacheTime = 0;
 const contribLimiter = rateLimit({ windowMs: 60 * 1000, max: 30, standardHeaders: true, legacyHeaders: false });
 
 app.post('/api/contributions', requireAuth, contribLimiter, (req, res) => {
-  const { item_ids, source } = req.body;
-  if (!item_ids || !Array.isArray(item_ids) || item_ids.length === 0) {
-    return res.status(400).json({ error: 'item_ids array required' });
+  const { item_ids, item_count, source } = req.body;
+  // Accept either `item_ids: Array<string>` (legacy) OR `item_count: number` (current frontend).
+  // Rate limiter (30/min per user) bounds abuse; caller only really communicates *how many* items touched.
+  let count;
+  if (Array.isArray(item_ids) && item_ids.length > 0) {
+    count = item_ids.length;
+  } else if (Number.isFinite(item_count) && item_count > 0) {
+    count = Math.floor(item_count);
+  } else {
+    return res.status(400).json({ error: 'item_ids array or item_count required' });
   }
-  // Cap array length to prevent score manipulation and memory pressure.
+  // Cap count to prevent score manipulation and memory pressure.
   // A real web refresh touches at most ~500 items per batch.
-  if (item_ids.length > 500) {
-    return res.status(400).json({ error: 'item_ids must contain 500 or fewer entries' });
+  if (count > 500) {
+    return res.status(400).json({ error: 'item_count must be 500 or fewer' });
   }
   const validSources = ['web_refresh', 'web_compare'];
   const src = validSources.includes(source) ? source : 'web_refresh';
@@ -2555,7 +2571,7 @@ app.post('/api/contributions', requireAuth, contribLimiter, (req, res) => {
   const now = Date.now();
 
   db.run(`INSERT INTO contributions (user_id, source, item_count, created_at) VALUES (?, ?, ?, ?)`,
-    [userId, src, item_ids.length, now], (err) => {
+    [userId, src, count, now], (err) => {
     if (err) return res.status(500).json({ error: err.message });
 
     // Return updated stats
@@ -2618,23 +2634,53 @@ const ACTIVITY_WEIGHTS = { scan: 1, loot_session: 5, chest_capture: 3, sale_reco
 const VALID_ACTIVITY_TYPES = Object.keys(ACTIVITY_WEIGHTS);
 const activityLimiter = rateLimit({ windowMs: 60 * 1000, max: 60, standardHeaders: true, legacyHeaders: false });
 
+// Per-type daily ceilings to make the leaderboard score ungameable via 60 rpm × 500 count spam.
+// Legit users never hit these limits; spammers are silently capped.
+const ACTIVITY_DAILY_CAPS = {
+  scan: 5000,            // ~200 refreshes × 25 items each
+  loot_session: 50,      // one session per run, very generous
+  chest_capture: 500,    // 500 tabs/day is absurd
+  sale_record: 500,
+  accountability: 200,
+  transport_plan: 200,
+  craft_calc: 500,
+};
+
 app.post('/api/activity', requireAuth, activityLimiter, (req, res) => {
   const { type, count } = req.body;
   if (!type || !VALID_ACTIVITY_TYPES.includes(type)) {
     return res.status(400).json({ error: 'type must be one of: ' + VALID_ACTIVITY_TYPES.join(', ') });
   }
-  const cnt = Math.min(Math.max(1, parseInt(count) || 1), 500);
-  db.run(`INSERT INTO user_activity (user_id, activity_type, count, recorded_at) VALUES (?, ?, ?, ?)`,
-    [req.user.id, type, cnt, Date.now()], (err) => {
-      if (err) return res.status(500).json({ error: err.message });
-      res.json({ success: true });
+  // Per-call cap 1-25: legitimate bulk actions fit, but no `count: 500` stuffing
+  const cnt = Math.min(Math.max(1, parseInt(count) || 1), 25);
+  const dailyCap = ACTIVITY_DAILY_CAPS[type] || 1000;
+  const uid = req.user.id;
+  const dayStart = Date.now() - 24 * 3600 * 1000;
+  readDb.get(
+    `SELECT COALESCE(SUM(count),0) AS total FROM user_activity WHERE user_id = ? AND activity_type = ? AND recorded_at > ?`,
+    [uid, type, dayStart],
+    (qErr, row) => {
+      if (qErr) return res.status(500).json({ error: qErr.message });
+      const already = (row && row.total) || 0;
+      if (already >= dailyCap) {
+        // Soft-succeed so the frontend doesn't surface an error on every further attempt, but record nothing.
+        return res.json({ success: true, capped: true });
+      }
+      const remaining = dailyCap - already;
+      const effective = Math.min(cnt, remaining);
+      db.run(`INSERT INTO user_activity (user_id, activity_type, count, recorded_at) VALUES (?, ?, ?, ?)`,
+        [uid, type, effective, Date.now()], (err) => {
+          if (err) return res.status(500).json({ error: err.message });
+          res.json({ success: true, capped: effective < cnt });
+        });
     });
 });
 
 app.get('/api/activity-stats', requireAuth, (req, res) => {
   const uid = req.user.id;
   const thirtyDaysAgo = Date.now() - 30 * 24 * 3600 * 1000;
-  db.all(`SELECT activity_type, SUM(count) as total FROM user_activity WHERE user_id = ? AND recorded_at > ? GROUP BY activity_type`,
+  // Profile/Community user-facing aggregate — move to readDb so it doesn't queue behind NATS writes on `db`
+  readDb.all(`SELECT activity_type, SUM(count) as total FROM user_activity WHERE user_id = ? AND recorded_at > ? GROUP BY activity_type`,
     [uid, thirtyDaysAgo], (err, rows) => {
       if (err) return res.status(500).json({ error: err.message });
       const breakdown = {};
@@ -2644,7 +2690,7 @@ app.get('/api/activity-stats', requireAuth, (req, res) => {
         combinedScore += (r.total || 0) * (ACTIVITY_WEIGHTS[r.activity_type] || 1);
       }
       // Also include legacy scan contributions
-      db.get(`SELECT COUNT(*) as cnt FROM contributions WHERE user_id = ? AND created_at > ?`, [uid, thirtyDaysAgo], (err2, scanRow) => {
+      readDb.get(`SELECT COUNT(*) as cnt FROM contributions WHERE user_id = ? AND created_at > ?`, [uid, thirtyDaysAgo], (err2, scanRow) => {
         const legacyScans = scanRow?.cnt || 0;
         if (legacyScans > 0 && !breakdown.scan) {
           breakdown.scan = legacyScans;
@@ -2662,10 +2708,11 @@ app.get('/api/activity-stats', requireAuth, (req, res) => {
 app.get('/api/my-stats', requireAuth, (req, res) => {
   const userId = req.user.id;
   const thirtyDaysAgo = Date.now() - 30 * 24 * 3600 * 1000;
-  db.get(`SELECT scans_30d, scans_total, tier FROM user_stats WHERE user_id = ?`, [userId], (err, row) => {
+  // All three reads move to readDb — Profile tab is user-facing and should never queue behind NATS writes
+  readDb.get(`SELECT scans_30d, scans_total, tier FROM user_stats WHERE user_id = ?`, [userId], (err, row) => {
     const scanRow = row || { scans_30d: 0, scans_total: 0, tier: 'bronze' };
     // Compute activity score + rank from combined activities (same logic as /api/activity-stats + /api/leaderboard).
-    db.all(`SELECT activity_type, SUM(count) as total FROM user_activity WHERE user_id = ? AND recorded_at > ? GROUP BY activity_type`, [userId, thirtyDaysAgo], (err2, actRows) => {
+    readDb.all(`SELECT activity_type, SUM(count) as total FROM user_activity WHERE user_id = ? AND recorded_at > ? GROUP BY activity_type`, [userId, thirtyDaysAgo], (err2, actRows) => {
       const breakdown = {};
       let score = 0;
       for (const r of (actRows || [])) {
@@ -2673,7 +2720,7 @@ app.get('/api/my-stats', requireAuth, (req, res) => {
         score += (r.total || 0) * (ACTIVITY_WEIGHTS[r.activity_type] || 1);
       }
       // Include legacy scan contributions if no scan activity yet
-      db.get(`SELECT COUNT(*) as cnt FROM contributions WHERE user_id = ? AND created_at > ?`, [userId, thirtyDaysAgo], (err3, scanCntRow) => {
+      readDb.get(`SELECT COUNT(*) as cnt FROM contributions WHERE user_id = ? AND created_at > ?`, [userId, thirtyDaysAgo], (err3, scanCntRow) => {
         const legacyScans = scanCntRow?.cnt || 0;
         if (legacyScans > 0 && !breakdown.scan) {
           breakdown.scan = legacyScans;
@@ -2935,7 +2982,10 @@ app.get('/api/transport-routes-live', (req, res) => {
   const buyCity = req.query.buy_city || '';
   const sellCity = req.query.sell_city || '';
   const sellStrategy = req.query.sell_strategy || 'market';
-  const minProfit = parseInt(req.query.min_profit) || 100; // Low default: resources have tiny per-unit margins but huge bulk volume
+  // Per-unit profit floor. Default 1 silver so T4/T5 raw mats, meals, potions (5–60 s/unit margin)
+  // aren't filtered out — they dominate bulk-cargo trips by total trip profit, not per-unit.
+  // Frontend already sorts by est_trip_profit; ROI cap (150%) still catches outliers.
+  const minProfit = parseInt(req.query.min_profit) || 1;
   const maxAge = parseInt(req.query.max_age) || 120;
   const limit = Math.min(parseInt(req.query.limit) || 200, 500);
   const excludeCities = (req.query.exclude || '').split(',').filter(Boolean);
@@ -3099,7 +3149,8 @@ app.get('/api/price-history', (req, res) => {
     : `SELECT city, avg_sell as sell_price_min, avg_buy as buy_price_max, min_sell, max_buy, period_start as recorded_at FROM price_averages WHERE item_id = ? AND quality = ? AND period_start > ? ORDER BY period_start`;
   const histParams = city ? [item_id, city, quality, cutoff] : [item_id, quality, cutoff];
 
-  db.all(histQuery, histParams, (err, histRows) => {
+  // Chart open is a hot path — use readDb to avoid queueing behind NATS UPSERTs on `db`
+  readDb.all(histQuery, histParams, (err, histRows) => {
     if (err) return res.status(500).json({ error: 'An internal error occurred' });
     const history = histRows || [];
 
@@ -3111,7 +3162,7 @@ app.get('/api/price-history', (req, res) => {
     const ohlcCutoff = new Date(cutoff).toISOString().slice(0, 13);
     const ohlcParams = city ? [item_id, city, quality, ohlcCutoff] : [item_id, quality, ohlcCutoff];
 
-    db.all(ohlcQuery, ohlcParams, (errO, ohlcRows) => {
+    readDb.all(ohlcQuery, ohlcParams, (errO, ohlcRows) => {
       const ohlc = ohlcRows || [];
 
       // Pre-computed analytics from price_analytics
@@ -3120,7 +3171,7 @@ app.get('/api/price-history', (req, res) => {
         : `SELECT city, metric, value, computed_at FROM price_analytics WHERE item_id = ? AND quality = ?`;
       const analyticsParams = city ? [item_id, city, quality] : [item_id, quality];
 
-      db.all(analyticsQuery, analyticsParams, (errA, analyticsRows) => {
+      readDb.all(analyticsQuery, analyticsParams, (errA, analyticsRows) => {
         const analytics = {};
         for (const r of (analyticsRows || [])) {
           if (city) {
@@ -3149,7 +3200,7 @@ app.get('/api/analytics/:itemId', (req, res) => {
     : `SELECT city, metric, value, computed_at FROM price_analytics WHERE item_id = ? AND quality = ? ORDER BY city, metric`;
   const params = city ? [item_id, city, quality] : [item_id, quality];
 
-  db.all(query, params, (err, rows) => {
+  readDb.all(query, params, (err, rows) => {
     if (err) return res.status(500).json({ error: 'An internal error occurred' });
     if (!rows || rows.length === 0) return res.json({ item_id, quality, metrics: {} });
 
@@ -3262,15 +3313,50 @@ setInterval(() => {
     }
   }
 }, 30000);
-wss.on('connection', ws => {
+// WS auth rate limit — per-IP failed-auth counter. 15 failures in 5 min → reject further attempts.
+// Stops brute-force enumeration of JWTs / capture tokens over WS (which bypasses the HTTP limiter).
+const wsAuthFailures = new Map(); // ip -> { count, windowStart }
+const WS_AUTH_WINDOW_MS = 5 * 60 * 1000;
+const WS_AUTH_MAX_FAILURES = 15;
+function wsAuthAllowed(ip) {
+  const now = Date.now();
+  const rec = wsAuthFailures.get(ip);
+  if (!rec || now - rec.windowStart > WS_AUTH_WINDOW_MS) return true;
+  return rec.count < WS_AUTH_MAX_FAILURES;
+}
+function wsAuthRecordFailure(ip) {
+  const now = Date.now();
+  const rec = wsAuthFailures.get(ip);
+  if (!rec || now - rec.windowStart > WS_AUTH_WINDOW_MS) {
+    wsAuthFailures.set(ip, { count: 1, windowStart: now });
+  } else {
+    rec.count++;
+  }
+}
+// Reset the failure table hourly to prevent memory growth
+setInterval(() => {
+  const now = Date.now();
+  for (const [ip, rec] of wsAuthFailures.entries()) {
+    if (now - rec.windowStart > WS_AUTH_WINDOW_MS * 2) wsAuthFailures.delete(ip);
+  }
+}, 60 * 60 * 1000);
+
+wss.on('connection', (ws, req) => {
   wsClients.add(ws);
   ws.isAuthenticated = false;
   ws._lastActivity = Date.now();
+  ws._ip = (req && (req.headers['x-forwarded-for'] || req.socket?.remoteAddress)) || 'unknown';
   ws.on('pong', () => { ws._lastActivity = Date.now(); }); // keepalive response
   ws.on('message', data => {
     ws._lastActivity = Date.now();
     try {
       const msg = JSON.parse(data.toString());
+      // Enforce WS auth rate limit before doing any verify work
+      if ((msg.type === 'auth' || msg.type === 'client-auth') && !wsAuthAllowed(ws._ip)) {
+        wsSafeSend(ws, { type: msg.type, success: false, error: 'Too many auth attempts — retry later.' });
+        try { ws.close(1008, 'rate-limited'); } catch (_) {}
+        return;
+      }
       // Browser auth (JWT token)
       if (msg.type === 'auth' && msg.token) {
         try {
@@ -3285,6 +3371,7 @@ wss.on('connection', ws => {
             wsSafeSend(ws, { type: 'chest-captures', data: pending });
           }
         } catch(e) {
+          wsAuthRecordFailure(ws._ip);
           wsSafeSend(ws, { type: 'auth', success: false, error: 'Invalid token' });
         }
       }
@@ -3293,6 +3380,7 @@ wss.on('connection', ws => {
       if (msg.type === 'client-auth' && msg.token) {
         readDb.get(`SELECT id, username FROM users WHERE capture_token = ?`, [msg.token], (err, user) => {
           if (err || !user) {
+            wsAuthRecordFailure(ws._ip);
             wsSafeSend(ws, { type: 'client-auth', success: false, error: 'Invalid capture token' });
             return;
           }
@@ -3490,17 +3578,50 @@ setInterval(() => {
   }
 }, 600000);
 
-let lastFlipValidation = 0;
+// Bounded concurrency for flip validations — parallelize instead of a single shared 1s lock
+// that was serializing ALL flips through one validator and dropping bursts from the 200-flip ring.
+const MAX_CONCURRENT_FLIP_VALIDATIONS = 5;
+let activeFlipValidations = 0;
+const flipValidationWaiters = [];
+function acquireFlipSlot() {
+  if (activeFlipValidations < MAX_CONCURRENT_FLIP_VALIDATIONS) {
+    activeFlipValidations++;
+    return Promise.resolve();
+  }
+  return new Promise(resolve => flipValidationWaiters.push(resolve));
+}
+function releaseFlipSlot() {
+  if (flipValidationWaiters.length > 0) flipValidationWaiters.shift()();
+  else activeFlipValidations--;
+}
+// AODP health — fail-closed when validation is degraded so we don't flood the live feed with unverified flips.
+// Flips go through with `unverified: true` flag so the frontend can badge them.
+let _aodpConsecutiveFailures = 0;
+const AODP_DEGRADED_THRESHOLD = 5;
+function aodpDegraded() { return _aodpConsecutiveFailures >= AODP_DEGRADED_THRESHOLD; }
+
 async function broadcastFlip(flip) {
-  // Always validate before broadcasting — queue with rate-limited API calls
-  const now = Date.now();
-  const waitMs = Math.max(0, 1000 - (now - lastFlipValidation));
-  if (waitMs > 0) await new Promise(r => setTimeout(r, waitMs));
-  lastFlipValidation = Date.now();
+  await acquireFlipSlot();
   try {
-    const valid = await validateFlipPrices(flip.itemId, flip.quality, flip.buyCity, flip.sellCity, flip.buyPrice, flip.sellPrice);
-    if (!valid) return;
-  } catch(e) { console.warn('[broadcastFlip] Validation error, dropping flip:', e.message); return; }
+    // If AODP has been failing recently, skip validation and mark flip unverified rather than silently pass.
+    if (aodpDegraded()) {
+      flip.unverified = true;
+    } else {
+      try {
+        const valid = await validateFlipPrices(flip.itemId, flip.quality, flip.buyCity, flip.sellCity, flip.buyPrice, flip.sellPrice);
+        if (!valid) return;
+      } catch(e) { console.warn('[broadcastFlip] Validation error, dropping flip:', e.message); return; }
+    }
+  } finally {
+    releaseFlipSlot();
+  }
+
+  // Soft TTL — if we spent too long in the queue + validation, skip stale flips
+  const FLIP_STALE_MS = 30000;
+  if (flip.detectedAt && Date.now() - flip.detectedAt > FLIP_STALE_MS) {
+    console.log(`[broadcastFlip] Dropping stale flip ${flip.itemId} (age ${Date.now() - flip.detectedAt}ms)`);
+    return;
+  }
 
   liveFlips.unshift(flip);
   if (liveFlips.length > MAX_FLIPS) liveFlips.pop();
@@ -3521,7 +3642,13 @@ async function validateFlipPrices(id, q, buyCity, sellCity, expectedBuyPrice, ex
     const url = `${API_BASE}/${encodeURIComponent(id)}.json?locations=${locs}&qualities=${q}`;
     const res = await fetch(url, { signal: controller.signal });
     clearTimeout(timeoutId);
-    if (!res.ok) return true; // Can't verify — allow through
+    if (!res.ok) {
+      _aodpConsecutiveFailures++;
+      // Don't silently pass — signal to caller that this flip is unverified.
+      // Caller marks it accordingly; frontend badges as such.
+      return true;
+    }
+    _aodpConsecutiveFailures = 0;
 
     const data = await res.json();
     let liveBuyPrice = 0, liveSellPrice = 0;
@@ -3558,7 +3685,8 @@ async function validateFlipPrices(id, q, buyCity, sellCity, expectedBuyPrice, ex
     return true;
   } catch (e) {
     clearTimeout(timeoutId);
-    return true; // Allow through on timeout/error
+    _aodpConsecutiveFailures++;
+    return true; // Allow through on timeout/error, but increments failure counter → eventually trips degraded mode
   }
 }
 

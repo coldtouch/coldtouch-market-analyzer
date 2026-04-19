@@ -509,10 +509,11 @@ function getEnchantmentBadge(itemId) {
 
 function categorizeItem(itemId) {
     const id = itemId.toUpperCase();
-    if (id.includes('MAIN_') || id.includes('2H_') && !id.includes('TOOL_')) {
-        if (id.includes('TOOL_')) return 'other';
+    // Operator precedence fix — MAIN_ || 2H_ paired together, THEN excluded if TOOL_
+    if ((id.includes('MAIN_') || id.includes('2H_')) && !id.includes('TOOL_')) {
         return 'weapons';
     }
+    if (id.includes('TOOL_')) return 'other';
     if (id.includes('HEAD_') || id.includes('ARMOR_') || id.includes('SHOES_')) {
         if (id.includes('PLATE_') || id.includes('LEATHER_') || id.includes('CLOTH_')) return 'armor';
     }
@@ -581,7 +582,20 @@ function getStackSize(itemId) {
 
 // Check if an item is stackable (resources, materials, consumables — NOT gear)
 function isStackableItem(itemId) {
-    return getEquipmentSlot(itemId) === null;
+    if (getEquipmentSlot(itemId) !== null) return false;
+    const id = (itemId || '').toUpperCase();
+    // Non-stackable gear + content the old check missed — trophies, furniture, mount tokens, kill trophies,
+    // labourer items, journals-filled, bags. These would otherwise produce absurd transport suggestions
+    // like "buy 20k Mammoth kits" because isStackableItem falls back to 999-cap when it can't slot them.
+    if (id.includes('TROPHY_')) return false;
+    if (id.includes('UNIQUE_FURNITUREITEM_')) return false;
+    if (id.includes('FURNITUREITEM_')) return false;
+    if (id.includes('MOUNT_')) return false;
+    if (id.includes('KILLTROPHY_')) return false;
+    if (id.includes('LABORER_')) return false;
+    if (id.includes('UNIQUE_HIDEOUT')) return false;
+    if (/^T\d_BAG(_|$)/.test(id)) return false;  // bags are equipment-like, not stackable
+    return true;
 }
 
 function getServer() {
@@ -11981,6 +11995,8 @@ async function doTransportScan() {
 
         spinner.classList.add('hidden');
         await enrichAndRenderTransport(lastTransportRoutes, budget, sortBy, mountCapacity, freeSlots);
+        // Contributions the transport_plan activity score — once per successful load.
+        if (typeof trackActivity === 'function') trackActivity('transport_plan', 1);
     } catch (e) {
         spinner.classList.add('hidden');
         showError(errorEl, 'Failed to load transport routes: ' + e.message);
@@ -12888,8 +12904,10 @@ async function loadCommunityTab() {
             const rankClass = rank <= 3 ? `top-${rank}` : '';
             const tier = /^[a-z]+$/.test(u.tier || '') ? u.tier : 'bronze';
             const tierLabel = tier.charAt(0).toUpperCase() + tier.slice(1);
+            // URL-encode each CDN path segment to prevent injection if user_id/avatar ever become non-numeric
+            // (Discord IDs are numeric today, but future Discord unlink bugs or DB corruption could break that).
             const avatarUrl = u.avatar
-                ? `https://cdn.discordapp.com/avatars/${u.user_id}/${u.avatar}.png?size=64`
+                ? `https://cdn.discordapp.com/avatars/${encodeURIComponent(u.user_id)}/${encodeURIComponent(u.avatar)}.png?size=64`
                 : 'https://cdn.discordapp.com/embed/avatars/0.png';
             const medal = rank === 1 ? '🥇' : rank === 2 ? '🥈' : rank === 3 ? '🥉' : rank;
             // Primary metric: activity score. Secondary: scan count (kept for continuity with old leaderboard).
@@ -12899,7 +12917,7 @@ async function loadCommunityTab() {
             return `
                 <div class="leaderboard-row">
                     <div class="leaderboard-rank ${rankClass}">${medal}</div>
-                    <img class="leaderboard-avatar" src="${avatarUrl}" alt="">
+                    <img class="leaderboard-avatar" src="${esc(avatarUrl)}" alt="">
                     <div class="leaderboard-name">
                         ${esc(u.username) || 'Unknown'}
                         <span class="tier-badge tier-${tier}">${tierLabel}</span>

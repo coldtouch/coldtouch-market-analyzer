@@ -1,5 +1,5 @@
 // Service Worker for Coldtouch Market Analyzer (PWA app shell caching)
-const CACHE_NAME = 'coldtouch-v40';
+const CACHE_NAME = 'coldtouch-v41';
 const APP_SHELL = [
     './',
     './index.html',

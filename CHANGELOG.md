@@ -2,6 +2,40 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-04-19 — Audit pass: recipes, transport, contributions, itemmap, security, DB hygiene, flip validation
+
+**User-reported bugs fixed:**
+- **Bear Paws T6.3 (and ~70 other artifact weapons) now have recipes.** `build_recipes.py` was missing KEEPER/HELL/MORGANA/AVALON/CRYSTAL faction variants across 1H and 2H weapons + several offhands. Added 70 new entries, dropped 13 phantom ones that didn't exist in items.json. Recipes.json regenerated (6,080 recipes). Market Browser Craft button now renders for Bear Paws and every other artifact weapon automatically (conditional was already correct; recipe data was the gap).
+- **Transport now shows food / potions / raw materials.** `/api/transport-routes-live` had `min_profit=100` silver/unit default, which wiped out bulk cargo (T4/T5 resources, meals, potions all have 5–60 s/unit margin). Dropped to 1 — frontend sorts by `est_trip_profit` and ROI cap still catches outliers.
+- **Community + Profile contribution score now updates.** `/api/contributions` required `{item_ids: Array}` but frontend sent `{item_count}` → silent 400 every call. Backend now accepts either. Also added the missing `trackActivity('transport_plan', 1)` call after Transport loads — it was weighted in `ACTIVITY_WEIGHTS` but never emitted.
+- **Loot Logger item-mismatch fix (Assassin Hood 6.3, etc).** `itemmap.json` was from the April 1 ao-bin-dumps; game shipped Protocol18 on April 13 (shifted items). Regenerated itemmap.json (11,175 entries), weightmap.json (10,749 entries), frontend items.json + itemweights.json from April 16 dump. Go client exe rebuilt — same path, drop-in replacement.
+
+**In-game chest log capture prep (MVP skeleton):**
+- `opGetChestLogs` (#151), `opGetAccessRightLogs` (#152), `opGetGuildAccountLogs` (#153), `opGetGuildAccountLogsLargeAmount` (#154) dispatchers added to `decode.go`. When `LogUnknownEvents: true` + user opens the in-game Log tab on a chest, the raw params now get dumped via `dumpParams()` for reverse-engineering. Full typed handler + accountability cross-check UI will follow once we have a real param shape sample.
+
+**Security hardening:**
+- Leaderboard avatar URL — `encodeURIComponent` on user_id/avatar + `esc()` on the full URL. Closes a theoretical XSS vector.
+- Device-auth no longer resets the user's capture token on every approval — reuses the existing token so the user's OTHER running Go client doesn't get kicked offline. Explicit token regen still available from Profile.
+- WebSocket auth now has per-IP rate limiting (15 failed auths / 5 min → reject + close connection). Previously `/api/` had a limiter but `wss://` was wide open.
+- `/api/activity` per-call count clamped to 1–25 (was 1–500); added per-type **daily caps** per user (scan 5000, loot_session 50, chest_capture 500, etc). A bad actor could previously inflate 150k pts/min into the leaderboard — now capped.
+- `/api/device/token` returns uniform 428 for all pending/expired/unknown cases — was leaking 404 vs 410 vs 428 (token-existence enumeration).
+
+**DB hygiene (latency):**
+- `/api/price-history`, `/api/analytics/:itemId`, `/api/activity-stats`, `/api/my-stats` — moved all reads to `readDb` so chart opens and Profile loads don't queue behind NATS batch writes on the main `db` connection.
+
+**Live Flips reliability:**
+- Flip validation now runs with bounded concurrency (5 parallel) instead of a single-shared 1s lock that serialized every flip.
+- Added a 30s staleness TTL — flips that waited too long in the validation queue are dropped instead of broadcast as fresh.
+- AODP degraded detection (5 consecutive failures) — when the upstream validator is unreachable, flips go through with `unverified: true` instead of silently passing as validated.
+
+**Low-priority polish:**
+- `categorizeItem()` precedence bug: `MAIN_ || 2H_ && !TOOL_` now parenthesized correctly — TOOL_ items no longer misclassify as weapons.
+- `isStackableItem()` expanded — trophies, furniture, mount tokens, kill trophies, labourer items, bags, hideouts no longer fall through to "stackable 999" and produce absurd transport suggestions.
+
+**sw.js cache:** v40 → v41. **Backend deploy required** for all backend fixes.
+
+---
+
 ### 2026-04-18 — Accountability deaths expandable + share-failed-on-big-content fix
 
 - **Shared Accountability view:** each death row is now clickable — expanding shows Recovered items (48×48 icons with qty badges and price tooltips), Worn-at-death equipment, and who looted the corpse. Previously the share link only showed a flat "victim → killer" strip with no way to see what was dropped or recovered.
