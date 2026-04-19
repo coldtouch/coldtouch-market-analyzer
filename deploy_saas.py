@@ -2353,29 +2353,45 @@ app.get('/api/loot-session/:sessionId', requireAuth, (req, res) => {
 
 // Upload a .txt loot log file (ao-loot-logger format)
 app.post('/api/loot-upload', requireAuth, (req, res) => {
-  const { lines } = req.body;
+  const { lines, sessionId: requestedSessionId } = req.body;
   if (!lines || !Array.isArray(lines) || lines.length === 0) {
     return res.status(400).json({ error: 'No loot data provided.' });
   }
-  const sessionId = req.user.id + '_upload_' + Date.now();
-  // INSERT OR IGNORE — deduped by idx_loot_events_dedupe. Re-uploading a file that
-  // overlaps with live-streamed events will silently skip the duplicates.
-  const stmt = db.prepare(`INSERT OR IGNORE INTO loot_events (user_id, session_id, timestamp, looted_by_name, looted_by_guild, looted_by_alliance, looted_from_name, looted_from_guild, looted_from_alliance, item_id, numeric_id, quantity, weight, is_silver)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0)`);
-  let count = 0;
-  for (const line of lines) {
-    // Format: timestamp_utc;looted_by__alliance;looted_by__guild;looted_by__name;item_id;item_name;quantity;looted_from__alliance;looted_from__guild;looted_from__name
-    const parts = line.split(';');
-    if (parts.length < 10) continue;
-    const [ts, byAlliance, byGuild, byName, itemId, itemName, qty, fromAlliance, fromGuild, fromName] = parts;
-    const timestamp = new Date(ts).getTime() || Date.now();
-    // Sanitize user-supplied strings: strip control chars, limit length
-    const san = s => (s || '').replace(/[\x00-\x1f\x7f]/g, '').slice(0, 64);
-    stmt.run(req.user.id, sessionId, timestamp, san(byName), san(byGuild), san(byAlliance), san(fromName), san(fromGuild), san(fromAlliance), san(itemId).slice(0, 100), 0, parseInt(qty) || 1);
-    count++;
+  // Append-to-existing mode: caller may pass an existing sessionId they own.
+  // Useful for backfilling death rows into a previously-uploaded session that was
+  // created before the Go client started writing __DEATH__ lines to its .txt log.
+  const doInsert = (sessionId) => {
+    // INSERT OR IGNORE — deduped by idx_loot_events_dedupe. Re-uploading a file that
+    // overlaps with live-streamed events will silently skip the duplicates.
+    const stmt = db.prepare(`INSERT OR IGNORE INTO loot_events (user_id, session_id, timestamp, looted_by_name, looted_by_guild, looted_by_alliance, looted_from_name, looted_from_guild, looted_from_alliance, item_id, numeric_id, quantity, weight, is_silver)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0)`);
+    let count = 0;
+    for (const line of lines) {
+      // Format: timestamp_utc;looted_by__alliance;looted_by__guild;looted_by__name;item_id;item_name;quantity;looted_from__alliance;looted_from__guild;looted_from__name
+      const parts = line.split(';');
+      if (parts.length < 10) continue;
+      const [ts, byAlliance, byGuild, byName, itemId, itemName, qty, fromAlliance, fromGuild, fromName] = parts;
+      const timestamp = new Date(ts).getTime() || Date.now();
+      // Sanitize user-supplied strings: strip control chars, limit length
+      const san = s => (s || '').replace(/[\x00-\x1f\x7f]/g, '').slice(0, 64);
+      stmt.run(req.user.id, sessionId, timestamp, san(byName), san(byGuild), san(byAlliance), san(fromName), san(fromGuild), san(fromAlliance), san(itemId).slice(0, 100), 0, parseInt(qty) || 1);
+      count++;
+    }
+    stmt.finalize();
+    res.json({ success: true, sessionId, eventsImported: count });
+  };
+
+  if (requestedSessionId && typeof requestedSessionId === 'string' && /^[a-zA-Z0-9_-]{8,80}$/.test(requestedSessionId)) {
+    // Verify the session belongs to this user before appending.
+    readDb.get('SELECT 1 FROM loot_events WHERE session_id = ? AND user_id = ? LIMIT 1', [requestedSessionId, req.user.id], (err, row) => {
+      if (err) return res.status(500).json({ error: err.message });
+      if (!row) return res.status(404).json({ error: 'Session not found or not owned by user' });
+      doInsert(requestedSessionId);
+    });
+    return;
   }
-  stmt.finalize();
-  res.json({ success: true, sessionId, eventsImported: count });
+
+  doInsert(req.user.id + '_upload_' + Date.now());
 });
 
 // Consolidate multiple already-persisted session IDs into one.

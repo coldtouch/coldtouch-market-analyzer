@@ -2,6 +2,19 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-04-19 — Offline .txt upload now carries deaths (fixes "0 deaths, all loot missing")
+
+**Symptom found in a real shared accountability link:** 522 loot events, 0 deaths, most loot red-dotted as missing. Root cause: the `.txt` file format only captured loot pickups. Offline uploads rebuilt the session without deaths, so the accountability view's "lost on death" subtraction had nothing to subtract → everything looked missing.
+
+**Fix:**
+- Go client (v0.7.2) — `event_loot.go` + `event_death.go` now write `__DEATH__` sentinel rows into loot-events-*.txt alongside loot. Row layout reuses the 10-column schema: `looted_by_*` = killer, `looted_from_*` = victim.
+- Backend — `/api/loot-upload` now accepts an optional `sessionId` param (regex-validated, ownership-checked). Used for appending rows to an existing uploaded session, e.g. backfilling deaths into a session created before this fix.
+- Retroactive fix for the user's broken share session: parsed 144 `[Death]` lines from the local stdout log, uploaded with `sessionId = <existing upload session>`. 143 rows persisted (1 caught by dedup UNIQUE INDEX). Share now renders: **47 deaths on Saggin (user's guild)**, 23 Savants, 17 XXX, 16 Lemon Girls, 13 E H O T, 12 Polska Gildia, etc.
+
+Backend deploy: `20260419-153126`. Go release `v0.7.2`.
+
+---
+
 ### 2026-04-19 — Session_id stability across WS reconnects (no more fragmented PvP sessions)
 
 **Found by analyzing a real PvP log:** 37 `[VPSRelay] Authenticated` reconnects in 50 minutes meant one PvP fight fragmented into ~37 Loot Logger sessions — one per reconnect. Root cause: `ws.lootSessionId` was generated server-side per WS connection, so every reconnect got a new ID.
