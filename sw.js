@@ -1,5 +1,6 @@
 // Service Worker for Coldtouch Market Analyzer (PWA app shell caching)
-const CACHE_NAME = 'coldtouch-v44';
+// FE-H3: bumped to v45; switched fetch strategy to stale-while-revalidate
+const CACHE_NAME = 'coldtouch-v45';
 const APP_SHELL = [
     './',
     './index.html',
@@ -27,9 +28,20 @@ self.addEventListener('activate', (e) => {
 });
 
 self.addEventListener('fetch', (e) => {
-    // Network-first for API calls, cache-first for app shell
+    // Pass-through: API calls and WebSocket upgrades
     if (e.request.url.includes('/api/') || e.request.url.includes('wss://')) return;
+    // FE-H3: stale-while-revalidate — serve cached copy instantly, refresh cache in background
     e.respondWith(
-        caches.match(e.request).then(cached => cached || fetch(e.request))
+        caches.open(CACHE_NAME).then(cache =>
+            cache.match(e.request).then(cached => {
+                const networkFetch = fetch(e.request).then(response => {
+                    if (response && response.status === 200 && response.type === 'basic') {
+                        cache.put(e.request, response.clone());
+                    }
+                    return response;
+                });
+                return cached || networkFetch;
+            })
+        )
     );
 });

@@ -2265,6 +2265,17 @@
                     <div id="changelog-wrapper" style="max-height: 500px; overflow-y: auto; position: relative;">
                     <div class="changelog-list">
                         <div class="changelog-entry">
+                            <div class="changelog-date">April 20, 2026</div>
+                            <div class="changelog-title">🔒 Security hardening &amp; frontend robustness (full audit remediation)</div>
+                            <ul>
+                                <li><strong>20 audit findings fixed</strong> across backend security, Python deploy script, and frontend JS.</li>
+                                <li><strong>Backend</strong>: trust proxy, admin-only guard on db-stats, 100-line upload cap, tighter batch-prices rate limit, https-only news links, HTML-strip in loot sanitiser, generic DB error messages, 30-day share token expiry, .env now uploaded via SFTP (no secrets in process cmdline).</li>
+                                <li><strong>Frontend</strong>: two unescaped <code>e.message</code> XSS paths closed, foodBuff escaped, market fetch gets a 30s abort timeout, WS error handler no longer silently swallows logic bugs, localStorage JSON parses wrapped in try/catch, <code>_consumedFlips</code> pruned on load (cap 1000), <code>spreadStatsCache</code> size-capped at 2000, WS URL derived from <code>VPS_BASE</code> constant, IDB upgrade guard uses <code>DB_VERSION</code> constant.</li>
+                                <li><strong>Service worker</strong>: v44 &rarr; v45; strategy changed from cache-first to stale-while-revalidate; registration uses <code>updateViaCache: 'none'</code>.</li>
+                                <li><strong>Cleanup</strong>: 19 scratch/test files deleted, <code>.gitignore</code> updated with loot-event logs, audit reports, and test file patterns.</li>
+                            </ul>
+                        </div>
+                        <div class="changelog-entry">
                             <div class="changelog-date">April 19, 2026</div>
                             <div class="changelog-title">🛠 Big audit pass &mdash; recipes, transport, contributions, item mismatches, security</div>
                             <ul>
@@ -3810,7 +3821,7 @@
 
     <script src="db.js"></script>
     <script src="app.js"></script>
-    <script>if('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(()=>{});</script>
+    <script>if('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js', {updateViaCache: 'none'}).catch(()=>{});</script><!-- FE-H3 -->
 </body>
 
 </html>

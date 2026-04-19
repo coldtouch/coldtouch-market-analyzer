@@ -2,6 +2,38 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-04-20 — Security hardening + frontend robustness (FULL_AUDIT_2026-04-19 remediation)
+
+**Backend (deploy_saas.py) — 10 fixes:**
+- **SEC-M2** — `app.set('trust proxy', 1)` added; rate limiters now use real client IP behind nginx.
+- **SEC-C4** — `/api/admin/db-stats` now requires owner ID (`325634482524782592`); was JWT-only.
+- **SEC-C5** — `/api/loot-upload` capped at 100 lines per request; oversized batches return HTTP 400.
+- **SEC-H2** — `/api/batch-prices` gets its own `batchPricesLimiter` (10 req/min); tighter than the global 60 req/min.
+- **SEC-H3** — News banner `link` field validated against `^https?://`; non-URL values are stripped rather than stored.
+- **SEC-H4** — `san()` now strips HTML chars (`<>"'&`) in addition to control characters.
+- **SEC-M5** — All `err.message` / `err2.message` / `eN.message` raw DB errors replaced with generic `"An internal error occurred."` response.
+- **SEC-M3** — Accountability share tokens and loot-session share tokens now expire after 30 days (HTTP 410 on expired token).
+- **PY-H1** — `.env` file now uploaded via SFTP instead of `echo 'base64' | base64 -d`; secrets no longer exposed in `/proc/<pid>/cmdline`.
+- **PY-H2** — Broken `try:` block (syntax error from previous session) fixed; rollback path now closes SSH before exit; `sys.excepthook` override ensures SSH cleanup on unhandled exception.
+
+**Frontend — 10 fixes:**
+- **FE-H1** — `e.message` in two `innerHTML` error states (Top Traded, Community Builds) wrapped with `esc()`.
+- **FE-H2** — `active.foodBuff` in crafter profile pill now wrapped with `esc()`.
+- **FE-H3** — Service worker bumped to `coldtouch-v45`; fetch strategy changed from pure cache-first to stale-while-revalidate; SW registration uses `{updateViaCache: 'none'}`.
+- **FE-H4** — `fetchMarketChunk` now passes `AbortSignal.timeout(30_000)` to `fetch()`; no more indefinite hangs on slow market API.
+- **FE-H5** — IDB upgrade guard now compares `e.oldVersion < DB_VERSION` (was hardcoded `< 4`).
+- **FE-M1** — `spreadStatsCache` gets a `SPREAD_STATS_CACHE_MAX = 2000` cap with eviction after rebuild.
+- **FE-M3** — `_consumedFlips` pruned on load: entries older than 24h removed, hard cap of 1000 entries enforced.
+- **FE-M4** — WebSocket `catch` block now rethrows non-`SyntaxError` exceptions (logic/render bugs no longer silently swallowed).
+- **FE-M5** — `localStorage.getItem` JSON.parse calls for `lootWhitelist` and `_consumedFlips` wrapped in `try/catch`.
+- **FE-M6** — WebSocket URL now derived from `VPS_BASE.replace(/^https/, 'wss')` instead of a hardcoded `wss://albionaitool.xyz`.
+
+**Cleanup:**
+- **CLEAN-1** — Deleted 19 scratch/test files (`test_*.js`, `death_payload.js`, `share2.json`, `deploy_bot.py`, `deploy_vps.py`, etc.).
+- **CLEAN-4** — `.gitignore` updated: `loot-events-*.txt`, `FULL_AUDIT_*.md`, `DEEP_AUDIT_*.md`, `*.exe~`, and remaining test files added.
+
+---
+
 ### 2026-04-19 — Upgrade Flips show exact rune/soul/relic breakdown
 
 **Before:** Upgrade Flips in Market Flipping showed a single hardcoded "Upgrade materials (est.): -X silver" line. Numbers were ballpark estimates baked into the frontend — never updated, never checked against real market prices.

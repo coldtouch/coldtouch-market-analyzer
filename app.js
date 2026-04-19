@@ -337,6 +337,7 @@ let vpsGameServer = 'europe'; // detected from VPS on init; used to skip VPS cac
 let analyticsChartInstance = null;
 let scanAbortController = null;
 let spreadStatsCache = {}; // keyed by "itemId_quality_buyCity_sellCity"
+const SPREAD_STATS_CACHE_MAX = 2000; // FE-M1: evict oldest batch when over limit
 const analyticsCache = new Map(); // keyed by itemId, value: { price_trend, latest_price } | 'pending'
 const ANALYTICS_CACHE_MAX = 500; // evict oldest entries when over limit
 let spreadStatsCacheTime = 0;
@@ -633,7 +634,8 @@ async function loadData() {
 async function fetchMarketChunk(server, items) {
     if (items.length === 0) return [];
     const url = `${API_URLS[server]}/${items.join(',')}.json?v=${Date.now()}`;
-    const response = await fetch(url);
+    // FE-H4: abort after 30s so a slow/hanging market API never blocks indefinitely
+    const response = await fetch(url, { signal: AbortSignal.timeout(30_000) });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     return response.json();
 }
@@ -1176,6 +1178,9 @@ async function loadSpreadStats() {
             const key = `${r.item_id}_${r.quality}_${r.buy_city}_${r.sell_city}`;
             spreadStatsCache[key] = r;
         }
+        // FE-M1: hard cap — drop excess entries (server already limits to 2000 but guard here too)
+        const ssKeys = Object.keys(spreadStatsCache);
+        if (ssKeys.length > SPREAD_STATS_CACHE_MAX) ssKeys.splice(0, ssKeys.length - SPREAD_STATS_CACHE_MAX).forEach(k => delete spreadStatsCache[k]);
         spreadStatsCacheTime = now;
         if (DEBUG) console.log(`[SpreadStats] Loaded ${rows.length} spread stats`);
     } catch (e) {
@@ -3781,7 +3786,7 @@ function updateCrafterProfilePill() {
     if (!pill) return;
     const active = getActiveCrafterProfile();
     if (active) {
-        pill.innerHTML = `🧑‍🔧 ${esc(active.name)} <span style="opacity:0.7;font-size:0.7rem;">· spec ${active.spec || 0} · ${active.foodBuff || 'no food'}</span>`;
+        pill.innerHTML = `🧑‍🔧 ${esc(active.name)} <span style="opacity:0.7;font-size:0.7rem;">· spec ${active.spec || 0} · ${esc(active.foodBuff || 'no food')}</span>`;
         pill.style.display = '';
     } else {
         pill.innerHTML = `🧑‍🔧 No profile — click to create`;
@@ -6454,7 +6459,7 @@ function initLiveSync() {
     }
 
     // Connect to the new VPS Proxy
-    wsLink = new WebSocket('wss://albionaitool.xyz');
+    wsLink = new WebSocket(VPS_BASE.replace(/^https/, 'wss')); // FE-M6: derive from VPS_BASE constant
 
     wsLink.onopen = () => {
         if (DEBUG) console.log("[WS] Connected to live data stream");
@@ -6632,7 +6637,9 @@ function initLiveSync() {
             }
 
         } catch(err) {
-            // Silently drop unparseable packets to avoid console spam
+            // FE-M4: only swallow JSON parse errors; rethrow logic/render bugs
+            if (err instanceof SyntaxError) return; // unparseable packet
+            console.error('[WS] Message handler error:', err);
         }
     };
 }
@@ -8932,7 +8939,7 @@ const LL_WHITELIST_KEY = 'albion_loot_whitelist';          // array of lowercase
 const LL_AUTOSAVE_KEY = 'albion_loot_autosave_enabled';
 const LL_DRAFT_KEY = 'albion_loot_live_draft';             // { events, name, savedAt }
 let liveSessionName = localStorage.getItem(LL_SESSION_NAME_KEY) || '';
-let lootWhitelist = JSON.parse(localStorage.getItem(LL_WHITELIST_KEY) || '[]');
+let lootWhitelist; try { lootWhitelist = JSON.parse(localStorage.getItem(LL_WHITELIST_KEY) || '[]'); } catch { lootWhitelist = []; } // FE-M5
 let _llAutosaveInterval = null;
 
 // G7: Suggest an auto-name based on session data. Pure function — returns a
@@ -13822,7 +13829,7 @@ async function loadTopTraded() {
         renderTopTraded(topItems.slice(0, limit));
     } catch (e) {
         spinner.classList.add('hidden');
-        container.innerHTML = `<div class="empty-state"><p>Failed to load top items: ${e.message}</p></div>`;
+        container.innerHTML = `<div class="empty-state"><p>Failed to load top items: ${esc(e.message)}</p></div>`;
     }
 }
 
@@ -14461,7 +14468,7 @@ async function loadBuilds(append = false) {
     } catch (e) {
         spinner.classList.add('hidden');
         if (!append) {
-            container.innerHTML = `<div class="empty-state"><p>Failed to load builds: ${e.message}</p></div>`;
+            container.innerHTML = `<div class="empty-state"><p>Failed to load builds: ${esc(e.message)}</p></div>`;
         }
     }
 }
@@ -15095,7 +15102,20 @@ function initTimersWidget() {
 }
 
 // ===== CONSUMED FLIP TRACKING =====
-const _consumedFlips = JSON.parse(localStorage.getItem('consumedFlips') || '{}');
+// FE-M5: try/catch on parse; FE-M3: prune stale/excess entries on load
+let _consumedFlips; try { _consumedFlips = JSON.parse(localStorage.getItem('consumedFlips') || '{}'); } catch { _consumedFlips = {}; }
+(function _pruneConsumedFlips() {
+    const now = Date.now();
+    // Remove entries older than 24h
+    for (const k of Object.keys(_consumedFlips)) { if (now - _consumedFlips[k] > 86400000) delete _consumedFlips[k]; }
+    // Hard cap at 1000 — if still over, drop oldest
+    const keys = Object.keys(_consumedFlips);
+    if (keys.length > 1000) {
+        keys.sort((a, b) => _consumedFlips[a] - _consumedFlips[b]);
+        keys.slice(0, keys.length - 1000).forEach(k => delete _consumedFlips[k]);
+    }
+    if (keys.length !== Object.keys(_consumedFlips).length) localStorage.setItem('consumedFlips', JSON.stringify(_consumedFlips));
+})();
 function markFlipConsumed(flipKey) {
     _consumedFlips[flipKey] = Date.now();
     localStorage.setItem('consumedFlips', JSON.stringify(_consumedFlips));

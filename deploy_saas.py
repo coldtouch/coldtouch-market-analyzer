@@ -40,13 +40,32 @@ def main():
 
     print("Connecting to VPS...")
     ssh = paramiko.SSHClient()
-    ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    # PY-C2: Load known_hosts so we reject unexpected host keys (MITM protection).
+    # Run `ssh-keyscan 5.189.189.71 >> ~/.ssh/known_hosts` once if first-time setup.
+    ssh.load_system_host_keys()
+    ssh.set_missing_host_key_policy(paramiko.RejectPolicy())
     ssh.connect(ip, username=usr, password=password, timeout=10)
 
-    def run_wait(cmd):
+    # PY-C1: run_wait now checks exit status and raises on failure for critical commands.
+    def run_wait(cmd, check=True):
+        """Run a remote SSH command. Raises RuntimeError if exit code != 0 and check=True."""
         stdin, stdout, stderr = ssh.exec_command(cmd)
-        stdout.channel.recv_exit_status()
-        return stdout.read().decode()
+        out = stdout.read().decode()
+        err_out = stderr.read().decode()
+        code = stdout.channel.recv_exit_status()
+        if check and code != 0:
+            raise RuntimeError(
+                f"Remote command failed (exit {code}):\n  cmd: {cmd}\n  stderr: {err_out.strip()}"
+            )
+        return out
+
+    # PY-H2: Register SSH cleanup hook so the session is closed on any unhandled exception.
+    _orig_excepthook = sys.excepthook
+    def _ssh_cleanup_hook(exc_type, exc_val, exc_tb):
+        try: ssh.close()
+        except Exception: pass
+        _orig_excepthook(exc_type, exc_val, exc_tb)
+    sys.excepthook = _ssh_cleanup_hook
 
     if mode == 'rollback':
         # DO-1: restore previous backend.js from .bak created during last deploy.
@@ -957,6 +976,7 @@ client.on('disconnect', () => console.warn('[Discord] Client disconnected'));
 
 // === EXPRESS APP ===
 const app = express();
+app.set('trust proxy', 1); // SEC-M2: real client IP behind nginx for rate limiters
 app.use(cors({ origin: 'https://coldtouch.github.io', credentials: true }));
 // Security headers: HSTS, X-Content-Type-Options, X-Frame-Options, etc.
 // contentSecurityPolicy disabled — this is a JSON API, not an HTML server.
@@ -982,6 +1002,8 @@ app.use((req, res, next) => {
 // Rate limiting
 const apiLimiter = rateLimit({ windowMs: 60 * 1000, max: 60, standardHeaders: true, legacyHeaders: false });
 app.use('/api/', apiLimiter);
+// SEC-H2: tighter limit for the heavy batch-prices endpoint (10 req/min per IP)
+const batchPricesLimiter = rateLimit({ windowMs: 60 * 1000, max: 10, standardHeaders: true, legacyHeaders: false, message: { error: 'Too many batch-price requests. Slow down.' } });
 
 
 // Manual Discord OAuth2 flow (replaces passport-discord which has no HTTP timeouts)
@@ -1106,11 +1128,11 @@ app.post('/api/news', requireAuth, (req, res) => {
     active: active !== false,
     message: (message || '').slice(0, 300),
     type: type || 'info', // 'info', 'warning', 'success', 'error'
-    link: (link || '').slice(0, 200),
+    link: (link && /^https?:\/\//.test(link)) ? link.slice(0, 200) : '', // SEC-H3: only allow http(s) URLs
     updatedAt: Date.now()
   });
   db.run(`INSERT OR REPLACE INTO meta_config (key, value) VALUES ('news_banner', ?)`, [banner], (err) => {
-    if (err) return res.status(500).json({ error: err.message });
+    if (err) return res.status(500).json({ error: 'An internal error occurred.' });
     res.json({ success: true });
   });
 });
@@ -1725,7 +1747,7 @@ app.post('/api/loot-tab/save', requireAuth, (req, res) => {
     `INSERT INTO loot_tabs (user_id, tab_name, city, purchase_price, items_json, purchased_at, status) VALUES (?, ?, ?, ?, ?, ?, 'open')`,
     [req.user.id, tabName.slice(0, 100), (city || '').slice(0, 50), price, itemsJson, now],
     function(err) {
-      if (err) return res.status(500).json({ error: err.message });
+      if (err) return res.status(500).json({ error: 'An internal error occurred.' });
       res.json({ success: true, id: this.lastID });
     }
   );
@@ -1745,7 +1767,7 @@ app.get('/api/loot-tabs', requireAuth, (req, res) => {
      LIMIT 50`,
     [req.user.id],
     (err, rows) => {
-      if (err) return res.status(500).json({ error: err.message });
+      if (err) return res.status(500).json({ error: 'An internal error occurred.' });
       const tabs = (rows || []).map(r => {
         let items = [];
         try { items = JSON.parse(r.items_json); } catch(e) {}
@@ -1773,12 +1795,12 @@ app.get('/api/loot-tab/:id', requireAuth, (req, res) => {
   const tabId = parseInt(req.params.id);
   if (!tabId) return res.status(400).json({ error: 'Invalid tab id.' });
   db.get(`SELECT * FROM loot_tabs WHERE id = ? AND user_id = ?`, [tabId, req.user.id], (err, tab) => {
-    if (err) return res.status(500).json({ error: err.message });
+    if (err) return res.status(500).json({ error: 'An internal error occurred.' });
     if (!tab) return res.status(404).json({ error: 'Tab not found.' });
     let items = [];
     try { items = JSON.parse(tab.items_json); } catch(e) {}
     db.all(`SELECT * FROM loot_tab_sales WHERE loot_tab_id = ? ORDER BY sold_at DESC`, [tabId], (err2, sales) => {
-      if (err2) return res.status(500).json({ error: err2.message });
+      if (err2) return res.status(500).json({ error: 'An internal error occurred.' });
       const revenue = (sales || []).reduce((s, r) => s + r.sale_price * r.quantity, 0);
       res.json({
         id: tab.id,
@@ -1805,7 +1827,7 @@ app.post('/api/loot-tab/:id/sale', requireAuth, (req, res) => {
   const price = parseInt(salePrice);
   if (isNaN(price) || price <= 0) return res.status(400).json({ error: 'salePrice must be positive.' });
   db.get(`SELECT id FROM loot_tabs WHERE id = ? AND user_id = ?`, [tabId, req.user.id], (err, row) => {
-    if (err) return res.status(500).json({ error: err.message });
+    if (err) return res.status(500).json({ error: 'An internal error occurred.' });
     if (!row) return res.status(404).json({ error: 'Tab not found.' });
     const qty = Math.max(1, parseInt(quantity) || 1);
     const now = Date.now();
@@ -1813,7 +1835,7 @@ app.post('/api/loot-tab/:id/sale', requireAuth, (req, res) => {
       `INSERT INTO loot_tab_sales (loot_tab_id, item_id, quality, quantity, sale_price, sold_at) VALUES (?, ?, ?, ?, ?, ?)`,
       [tabId, itemId.slice(0, 100), parseInt(quality) || 1, qty, price, now],
       function(err2) {
-        if (err2) return res.status(500).json({ error: err2.message });
+        if (err2) return res.status(500).json({ error: 'An internal error occurred.' });
         res.json({ success: true, id: this.lastID });
       }
     );
@@ -1833,11 +1855,11 @@ app.put('/api/loot-tab/:id/sale/:saleId', requireAuth, (req, res) => {
   // Verify ownership via loot_tabs join
   db.get(`SELECT s.id FROM loot_tab_sales s JOIN loot_tabs t ON s.loot_tab_id = t.id
           WHERE s.id = ? AND t.id = ? AND t.user_id = ?`, [saleId, tabId, req.user.id], (err, row) => {
-    if (err) return res.status(500).json({ error: err.message });
+    if (err) return res.status(500).json({ error: 'An internal error occurred.' });
     if (!row) return res.status(404).json({ error: 'Sale not found.' });
     db.run(`UPDATE loot_tab_sales SET sale_price = ?, quantity = ? WHERE id = ?`,
       [price, qty, saleId], function(err2) {
-        if (err2) return res.status(500).json({ error: err2.message });
+        if (err2) return res.status(500).json({ error: 'An internal error occurred.' });
         res.json({ success: true });
       });
   });
@@ -1850,10 +1872,10 @@ app.delete('/api/loot-tab/:id/sale/:saleId', requireAuth, (req, res) => {
   if (!tabId || !saleId) return res.status(400).json({ error: 'Invalid ids.' });
   db.get(`SELECT s.id FROM loot_tab_sales s JOIN loot_tabs t ON s.loot_tab_id = t.id
           WHERE s.id = ? AND t.id = ? AND t.user_id = ?`, [saleId, tabId, req.user.id], (err, row) => {
-    if (err) return res.status(500).json({ error: err.message });
+    if (err) return res.status(500).json({ error: 'An internal error occurred.' });
     if (!row) return res.status(404).json({ error: 'Sale not found.' });
     db.run(`DELETE FROM loot_tab_sales WHERE id = ?`, [saleId], function(err2) {
-      if (err2) return res.status(500).json({ error: err2.message });
+      if (err2) return res.status(500).json({ error: 'An internal error occurred.' });
       res.json({ success: true, deleted: this.changes });
     });
   });
@@ -1868,7 +1890,7 @@ app.patch('/api/loot-tab/:id/status', requireAuth, (req, res) => {
     return res.status(400).json({ error: 'status must be open, partial, or sold.' });
   }
   db.run(`UPDATE loot_tabs SET status = ? WHERE id = ? AND user_id = ?`, [status, tabId, req.user.id], function(err) {
-    if (err) return res.status(500).json({ error: err.message });
+    if (err) return res.status(500).json({ error: 'An internal error occurred.' });
     if (this.changes === 0) return res.status(404).json({ error: 'Tab not found.' });
     res.json({ success: true });
   });
@@ -1879,9 +1901,9 @@ app.delete('/api/loot-tab/:id', requireAuth, (req, res) => {
   if (!tabId) return res.status(400).json({ error: 'Invalid tab id.' });
   // Delete sales first (foreign key), then the tab itself
   db.run(`DELETE FROM loot_tab_sales WHERE loot_tab_id = ? AND loot_tab_id IN (SELECT id FROM loot_tabs WHERE user_id = ?)`, [tabId, req.user.id], (err) => {
-    if (err) return res.status(500).json({ error: err.message });
+    if (err) return res.status(500).json({ error: 'An internal error occurred.' });
     db.run(`DELETE FROM loot_tabs WHERE id = ? AND user_id = ?`, [tabId, req.user.id], function(err2) {
-      if (err2) return res.status(500).json({ error: err2.message });
+      if (err2) return res.status(500).json({ error: 'An internal error occurred.' });
       if (this.changes === 0) return res.status(404).json({ error: 'Tab not found.' });
       res.json({ success: true });
     });
@@ -1890,7 +1912,7 @@ app.delete('/api/loot-tab/:id', requireAuth, (req, res) => {
 
 // === BATCH PRICE LOOKUP (for loot logger estimates) ===
 // Uses price_averages (aggregated scan data) — no outliers, no stale NATS orders.
-app.post('/api/batch-prices', (req, res) => {
+app.post('/api/batch-prices', batchPricesLimiter, (req, res) => {
   // Accept either:
   //   { itemIds: ['T4_BAG', ...] }                  (legacy — assumes quality 1)
   //   { items: [{ itemId: 'T4_BAG', quality: 3 }] } (preferred — per-item quality)
@@ -1924,7 +1946,7 @@ app.post('/api/batch-prices', (req, res) => {
      GROUP BY item_id, quality, city`,
     [...uniqueIds, cutoff],
     (err, rows) => {
-      if (err) return res.status(500).json({ error: err.message });
+      if (err) return res.status(500).json({ error: 'An internal error occurred.' });
 
       // Index: item_id + '_' + quality → { price, city, source }
       const result = {};
@@ -1980,7 +2002,7 @@ app.post('/api/batch-prices', (req, res) => {
 // === SALE NOTIFICATIONS API ===
 app.get('/api/sale-notifications', requireAuth, (req, res) => {
   readDb.all(`SELECT * FROM sale_notifications WHERE user_id = ? ORDER BY sold_at DESC LIMIT 50`, [req.user.id], (err, rows) => {
-    if (err) return res.status(500).json({ error: err.message });
+    if (err) return res.status(500).json({ error: 'An internal error occurred.' });
     res.json(rows || []);
   });
 });
@@ -2006,7 +2028,7 @@ app.get('/api/loot-sessions', requireAuth, (req, res) => {
     ORDER BY started_at DESC
     LIMIT 50`,
     [req.user.id], (err, rows) => {
-      if (err) return res.status(500).json({ error: err.message });
+      if (err) return res.status(500).json({ error: 'An internal error occurred.' });
       res.json({ sessions: rows || [] });
     });
 });
@@ -2031,7 +2053,7 @@ app.post('/api/accountability/share', requireAuth, (req, res) => {
         : 'SELECT session_id FROM loot_events WHERE user_id = ? ORDER BY timestamp DESC LIMIT 1';
     const verifyParams = resolvedSessionId ? [resolvedSessionId, req.user.id] : [req.user.id];
     db.get(verifyQuery, verifyParams, (err, row) => {
-        if (err) return res.status(500).json({ error: err.message });
+        if (err) return res.status(500).json({ error: 'An internal error occurred.' });
         if (!row) return res.status(404).json({ error: 'Session not found' });
         const finalSessionId = resolvedSessionId || row.session_id;
         // Serialize captures (trim to essentials + cap item count per capture for size safety)
@@ -2051,7 +2073,7 @@ app.post('/api/accountability/share', requireAuth, (req, res) => {
         db.run(`INSERT INTO accountability_shares (token, user_id, session_id, captures_json, session_name, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
             [token, req.user.id, finalSessionId, capturesJson, (sessionName || '').slice(0, 120), Date.now()],
             function(iErr) {
-                if (iErr) return res.status(500).json({ error: iErr.message });
+                if (iErr) return res.status(500).json({ error: 'An internal error occurred.' });
                 res.json({ token, url: `/?accShare=${token}` });
             });
     });
@@ -2062,11 +2084,13 @@ app.get('/api/accountability/public/:token', (req, res) => {
     const token = req.params.token;
     if (!token || !/^[A-Za-z0-9_-]{20,40}$/.test(token)) return res.status(400).json({ error: 'Invalid token' });
     readDb.get(`SELECT user_id, session_id, captures_json, session_name, created_at FROM accountability_shares WHERE token = ?`, [token], (err, row) => {
-        if (err) return res.status(500).json({ error: err.message });
+        if (err) return res.status(500).json({ error: 'An internal error occurred.' });
         if (!row) return res.status(404).json({ error: 'Share not found or revoked' });
+        // SEC-M3: expire shares after 30 days
+        if (Date.now() - row.created_at > 30 * 24 * 60 * 60 * 1000) return res.status(410).json({ error: 'Share link has expired.' });
         readDb.all(`SELECT timestamp, looted_by_name, looted_by_guild, looted_by_alliance, looted_from_name, looted_from_guild, looted_from_alliance, item_id, numeric_id, quantity, weight, equipment_json FROM loot_events WHERE session_id = ? AND user_id = ? ORDER BY timestamp ASC`,
             [row.session_id, row.user_id], (err2, events) => {
-                if (err2) return res.status(500).json({ error: err2.message });
+                if (err2) return res.status(500).json({ error: 'An internal error occurred.' });
                 // Bump view counter (fire-and-forget)
                 db.run(`UPDATE accountability_shares SET view_count = view_count + 1 WHERE token = ?`, [token]);
                 let captures = [];
@@ -2083,7 +2107,7 @@ app.get('/api/accountability/public/:token', (req, res) => {
 
 app.delete('/api/accountability/share/:token', requireAuth, (req, res) => {
     db.run(`DELETE FROM accountability_shares WHERE token = ? AND user_id = ?`, [req.params.token, req.user.id], function(err) {
-        if (err) return res.status(500).json({ error: err.message });
+        if (err) return res.status(500).json({ error: 'An internal error occurred.' });
         res.json({ success: true, revoked: this.changes });
     });
 });
@@ -2093,12 +2117,12 @@ app.post('/api/loot-session/:sessionId/share', requireAuth, (req, res) => {
   // Verify the session belongs to this user before minting a token
   db.get(`SELECT 1 FROM loot_events WHERE session_id = ? AND user_id = ? LIMIT 1`,
     [sessionId, req.user.id], (err, row) => {
-      if (err) return res.status(500).json({ error: err.message });
+      if (err) return res.status(500).json({ error: 'An internal error occurred.' });
       if (!row) return res.status(404).json({ error: 'Session not found.' });
       // Check if a token already exists — return it
       db.get(`SELECT public_token FROM loot_session_shares WHERE session_id = ?`,
         [sessionId], (err2, existing) => {
-          if (err2) return res.status(500).json({ error: err2.message });
+          if (err2) return res.status(500).json({ error: 'An internal error occurred.' });
           if (existing && existing.public_token) {
             return res.json({ token: existing.public_token, created: false });
           }
@@ -2106,7 +2130,7 @@ app.post('/api/loot-session/:sessionId/share', requireAuth, (req, res) => {
           const token = require('crypto').randomBytes(24).toString('base64url');
           db.run(`INSERT INTO loot_session_shares (session_id, user_id, public_token, created_at) VALUES (?, ?, ?, ?)`,
             [sessionId, req.user.id, token, Date.now()], function(err3) {
-              if (err3) return res.status(500).json({ error: err3.message });
+              if (err3) return res.status(500).json({ error: 'An internal error occurred.' });
               res.json({ token, created: true });
             });
         });
@@ -2118,7 +2142,7 @@ app.post('/api/loot-session/:sessionId/unshare', requireAuth, (req, res) => {
   const sessionId = req.params.sessionId;
   db.run(`DELETE FROM loot_session_shares WHERE session_id = ? AND user_id = ?`,
     [sessionId, req.user.id], function(err) {
-      if (err) return res.status(500).json({ error: err.message });
+      if (err) return res.status(500).json({ error: 'An internal error occurred.' });
       res.json({ success: true, revoked: this.changes });
     });
 });
@@ -2126,7 +2150,7 @@ app.post('/api/loot-session/:sessionId/unshare', requireAuth, (req, res) => {
 // C4: Crafter aggregation — top crafters across all tracked tabs.
 app.get('/api/crafter-stats', requireAuth, (req, res) => {
   readDb.all(`SELECT id, items_json FROM loot_tabs WHERE user_id = ?`, [req.user.id], (err, rows) => {
-    if (err) return res.status(500).json({ error: err.message });
+    if (err) return res.status(500).json({ error: 'An internal error occurred.' });
     const crafterMap = {};
     let totalItems = 0;
     for (const row of (rows || [])) {
@@ -2211,15 +2235,15 @@ app.get('/api/guild-leaderboard', requireAuth, (req, res) => {
   const p1 = [uid, ...timeParams];
 
   readDb.all(lootersSql, p1, (e1, looters) => {
-    if (e1) return res.status(500).json({ error: e1.message });
+    if (e1) return res.status(500).json({ error: 'An internal error occurred.' });
     readDb.all(killersSql, p1, (e2, killers) => {
-      if (e2) return res.status(500).json({ error: e2.message });
+      if (e2) return res.status(500).json({ error: 'An internal error occurred.' });
       readDb.all(deathsSql, p1, (e3, deaths) => {
-        if (e3) return res.status(500).json({ error: e3.message });
+        if (e3) return res.status(500).json({ error: 'An internal error occurred.' });
         readDb.all(activeSql, p1, (e4, active) => {
-          if (e4) return res.status(500).json({ error: e4.message });
+          if (e4) return res.status(500).json({ error: 'An internal error occurred.' });
           readDb.get(totalsSql, p1, (e5, totals) => {
-            if (e5) return res.status(500).json({ error: e5.message });
+            if (e5) return res.status(500).json({ error: 'An internal error occurred.' });
             res.json({
               period,
               totals: totals || { total_sessions: 0, total_players: 0, total_items: 0, total_deaths: 0 },
@@ -2264,9 +2288,9 @@ app.post('/api/player-trends-bulk', requireAuth, (req, res) => {
     WHERE user_id = ? AND item_id = '__DEATH__' AND looted_from_name IN (${placeholders})
     GROUP BY looted_from_name`;
   readDb.all(sql, [req.user.id, ...cleaned], (err, rows) => {
-    if (err) return res.status(500).json({ error: err.message });
+    if (err) return res.status(500).json({ error: 'An internal error occurred.' });
     readDb.all(deathsSql, [req.user.id, ...cleaned], (err2, deathRows) => {
-      if (err2) return res.status(500).json({ error: err2.message });
+      if (err2) return res.status(500).json({ error: 'An internal error occurred.' });
       const trends = {};
       for (const r of rows || []) {
         trends[r.name] = {
@@ -2300,7 +2324,7 @@ app.post('/api/loot-sessions/merge', requireAuth, (req, res) => {
   // Verify all sessions belong to this user, then copy events to new session
   db.all(`SELECT DISTINCT session_id FROM loot_events WHERE user_id = ? AND session_id IN (${placeholders})`,
     [uid, ...sessionIds], (err, found) => {
-      if (err) return res.status(500).json({ error: err.message });
+      if (err) return res.status(500).json({ error: 'An internal error occurred.' });
       const foundIds = new Set((found || []).map(r => r.session_id));
       const missing = sessionIds.filter(id => !foundIds.has(id));
       if (missing.length > 0) return res.status(404).json({ error: 'Sessions not found: ' + missing.join(', ') });
@@ -2313,7 +2337,7 @@ app.post('/api/loot-sessions/merge', requireAuth, (req, res) => {
               FROM loot_events WHERE user_id = ? AND session_id IN (${placeholders})
               ORDER BY timestamp ASC`,
         [uid, newId, uid, ...sessionIds], function(err2) {
-          if (err2) return res.status(500).json({ error: err2.message });
+          if (err2) return res.status(500).json({ error: 'An internal error occurred.' });
           res.json({ success: true, newSessionId: newId, eventsCopied: this.changes });
         });
     });
@@ -2329,13 +2353,15 @@ app.get('/api/public/loot-session/:token', (req, res) => {
   }
   db.get(`SELECT session_id, created_at FROM loot_session_shares WHERE public_token = ?`,
     [token], (err, share) => {
-      if (err) return res.status(500).json({ error: err.message });
+      if (err) return res.status(500).json({ error: 'An internal error occurred.' });
       if (!share) return res.status(404).json({ error: 'Session not found or no longer shared.' });
+      // SEC-M3: expire shares after 30 days
+      if (Date.now() - share.created_at > 30 * 24 * 60 * 60 * 1000) return res.status(410).json({ error: 'Share link has expired.' });
       db.all(`SELECT timestamp, looted_by_name, looted_by_guild, looted_by_alliance,
         looted_from_name, looted_from_guild, looted_from_alliance, item_id, quantity, weight
         FROM loot_events WHERE session_id = ? ORDER BY timestamp ASC LIMIT 5000`,
         [share.session_id], (err2, rows) => {
-          if (err2) return res.status(500).json({ error: err2.message });
+          if (err2) return res.status(500).json({ error: 'An internal error occurred.' });
           res.json({ sessionId: share.session_id, sharedAt: share.created_at, events: rows || [] });
         });
     });
@@ -2346,7 +2372,7 @@ app.get('/api/loot-session/:sessionId', requireAuth, (req, res) => {
   const sessionId = req.params.sessionId;
   db.all(`SELECT * FROM loot_events WHERE session_id = ? AND user_id = ? ORDER BY timestamp ASC`,
     [sessionId, req.user.id], (err, rows) => {
-      if (err) return res.status(500).json({ error: err.message });
+      if (err) return res.status(500).json({ error: 'An internal error occurred.' });
       res.json({ events: rows || [] });
     });
 });
@@ -2357,6 +2383,8 @@ app.post('/api/loot-upload', requireAuth, (req, res) => {
   if (!lines || !Array.isArray(lines) || lines.length === 0) {
     return res.status(400).json({ error: 'No loot data provided.' });
   }
+  // SEC-C5: cap upload payload to prevent DoS via oversized batch
+  if (lines.length > 100) return res.status(400).json({ error: 'Too many lines. Maximum 100 per upload.' });
   // Append-to-existing mode: caller may pass an existing sessionId they own.
   // Useful for backfilling death rows into a previously-uploaded session that was
   // created before the Go client started writing __DEATH__ lines to its .txt log.
@@ -2373,7 +2401,7 @@ app.post('/api/loot-upload', requireAuth, (req, res) => {
       const [ts, byAlliance, byGuild, byName, itemId, itemName, qty, fromAlliance, fromGuild, fromName] = parts;
       const timestamp = new Date(ts).getTime() || Date.now();
       // Sanitize user-supplied strings: strip control chars, limit length
-      const san = s => (s || '').replace(/[\x00-\x1f\x7f]/g, '').slice(0, 64);
+      const san = s => (s || '').replace(/[\x00-\x1f\x7f]/g, '').replace(/[<>"'&]/g, '').slice(0, 64); // SEC-H4: strip HTML chars
       stmt.run(req.user.id, sessionId, timestamp, san(byName), san(byGuild), san(byAlliance), san(fromName), san(fromGuild), san(fromAlliance), san(itemId).slice(0, 100), 0, parseInt(qty) || 1);
       count++;
     }
@@ -2384,7 +2412,7 @@ app.post('/api/loot-upload', requireAuth, (req, res) => {
   if (requestedSessionId && typeof requestedSessionId === 'string' && /^[a-zA-Z0-9_-]{8,80}$/.test(requestedSessionId)) {
     // Verify the session belongs to this user before appending.
     readDb.get('SELECT 1 FROM loot_events WHERE session_id = ? AND user_id = ? LIMIT 1', [requestedSessionId, req.user.id], (err, row) => {
-      if (err) return res.status(500).json({ error: err.message });
+      if (err) return res.status(500).json({ error: 'An internal error occurred.' });
       if (!row) return res.status(404).json({ error: 'Session not found or not owned by user' });
       doInsert(requestedSessionId);
     });
@@ -2412,7 +2440,7 @@ app.post('/api/loot-session/consolidate', requireAuth, (req, res) => {
   const placeholders = sessionIds.map(() => '?').join(',');
   db.all(`SELECT DISTINCT session_id FROM loot_events WHERE user_id = ? AND session_id IN (${placeholders})`,
     [req.user.id, ...sessionIds], (err, rows) => {
-      if (err) return res.status(500).json({ error: err.message });
+      if (err) return res.status(500).json({ error: 'An internal error occurred.' });
       const ownedIds = (rows || []).map(r => r.session_id);
       if (ownedIds.length === 0) {
         return res.status(404).json({ error: 'No matching sessions found for this user' });
@@ -2421,7 +2449,7 @@ app.post('/api/loot-session/consolidate', requireAuth, (req, res) => {
       // session's data intact and just absorbs the reconnect fragments into it.
       db.get(`SELECT session_id, MIN(timestamp) as min_ts FROM loot_events WHERE user_id = ? AND session_id IN (${ownedIds.map(() => '?').join(',')}) GROUP BY session_id ORDER BY min_ts ASC LIMIT 1`,
         [req.user.id, ...ownedIds], (err2, canon) => {
-          if (err2) return res.status(500).json({ error: err2.message });
+          if (err2) return res.status(500).json({ error: 'An internal error occurred.' });
           if (!canon) return res.status(404).json({ error: 'No events found' });
           const canonicalId = canon.session_id;
           const others = ownedIds.filter(id => id !== canonicalId);
@@ -2433,7 +2461,7 @@ app.post('/api/loot-session/consolidate', requireAuth, (req, res) => {
           const otherPlaceholders = others.map(() => '?').join(',');
           db.run(`UPDATE loot_events SET session_id = ? WHERE user_id = ? AND session_id IN (${otherPlaceholders})`,
             [canonicalId, req.user.id, ...others], function(err3) {
-              if (err3) return res.status(500).json({ error: err3.message });
+              if (err3) return res.status(500).json({ error: 'An internal error occurred.' });
               console.log(`[Consolidate] User ${req.user.id}: merged ${others.length} session fragments (${this.changes} rows) into ${canonicalId}`);
               res.json({
                 success: true,
@@ -2451,7 +2479,7 @@ app.post('/api/loot-session/consolidate', requireAuth, (req, res) => {
 app.delete('/api/loot-session/:sessionId', requireAuth, (req, res) => {
   const sessionId = req.params.sessionId;
   db.run(`DELETE FROM loot_events WHERE session_id = ? AND user_id = ?`, [sessionId, req.user.id], function(err) {
-    if (err) return res.status(500).json({ error: err.message });
+    if (err) return res.status(500).json({ error: 'An internal error occurred.' });
     res.json({ success: true, deleted: this.changes });
   });
 });
@@ -2495,7 +2523,7 @@ function requireAuth(req, res, next) {
 app.get('/api/alerts', requireAuth, (req, res) => {
   const guildId = 'web-' + req.user.id;
   db.all(`SELECT guild_id, channel_id, min_profit, cooldown_ms FROM alerts WHERE guild_id = ?`, [guildId], (err, rows) => {
-    if (err) return res.status(500).json({ error: err.message });
+    if (err) return res.status(500).json({ error: 'An internal error occurred.' });
     res.json(rows || []);
   });
 });
@@ -2508,7 +2536,7 @@ app.post('/api/alerts', requireAuth, (req, res) => {
   const guildId = 'web-' + req.user.id;
   db.run(`INSERT OR REPLACE INTO alerts (guild_id, channel_id, min_profit) VALUES (?, ?, ?)`,
     [guildId, channel_id, profit], (err) => {
-    if (err) return res.status(500).json({ error: err.message });
+    if (err) return res.status(500).json({ error: 'An internal error occurred.' });
     res.json({ success: true, channel_id, min_profit: profit });
   });
 });
@@ -2519,7 +2547,7 @@ app.delete('/api/alerts', requireAuth, (req, res) => {
   const guildId = 'web-' + req.user.id;
   // Scoped delete: only removes the alert if it belongs to the requesting user.
   db.run(`DELETE FROM alerts WHERE channel_id = ? AND guild_id = ?`, [channel_id, guildId], (err) => {
-    if (err) return res.status(500).json({ error: err.message });
+    if (err) return res.status(500).json({ error: 'An internal error occurred.' });
     res.json({ success: true });
   });
 });
@@ -2588,7 +2616,7 @@ app.post('/api/contributions', requireAuth, contribLimiter, (req, res) => {
 
   db.run(`INSERT INTO contributions (user_id, source, item_count, created_at) VALUES (?, ?, ?, ?)`,
     [userId, src, count, now], (err) => {
-    if (err) return res.status(500).json({ error: err.message });
+    if (err) return res.status(500).json({ error: 'An internal error occurred.' });
 
     // Return updated stats
     const thirtyDaysAgo = now - 30 * 24 * 60 * 60 * 1000;
@@ -2676,7 +2704,7 @@ app.post('/api/activity', requireAuth, activityLimiter, (req, res) => {
     `SELECT COALESCE(SUM(count),0) AS total FROM user_activity WHERE user_id = ? AND activity_type = ? AND recorded_at > ?`,
     [uid, type, dayStart],
     (qErr, row) => {
-      if (qErr) return res.status(500).json({ error: qErr.message });
+      if (qErr) return res.status(500).json({ error: 'An internal error occurred.' });
       const already = (row && row.total) || 0;
       if (already >= dailyCap) {
         // Soft-succeed so the frontend doesn't surface an error on every further attempt, but record nothing.
@@ -2686,7 +2714,7 @@ app.post('/api/activity', requireAuth, activityLimiter, (req, res) => {
       const effective = Math.min(cnt, remaining);
       db.run(`INSERT INTO user_activity (user_id, activity_type, count, recorded_at) VALUES (?, ?, ?, ?)`,
         [uid, type, effective, Date.now()], (err) => {
-          if (err) return res.status(500).json({ error: err.message });
+          if (err) return res.status(500).json({ error: 'An internal error occurred.' });
           res.json({ success: true, capped: effective < cnt });
         });
     });
@@ -2698,7 +2726,7 @@ app.get('/api/activity-stats', requireAuth, (req, res) => {
   // Profile/Community user-facing aggregate — move to readDb so it doesn't queue behind NATS writes on `db`
   readDb.all(`SELECT activity_type, SUM(count) as total FROM user_activity WHERE user_id = ? AND recorded_at > ? GROUP BY activity_type`,
     [uid, thirtyDaysAgo], (err, rows) => {
-      if (err) return res.status(500).json({ error: err.message });
+      if (err) return res.status(500).json({ error: 'An internal error occurred.' });
       const breakdown = {};
       let combinedScore = 0;
       for (const r of (rows || [])) {
@@ -2797,7 +2825,7 @@ app.get('/api/leaderboard', (req, res) => {
       console.error('[Leaderboard] query failed:', err.message);
       // Fallback: legacy scans-only ranking so the tab never shows empty. readDb for the same reason.
       readDb.all(`SELECT user_id, username, avatar, scans_30d, tier, 0 AS score FROM user_stats WHERE scans_30d > 0 ORDER BY scans_30d DESC LIMIT 20`, [], (err2, fallback) => {
-        if (err2) return res.status(500).json({ error: err2.message });
+        if (err2) return res.status(500).json({ error: 'An internal error occurred.' });
         leaderboardCache = fallback || [];
         leaderboardCacheTime = now;
         res.json(leaderboardCache);
@@ -2836,7 +2864,7 @@ app.get('/api/spread-stats', (req, res) => {
     `SELECT * FROM spread_stats WHERE item_id = ? AND quality = ? AND window_days = 7 ORDER BY confidence_score DESC`,
     [item_id, q],
     (err, rows) => {
-      if (err) return res.status(500).json({ error: err.message });
+      if (err) return res.status(500).json({ error: 'An internal error occurred.' });
       res.json(rows || []);
     }
   );
@@ -2849,7 +2877,7 @@ app.get('/api/spread-stats/top', (req, res) => {
     `SELECT * FROM spread_stats WHERE window_days = 7 AND confidence_score >= ? AND avg_spread > 0 ORDER BY confidence_score DESC LIMIT ?`,
     [minConfidence, limit],
     (err, rows) => {
-      if (err) return res.status(500).json({ error: err.message });
+      if (err) return res.status(500).json({ error: 'An internal error occurred.' });
       res.json(rows || []);
     }
   );
@@ -2897,7 +2925,7 @@ app.get('/api/transport-routes', (req, res) => {
   params.push(limit);
 
   db.all(sql, params, (err, rows) => {
-    if (err) return res.status(500).json({ error: err.message });
+    if (err) return res.status(500).json({ error: 'An internal error occurred.' });
     res.json(rows || []);
   });
 });
@@ -3246,6 +3274,8 @@ app.get('/api/analytics/:itemId', (req, res) => {
 // === ADMIN: DB STATS (JWT-protected) ===
 // Returns DB size, row counts per table, oldest/newest timestamps for monitoring.
 app.get('/api/admin/db-stats', requireAuth, (req, res) => {
+  // SEC-C4: owner-only endpoint
+  if (req.user.id !== '325634482524782592') return res.status(403).json({ error: 'Admin only.' });
   const tables = [
     'price_averages', 'price_hourly', 'price_analytics',
     'spread_stats', 'price_snapshots', 'users', 'contributions', 'loot_tabs'
@@ -5073,9 +5103,13 @@ SMTP_USER={smtp_user}
 SMTP_PASS={smtp_pass}
 SMTP_FROM={smtp_from}
 """
-    b64_env = base64.b64encode(env_content.encode()).decode()
-    run_wait(f"echo '{b64_env}' | base64 -d > /opt/albion-saas/.env")
+    # PY-H1: upload .env via SFTP — avoids exposing secrets in /proc/<pid>/cmdline
+    env_sftp = ssh.open_sftp()
+    with env_sftp.file('/opt/albion-saas/.env', 'w') as ef:
+        ef.write(env_content)
+    env_sftp.close()
     run_wait("chmod 600 /opt/albion-saas/.env")
+    print(f"Uploaded .env ({len(env_content)} bytes via SFTP)")
 
     svc = """
 [Unit]

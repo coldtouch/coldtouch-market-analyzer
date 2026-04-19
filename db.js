@@ -20,7 +20,7 @@ const MarketDB = (() => {
             const req = indexedDB.open(DB_NAME, DB_VERSION);
             req.onupgradeneeded = (e) => {
                 const db = e.target.result;
-                if (e.oldVersion < 4 && db.objectStoreNames.contains(STORE_NAME)) {
+                if (e.oldVersion < DB_VERSION && db.objectStoreNames.contains(STORE_NAME)) { // FE-H5: use DB_VERSION constant
                     db.deleteObjectStore(STORE_NAME);
                 }
                 if (!db.objectStoreNames.contains(STORE_NAME)) {
