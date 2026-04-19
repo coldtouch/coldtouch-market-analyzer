@@ -2,6 +2,18 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-04-20 — Modal scroll fix + comprehensive Escape handler
+
+**Bug fix — Guild Leaderboard (and all tall modals) scroll:**
+- **Root cause:** `.modal` CSS had `align-items: center` with no `overflow-y`. When modal content exceeded viewport height (e.g. guild leaderboard with 4 tables), content clipped above and below with no way to scroll — the backdrop blocked background scrolling too.
+- **Fix:** `.modal` now uses `align-items: flex-start`, `overflow-y: auto`, `padding: 2rem 1rem`, `box-sizing: border-box`. The modal wrapper itself is the scroll surface; no change needed to `.modal-content`.
+
+**Escape key — expanded from 3 to 11 modals:**
+- Previous handler only covered `copy-preview-modal`, `feedback-modal`, and `chart-modal`.
+- New `modalMap` array covers all modals: `copy-preview-modal`, `guild-leaderboard-modal`, `session-compare-modal`, `session-merge-modal`, `share-session-modal`, `trip-summary-modal`, `loot-split-modal`, `whitelist-modal`, `feedback-modal`, `chart-modal`, and the dynamic `ll-shortcut-help` modal (created with `createElement`, closed with `.remove()`).
+
+---
+
 ### 2026-04-20 — Security hardening + frontend robustness (FULL_AUDIT_2026-04-19 remediation)
 
 **Backend (deploy_saas.py) — 10 fixes:**

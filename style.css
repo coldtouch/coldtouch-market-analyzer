@@ -3033,7 +3033,10 @@ select:focus {
     background: rgba(0, 0, 0, 0.85);
     display: flex;
     justify-content: center;
-    align-items: center;
+    align-items: flex-start;   /* was: center — flex-start lets tall content scroll */
+    overflow-y: auto;           /* modal container is the scroll surface */
+    padding: 2rem 1rem;         /* breathing room top/bottom */
+    box-sizing: border-box;
     z-index: var(--z-modal);
     backdrop-filter: blur(6px);
 }
@@ -3051,6 +3054,8 @@ select:focus {
     max-width: 800px;
     position: relative;
     box-shadow: var(--shadow);
+    /* modal-content itself is NOT the scroll container — the .modal wrapper scrolls,
+       keeping the close-btn always reachable at the top of the content box */
 }
 
 .close-btn {

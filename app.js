@@ -14974,12 +14974,24 @@ document.getElementById('feedback-modal').addEventListener('click', function(e) 
 
 document.addEventListener('keydown', function(e) {
     if (e.key !== 'Escape') return;
-    const feedback = document.getElementById('feedback-modal');
-    const whitelist = document.getElementById('whitelist-modal');
-    const copyPreview = document.getElementById('copy-preview-modal');
-    if (copyPreview && !copyPreview.classList.contains('hidden')) { closeCopyPreviewModal(); return; }
-    if (feedback && !feedback.classList.contains('hidden')) { closeFeedbackModal(); return; }
-    if (whitelist && !whitelist.classList.contains('hidden')) { closeWhitelistModal(); return; }
+    // Close whichever modal is currently open (priority order: most-recently-opened first)
+    const modalMap = [
+        ['copy-preview-modal',    () => closeCopyPreviewModal()],
+        ['guild-leaderboard-modal', () => closeGuildLeaderboard()],
+        ['session-compare-modal', () => closeSessionCompare()],
+        ['session-merge-modal',   () => closeSessionMerge()],
+        ['share-session-modal',   () => closeShareSessionModal()],
+        ['trip-summary-modal',    () => closeTripSummary()],
+        ['loot-split-modal',      () => closeLootSplit()],
+        ['whitelist-modal',       () => closeWhitelistModal()],
+        ['feedback-modal',        () => closeFeedbackModal()],
+        ['chart-modal',           () => { document.getElementById('chart-modal')?.classList.add('hidden'); }],
+        ['ll-shortcut-help',      () => { document.getElementById('ll-shortcut-help')?.remove(); }],
+    ];
+    for (const [id, closeFn] of modalMap) {
+        const el = document.getElementById(id);
+        if (el && !el.classList.contains('hidden')) { closeFn(); return; }
+    }
 });
 
 async function submitFeedback() {

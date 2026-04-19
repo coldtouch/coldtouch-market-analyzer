@@ -2266,6 +2266,14 @@
                     <div class="changelog-list">
                         <div class="changelog-entry">
                             <div class="changelog-date">April 20, 2026</div>
+                            <div class="changelog-title">🐛 Modal scroll fix + Escape key covers all modals</div>
+                            <ul>
+                                <li><strong>Guild Leaderboard scroll bug fixed</strong> &mdash; tall modals now scroll correctly. Root cause: <code>align-items: center</code> with no <code>overflow-y</code> clipped content above &amp; below viewport with no escape. Fixed with <code>align-items: flex-start; overflow-y: auto</code> on <code>.modal</code>.</li>
+                                <li><strong>Escape key now closes all 11 modals</strong> &mdash; previously only 3 were covered. New handler covers: Copy Preview, Guild Leaderboard, Session Compare, Session Merge, Share Session, Trip Summary, Loot Split, Whitelist, Feedback, Chart, and the dynamic Shortcuts Help card.</li>
+                            </ul>
+                        </div>
+                        <div class="changelog-entry">
+                            <div class="changelog-date">April 20, 2026</div>
                             <div class="changelog-title">🔒 Security hardening &amp; frontend robustness (full audit remediation)</div>
                             <ul>
                                 <li><strong>20 audit findings fixed</strong> across backend security, Python deploy script, and frontend JS.</li>
