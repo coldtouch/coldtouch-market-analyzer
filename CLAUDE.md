@@ -118,7 +118,16 @@
 
 ## Recent Session History
 
-### April 10 — SEO + Discord Login Fix (Latest)
+### April 20 — Security Hardening (Full Audit Remediation) — Latest
+- **20 audit findings fixed** from FULL_AUDIT_2026-04-19.md across backend, frontend, and deploy script.
+- **Backend:** trust proxy, admin guard on db-stats, upload cap, batch-prices rate limiter, news link URL validation, HTML-strip in san(), generic DB errors, 30-day share token expiry, SFTP for .env upload.
+- **PY-H2:** Fixed broken `try:` syntax error left from previous session; SSH cleanup via `sys.excepthook`.
+- **Frontend:** Two `e.message` XSS paths closed, foodBuff escaped, 30s fetch timeout, WS catch narrowed, localStorage try/catch, `_consumedFlips` pruned, `spreadStatsCache` size-capped, WS URL from `VPS_BASE`, IDB upgrade uses `DB_VERSION`.
+- **SW:** v44→v45, cache-first→stale-while-revalidate, `updateViaCache:'none'`.
+- **Cleanup:** 19 scratch files deleted, `.gitignore` updated.
+- **Committed & pushed:** `claude/friendly-dubinsky` branch.
+
+### April 10 — SEO + Discord Login Fix
 - **SEO:** Full meta tag overhaul — expanded title, richer description, keywords, canonical, OG tags, Twitter Card, JSON-LD WebApplication schema, inline SVG favicon, robots.txt, sitemap.xml, og-image.png.
 - **Discord login reliability:** `readDb` (OPEN_READONLY, third SQLite connection) for `/api/me` — no queue starvation. Frontend JWT fallback — when VPS unreachable, decodes token locally and logs user in from cached claims. Timeout 5s → 8s + 1 retry.
 - **HANDOFF:** Fixed stale VPS RAM (was "1 GB", now 11 GB Contabo).
@@ -223,6 +232,12 @@
 - [x] GitHub Releases — v1.0.0, CI pipeline
 - [x] Audit fixes #1-9 — ALL COMPLETE
 - [x] Delete tracked tabs, client docs, toast system, cross-feature links
+
+### Done (April 20)
+- [x] FULL_AUDIT_2026-04-19.md remediation — 20 findings fixed (SEC/PY/FE phases 1+3+4)
+- [x] PY-H2 syntax error fixed (broken try: block)
+- [x] .env now uploaded via SFTP (PY-H1)
+- [x] 19 scratch files deleted, .gitignore updated (CLEAN-1, CLEAN-4)
 
 ### Pending
 - [ ] **Loot Logger Viewer UX** — better layout, sorting, filtering, player search, total value estimates
