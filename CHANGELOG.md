@@ -2,6 +2,48 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-04-20 — Craft Runs: full buy→refine→craft→sell pipeline tracker
+
+**New tab: "Craft Runs" (Trading group)**
+
+- **Run list**: cards showing status badge (Buying / Refining / Crafting / Hauling / Selling / Complete), mini emoji flow strip, running cost/revenue/net P&L (after 5.5% tax estimate), creation date, and transaction count.
+- **New run form**: run name, optional target item with autocomplete, hideout Power Level (0-8), and Core Bonus % (0-30).
+- **Run detail view**:
+  - Visual progress bar with emoji icons and filled connector lines for completed steps.
+  - P&L dashboard: Total Cost · Revenue · Tax Estimate (5.5%) · Net Profit (with margin %).
+  - Full transaction log table: date, type, item, qty, unit price, total (color-coded cost/revenue), city, source.
+  - Action buttons: **+ Buy**, **+ Sell**, **+ Craft** open the transaction modal; **→ [Next Status]** advances the run to the next phase.
+- **Add Transaction modal**: 6 types (Buy, Refine In, Refine Out, Craft In, Craft Out, Sell) with item name/ID, qty, unit price, and city fields.
+- **Delete run** with confirmation dialog; Escape closes the transaction modal.
+
+**Backend: 3 new SQLite tables + 10 API endpoints**
+
+| Table | Purpose |
+|-------|---------|
+| `craft_runs` | Run header: name, status, target item, hideout settings, cost/revenue totals |
+| `craft_run_transactions` | Every buy/refine/craft/sell line with type, item, qty, unit price, city, source |
+| `craft_run_scans` | Tab/chest scan records: items JSON, total paid, allocation method |
+
+API endpoints (all JWT-protected except refine/hideout helpers):
+- `POST /api/craft-runs` — create
+- `GET /api/craft-runs` — list (last 100, with txn count)
+- `GET /api/craft-runs/:id` — details with transactions and scans
+- `PATCH /api/craft-runs/:id` — update name/status/settings (marks `closed_at` when → complete)
+- `DELETE /api/craft-runs/:id` — cascades to transactions and scans
+- `POST /api/craft-runs/:id/txn` — add transaction; auto-updates `total_cost`/`total_revenue` on run
+- `POST /api/craft-runs/:id/scan` — link a chest scan and split total_paid across items by quantity proportion
+- `GET /api/craft-runs/:id/summary` — full P&L breakdown by transaction type
+- `GET /api/refine/optimal-city?material_type=ore` — returns optimal city + icon + bonus % for each material
+- `GET /api/craft/hideout-bonus?power_level=5&core_bonus=10` — returns total hideout bonus and approximate RRR
+
+**Crafting Profits tab enhancement**
+
+- Added **"Hideout (Black Zone)"** option to the Location Bonus selector.
+- When selected, reveals two sub-inputs: **PL (0-8)** and **Core % (0-30)** with a live preview (e.g. "= 27.0% bonus").
+- Effective bonus = 15% base + PL × 2% (specialist rate) + core %. Feeds directly into `calculateRRR()`.
+
+---
+
 ### 2026-04-20 — Modal scroll fix + comprehensive Escape handler
 
 **Bug fix — Guild Leaderboard (and all tall modals) scroll:**

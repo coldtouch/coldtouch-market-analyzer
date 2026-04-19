@@ -6892,3 +6892,270 @@ footer {
     .subtree-row { font-size: 0.8rem; }
 }
 
+/* ============================================================
+   CRAFT RUNS TAB
+   ============================================================ */
+
+.cr-run-list {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+    gap: 1rem;
+    margin-top: 1rem;
+}
+
+.cr-run-card {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    padding: 1rem;
+    cursor: default;
+}
+
+.cr-run-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 0.5rem;
+}
+
+.cr-run-name {
+    font-size: 1rem;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.cr-status-badge {
+    font-size: 0.72rem;
+    font-weight: 600;
+    padding: 0.2rem 0.55rem;
+    border-radius: 20px;
+    white-space: nowrap;
+    flex-shrink: 0;
+}
+
+/* Mini flow strip inside run card */
+.cr-flow-steps {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    flex-wrap: nowrap;
+    overflow: hidden;
+}
+
+.cr-flow-step {
+    font-size: 0.78rem;
+    color: var(--text-secondary);
+    white-space: nowrap;
+    padding: 0.15rem 0.35rem;
+    border-radius: 4px;
+    transition: background 0.15s, color 0.15s;
+}
+
+.cr-flow-step.done {
+    color: var(--profit-green);
+    opacity: 0.7;
+}
+
+.cr-flow-step.active {
+    background: rgba(251, 191, 36, 0.15);
+    color: #fbbf24;
+    font-weight: 600;
+}
+
+.cr-flow-arrow {
+    color: var(--text-secondary);
+    font-size: 0.75rem;
+    opacity: 0.4;
+}
+
+/* Run card stats row */
+.cr-run-stats {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 0.5rem;
+    background: rgba(0,0,0,0.2);
+    border-radius: 6px;
+    padding: 0.5rem 0.75rem;
+}
+
+.cr-stat {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.cr-stat-label {
+    font-size: 0.68rem;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+}
+
+.cr-stat-val {
+    font-size: 0.88rem;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.cr-run-actions {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding-top: 0.25rem;
+    border-top: 1px solid var(--border);
+}
+
+/* Detail view — progress bar */
+.cr-progress-bar {
+    display: flex;
+    align-items: center;
+    padding: 1rem 1.25rem;
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    margin-top: 0.75rem;
+    overflow-x: auto;
+    gap: 0;
+}
+
+.cr-progress-step {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    padding: 0 0.5rem;
+    flex-shrink: 0;
+}
+
+.cr-progress-icon {
+    font-size: 1.4rem;
+    width: 44px;
+    height: 44px;
+    border-radius: 50%;
+    background: rgba(255,255,255,0.05);
+    border: 2px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: border-color 0.2s, background 0.2s;
+}
+
+.cr-progress-step.done .cr-progress-icon {
+    border-color: var(--profit-green);
+    background: rgba(34, 197, 94, 0.1);
+}
+
+.cr-progress-step.active .cr-progress-icon {
+    border-color: #fbbf24;
+    background: rgba(251, 191, 36, 0.12);
+    box-shadow: 0 0 0 4px rgba(251, 191, 36, 0.08);
+}
+
+.cr-progress-label {
+    font-size: 0.7rem;
+    color: var(--text-secondary);
+    white-space: nowrap;
+    text-align: center;
+}
+
+.cr-progress-step.done .cr-progress-label { color: var(--profit-green); }
+.cr-progress-step.active .cr-progress-label { color: #fbbf24; font-weight: 600; }
+
+.cr-progress-line {
+    flex: 1;
+    height: 2px;
+    background: var(--border);
+    min-width: 16px;
+    flex-shrink: 0;
+    transition: background 0.2s;
+}
+
+.cr-progress-line.done { background: var(--profit-green); opacity: 0.5; }
+
+/* P&L dashboard */
+.cr-pnl-dashboard {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 0.75rem;
+    margin-top: 0.75rem;
+}
+
+.cr-pnl-card {
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 0.85rem 1rem;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.cr-pnl-label {
+    font-size: 0.72rem;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+
+.cr-pnl-val {
+    font-size: 1.05rem;
+    font-weight: 700;
+}
+
+/* Transaction table */
+.cr-txn-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.82rem;
+}
+
+.cr-txn-table th {
+    padding: 0.4rem 0.6rem;
+    text-align: left;
+    color: var(--text-secondary);
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    border-bottom: 1px solid var(--border);
+    white-space: nowrap;
+}
+
+.cr-txn-table td {
+    padding: 0.45rem 0.6rem;
+    border-bottom: 1px solid rgba(255,255,255,0.04);
+    white-space: nowrap;
+    max-width: 160px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.cr-txn-table tr:hover td { background: rgba(255,255,255,0.03); }
+
+.cr-txn-type-badge {
+    font-size: 0.72rem;
+    padding: 0.15rem 0.4rem;
+    border-radius: 4px;
+    background: rgba(255,255,255,0.07);
+    white-space: nowrap;
+}
+
+/* Hideout inputs in Crafting Profits */
+#craft-hideout-group {
+    display: none;
+    align-items: center;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+}
+
+#craft-hideout-group.visible {
+    display: flex;
+}
+
+@media (max-width: 768px) {
+    .cr-run-list { grid-template-columns: 1fr; }
+    .cr-run-stats { grid-template-columns: 1fr 1fr; }
+    .cr-pnl-dashboard { grid-template-columns: 1fr 1fr; }
+    .cr-txn-table th, .cr-txn-table td { font-size: 0.73rem; padding: 0.35rem 0.4rem; }
+    .cr-progress-label { font-size: 0.62rem; }
+}
+

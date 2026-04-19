@@ -734,6 +734,7 @@ function initTabs() {
             if (currentTab === 'alerts') loadAlerts();
             if (currentTab === 'community') { if (typeof loadLeaderboard === 'function') loadLeaderboard(); }
             if (currentTab === 'portfolio') { if (typeof renderPortfolio === 'function') renderPortfolio(); }
+            if (currentTab === 'craft-runs') initCraftRunsTab();
             // BENCHED: if (currentTab === 'mounts') { if (typeof renderMountsDatabase === 'function') renderMountsDatabase(); }
             // Tab name is 'farming' in data-tab, NOT 'farm' — this guard never fired before this fix.
             if (currentTab === 'farming') { if (typeof renderFarmBreed === 'function') renderFarmBreed(); }
@@ -766,7 +767,7 @@ function initTabs() {
     const VALID_TABS = new Set([
         'browser','arbitrage','bmflipper','compare','toptraded','itempower','favorites',
         'crafting','craft-top-n','refining-lab','journals','rrr','repair',
-        'transport','live-flips','portfolio',
+        'transport','live-flips','portfolio','craft-runs',
         'loot-buyer','loot-logger',
         'farming',
         'alerts','community','profile','about'
@@ -2290,7 +2291,12 @@ function renderCraftDetail(itemId, recipe, data) {
     const useFocus = document.getElementById('craft-use-focus').checked;
     const specLevel = parseInt(document.getElementById('craft-spec').value) || 0;
     const masteryLevel = parseInt(document.getElementById('craft-mastery').value) || 0;
-    const cityBonusPct = parseFloat(document.getElementById('craft-city-bonus').value) || 0;
+    const cityBonusRaw = document.getElementById('craft-city-bonus').value;
+    // Hideout: bonus = 15% base + PL×2% + core% (overrides the select numeric value)
+    const cityBonusPct = cityBonusRaw === 'hideout'
+        ? 15 + (parseInt(document.getElementById('craft-hideout-pl')?.value) || 0) * 2
+            + (parseFloat(document.getElementById('craft-hideout-core')?.value) || 0)
+        : parseFloat(cityBonusRaw) || 0;
     const stationFee = parseFloat(document.getElementById('craft-fee').value) || 0;
     const stationS100 = parseFloat(document.getElementById('craft-station-s100')?.value) || 0;
     const craftQuality = parseInt(document.getElementById('craft-quality')?.value) || 1;
@@ -5958,6 +5964,27 @@ async function init() {
         const fg = document.getElementById('craft-focus-cost-group');
         if (fg) fg.style.display = focusCB.checked ? '' : 'none';
     });
+
+    // Hideout bonus — show/hide PL+Core inputs when "Hideout" is selected
+    const cityBonusSel = document.getElementById('craft-city-bonus');
+    const hideoutGroup = document.getElementById('craft-hideout-group');
+    function updateHideoutBonusDisplay() {
+        if (!cityBonusSel || !hideoutGroup) return;
+        const isHideout = cityBonusSel.value === 'hideout';
+        hideoutGroup.style.display = isHideout ? 'flex' : 'none';
+        if (isHideout) {
+            const pl = parseInt(document.getElementById('craft-hideout-pl')?.value) || 0;
+            const core = parseFloat(document.getElementById('craft-hideout-core')?.value) || 0;
+            const total = 15 + pl * 2 + core;
+            const totalEl = document.getElementById('craft-hideout-total');
+            if (totalEl) totalEl.textContent = `= ${total.toFixed(1)}% bonus`;
+        }
+    }
+    if (cityBonusSel) {
+        cityBonusSel.addEventListener('change', updateHideoutBonusDisplay);
+        document.getElementById('craft-hideout-pl')?.addEventListener('input', updateHideoutBonusDisplay);
+        document.getElementById('craft-hideout-core')?.addEventListener('input', updateHideoutBonusDisplay);
+    }
     document.getElementById('craft-search').addEventListener('keydown', (e) => {
         if (e.key === 'Enter') doCraftSearch();
     });
@@ -14986,6 +15013,7 @@ document.addEventListener('keydown', function(e) {
         ['whitelist-modal',       () => closeWhitelistModal()],
         ['feedback-modal',        () => closeFeedbackModal()],
         ['chart-modal',           () => { document.getElementById('chart-modal')?.classList.add('hidden'); }],
+        ['cr-txn-modal',          () => { document.getElementById('cr-txn-modal')?.classList.add('hidden'); }],
         ['ll-shortcut-help',      () => { document.getElementById('ll-shortcut-help')?.remove(); }],
     ];
     for (const [id, closeFn] of modalMap) {
@@ -16347,3 +16375,430 @@ document.addEventListener('keydown', (e) => {
 const _origInit = typeof init === 'function' ? init : null;
 function _wrappedInit() { if (_origInit) _origInit(); initTimersWidget(); }
 window.addEventListener('load', _wrappedInit);
+
+// ============================================================
+// CRAFT RUNS TAB
+// ============================================================
+
+const CR_STATUS_FLOW = ['buying', 'refining', 'crafting', 'hauling', 'selling', 'complete'];
+const CR_STATUS_LABELS = {
+    buying:   '🛒 Buying',
+    refining: '⚒️ Refining',
+    crafting: '🔨 Crafting',
+    hauling:  '📦 Hauling',
+    selling:  '💰 Selling',
+    complete: '✅ Complete',
+};
+const CR_COST_TYPES_FE = new Set(['buy', 'refine_in', 'craft_in']);
+const CR_REV_TYPES_FE  = new Set(['sell', 'refine_out', 'craft_out']);
+
+let crCurrentRunId = null;
+let _crInitialized = false;
+
+function initCraftRunsTab() {
+    // Wire static buttons once; reload runs on every visit
+    if (!_crInitialized) {
+        _crInitialized = true;
+        const newBtn    = document.getElementById('cr-new-btn');
+        const backBtn   = document.getElementById('cr-back-btn');
+        const cancelBtn = document.getElementById('cr-cancel-new-btn');
+        const createBtn = document.getElementById('cr-create-btn');
+
+        if (newBtn)    newBtn.onclick    = () => crToggleNewForm(true);
+        if (backBtn)   backBtn.onclick   = () => crShowList();
+        if (cancelBtn) cancelBtn.onclick = () => crToggleNewForm(false);
+        if (createBtn) createBtn.onclick = crSubmitNewRun;
+
+        // Transaction modal close wiring
+        document.getElementById('cr-txn-close-btn')?.addEventListener('click', () => {
+            document.getElementById('cr-txn-modal')?.classList.add('hidden');
+        });
+        document.getElementById('cr-txn-cancel-btn')?.addEventListener('click', () => {
+            document.getElementById('cr-txn-modal')?.classList.add('hidden');
+        });
+
+        // Item autocomplete for new run target field
+        crSetupTargetAutocomplete();
+    }
+    crShowList();
+}
+
+function crShowList() {
+    crCurrentRunId = null;
+    const listView   = document.getElementById('cr-list-view');
+    const detailView = document.getElementById('cr-detail-view');
+    const backBtn    = document.getElementById('cr-back-btn');
+    const newBtn     = document.getElementById('cr-new-btn');
+    if (listView)   listView.style.display = '';
+    if (detailView) detailView.style.display = 'none';
+    if (backBtn)    backBtn.style.display = 'none';
+    if (newBtn)     newBtn.style.display = '';
+    crToggleNewForm(false);
+    crLoadRuns();
+}
+
+function crToggleNewForm(show) {
+    const form = document.getElementById('cr-new-form');
+    if (form) form.style.display = show ? 'flex' : 'none';
+    if (!show) {
+        const ni = document.getElementById('cr-name-input');
+        const ti = document.getElementById('cr-target-input');
+        if (ni) ni.value = '';
+        if (ti) ti.value = '';
+    }
+}
+
+async function crLoadRuns() {
+    const cards = document.getElementById('cr-list-cards');
+    const empty = document.getElementById('cr-list-empty');
+    if (!cards) return;
+    cards.innerHTML = '<div class="loading-state"><div class="spinner"></div><p>Loading runs…</p></div>';
+    try {
+        const r = await fetch(`${VPS_BASE}/api/craft-runs`, { headers: authHeaders() });
+        if (!r.ok) {
+            cards.innerHTML = `<div class="empty-state"><p>${r.status === 401 ? 'Please log in to use Craft Runs.' : 'Failed to load runs.'}</p></div>`;
+            if (empty) empty.classList.add('hidden');
+            return;
+        }
+        const data = await r.json();
+        crRenderList(data.runs || []);
+    } catch {
+        cards.innerHTML = '<div class="empty-state"><p>Could not reach server. Check your connection.</p></div>';
+        if (empty) empty.classList.add('hidden');
+    }
+}
+
+function crRenderList(runs) {
+    const cards = document.getElementById('cr-list-cards');
+    const empty = document.getElementById('cr-list-empty');
+    if (!cards) return;
+    if (!runs.length) {
+        cards.innerHTML = '';
+        if (empty) empty.classList.remove('hidden');
+        return;
+    }
+    if (empty) empty.classList.add('hidden');
+    cards.innerHTML = runs.map(r => crRunCardHTML(r)).join('');
+    cards.querySelectorAll('[data-open-run]').forEach(btn => {
+        btn.addEventListener('click', () => crOpenRun(parseInt(btn.dataset.openRun)));
+    });
+    cards.querySelectorAll('[data-delete-run]').forEach(btn => {
+        btn.addEventListener('click', () => crDeleteRun(parseInt(btn.dataset.deleteRun)));
+    });
+}
+
+function crRunCardHTML(run) {
+    const statusColor = {
+        buying: '#f59e0b', refining: '#8b5cf6', crafting: '#3b82f6',
+        hauling: '#f97316', selling: '#10b981', complete: '#22c55e'
+    }[run.status] || 'var(--text-secondary)';
+    const profit = (run.total_revenue || 0) - (run.total_cost || 0);
+    const taxEst = (run.total_revenue || 0) * 0.055;
+    const net = profit - taxEst;
+    const profitSign = net >= 0 ? '+' : '';
+    const profitColor = net >= 0 ? 'var(--profit-green)' : 'var(--loss-red)';
+    const marginPct = run.total_cost > 0 ? ((net / run.total_cost) * 100).toFixed(1) : '—';
+    const created = run.created_at ? new Date(run.created_at).toLocaleDateString() : '';
+    const statusIdx = CR_STATUS_FLOW.indexOf(run.status);
+    const flowHTML = CR_STATUS_FLOW.map((s, i) => {
+        const done   = i < statusIdx || run.status === 'complete';
+        const active = s === run.status && run.status !== 'complete';
+        const icon   = CR_STATUS_LABELS[s].split(' ')[0];
+        return `<span class="cr-flow-step ${done ? 'done' : ''} ${active ? 'active' : ''}" title="${CR_STATUS_LABELS[s]}">${icon}</span>${i < CR_STATUS_FLOW.length - 1 ? '<span class="cr-flow-arrow">›</span>' : ''}`;
+    }).join('');
+
+    return `<div class="trade-card cr-run-card">
+        <div class="cr-run-header">
+            <div>
+                <div class="cr-run-name">${esc(run.name)}</div>
+                ${run.target_item ? `<div style="color:var(--text-secondary);font-size:0.78rem;">${esc(run.target_item)}</div>` : ''}
+            </div>
+            <span class="cr-status-badge" style="background:${statusColor}22;color:${statusColor};border:1px solid ${statusColor}44;">${esc(CR_STATUS_LABELS[run.status] || run.status)}</span>
+        </div>
+        <div class="cr-flow-steps">${flowHTML}</div>
+        <div class="cr-run-stats">
+            <div class="cr-stat"><span class="cr-stat-label">Cost</span><span class="cr-stat-val">${fmtSilver(run.total_cost || 0)}</span></div>
+            <div class="cr-stat"><span class="cr-stat-label">Revenue</span><span class="cr-stat-val">${fmtSilver(run.total_revenue || 0)}</span></div>
+            <div class="cr-stat"><span class="cr-stat-label">Net P&amp;L</span><span class="cr-stat-val" style="color:${profitColor};">${profitSign}${fmtSilver(net)} (${marginPct}%)</span></div>
+        </div>
+        <div class="cr-run-actions">
+            <span style="color:var(--text-secondary);font-size:0.73rem;">${esc(created)}${run.txn_count ? ` · ${run.txn_count} txn${run.txn_count > 1 ? 's' : ''}` : ''}</span>
+            <div style="display:flex;gap:0.4rem;">
+                <button class="btn-secondary" data-open-run="${run.id}" style="padding:0.3rem 0.7rem;font-size:0.8rem;">Open</button>
+                <button class="btn-secondary" data-delete-run="${run.id}" style="padding:0.3rem 0.5rem;font-size:0.8rem;color:var(--loss-red);" title="Delete run">🗑️</button>
+            </div>
+        </div>
+    </div>`;
+}
+
+async function crOpenRun(id) {
+    crCurrentRunId = id;
+    const listView   = document.getElementById('cr-list-view');
+    const detailView = document.getElementById('cr-detail-view');
+    const backBtn    = document.getElementById('cr-back-btn');
+    const newBtn     = document.getElementById('cr-new-btn');
+    if (listView)   listView.style.display = 'none';
+    if (detailView) { detailView.style.display = 'block'; detailView.innerHTML = '<div class="loading-state"><div class="spinner"></div><p>Loading…</p></div>'; }
+    if (backBtn)    backBtn.style.display = '';
+    if (newBtn)     newBtn.style.display = 'none';
+    crToggleNewForm(false);
+
+    try {
+        const r = await fetch(`${VPS_BASE}/api/craft-runs/${id}`, { headers: authHeaders() });
+        if (!r.ok) { showToast('Failed to load run.', 'error'); crShowList(); return; }
+        const data = await r.json();
+        crRenderDetail(data.run, data.transactions || [], data.scans || []);
+    } catch {
+        showToast('Network error loading run.', 'error');
+        crShowList();
+    }
+}
+
+function crRenderDetail(run, txns, scans) {
+    const el = document.getElementById('cr-detail-view');
+    if (!el) return;
+
+    const profit = (run.total_revenue || 0) - (run.total_cost || 0);
+    const taxEst = (run.total_revenue || 0) * 0.055;
+    const net = profit - taxEst;
+    const profitSign = net >= 0 ? '+' : '';
+    const profitColor = net >= 0 ? 'var(--profit-green)' : 'var(--loss-red)';
+    const marginPct = run.total_cost > 0 ? ((net / run.total_cost) * 100).toFixed(1) : '—';
+    const statusIdx = CR_STATUS_FLOW.indexOf(run.status);
+    const nextStatus = run.status !== 'complete' ? CR_STATUS_FLOW[Math.min(statusIdx + 1, CR_STATUS_FLOW.length - 1)] : null;
+
+    // Progress bar
+    const progressHTML = CR_STATUS_FLOW.map((s, i) => {
+        const done   = i < statusIdx || run.status === 'complete';
+        const active = s === run.status && run.status !== 'complete';
+        const label  = CR_STATUS_LABELS[s].split(' ');
+        return `<div class="cr-progress-step ${done ? 'done' : ''} ${active ? 'active' : ''}">
+            <div class="cr-progress-icon">${label[0]}</div>
+            <div class="cr-progress-label">${label.slice(1).join(' ')}</div>
+        </div>${i < CR_STATUS_FLOW.length - 1 ? `<div class="cr-progress-line ${done ? 'done' : ''}"></div>` : ''}`;
+    }).join('');
+
+    // Transaction rows
+    const txnTypeLabels = { buy: '🛒 Buy', refine_in: '⚒️ In', refine_out: '⚒️ Out', craft_in: '🔨 In', craft_out: '🔨 Out', sell: '💰 Sell' };
+    const srcLabels = { manual: 'Manual', tab_scan: 'Tab Scan', market_auto: 'Auto' };
+    const txnRows = txns.map(t => {
+        const isCost = CR_COST_TYPES_FE.has(t.type);
+        const total  = t.total_price != null ? t.total_price : (t.quantity * t.unit_price);
+        const tColor = isCost ? 'var(--loss-red)' : 'var(--profit-green)';
+        return `<tr>
+            <td style="color:var(--text-secondary);font-size:0.73rem;">${new Date(t.timestamp).toLocaleDateString()}</td>
+            <td><span class="cr-txn-type-badge">${txnTypeLabels[t.type] || esc(t.type)}</span></td>
+            <td style="max-width:140px;">${esc(t.item_id)}</td>
+            <td style="text-align:right;">${fmtNum(t.quantity)}</td>
+            <td style="text-align:right;">${fmtSilver(t.unit_price)}</td>
+            <td style="text-align:right;color:${tColor};">${isCost ? '-' : '+'}${fmtSilver(total)}</td>
+            <td style="color:var(--text-secondary);font-size:0.73rem;">${esc(t.city || '—')}</td>
+            <td style="font-size:0.7rem;color:var(--text-secondary);">${srcLabels[t.source] || esc(t.source || '')}</td>
+        </tr>`;
+    }).join('');
+
+    el.innerHTML = `
+    <div class="controls-panel" style="margin-top:0.5rem;">
+        <div style="flex:1;">
+            <h3 style="margin:0 0 0.2rem;color:var(--accent);">${esc(run.name)}</h3>
+            ${run.target_item ? `<div style="color:var(--text-secondary);font-size:0.82rem;">Target: ${esc(run.target_item)}</div>` : ''}
+            ${run.hideout_power_level > 0 || run.hideout_core_bonus > 0
+                ? `<div style="color:#a78bfa;font-size:0.75rem;">⚡ Hideout PL${run.hideout_power_level} · Core +${run.hideout_core_bonus}%</div>`
+                : ''}
+        </div>
+        <div style="display:flex;gap:0.5rem;flex-wrap:wrap;">
+            <button id="cr-btn-buy" class="btn-primary" style="font-size:0.82rem;">+ Buy</button>
+            <button id="cr-btn-sell" class="btn-secondary" style="font-size:0.82rem;">+ Sell</button>
+            <button id="cr-btn-craft" class="btn-secondary" style="font-size:0.82rem;">+ Craft</button>
+            ${nextStatus
+                ? `<button id="cr-advance-btn" class="btn-secondary" style="font-size:0.82rem;color:var(--accent);" title="Advance to ${CR_STATUS_LABELS[nextStatus]}">→ ${CR_STATUS_LABELS[nextStatus]}</button>`
+                : ''}
+        </div>
+    </div>
+
+    <div class="cr-progress-bar">${progressHTML}</div>
+
+    <div class="cr-pnl-dashboard">
+        <div class="cr-pnl-card">
+            <div class="cr-pnl-label">Total Cost</div>
+            <div class="cr-pnl-val" style="color:var(--loss-red);">${fmtSilver(run.total_cost || 0)}</div>
+        </div>
+        <div class="cr-pnl-card">
+            <div class="cr-pnl-label">Revenue</div>
+            <div class="cr-pnl-val" style="color:var(--profit-green);">${fmtSilver(run.total_revenue || 0)}</div>
+        </div>
+        <div class="cr-pnl-card">
+            <div class="cr-pnl-label">Tax Est. (5.5%)</div>
+            <div class="cr-pnl-val" style="color:var(--text-secondary);">−${fmtSilver(taxEst)}</div>
+        </div>
+        <div class="cr-pnl-card" style="border-color:${net >= 0 ? 'rgba(34,197,94,0.3)' : 'rgba(239,68,68,0.3)'};">
+            <div class="cr-pnl-label">Net Profit</div>
+            <div class="cr-pnl-val" style="color:${profitColor};font-size:1.15rem;">${profitSign}${fmtSilver(net)}</div>
+            <div style="color:${profitColor};font-size:0.73rem;">${marginPct}% margin</div>
+        </div>
+    </div>
+
+    <div class="controls-panel" style="margin-top:0.75rem;padding:0.75rem 1rem;flex-direction:column;align-items:stretch;">
+        <h4 style="margin:0 0 0.6rem;color:var(--accent);">Transaction Log (${txns.length})</h4>
+        ${txns.length ? `<div style="overflow-x:auto;">
+            <table class="cr-txn-table">
+                <thead><tr>
+                    <th>Date</th><th>Type</th><th>Item</th><th>Qty</th><th>Unit Price</th><th>Total</th><th>City</th><th>Source</th>
+                </tr></thead>
+                <tbody>${txnRows}</tbody>
+            </table>
+        </div>` : `<div class="empty-state" style="padding:0.75rem 0;"><p>No transactions yet — use <strong>+ Buy</strong> / <strong>+ Sell</strong> / <strong>+ Craft</strong> above.</p></div>`}
+    </div>`;
+
+    // Wire action buttons
+    document.getElementById('cr-btn-buy')?.addEventListener('click', () => crOpenTxnModal(run.id, 'buy'));
+    document.getElementById('cr-btn-sell')?.addEventListener('click', () => crOpenTxnModal(run.id, 'sell'));
+    document.getElementById('cr-btn-craft')?.addEventListener('click', () => crOpenTxnModal(run.id, 'craft_out'));
+    const advBtn = document.getElementById('cr-advance-btn');
+    if (advBtn && nextStatus) advBtn.addEventListener('click', () => crAdvanceStatus(run.id, nextStatus));
+}
+
+function crOpenTxnModal(runId, defaultType) {
+    const modal = document.getElementById('cr-txn-modal');
+    if (!modal) return;
+    const typeEl = document.getElementById('cr-txn-type-select');
+    if (typeEl) typeEl.value = defaultType;
+    const itemEl  = document.getElementById('cr-txn-item-input');
+    const qtyEl   = document.getElementById('cr-txn-qty-input');
+    const priceEl = document.getElementById('cr-txn-price-input');
+    const cityEl  = document.getElementById('cr-txn-city-input');
+    if (itemEl)  itemEl.value  = '';
+    if (qtyEl)   qtyEl.value   = '1';
+    if (priceEl) priceEl.value = '';
+    if (cityEl)  cityEl.value  = '';
+
+    const submitBtn = document.getElementById('cr-txn-submit-btn');
+    // Replace with a fresh clone to avoid duplicate listeners
+    const fresh = submitBtn?.cloneNode(true);
+    if (fresh && submitBtn) {
+        submitBtn.replaceWith(fresh);
+        fresh.addEventListener('click', () => crSubmitTxn(runId));
+    }
+    modal.classList.remove('hidden');
+    itemEl?.focus();
+}
+
+async function crSubmitTxn(runId) {
+    const type     = document.getElementById('cr-txn-type-select')?.value;
+    const item_id  = document.getElementById('cr-txn-item-input')?.value.trim();
+    const quantity = parseInt(document.getElementById('cr-txn-qty-input')?.value) || 1;
+    const unit_price = parseInt(document.getElementById('cr-txn-price-input')?.value) || 0;
+    const city     = document.getElementById('cr-txn-city-input')?.value || '';
+
+    if (!item_id) { showToast('Item name / ID is required.', 'error'); return; }
+    if (!unit_price && type !== 'refine_out' && type !== 'craft_out') {
+        showToast('Price is required.', 'error'); return;
+    }
+
+    try {
+        const r = await fetch(`${VPS_BASE}/api/craft-runs/${runId}/txn`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', ...authHeaders() },
+            body: JSON.stringify({ type, item_id, quantity, unit_price, city, source: 'manual' })
+        });
+        const d = await r.json();
+        if (d.id) {
+            document.getElementById('cr-txn-modal')?.classList.add('hidden');
+            showToast('Transaction added.', 'success');
+            crOpenRun(runId); // Reload detail
+        } else {
+            showToast(d.error || 'Failed to add transaction.', 'error');
+        }
+    } catch {
+        showToast('Network error.', 'error');
+    }
+}
+
+async function crSubmitNewRun() {
+    const name     = document.getElementById('cr-name-input')?.value.trim();
+    const target   = document.getElementById('cr-target-input')?.value.trim();
+    const pl       = parseInt(document.getElementById('cr-pl-input')?.value) || 0;
+    const core     = parseFloat(document.getElementById('cr-core-input')?.value) || 0;
+
+    if (!name) { showToast('Run name is required.', 'error'); return; }
+
+    try {
+        const r = await fetch(`${VPS_BASE}/api/craft-runs`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', ...authHeaders() },
+            body: JSON.stringify({ name, target_item: target || null, hideout_power_level: pl, hideout_core_bonus: core })
+        });
+        const d = await r.json();
+        if (d.id) {
+            showToast(`Run "${esc(name)}" created!`, 'success');
+            crToggleNewForm(false);
+            crOpenRun(d.id);
+        } else {
+            showToast(d.error || 'Failed to create run.', 'error');
+        }
+    } catch {
+        showToast('Network error.', 'error');
+    }
+}
+
+async function crDeleteRun(id) {
+    showConfirm('Delete this craft run and all its transactions? This cannot be undone.', async () => {
+        try {
+            const r = await fetch(`${VPS_BASE}/api/craft-runs/${id}`, { method: 'DELETE', headers: authHeaders() });
+            const d = await r.json();
+            if (d.success) { showToast('Run deleted.', 'success'); crLoadRuns(); }
+            else showToast(d.error || 'Failed to delete.', 'error');
+        } catch { showToast('Network error.', 'error'); }
+    });
+}
+
+async function crAdvanceStatus(runId, newStatus) {
+    try {
+        const r = await fetch(`${VPS_BASE}/api/craft-runs/${runId}`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json', ...authHeaders() },
+            body: JSON.stringify({ status: newStatus })
+        });
+        const d = await r.json();
+        if (d.success) {
+            showToast(`Status → ${CR_STATUS_LABELS[newStatus]}`, 'success');
+            crOpenRun(runId);
+        } else {
+            showToast(d.error || 'Failed to update status.', 'error');
+        }
+    } catch { showToast('Network error.', 'error'); }
+}
+
+// Item autocomplete for new run target field
+function crSetupTargetAutocomplete() {
+    const input    = document.getElementById('cr-target-input');
+    const dropdown = document.getElementById('cr-target-autocomplete');
+    if (!input || !dropdown) return;
+
+    input.addEventListener('input', () => {
+        const q = input.value.trim().toLowerCase();
+        if (q.length < 2) { dropdown.classList.add('hidden'); return; }
+        const items = window.itemsData || window.itemList || [];
+        const matches = items.filter(it => {
+            const name = (it.name || it.localizedName || it.LocalizedNames?.['EN-US'] || '').toLowerCase();
+            return name.includes(q);
+        }).slice(0, 8);
+        if (!matches.length) { dropdown.classList.add('hidden'); return; }
+        dropdown.innerHTML = matches.map(it => {
+            const name = esc(it.name || it.localizedName || it.LocalizedNames?.['EN-US'] || it.UniqueName || it.id);
+            return `<div class="autocomplete-item" data-name="${name}">${name}</div>`;
+        }).join('');
+        dropdown.classList.remove('hidden');
+        dropdown.querySelectorAll('.autocomplete-item').forEach(el => {
+            el.addEventListener('click', () => {
+                input.value = el.dataset.name;
+                dropdown.classList.add('hidden');
+            });
+        });
+    });
+    document.addEventListener('click', (ev) => {
+        if (!input.contains(ev.target) && !dropdown.contains(ev.target)) {
+            dropdown.classList.add('hidden');
+        }
+    }, { passive: true });
+}

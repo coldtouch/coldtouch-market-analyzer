@@ -118,7 +118,21 @@
 
 ## Recent Session History
 
-### April 20 — Security Hardening (Full Audit Remediation) — Latest
+### April 20 — Craft Runs Feature + Bug Fixes — Latest
+
+**Craft Runs full pipeline tracker (buy→refine→craft→sell):**
+- 3 new SQLite tables: `craft_runs`, `craft_run_transactions`, `craft_run_scans`
+- 10 new API endpoints: CRUD on runs, add transactions, link tab scans, P&L summary, refine city helper, hideout bonus helper
+- New "Craft Runs" tab in Trading group with full UI: run list cards, new run form, detail view with progress bar + P&L dashboard + transaction log, Add Transaction modal (6 types), advance status, delete
+- Crafting Profits hideout enhancement: "Hideout (Black Zone)" option in city-bonus select reveals PL (0-8) + Core % (0-30) inputs; bonus = 15% base + PL×2% + core
+- CSS: `.cr-*` classes for run cards, progress bar, P&L dashboard, txn table
+- CHANGELOG.md + About tab (dual entries) + features-grid card
+
+**Modal scroll fix + Escape handler (same session):**
+- `.modal` CSS: `align-items: flex-start; overflow-y: auto` — tall modals now scroll
+- Escape handler expanded from 3 to 11 modals (+ `cr-txn-modal`)
+
+### April 20 — Security Hardening (Full Audit Remediation)
 - **20 audit findings fixed** from FULL_AUDIT_2026-04-19.md across backend, frontend, and deploy script.
 - **Backend:** trust proxy, admin guard on db-stats, upload cap, batch-prices rate limiter, news link URL validation, HTML-strip in san(), generic DB errors, 30-day share token expiry, SFTP for .env upload.
 - **PY-H2:** Fixed broken `try:` syntax error left from previous session; SSH cleanup via `sys.excepthook`.
@@ -240,6 +254,9 @@
 - [x] 19 scratch files deleted, .gitignore updated (CLEAN-1, CLEAN-4)
 
 ### Pending
+- [ ] **Craft Runs — Tab Scan linking UI** — frontend flow to link a chest capture to an active run (backend endpoint exists at `POST /api/craft-runs/:id/scan`)
+- [ ] **Craft Runs — Portfolio integration** — completed runs appear in Portfolio Tracker with full cost basis
+- [ ] **Craft Runs — Refining Planner** — auto-suggest city from material type, batch calculator (backend `/api/refine/optimal-city` exists)
 - [ ] **Loot Logger Viewer UX** — better layout, sorting, filtering, player search, total value estimates
 - [ ] **Device Auth end-to-end test**
 - [ ] **Test chest capture on guild island**

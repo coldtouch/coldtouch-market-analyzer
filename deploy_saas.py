@@ -500,6 +500,48 @@ db.serialize(() => {
   )`);
   db.run(`CREATE INDEX IF NOT EXISTS idx_audit_created ON audit_log(created_at)`);
 
+  // === CRAFT RUNS ===
+  db.run(`CREATE TABLE IF NOT EXISTS craft_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    status TEXT DEFAULT 'buying',
+    target_item TEXT,
+    hideout_power_level INTEGER DEFAULT 0,
+    hideout_core_bonus REAL DEFAULT 0,
+    total_cost REAL DEFAULT 0,
+    total_revenue REAL DEFAULT 0,
+    created_at INTEGER DEFAULT (strftime('%s','now') * 1000),
+    closed_at INTEGER
+  )`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_craft_runs_user ON craft_runs(user_id, created_at)`);
+
+  db.run(`CREATE TABLE IF NOT EXISTS craft_run_transactions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id INTEGER NOT NULL REFERENCES craft_runs(id) ON DELETE CASCADE,
+    type TEXT NOT NULL,
+    item_id TEXT NOT NULL,
+    quantity INTEGER DEFAULT 1,
+    unit_price REAL DEFAULT 0,
+    total_price REAL DEFAULT 0,
+    city TEXT,
+    source TEXT DEFAULT 'manual',
+    scan_tab_id TEXT,
+    captured_by TEXT DEFAULT 'user',
+    timestamp INTEGER DEFAULT (strftime('%s','now') * 1000)
+  )`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_crt_run ON craft_run_transactions(run_id, timestamp)`);
+
+  db.run(`CREATE TABLE IF NOT EXISTS craft_run_scans (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id INTEGER NOT NULL REFERENCES craft_runs(id) ON DELETE CASCADE,
+    container_id TEXT,
+    items_json TEXT DEFAULT '[]',
+    total_paid REAL DEFAULT 0,
+    allocation_method TEXT DEFAULT 'by_market_value',
+    scanned_at INTEGER DEFAULT (strftime('%s','now') * 1000)
+  )`);
+
   db.get(`SELECT value FROM meta_config WHERE key = 'game_server'`, (err, row) => {
     const prevServer = row ? row.value : null;
     if (prevServer && prevServer !== GAME_SERVER) {
@@ -3317,6 +3359,256 @@ app.get('/api/admin/db-stats', requireAuth, (req, res) => {
         done();
       });
     }
+  });
+});
+
+// ============================================================
+// CRAFT RUNS API
+// ============================================================
+const CR_VALID_STATUSES = new Set(['buying','refining','crafting','hauling','selling','complete']);
+const CR_VALID_TXN_TYPES = new Set(['buy','refine_in','refine_out','craft_in','craft_out','sell']);
+const CR_COST_TYPES = new Set(['buy','refine_in','craft_in']);
+
+// POST /api/craft-runs — create a new run
+app.post('/api/craft-runs', requireAuth, (req, res) => {
+  const { name, target_item, hideout_power_level, hideout_core_bonus } = req.body;
+  if (!name || typeof name !== 'string' || !name.trim()) {
+    return res.status(400).json({ error: 'name is required.' });
+  }
+  const pl = Math.min(8, Math.max(0, parseInt(hideout_power_level) || 0));
+  const core = Math.min(30, Math.max(0, parseFloat(hideout_core_bonus) || 0));
+  db.run(
+    `INSERT INTO craft_runs (user_id, name, target_item, hideout_power_level, hideout_core_bonus) VALUES (?, ?, ?, ?, ?)`,
+    [req.user.id, name.trim().slice(0, 100), (target_item || '').slice(0, 100) || null, pl, core],
+    function(err) {
+      if (err) return res.status(500).json({ error: 'An internal error occurred.' });
+      res.json({ success: true, id: this.lastID });
+    }
+  );
+});
+
+// GET /api/craft-runs — list user's runs
+app.get('/api/craft-runs', requireAuth, (req, res) => {
+  db.all(
+    `SELECT cr.id, cr.name, cr.status, cr.target_item, cr.total_cost, cr.total_revenue,
+            cr.created_at, cr.closed_at, cr.hideout_power_level, cr.hideout_core_bonus,
+            COUNT(crt.id) as txn_count
+     FROM craft_runs cr
+     LEFT JOIN craft_run_transactions crt ON crt.run_id = cr.id
+     WHERE cr.user_id = ?
+     GROUP BY cr.id
+     ORDER BY cr.created_at DESC
+     LIMIT 100`,
+    [req.user.id],
+    (err, rows) => {
+      if (err) return res.status(500).json({ error: 'An internal error occurred.' });
+      res.json({ runs: rows || [] });
+    }
+  );
+});
+
+// GET /api/craft-runs/:id — run details + transactions + scans
+app.get('/api/craft-runs/:id', requireAuth, (req, res) => {
+  const runId = parseInt(req.params.id);
+  if (!runId) return res.status(400).json({ error: 'Invalid run id.' });
+  db.get(`SELECT * FROM craft_runs WHERE id = ? AND user_id = ?`, [runId, req.user.id], (err, run) => {
+    if (err) return res.status(500).json({ error: 'An internal error occurred.' });
+    if (!run) return res.status(404).json({ error: 'Run not found.' });
+    db.all(`SELECT * FROM craft_run_transactions WHERE run_id = ? ORDER BY timestamp ASC`, [runId], (err2, txns) => {
+      if (err2) return res.status(500).json({ error: 'An internal error occurred.' });
+      db.all(`SELECT * FROM craft_run_scans WHERE run_id = ? ORDER BY scanned_at ASC`, [runId], (err3, scans) => {
+        if (err3) return res.status(500).json({ error: 'An internal error occurred.' });
+        res.json({ run, transactions: txns || [], scans: scans || [] });
+      });
+    });
+  });
+});
+
+// PATCH /api/craft-runs/:id — update status / settings
+app.patch('/api/craft-runs/:id', requireAuth, (req, res) => {
+  const runId = parseInt(req.params.id);
+  if (!runId) return res.status(400).json({ error: 'Invalid run id.' });
+  const { name, status, target_item, hideout_power_level, hideout_core_bonus } = req.body;
+  if (status && !CR_VALID_STATUSES.has(status)) return res.status(400).json({ error: 'Invalid status.' });
+  db.get(`SELECT id FROM craft_runs WHERE id = ? AND user_id = ?`, [runId, req.user.id], (err, row) => {
+    if (err) return res.status(500).json({ error: 'An internal error occurred.' });
+    if (!row) return res.status(404).json({ error: 'Run not found.' });
+    const fields = [];
+    const vals = [];
+    if (name !== undefined)   { fields.push('name = ?');   vals.push(String(name).slice(0, 100)); }
+    if (status !== undefined) { fields.push('status = ?'); vals.push(status); if (status === 'complete') { fields.push('closed_at = ?'); vals.push(Date.now()); } }
+    if (target_item !== undefined) { fields.push('target_item = ?'); vals.push(String(target_item).slice(0, 100) || null); }
+    if (hideout_power_level !== undefined) { fields.push('hideout_power_level = ?'); vals.push(Math.min(8, Math.max(0, parseInt(hideout_power_level) || 0))); }
+    if (hideout_core_bonus !== undefined) { fields.push('hideout_core_bonus = ?'); vals.push(Math.min(30, Math.max(0, parseFloat(hideout_core_bonus) || 0))); }
+    if (!fields.length) return res.status(400).json({ error: 'Nothing to update.' });
+    vals.push(runId);
+    db.run(`UPDATE craft_runs SET ${fields.join(', ')} WHERE id = ?`, vals, (err2) => {
+      if (err2) return res.status(500).json({ error: 'An internal error occurred.' });
+      res.json({ success: true });
+    });
+  });
+});
+
+// DELETE /api/craft-runs/:id
+app.delete('/api/craft-runs/:id', requireAuth, (req, res) => {
+  const runId = parseInt(req.params.id);
+  if (!runId) return res.status(400).json({ error: 'Invalid run id.' });
+  db.get(`SELECT id FROM craft_runs WHERE id = ? AND user_id = ?`, [runId, req.user.id], (err, row) => {
+    if (err) return res.status(500).json({ error: 'An internal error occurred.' });
+    if (!row) return res.status(404).json({ error: 'Run not found.' });
+    db.run(`DELETE FROM craft_runs WHERE id = ?`, [runId], (err2) => {
+      if (err2) return res.status(500).json({ error: 'An internal error occurred.' });
+      res.json({ success: true });
+    });
+  });
+});
+
+// POST /api/craft-runs/:id/txn — add a transaction
+app.post('/api/craft-runs/:id/txn', requireAuth, (req, res) => {
+  const runId = parseInt(req.params.id);
+  if (!runId) return res.status(400).json({ error: 'Invalid run id.' });
+  const { type, item_id, quantity, unit_price, city, source } = req.body;
+  if (!type || !CR_VALID_TXN_TYPES.has(type)) return res.status(400).json({ error: 'Invalid type.' });
+  if (!item_id || typeof item_id !== 'string') return res.status(400).json({ error: 'item_id required.' });
+  const qty = Math.max(1, parseInt(quantity) || 1);
+  const unitP = Math.max(0, parseFloat(unit_price) || 0);
+  const totalP = qty * unitP;
+  const src = ['manual','tab_scan','market_auto'].includes(source) ? source : 'manual';
+
+  db.get(`SELECT id FROM craft_runs WHERE id = ? AND user_id = ?`, [runId, req.user.id], (err, row) => {
+    if (err) return res.status(500).json({ error: 'An internal error occurred.' });
+    if (!row) return res.status(404).json({ error: 'Run not found.' });
+    const now = Date.now();
+    db.run(
+      `INSERT INTO craft_run_transactions (run_id, type, item_id, quantity, unit_price, total_price, city, source, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [runId, type, item_id.slice(0, 100), qty, unitP, totalP, (city || '').slice(0, 50) || null, src, now],
+      function(err2) {
+        if (err2) return res.status(500).json({ error: 'An internal error occurred.' });
+        const txnId = this.lastID;
+        // Update run totals
+        const col = CR_COST_TYPES.has(type) ? 'total_cost' : (type === 'sell' || type === 'refine_out' || type === 'craft_out' ? 'total_revenue' : null);
+        if (col) {
+          db.run(`UPDATE craft_runs SET ${col} = ${col} + ? WHERE id = ?`, [totalP, runId], () => {});
+        }
+        res.json({ success: true, id: txnId });
+      }
+    );
+  });
+});
+
+// POST /api/craft-runs/:id/scan — link a tab scan, split cost across items
+app.post('/api/craft-runs/:id/scan', requireAuth, (req, res) => {
+  const runId = parseInt(req.params.id);
+  if (!runId) return res.status(400).json({ error: 'Invalid run id.' });
+  const { container_id, items_json, total_paid, allocation_method } = req.body;
+  let items = [];
+  try { items = JSON.parse(typeof items_json === 'string' ? items_json : JSON.stringify(items_json || [])); } catch { }
+  if (!Array.isArray(items) || items.length === 0) return res.status(400).json({ error: 'items_json must be a non-empty array.' });
+  if (items.length > 200) return res.status(400).json({ error: 'Too many items (max 200).' });
+  const paid = Math.max(0, parseFloat(total_paid) || 0);
+  const method = ['by_market_value','equal_split','manual'].includes(allocation_method) ? allocation_method : 'equal_split';
+
+  db.get(`SELECT id FROM craft_runs WHERE id = ? AND user_id = ?`, [runId, req.user.id], (err, row) => {
+    if (err) return res.status(500).json({ error: 'An internal error occurred.' });
+    if (!row) return res.status(404).json({ error: 'Run not found.' });
+    const now = Date.now();
+    db.run(
+      `INSERT INTO craft_run_scans (run_id, container_id, items_json, total_paid, allocation_method, scanned_at) VALUES (?, ?, ?, ?, ?, ?)`,
+      [runId, (container_id || '').slice(0, 100) || null, JSON.stringify(items), paid, method, now],
+      function(err2) {
+        if (err2) return res.status(500).json({ error: 'An internal error occurred.' });
+        const scanId = this.lastID;
+        // Split cost equally across item lines (by_market_value requires client-side market data; we use equal_split as safe default)
+        const totalQty = items.reduce((s, it) => s + (parseInt(it.qty || it.quantity) || 1), 0);
+        let txnsCreated = 0;
+        let pending = items.length;
+        if (pending === 0) return res.json({ success: true, scan_id: scanId, txns_created: 0 });
+        items.forEach(it => {
+          const qty = Math.max(1, parseInt(it.qty || it.quantity) || 1);
+          const share = totalQty > 0 ? (qty / totalQty) : (1 / items.length);
+          const lineTotal = paid * share;
+          const unitP = qty > 0 ? lineTotal / qty : 0;
+          db.run(
+            `INSERT INTO craft_run_transactions (run_id, type, item_id, quantity, unit_price, total_price, source, scan_tab_id, timestamp) VALUES (?, 'buy', ?, ?, ?, ?, 'tab_scan', ?, ?)`,
+            [runId, String(it.item_id || it.itemId || 'UNKNOWN').slice(0, 100), qty, unitP, lineTotal, String(scanId), now],
+            (err3) => {
+              if (!err3) txnsCreated++;
+              if (--pending === 0) {
+                // Update run total_cost
+                db.run(`UPDATE craft_runs SET total_cost = total_cost + ? WHERE id = ?`, [paid, runId], () => {});
+                res.json({ success: true, scan_id: scanId, txns_created: txnsCreated });
+              }
+            }
+          );
+        });
+      }
+    );
+  });
+});
+
+// GET /api/craft-runs/:id/summary — P&L breakdown
+app.get('/api/craft-runs/:id/summary', requireAuth, (req, res) => {
+  const runId = parseInt(req.params.id);
+  if (!runId) return res.status(400).json({ error: 'Invalid run id.' });
+  db.get(`SELECT * FROM craft_runs WHERE id = ? AND user_id = ?`, [runId, req.user.id], (err, run) => {
+    if (err) return res.status(500).json({ error: 'An internal error occurred.' });
+    if (!run) return res.status(404).json({ error: 'Run not found.' });
+    db.all(
+      `SELECT type, SUM(total_price) as total FROM craft_run_transactions WHERE run_id = ? GROUP BY type`,
+      [runId],
+      (err2, rows) => {
+        if (err2) return res.status(500).json({ error: 'An internal error occurred.' });
+        const by_type = {};
+        (rows || []).forEach(r => { by_type[r.type] = r.total; });
+        const totalCost = run.total_cost;
+        const totalRevenue = run.total_revenue;
+        const taxEst = totalRevenue * 0.055;
+        const netProfit = totalRevenue - totalCost - taxEst;
+        const marginPct = totalCost > 0 ? ((netProfit / totalCost) * 100) : 0;
+        res.json({
+          run,
+          total_cost: totalCost,
+          total_revenue: totalRevenue,
+          tax_estimate: taxEst,
+          net_profit: netProfit,
+          margin_pct: marginPct,
+          by_type
+        });
+      }
+    );
+  });
+});
+
+// GET /api/refine/optimal-city — suggest best refining city for a material type
+app.get('/api/refine/optimal-city', (req, res) => {
+  const mat = (req.query.material_type || '').toLowerCase();
+  const cityMap = {
+    ore:   { city: 'Thetford',     icon: '⛏️', refined: 'Metal Bars',   bonus: 40 },
+    wood:  { city: 'Fort Sterling', icon: '🌲', refined: 'Planks',       bonus: 40 },
+    fiber: { city: 'Lymhurst',     icon: '🧵', refined: 'Cloth',         bonus: 40 },
+    hide:  { city: 'Martlock',     icon: '🐄', refined: 'Leather',       bonus: 40 },
+    rock:  { city: 'Bridgewatch',  icon: '🪨', refined: 'Stone Blocks',  bonus: 40 },
+  };
+  if (!mat || !cityMap[mat]) {
+    return res.json({ suggestions: Object.entries(cityMap).map(([k, v]) => ({ material: k, ...v })) });
+  }
+  res.json({ material: mat, ...cityMap[mat] });
+});
+
+// GET /api/craft/hideout-bonus — calculate hideout crafting/refining bonus
+app.get('/api/craft/hideout-bonus', (req, res) => {
+  const pl = Math.min(8, Math.max(0, parseInt(req.query.power_level) || 0));
+  const core = Math.min(30, Math.max(0, parseFloat(req.query.core_bonus) || 0));
+  const baseCrafting = 15;
+  const plBonus = pl * 2; // +2% specialist per level
+  const total = baseCrafting + plBonus + core;
+  res.json({
+    power_level: pl,
+    core_bonus: core,
+    base: baseCrafting,
+    pl_bonus: plBonus,
+    total_bonus: total,
+    rrr_approx: (1 - 1 / (1 + (18 + total) / 100)).toFixed(4)
   });
 });
 
