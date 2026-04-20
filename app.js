@@ -10166,6 +10166,24 @@ function renderDeathsSection(deaths) {
     const filterActive = _llDeathFilterVictim !== null;
     const friendlyCount = deaths.filter(d => d.wasFriendly).length;
     const enemyCount = deaths.length - friendlyCount;
+    // Reusable row renderer: icon + name + qty + value — readable at a glance.
+    // Replaces the old icon-only strip where users had to hover each tiny square
+    // to learn what the item was.
+    const renderItemRow = (itemId, qty, source) => {
+        const name = getFriendlyName(itemId) || itemId;
+        const pe = _llPriceMap[itemId];
+        const perUnit = pe && pe.price > 0 ? pe.price : 0;
+        const total = perUnit * qty;
+        const valStr = total > 0 ? formatSilver(total) : '';
+        const valAttr = perUnit > 0 ? ` data-tip-value="${Math.floor(perUnit)}"` : '';
+        return `<div class="ll-death-item-row">
+            <img src="https://render.albiononline.com/v1/item/${encodeURIComponent(itemId)}.png" class="ll-death-item-icon" data-tip-item="${esc(itemId)}" data-tip-source="${source}"${valAttr} loading="lazy" onerror="this.style.display='none'" alt="">
+            <span class="ll-death-item-name">${esc(name)}</span>
+            ${qty > 1 ? `<span class="ll-death-item-qty">&times;${qty}</span>` : '<span class="ll-death-item-qty"></span>'}
+            <span class="ll-death-item-value">${valStr}</span>
+        </div>`;
+    };
+
     const rows = deaths.map(d => {
         const safeVictim = esc(d.victim);
         const sideClass = d.wasFriendly ? 'll-death-friendly' : 'll-death-enemy';
@@ -10173,28 +10191,66 @@ function renderDeathsSection(deaths) {
         const sideLabel = d.wasFriendly ? 'friendly' : 'enemy';
         const when = d.timestamp ? new Date(d.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '—';
         const value = d.estimatedValue > 0 ? formatSilver(d.estimatedValue) : '—';
-        // Expanded details: items + equipment + looters + actions
-        const seen = new Set();
-        const uniqueItems = d.lootedItems.filter(li => li.item_id && !seen.has(li.item_id) && seen.add(li.item_id));
-        const itemsHtml = uniqueItems.map(li => {
-            const valEntry = _llPriceMap[li.item_id];
-            const valAttr = valEntry && valEntry.price > 0 ? ` data-tip-value="${Math.floor(valEntry.price)}"` : '';
-            return `<img src="https://render.albiononline.com/v1/item/${encodeURIComponent(li.item_id)}.png" class="ll-death-item" data-tip-item="${esc(li.item_id)}" data-tip-source="loot"${valAttr} loading="lazy" onerror="this.style.display='none'" alt="">`;
-        }).join('') || '<span style="color:var(--text-muted);font-size:0.75rem;font-style:italic;">No items recovered</span>';
+
+        // Group loot by (looter → item_id) so each looter's pile is a short,
+        // readable list instead of one flat wall of icons across looters.
+        const perLooter = {};
+        for (const li of d.lootedItems) {
+            if (!li.item_id) continue;
+            const lname = li.looted_by_name || 'Unknown';
+            if (!perLooter[lname]) perLooter[lname] = {};
+            perLooter[lname][li.item_id] = (perLooter[lname][li.item_id] || 0) + (li.quantity || 1);
+        }
+
+        // Header summary: total item lines + silver across looters
+        const totalLooters = d.lootedBy.length;
+        const totalItems = d.lootedBy.reduce((s, l) => s + l.items, 0);
+
+        // Per-looter sections (sorted by silver desc, mirrors d.lootedBy)
+        const looterGroups = d.lootedBy.map(looter => {
+            const items = perLooter[looter.name] || {};
+            const rowsHtml = Object.entries(items)
+                .sort((a, b) => {
+                    const pa = (_llPriceMap[a[0]]?.price || 0) * a[1];
+                    const pb = (_llPriceMap[b[0]]?.price || 0) * b[1];
+                    return pb - pa; // most valuable first
+                })
+                .map(([itemId, qty]) => renderItemRow(itemId, qty, 'loot'))
+                .join('');
+            const guildBadge = looter.guild ? `<span class="ll-death-looter-guild">[${esc(looter.guild)}]</span>` : '';
+            const statsStr = `${looter.items} item${looter.items !== 1 ? 's' : ''}${looter.silver > 0 ? ` · ${formatSilver(looter.silver)}` : ''}`;
+            return `<div class="ll-death-looter-group">
+                <div class="ll-death-looter-header">
+                    <span class="ll-death-looter-name">${esc(looter.name)}</span>
+                    ${guildBadge}
+                    <span class="ll-death-looter-stats">${statsStr}</span>
+                </div>
+                <div class="ll-death-looter-items">${rowsHtml}</div>
+            </div>`;
+        }).join('');
+
+        const lootSection = looterGroups
+            ? `<div class="ll-death-section-label">Recovered by ${totalLooters} looter${totalLooters !== 1 ? 's' : ''} · ${totalItems} item${totalItems !== 1 ? 's' : ''}${d.estimatedValue > 0 ? ` · ${formatSilver(d.estimatedValue)}` : ''}</div>
+               <div class="ll-death-looter-list">${looterGroups}</div>`
+            : `<div class="ll-death-section-label">Recovered items</div>
+               <div class="ll-death-empty">No items recovered in tracked range</div>`;
+
+        // Worn-at-death: collapsible so the main focus stays on who looted what.
+        // Shows full names and per-piece price. Defaults open when there are few
+        // pieces, collapsed when the list is long.
         let equipmentHtml = '';
         if (Array.isArray(d.equipmentAtDeath) && d.equipmentAtDeath.length > 0) {
-            const equipImgs = d.equipmentAtDeath.map(eq => {
-                const id = eq.itemId || '';
-                if (!id) return '';
-                const valEntry = _llPriceMap[id];
-                const valAttr = valEntry && valEntry.price > 0 ? ` data-tip-value="${Math.floor(valEntry.price)}"` : '';
-                return `<img src="https://render.albiononline.com/v1/item/${encodeURIComponent(id)}.png" class="ll-death-item ll-death-equip" data-tip-item="${esc(id)}" data-tip-source="equipped"${valAttr} loading="lazy" onerror="this.style.display='none'" alt="">`;
-            }).join('');
-            equipmentHtml = `<div class="ll-death-equipment-row" title="Equipment worn at death"><span class="ll-death-equipment-label">Worn at death:</span><div class="ll-death-items">${equipImgs}</div></div>`;
+            const rows = d.equipmentAtDeath
+                .filter(eq => eq && eq.itemId)
+                .map(eq => renderItemRow(eq.itemId, 1, 'equipped'))
+                .join('');
+            const openAttr = d.equipmentAtDeath.length <= 4 ? ' open' : '';
+            equipmentHtml = `<details class="ll-death-equipment-group"${openAttr}>
+                <summary class="ll-death-section-label ll-death-equipment-summary">Worn at death (${d.equipmentAtDeath.length})</summary>
+                <div class="ll-death-looter-items">${rows}</div>
+            </details>`;
         }
-        const looters = d.lootedBy.map(l =>
-            `<span class="ll-looter-chip">${esc(l.name)} <span style="color:var(--text-muted);">(${l.items}×${l.silver > 0 ? ', ' + formatSilver(l.silver) : ''})</span></span>`
-        ).join('');
+
         const isActive = filterActive && _llDeathFilterVictim === d.victim;
         return `<details class="ll-death-row ${sideClass}${isActive ? ' active-filter' : ''}"${isActive ? ' open' : ''}>
             <summary class="ll-death-row-summary">
@@ -10208,9 +10264,7 @@ function renderDeathsSection(deaths) {
             </summary>
             <div class="ll-death-row-body">
                 ${equipmentHtml}
-                <div class="ll-death-section-label">Recovered items</div>
-                <div class="ll-death-items">${itemsHtml}</div>
-                ${looters ? `<div class="ll-death-section-label">Recovered by</div><div class="ll-death-looters-row">${looters}</div>` : ''}
+                ${lootSection}
                 <div class="ll-death-actions">
                     <button class="btn-small" onclick="event.preventDefault();filterByDeath('${safeVictim}')" title="Filter main view to this death's loot chain">Filter main view</button>
                     <button class="btn-small" onclick="event.preventDefault();copyDeathReport('${safeVictim}', ${d.timestamp})" title="Copy death report for Discord">📋 Discord</button>

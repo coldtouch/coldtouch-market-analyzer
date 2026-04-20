@@ -6317,6 +6317,120 @@ footer {
     color: var(--text-secondary);
 }
 
+/* 2026-04-21 expanded death view — per-looter grouping with readable item rows.
+   Old layout was an anonymous 36px icon strip; users had to hover each icon to
+   learn what was looted. Now: one group per looter, each item on its own line
+   with icon · name · qty · silver value. */
+.ll-death-looter-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    margin-top: 0.3rem;
+}
+.ll-death-looter-group {
+    background: rgba(255, 255, 255, 0.02);
+    border: 1px solid rgba(255, 255, 255, 0.05);
+    border-radius: 6px;
+    padding: 0.4rem 0.55rem 0.5rem;
+}
+.ll-death-looter-header {
+    display: flex;
+    align-items: baseline;
+    gap: 0.45rem;
+    flex-wrap: wrap;
+    margin-bottom: 0.35rem;
+    font-size: 0.82rem;
+}
+.ll-death-looter-name {
+    font-weight: 600;
+    color: var(--text-primary);
+}
+.ll-death-looter-guild {
+    font-size: 0.72rem;
+    color: var(--text-muted);
+}
+.ll-death-looter-stats {
+    margin-left: auto;
+    font-size: 0.72rem;
+    color: var(--text-muted);
+}
+.ll-death-looter-items {
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+}
+.ll-death-item-row {
+    display: grid;
+    grid-template-columns: 28px 1fr auto auto;
+    gap: 0.5rem;
+    align-items: center;
+    padding: 0.2rem 0.3rem;
+    border-radius: 4px;
+    font-size: 0.8rem;
+    background: rgba(255, 255, 255, 0.015);
+    transition: background 0.12s ease;
+}
+.ll-death-item-row:hover {
+    background: rgba(255, 255, 255, 0.05);
+}
+.ll-death-item-icon {
+    width: 28px;
+    height: 28px;
+    image-rendering: pixelated;
+    border-radius: 3px;
+    background: var(--bg-elevated);
+}
+.ll-death-item-name {
+    color: var(--text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    min-width: 0;
+}
+.ll-death-item-qty {
+    color: var(--accent);
+    font-weight: 600;
+    font-size: 0.78rem;
+    min-width: 2ch;
+    text-align: right;
+}
+.ll-death-item-value {
+    color: var(--text-muted);
+    font-size: 0.76rem;
+    font-variant-numeric: tabular-nums;
+    min-width: 4.5ch;
+    text-align: right;
+}
+.ll-death-empty {
+    color: var(--text-muted);
+    font-size: 0.78rem;
+    font-style: italic;
+    padding: 0.35rem 0.3rem;
+}
+.ll-death-equipment-group {
+    margin-bottom: 0.45rem;
+    border-left: 2px solid rgba(99, 179, 237, 0.35);
+    padding-left: 0.5rem;
+}
+.ll-death-equipment-summary {
+    cursor: pointer;
+    user-select: none;
+    list-style: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+}
+.ll-death-equipment-summary::-webkit-details-marker { display: none; }
+.ll-death-equipment-summary::before {
+    content: '▸';
+    font-size: 0.7rem;
+    color: var(--text-muted);
+    transition: transform 0.12s ease;
+}
+.ll-death-equipment-group[open] .ll-death-equipment-summary::before {
+    transform: rotate(90deg);
+}
+
 /* Mobile compaction for the summary grid */
 @media (max-width: 640px) {
     .ll-death-row-summary {
@@ -6324,6 +6438,12 @@ footer {
         font-size: 0.78rem;
     }
     .ll-death-row-time, .ll-death-row-sep, .ll-death-row-killer { display: none; }
+    .ll-death-item-row {
+        grid-template-columns: 24px 1fr auto;
+        font-size: 0.75rem;
+    }
+    .ll-death-item-icon { width: 24px; height: 24px; }
+    .ll-death-item-value { display: none; }
 }
 
 /* Timeline rich tooltip (floating above bars on hover) */

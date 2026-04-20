@@ -2,6 +2,35 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-04-21 — Deaths: per-looter grouping with readable item rows
+
+**Complaint:** expanded death cards in the accountability deaths section were an anonymous grid of 36px icons — you had to hover each one to learn what was looted. With a ZvZ death (8+ items, multiple looters), the whole row was unreadable.
+
+**New layout — grouped by looter, one item per line:**
+
+```
+RECOVERED BY 2 LOOTERS · 13 ITEMS · 150k
+┌ MorganNoir [Saggin]                           11 items · 120k ─┐
+│ [icon] Master's Ursine Maulers .3          ×1        80k       │
+│ [icon] Adept's Rune                        ×5        15k       │
+│ [icon] Minor Healing Potion                ×3         3k       │
+└─────────────────────────────────────────────────────────────────┘
+┌ Georgekalavr [Saggin]                           2 items · 30k ─┐
+│ [icon] Master's Stalker Shoes .2           ×1        27k       │
+│ [icon] T6 Revive Potion                    ×1         3k       │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+- Each looter's pile is a distinct card; items within are sorted by silver value desc
+- Stackables collapse into a single row with `×N` qty badge
+- Worn-at-death moved into its own collapsible `<details>` (auto-open for ≤4 pieces)
+- Empty-range deaths get a clean "No items recovered in tracked range" state
+- Icon row → grid layout with name, qty, silver. Mobile drops the value column but keeps name + qty
+
+CSS additions in `style.css`: `.ll-death-looter-group`, `.ll-death-looter-header`, `.ll-death-item-row`, `.ll-death-equipment-group` and friends. Verified against the friend's 74-death CTA share — looter groups render correctly, item names show inline without hover.
+
+---
+
 ### 2026-04-21 — Accountability: recover item names when Go client ships without itemmap
 
 **Bug:** a friend ran a CTA and shared the accountability report — every item rendered as "Unknown 1954", "Unknown 2409", "Unknown 9090"... 651 events, all unusable. Regear was impossible.

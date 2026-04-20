@@ -2286,6 +2286,17 @@
                     <div class="changelog-list">
                         <div class="changelog-entry">
                             <div class="changelog-date">April 21, 2026</div>
+                            <div class="changelog-title">☠️ Deaths &mdash; per-looter grouping with readable item rows</div>
+                            <ul>
+                                <li><strong>Problem:</strong> expanded death cards were an anonymous grid of 36px icons. In a ZvZ death with 8+ items and multiple looters, you had to hover each one to learn what was taken &mdash; unreadable.</li>
+                                <li><strong>New layout:</strong> one card per looter with <code>Name [Guild] · N items · silver</code> header, then one row per item (icon &middot; name &middot; <code>&times;qty</code> &middot; value). Stackables collapse. Items sorted most-valuable-first within each pile.</li>
+                                <li>Worn-at-death moved into its own collapsible <code>&lt;details&gt;</code> (auto-open for small sets, collapsed for long ones) &mdash; keeps the focus on <em>who looted what</em>.</li>
+                                <li>Empty-range deaths now render a clean &ldquo;No items recovered in tracked range&rdquo; state instead of a blank strip.</li>
+                                <li>Mobile: grid drops the silver column but keeps name + qty readable on one line.</li>
+                            </ul>
+                        </div>
+                        <div class="changelog-entry">
+                            <div class="changelog-date">April 21, 2026</div>
                             <div class="changelog-title">🔤 Accountability &mdash; recover item names when Go client ships without itemmap</div>
                             <ul>
                                 <li><strong>Bug:</strong> a friend ran a CTA and shared the accountability report &mdash; every one of 651 events rendered as &ldquo;Unknown 1954&rdquo;, &ldquo;Unknown 2409&rdquo;, &ldquo;Unknown 9090&rdquo;&hellip; Regear was impossible.</li>
