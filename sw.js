@@ -1,10 +1,10 @@
 // Service Worker for Coldtouch Market Analyzer (PWA app shell caching)
-// v46: ship UNKNOWN_ recovery (itemmap.json + rewriteUnknownItemId). Visitors had
-// stale-while-revalidate copies of app.js v45 that pre-dated the fix, so their
-// first share-link visit after the fix still rendered "Unknown 1954" etc.
-// Bumping the cache name triggers the activate handler to delete the old cache
-// and re-fetch the updated app shell on next load.
-const CACHE_NAME = 'coldtouch-v46';
+// v47: fix UNKNOWN_ recovery race — NUMERIC_ITEM_MAP wasn't loaded in time when
+// the share handler raced loadData(), so normalization silently no-opped and
+// UNKNOWN_* keys locked into the accountability grouping maps. runAccountabilityCheck
+// now awaits loadData(); loadData is memoized so concurrent callers share one
+// round-trip.
+const CACHE_NAME = 'coldtouch-v47';
 const APP_SHELL = [
     './',
     './index.html',

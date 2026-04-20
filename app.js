@@ -429,6 +429,14 @@ function showPrompt(message, defaultValue, onSubmit) {
 
 function getFriendlyName(id) {
     if (ITEM_NAMES[id] && ITEM_NAMES[id].trim() !== '') return ITEM_NAMES[id];
+    // Display-time safety net for UNKNOWN_<n> items that slipped past the
+    // ingestion-time normalizer (e.g. if NUMERIC_ITEM_MAP was still loading
+    // when the event arrived). Look up the numeric suffix directly.
+    if (typeof id === 'string' && id.startsWith('UNKNOWN_')) {
+        const mapped = NUMERIC_ITEM_MAP[id.slice(8)];
+        if (mapped && ITEM_NAMES[mapped] && ITEM_NAMES[mapped].trim() !== '') return ITEM_NAMES[mapped];
+        if (mapped) return mapped; // at least show the string ID if no localized name
+    }
     return id.replace(/_/g, ' ').replace(/T(\d+)/, 'Tier $1').toLowerCase().replace(/\b\w/g, l => l.toUpperCase());
 }
 
@@ -663,25 +671,37 @@ function hideError(container) {
 }
 
 // ====== DATA LOADING ======
-async function loadData() {
-    try {
-        const cb = '?v=' + Date.now();
-        const [resItems, resRecipes, resWeights, resItemMap] = await Promise.all([
-            fetch('items.json' + cb),
-            fetch('recipes.json' + cb),
-            fetch('itemweights.json' + cb).catch(() => ({ ok: false })),
-            fetch('itemmap.json' + cb).catch(() => ({ ok: false }))
-        ]);
-        ITEM_NAMES = await resItems.json();
-        itemsList = Object.keys(ITEM_NAMES).filter(k => k && ITEM_NAMES[k]);
-        recipesData = await resRecipes.json();
-        if (resWeights.ok) ITEM_WEIGHTS = await resWeights.json();
-        if (resItemMap.ok) {
-            try { NUMERIC_ITEM_MAP = await resItemMap.json(); } catch { NUMERIC_ITEM_MAP = {}; }
+// loadData is called from many entry points (each tab's first-render, share
+// handler, etc.). We memoize the in-flight promise so concurrent callers share
+// one network round-trip rather than kicking off duplicates. Also lets callers
+// `await loadData()` as a synchronization point when they need ITEM_NAMES /
+// NUMERIC_ITEM_MAP to be populated before proceeding (e.g. the accountability
+// normalizer relies on NUMERIC_ITEM_MAP).
+let _loadDataPromise = null;
+function loadData() {
+    if (_loadDataPromise) return _loadDataPromise;
+    _loadDataPromise = (async () => {
+        try {
+            const cb = '?v=' + Date.now();
+            const [resItems, resRecipes, resWeights, resItemMap] = await Promise.all([
+                fetch('items.json' + cb),
+                fetch('recipes.json' + cb),
+                fetch('itemweights.json' + cb).catch(() => ({ ok: false })),
+                fetch('itemmap.json' + cb).catch(() => ({ ok: false }))
+            ]);
+            ITEM_NAMES = await resItems.json();
+            itemsList = Object.keys(ITEM_NAMES).filter(k => k && ITEM_NAMES[k]);
+            recipesData = await resRecipes.json();
+            if (resWeights.ok) ITEM_WEIGHTS = await resWeights.json();
+            if (resItemMap.ok) {
+                try { NUMERIC_ITEM_MAP = await resItemMap.json(); } catch { NUMERIC_ITEM_MAP = {}; }
+            }
+        } catch (e) {
+            console.error('Failed to load data files:', e);
+            _loadDataPromise = null; // allow retry on next call
         }
-    } catch (e) {
-        console.error('Failed to load data files:', e);
-    }
+    })();
+    return _loadDataPromise;
 }
 
 // ====== API FETCHING ======
@@ -11384,6 +11404,16 @@ async function runAccountabilityCheck() {
     if (!sessionId) { showToast('Select a loot session first', 'warning'); return; }
     if (selectedIdxs.length === 0) { showToast('Select at least one chest capture', 'warning'); return; }
 
+    // Make sure NUMERIC_ITEM_MAP / ITEM_NAMES are loaded BEFORE we try to normalize
+    // UNKNOWN_<n> item IDs below — otherwise the lookup is a silent no-op and
+    // UNKNOWN_* keys get locked into the grouping maps (lootedByPlayer + deposited),
+    // producing wrong accountability math. Shared-link loads race this hard:
+    // _renderPublicAccountabilityView schedules runAccountabilityCheck 100ms after
+    // its own fetch, which can beat loadData's itemmap.json fetch.
+    if (!NUMERIC_ITEM_MAP || Object.keys(NUMERIC_ITEM_MAP).length === 0) {
+        try { await loadData(); } catch { /* fall through — normalizer will no-op if still empty */ }
+    }
+
     resultEl.innerHTML = '<div class="empty-state"><p>Analyzing…</p></div>';
     const lastRunLabel = document.getElementById('acc-last-run');
     if (lastRunLabel) lastRunLabel.textContent = `Running check at ${new Date().toLocaleTimeString()}…`;
@@ -11424,6 +11454,9 @@ async function runAccountabilityCheck() {
     for (const idx of selectedIdxs) {
         const cap = captures[idx];
         if (!cap || !cap.items) continue;
+        // Re-normalize capture items now that loadData is guaranteed to have
+        // finished — share-view injection may have happened before the map loaded.
+        normalizeChestCaptureInPlace(cap);
         selectedTabNames.push(cap.tabName || `Tab ${idx + 1}`);
         for (const item of cap.items) {
             deposited[item.itemId] = (deposited[item.itemId] || 0) + (item.quantity || 1);
