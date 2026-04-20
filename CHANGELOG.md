@@ -2,6 +2,23 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-04-21 — Death attribution via pickup timestamps + chest-log permission note
+
+**Death-attribution rewrite.** Old logic only marked items as "lost on death" when another tracked player looted them off the corpse — this under-counted losses any time the victim died out of range of all tracked looters, or when enemies out of range did the looting.
+
+**New logic:** if a player died at time T, every item they picked up BEFORE T is lost on death. Supports multiple deaths per player (pickups between two deaths get attributed to the next one). Post-death pickups still count toward "should have deposited". Implemented as a two-pass scan:
+
+1. Pass 1: collect `deathTimesByPlayer[name] = [sortedTs...]` from all `__DEATH__` events
+2. Pass 2: for each pickup, if `deathTimesByPlayer[name]` contains any timestamp later than the pickup's, the item is lost
+
+Test case: Alice picks up ×3 Rune (t=0), ×2 Soul (t=10), dies at t=20, picks up ×5 Meal Stew (t=30). Result: Rune & Soul flagged "Lost on Death" (red row); Meal Stew counts as Deposited. Bob (never died) is unaffected.
+
+The live-session event-object shape gained `timestamp`, `looted_by_alliance`, `looted_from_name` fields (previously stripped during the `__live__` mapping), needed for the timestamp window + alliance-aware friendly detection.
+
+**Chest Log Captures permission note.** The card now warns that viewing chest logs requires the **View Chest Logs** permission on your guild role (typically Officer+). Members without it won't see a Log tab in the chest UI — nothing the website can fix.
+
+---
+
 ### 2026-04-21 — Accountability: chest-log cross-check with ✓ verified badges
 
 Existing accountability had two data sources — pickups tracked by the Go client and snapshots of chest tab contents. Attribution was **inferred** proportionally: if total pickups matched chest quantities, the math blamed whoever picked up the most. This missed deposits by the local player (protocol doesn't broadcast own pickups) and over-attributed missing items when multiple guild members touched the same chest.

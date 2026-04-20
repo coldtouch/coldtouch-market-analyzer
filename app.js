@@ -11578,8 +11578,11 @@ async function runAccountabilityCheck() {
     let lootEvents;
     if (sessionId === '__live__') {
         lootEvents = liveLootEvents.map(e => ({
+            timestamp: e.timestamp || e.ts || 0, // preserved for death-window attribution
             looted_by_name: e.looted_by_name || e.lootedBy?.name || '',
             looted_by_guild: e.looted_by_guild || e.lootedBy?.guild || '',
+            looted_by_alliance: e.looted_by_alliance || e.lootedBy?.alliance || '',
+            looted_from_name: e.looted_from_name || e.lootedFrom?.name || '',
             item_id: e.item_id || e.itemId || '',
             numeric_id: e.numeric_id != null ? e.numeric_id : e.numericId,
             quantity: e.quantity || 1
@@ -11646,23 +11649,47 @@ async function runAccountabilityCheck() {
     }
     window._llChestLogMerged = mergedLogMeta;
 
-    // Per-player looted inventory + death tracking
+    // Per-player looted inventory + death tracking.
+    //
+    // 2026-04-21 rewrite — death attribution now uses PICKUP TIMESTAMPS, not
+    // corpse-loot ranges. The old logic only marked items as lost-on-death when
+    // another guild member picked them up off the corpse (required being in
+    // range of the kill). That undercounted losses whenever the victim died
+    // out of range of any tracked looter, or when enemies out of range did the
+    // looting. The new logic is simpler AND more accurate: if a player died at
+    // time T, every item they picked up BEFORE T is lost (they didn't get to
+    // deposit it). Supports multiple deaths per player (items picked up
+    // between deaths get attributed to the next death).
     const lootedByPlayer = {};
-    const deathVictims = new Set(); // players who died (items lost)
-    const lostByDeath = {};        // { playerName: { itemId: qty } } — items looted FROM dead players
+    const deathVictims = new Set();
+    const deathTimesByPlayer = {};  // { name: [sortedTs...] }
+
+    // Pass 1 — collect deaths
     for (const ev of lootEvents) {
-        // Track deaths
         if (ev.item_id === '__DEATH__') {
-            if (ev.looted_from_name) deathVictims.add(ev.looted_from_name);
-            continue;
+            const victim = ev.looted_from_name || '';
+            if (!victim) continue;
+            deathVictims.add(victim);
+            const ts = +new Date(ev.timestamp) || 0;
+            if (!deathTimesByPlayer[victim]) deathTimesByPlayer[victim] = [];
+            deathTimesByPlayer[victim].push(ts);
         }
+    }
+    for (const n of Object.keys(deathTimesByPlayer)) deathTimesByPlayer[n].sort((a, b) => a - b);
+
+    // Pass 2 — attribute each pickup to "survived" or "lost on death"
+    const lostByDeath = {};  // { name: { itemId: qty } } — items the player lost by dying
+    for (const ev of lootEvents) {
+        if (ev.item_id === '__DEATH__') continue;
         const name = ev.looted_by_name || 'Unknown';
+        const evTs = +new Date(ev.timestamp) || 0;
         if (!lootedByPlayer[name]) lootedByPlayer[name] = { guild: ev.looted_by_guild || '', alliance: ev.looted_by_alliance || '', items: {} };
         lootedByPlayer[name].items[ev.item_id] = (lootedByPlayer[name].items[ev.item_id] || 0) + (ev.quantity || 1);
-        // Track items looted from players who died (those items are gone from the victim)
-        if (ev.looted_from_name && deathVictims.has(ev.looted_from_name)) {
-            if (!lostByDeath[ev.looted_from_name]) lostByDeath[ev.looted_from_name] = {};
-            lostByDeath[ev.looted_from_name][ev.item_id] = (lostByDeath[ev.looted_from_name][ev.item_id] || 0) + (ev.quantity || 1);
+        // If this player died at some point AFTER picking this up, it's lost.
+        const deaths = deathTimesByPlayer[name];
+        if (deaths && evTs > 0 && deaths.some(dTs => dTs > evTs)) {
+            if (!lostByDeath[name]) lostByDeath[name] = {};
+            lostByDeath[name][ev.item_id] = (lostByDeath[name][ev.item_id] || 0) + (ev.quantity || 1);
         }
     }
 
