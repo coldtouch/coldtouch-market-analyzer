@@ -300,6 +300,22 @@
 - **Git identity:** `Coldtouch <coldtouch@users.noreply.github.com>`
 - **Always update 3 things after work:** CHANGELOG.md + in-website changelog in About tab (index.html) + features-grid if new feature. User had to remind about this when it was missed during Transport release
 
+## Agent Coding Principles (Karpathy-inspired)
+
+> Adopted April 20, 2026. These principles guide how Claude sessions approach work on this project.
+
+1. **Think Before Coding** — Don't assume. Surface confusion, ask clarifying questions, identify tradeoffs before writing code. If a requirement is ambiguous, stop and clarify rather than guessing.
+
+2. **Simplicity First** — Minimum code that solves the problem. No speculative abstractions, no flexibility that wasn't requested. If 200 lines could be 50, rewrite. Ask: "Would a senior engineer say this is overcomplicated?"
+
+3. **Surgical Changes** — Only touch what you must. Clean up only your own mess. Don't refactor unrelated code in the same commit. Keeps changes reversible and reviews clean.
+
+4. **Goal-Driven Execution** — Define what success looks like, not just what to do. Transform imperatives into verifiable goals:
+   - Instead of "fix the bug" → "reproduce in test, then fix, verify test passes"
+   - Instead of "add validation" → "write tests for constraints, then implement until tests pass"
+
+5. **Eval Loops for Critical Features** — For big features, define acceptance criteria upfront → implement → test against criteria → analyze failures → improve → re-test. Especially valuable for multi-phase features.
+
 ## Standard Workflow (After Any Work)
 1. Update `CHANGELOG.md` with dated section
 2. Add matching entry to changelog-list in `index.html` About tab
