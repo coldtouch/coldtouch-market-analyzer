@@ -2286,6 +2286,16 @@
                     <div class="changelog-list">
                         <div class="changelog-entry">
                             <div class="changelog-date">April 20, 2026</div>
+                            <div class="changelog-title">🔗 Loot Buyer &mdash; multi-tab select + combine</div>
+                            <ul>
+                                <li><strong>Checkbox on every capture card</strong> &mdash; tick 2+ tabs and a combine bar appears with live &ldquo;N tabs &middot; M item lines &middot; X total qty &middot; Y kg&rdquo; summary.</li>
+                                <li><strong>🔗 Combine &amp; Analyze</strong> merges selected tabs: stackables dedup by <code>(itemId, quality, enchantment)</code> with quantities summed; equipment stays separate (each instance is unique).</li>
+                                <li>Each merged item keeps a <code>_sourceTab</code> reference so downstream UI knows which tab contributed it.</li>
+                                <li>Phase 1 evaluate, Phase 2 sell plan, and Phase 3 track all work on the combined tab unchanged &mdash; no code paths had to be rewritten.</li>
+                            </ul>
+                        </div>
+                        <div class="changelog-entry">
+                            <div class="changelog-date">April 20, 2026</div>
                             <div class="changelog-title">👻 Loot Buyer &mdash; ghost &ldquo;Unicorn skin&rdquo; fix (non-tradeable filter)</div>
                             <ul>
                                 <li><strong>Bug:</strong> chest captures sometimes included items that weren&rsquo;t physically in the tab &mdash; most notably <code>UNIQUE_UNLOCK_SKIN_HORSE_UNICORN_WHITE_TELLAFRIEND</code> (a Tell-a-Friend recruiter reward) appearing in a personal &ldquo;sell&rdquo; tab. Reproducible on rescan.</li>
@@ -3629,6 +3639,12 @@
             <!-- Captured chests notification area -->
             <div id="loot-captures-area" style="margin-bottom:1rem;">
                 <div id="loot-captures-list"></div>
+                <!-- Multi-select combine bar (shows when 2+ tabs are checked) -->
+                <div id="loot-combine-bar" style="display:none; margin-top:0.5rem; padding:0.6rem 0.85rem; background:rgba(251,191,36,0.08); border:1px solid rgba(251,191,36,0.4); border-radius:8px; display:flex; align-items:center; gap:0.75rem; flex-wrap:wrap;">
+                    <span id="loot-combine-summary" style="flex:1; color:var(--accent); font-size:0.85rem; font-weight:600;"></span>
+                    <button id="loot-combine-btn" class="btn-primary" style="padding:0.35rem 0.8rem; font-size:0.8rem;">🔗 Combine &amp; Analyze</button>
+                    <button id="loot-combine-clear" class="btn-secondary" style="padding:0.35rem 0.6rem; font-size:0.75rem;">Clear</button>
+                </div>
                 <div id="loot-no-captures" class="empty-state" style="padding:1.25rem 0 0.5rem;">
                     <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" stroke-width="1.5" style="margin:0 auto 0.5rem; display:block;"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>
                     <p style="margin:0 0 0.75rem;">No chest captures yet. Pick how you want to get started:</p>

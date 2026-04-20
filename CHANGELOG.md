@@ -2,6 +2,19 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-04-20 — Loot Buyer: multi-tab select + combine
+
+Each chest tab was a separate card — analysing a bulk purchase that spanned multiple tabs meant eyeballing them one by one. Now every capture card has a checkbox; ticking 2+ reveals a sticky combine bar with a live `N tabs · M item lines · X total qty · Y kg` summary. Click **🔗 Combine & Analyze** and we merge:
+
+- Stackables by `(itemId, quality, enchantment)` — quantities sum
+- Equipment stays separate (each instance is unique by crafter / enchant / quality)
+- Every merged line gets a `_sourceTab` so downstream UI can show which tab contributed it
+- Synthetic capture replaces `lootSelectedCapture` so Phase 1 evaluate / Phase 2 sell plan / Phase 3 track all work unchanged
+
+Removing a capture clears the multi-select set (safer than trying to re-index after a shift).
+
+---
+
 ### 2026-04-20 — Loot Buyer: filter account-bound cosmetics (ghost Unicorn skin fix)
 
 **Bug:** chest captures sometimes included account-bound cosmetic items that aren't physically in the tab — most visible case was `UNIQUE_UNLOCK_SKIN_HORSE_UNICORN_WHITE_TELLAFRIEND` (Riding Horse Skin: Unicorn, a Tell-a-Friend recruiter reward) appearing in a personal "sell" tab in Fort Sterling even though the player never put it there. Symptom was reproducible on rescan.

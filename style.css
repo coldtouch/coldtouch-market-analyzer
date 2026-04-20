@@ -5128,7 +5128,8 @@ END BENCHED: Mounts Database */
 
 .loot-capture-card {
     display: flex;
-    flex-direction: column;
+    flex-direction: row;
+    align-items: center;
     gap: 0.4rem;
     background: var(--bg-card);
     border: 1px solid var(--border-color);
@@ -5140,6 +5141,17 @@ END BENCHED: Mounts Database */
 .loot-capture-card:hover {
     border-color: var(--accent);
     box-shadow: 0 0 12px rgba(212, 175, 55, 0.1);
+}
+
+.loot-capture-card.loot-multi-selected {
+    border-color: rgba(251, 191, 36, 0.7);
+    background: rgba(251, 191, 36, 0.05);
+    box-shadow: 0 0 12px rgba(251, 191, 36, 0.15);
+}
+
+.loot-capture-card .loot-multi-check {
+    flex-shrink: 0;
+    cursor: pointer;
 }
 
 .loot-capture-card .loot-card-title {

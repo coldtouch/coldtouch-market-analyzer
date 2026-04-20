@@ -736,7 +736,7 @@ function initTabs() {
             if (currentTab === 'browser') renderBrowser();
             if (currentTab === 'live-flips') initLiveFlipsTab();
             if (currentTab === 'profile') initProfileTab();
-            if (currentTab === 'loot-buyer') { renderLootCaptures(); loadTrackedTabs(); loadRecentSales(); }
+            if (currentTab === 'loot-buyer') { renderLootCaptures(); loadTrackedTabs(); loadRecentSales(); initLootCombineBar(); }
             if (currentTab === 'loot-logger') { showLootLoggerMode('live'); }
             if (currentTab === 'crafting') {
                 if (window._craftLastData && window._craftLastRecipe && window._craftLastItemId) {
@@ -7359,7 +7359,11 @@ function renderLootCaptures() {
         const calcTabWeight = (items) => items.reduce((sum, it) => sum + getItemWeight(it.itemId) * (it.quantity || 1), 0);
         const makeCard = (onclick, name, badge, itemCount, equipCount, stackCount, totalWeight, timeAgoStr, capIndex) => {
             const weightStr = totalWeight > 0 ? `${totalWeight.toFixed(1)} kg` : '';
-            return `<div class="loot-capture-card" style="cursor:pointer; position:relative;">
+            const isMultiSelected = window._lootMultiSelected && window._lootMultiSelected.has(capIndex);
+            return `<div class="loot-capture-card${isMultiSelected ? ' loot-multi-selected' : ''}" style="cursor:pointer; position:relative;">
+                <label class="loot-multi-check" onclick="event.stopPropagation();" title="Select to combine with other tabs" style="display:flex; align-items:center; padding:0 0.5rem 0 0.25rem;">
+                    <input type="checkbox" data-cap-idx="${capIndex}" ${isMultiSelected ? 'checked' : ''} onclick="event.stopPropagation(); toggleLootMultiSelect(${capIndex}, this.checked);" style="transform:scale(1.15); cursor:pointer;">
+                </label>
                 <div onclick="${onclick}" style="flex:1;">
                     <div style="display:flex; align-items:center; gap:0.4rem;">
                         <span class="loot-card-title">${esc(name)}</span>
@@ -7403,10 +7407,142 @@ function removeLootCapture(index) {
         lootBuyerCaptures.splice(index, 1);
         // E2: No sync needed — lootBuyerCaptures IS window._chestCaptures
         lootSelectedCapture = null;
+        // Removing a capture shifts higher indices — safest to clear multi-select state.
+        if (window._lootMultiSelected) window._lootMultiSelected.clear();
+        updateLootCombineBar();
         renderLootCaptures();
         _fireCaptureBusEvent('remove', null); // F3: notify subscribers
         showToast('Capture removed', 'info');
     }
+}
+
+// ─── Multi-tab select + combine ───────────────────────────────────────
+window._lootMultiSelected = window._lootMultiSelected || new Set();
+
+function toggleLootMultiSelect(capIndex, checked) {
+    if (checked) {
+        window._lootMultiSelected.add(capIndex);
+    } else {
+        window._lootMultiSelected.delete(capIndex);
+    }
+    // Update visual highlight on the card without re-rendering the whole list
+    const card = document.querySelector(`input[data-cap-idx="${capIndex}"]`)?.closest('.loot-capture-card');
+    if (card) card.classList.toggle('loot-multi-selected', checked);
+    updateLootCombineBar();
+}
+
+function updateLootCombineBar() {
+    const bar = document.getElementById('loot-combine-bar');
+    const summary = document.getElementById('loot-combine-summary');
+    if (!bar) return;
+    const sel = window._lootMultiSelected || new Set();
+    if (sel.size < 2) {
+        bar.style.display = 'none';
+        return;
+    }
+    bar.style.display = 'flex';
+    // Aggregate stats across selected captures
+    let totalItems = 0, totalQty = 0, totalWeight = 0;
+    for (const idx of sel) {
+        const cap = lootBuyerCaptures[idx];
+        if (!cap || !Array.isArray(cap.items)) continue;
+        totalItems += cap.items.length;
+        for (const it of cap.items) {
+            const q = it.quantity || 1;
+            totalQty += q;
+            totalWeight += getItemWeight(it.itemId) * q;
+        }
+    }
+    if (summary) {
+        summary.textContent = `${sel.size} tabs selected · ${totalItems} item lines · ${totalQty} total qty${totalWeight > 0 ? ` · ${totalWeight.toFixed(1)} kg` : ''}`;
+    }
+}
+
+function combineLootMultiSelect() {
+    const sel = window._lootMultiSelected || new Set();
+    if (sel.size < 2) { showToast('Select at least 2 tabs to combine.', 'warn'); return; }
+
+    // Build a stacked-item merge keyed by itemId|quality|enchantment for stackables.
+    // Equipment items stay separate — each crafted item is unique (quality + enchant + crafter),
+    // and we preserve source tab info in _sourceTabs for display.
+    const mergedStack = new Map();
+    const equipItems = [];
+    const sourceTabs = [];
+    let earliestMs = Infinity;
+    let isGuild = false;
+
+    const orderedIdxs = [...sel].sort((a, b) => a - b);
+    for (const idx of orderedIdxs) {
+        const cap = lootBuyerCaptures[idx];
+        if (!cap || !Array.isArray(cap.items)) continue;
+        const tabLabel = cap.customName || cap.tabName
+            || (cap.vaultTabs && typeof cap.tabIndex === 'number' && cap.vaultTabs[cap.tabIndex]?.name)
+            || `Tab ${idx + 1}`;
+        sourceTabs.push(tabLabel);
+        if (cap.isGuild) isGuild = true;
+        const capMs = typeof cap.capturedAt === 'number' ? cap.capturedAt : (cap.capturedAt ? new Date(cap.capturedAt).getTime() : 0);
+        if (capMs > 0 && capMs < earliestMs) earliestMs = capMs;
+
+        for (const it of cap.items) {
+            if (it.isEquipment) {
+                // Keep all equipment as separate lines — each instance is unique
+                equipItems.push({ ...it, _sourceTab: tabLabel });
+            } else {
+                const key = `${it.itemId}|${it.quality || 1}|${it.enchantment || 0}`;
+                const existing = mergedStack.get(key);
+                if (existing) {
+                    existing.quantity = (existing.quantity || 1) + (it.quantity || 1);
+                } else {
+                    mergedStack.set(key, { ...it, _sourceTab: tabLabel });
+                }
+            }
+        }
+    }
+
+    const mergedItems = [...equipItems, ...mergedStack.values()];
+    if (mergedItems.length === 0) {
+        showToast('Selected tabs have no items to combine.', 'warn');
+        return;
+    }
+
+    // Build a synthetic capture so downstream code (Phase 1 eval, sell plan, track) works unchanged.
+    const combinedTabName = sourceTabs.length <= 3
+        ? `Combined: ${sourceTabs.join(' + ')}`
+        : `Combined: ${sourceTabs.slice(0, 3).join(' + ')} + ${sourceTabs.length - 3} more`;
+
+    lootSelectedCapture = {
+        tabName:     combinedTabName,
+        customName:  combinedTabName,
+        isGuild,
+        items:       mergedItems,
+        itemCount:   mergedItems.length,
+        capturedAt:  earliestMs === Infinity ? Date.now() : earliestMs,
+        _combined:   true,
+        _sourceTabs: sourceTabs,
+    };
+    selectLootCaptureUI(combinedTabName, mergedItems);
+    showToast(`Combined ${orderedIdxs.length} tabs → ${mergedItems.length} merged item lines.`, 'success');
+}
+
+function clearLootMultiSelect() {
+    window._lootMultiSelected.clear();
+    updateLootCombineBar();
+    // Uncheck boxes + remove highlight
+    document.querySelectorAll('#loot-captures-list .loot-capture-card .loot-multi-check input').forEach(input => {
+        input.checked = false;
+    });
+    document.querySelectorAll('#loot-captures-list .loot-capture-card.loot-multi-selected').forEach(card => {
+        card.classList.remove('loot-multi-selected');
+    });
+}
+
+let _lootCombineBarWired = false;
+function initLootCombineBar() {
+    if (_lootCombineBarWired) { updateLootCombineBar(); return; }
+    _lootCombineBarWired = true;
+    document.getElementById('loot-combine-btn')?.addEventListener('click', combineLootMultiSelect);
+    document.getElementById('loot-combine-clear')?.addEventListener('click', clearLootMultiSelect);
+    updateLootCombineBar();
 }
 
 function renameLootCapture(index) {
