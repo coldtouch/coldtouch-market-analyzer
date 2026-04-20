@@ -2,6 +2,21 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-04-20 — Loot Buyer: filter account-bound cosmetics (ghost Unicorn skin fix)
+
+**Bug:** chest captures sometimes included account-bound cosmetic items that aren't physically in the tab — most visible case was `UNIQUE_UNLOCK_SKIN_HORSE_UNICORN_WHITE_TELLAFRIEND` (Riding Horse Skin: Unicorn, a Tell-a-Friend recruiter reward) appearing in a personal "sell" tab in Fort Sterling even though the player never put it there. Symptom was reproducible on rescan.
+
+**Root cause:** The Go client's `globalItemCache` is populated by every `NewSimpleItem`/`NewEquipmentItem`/etc. event the game sends — including events for account-bound items (mount skin unlocks, avatars, TELLAFRIEND rewards) that are always in awareness. When the game sends `evAttachItemContainer` with the tab's slot map, some of those slot IDs collide with cached account-bound items and get pulled into the capture.
+
+**Fix — defensive filter at two layers:**
+
+- **Go client** (`client/itemmap.go`, `client/event_container_items.go`): new `IsNonTradeableItem(itemName)` that returns true for `UNIQUE_UNLOCK_*`, `SKIN_*`, `UNIQUE_AVATAR*`, `UNIQUE_HIDEOUT*`, `UNKNOWN_*`, and any item containing `_TELLAFRIEND`. `BuildCaptureFromSlots` now skips these and logs each filtered item at Info level; capture summary reports a new `filtered` count.
+- **Frontend** (`app.js`): matching `isNonTradeableItemId(itemId)` applied in the WS `chest-capture` handler before pushing to `window._chestCaptures` — gives immediate relief even if the user hasn't rebuilt the Go client.
+
+Tradeable items (ores, bars, weapons, armor, regular mounts including Mammoths and Ox) are unaffected.
+
+---
+
 ### 2026-04-20 — Craft Runs: Tab Scan linking + Portfolio sync + Refining Planner
 
 **Tab Scan Linking (frontend for existing `POST /api/craft-runs/:id/scan`)**

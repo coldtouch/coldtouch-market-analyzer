@@ -431,6 +431,21 @@ function getItemWeight(id) {
     return ITEM_WEIGHTS[id] || 0;
 }
 
+// Non-tradeable patterns — account-bound cosmetics, unlock tokens, avatar art, etc.
+// The game sometimes leaks these into chest-tab slot maps (notably mount skin unlocks
+// like UNIQUE_UNLOCK_SKIN_HORSE_*_TELLAFRIEND), so we filter them out of Loot Buyer
+// captures. Same patterns as the Go client's IsNonTradeableItem.
+function isNonTradeableItemId(itemId) {
+    if (!itemId || typeof itemId !== 'string') return false;
+    if (itemId.startsWith('UNIQUE_UNLOCK_')) return true;
+    if (itemId.startsWith('SKIN_'))          return true;
+    if (itemId.startsWith('UNIQUE_AVATAR'))  return true;
+    if (itemId.startsWith('UNIQUE_HIDEOUT')) return true;
+    if (itemId.startsWith('UNKNOWN_'))       return true;
+    if (itemId.includes('_TELLAFRIEND'))     return true;
+    return false;
+}
+
 function getQualityName(q) {
     const map = { '1': 'Normal', '2': 'Good', '3': 'Outstanding', '4': 'Excellent', '5': 'Masterpiece' };
     return map[String(q)] || 'Unknown';
@@ -11844,6 +11859,16 @@ function handleLootLoggerWsMessage(msg) {
             // Always store if in accountability mode regardless of toggle
         } else if (!chestCaptureActive) {
             // Skip if capture mode is off and not on accountability tab
+        }
+        // Filter out account-bound cosmetics that the game sometimes leaks into chest slot maps
+        // (mount skins, unlock tokens, TELLAFRIEND rewards, etc.). Defense-in-depth with Go client filter.
+        if (Array.isArray(msg.data.items)) {
+            const before = msg.data.items.length;
+            msg.data.items = msg.data.items.filter(it => !isNonTradeableItemId(it.itemId));
+            const filtered = before - msg.data.items.length;
+            if (filtered > 0) {
+                console.log(`[ChestCapture] Filtered ${filtered} non-tradeable item(s) (mount skins / unlocks / TELLAFRIEND cosmetics)`);
+            }
         }
         // E2: lootBuyerCaptures IS window._chestCaptures — push to the unified store
         if (!window._chestCaptures.includes(msg.data)) {

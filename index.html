@@ -2286,6 +2286,16 @@
                     <div class="changelog-list">
                         <div class="changelog-entry">
                             <div class="changelog-date">April 20, 2026</div>
+                            <div class="changelog-title">👻 Loot Buyer &mdash; ghost &ldquo;Unicorn skin&rdquo; fix (non-tradeable filter)</div>
+                            <ul>
+                                <li><strong>Bug:</strong> chest captures sometimes included items that weren&rsquo;t physically in the tab &mdash; most notably <code>UNIQUE_UNLOCK_SKIN_HORSE_UNICORN_WHITE_TELLAFRIEND</code> (a Tell-a-Friend recruiter reward) appearing in a personal &ldquo;sell&rdquo; tab. Reproducible on rescan.</li>
+                                <li><strong>Cause:</strong> the Go client&rsquo;s global item cache includes account-bound items (mount skin unlocks, avatars, TELLAFRIEND rewards) that are always in awareness. The game&rsquo;s <code>AttachItemContainer</code> slot map occasionally references these slots, leaking cosmetics into chest captures.</li>
+                                <li><strong>Fix (two layers):</strong> new <code>IsNonTradeableItem</code>/<code>isNonTradeableItemId</code> filter in both the Go client and the website. Skips <code>UNIQUE_UNLOCK_*</code>, <code>SKIN_*</code>, <code>UNIQUE_AVATAR*</code>, <code>UNIQUE_HIDEOUT*</code>, <code>UNKNOWN_*</code>, and anything containing <code>_TELLAFRIEND</code>. Tradeable mounts (Mammoth, Ox, regular horses) are unaffected.</li>
+                                <li>Go client now logs each filtered item at Info level and reports a <code>filtered</code> count in the capture summary.</li>
+                            </ul>
+                        </div>
+                        <div class="changelog-entry">
+                            <div class="changelog-date">April 20, 2026</div>
                             <div class="changelog-title">⚒️ Craft Runs &mdash; Tab Scan linking, Portfolio sync, Refining Planner</div>
                             <ul>
                                 <li><strong>📦 From Scan</strong> button in run detail &mdash; attach a chest capture directly to an active run. Cost is split across items by quantity (or by market value); each line becomes a <code>tab_scan</code>-sourced buy transaction.</li>
