@@ -2285,6 +2285,16 @@
                     <div id="changelog-wrapper" style="max-height: 500px; overflow-y: auto; position: relative;">
                     <div class="changelog-list">
                         <div class="changelog-entry">
+                            <div class="changelog-date">April 21, 2026</div>
+                            <div class="changelog-title">🔤 Accountability &mdash; recover item names when Go client ships without itemmap</div>
+                            <ul>
+                                <li><strong>Bug:</strong> a friend ran a CTA and shared the accountability report &mdash; every one of 651 events rendered as &ldquo;Unknown 1954&rdquo;, &ldquo;Unknown 2409&rdquo;, &ldquo;Unknown 9090&rdquo;&hellip; Regear was impossible.</li>
+                                <li><strong>Cause:</strong> the Go client resolves numeric item IDs via a companion <code>itemmap.json</code> next to the binary. Missing/stale file &rarr; <code>resolveItemName</code> falls back to <code>UNKNOWN_&lt;numericID&gt;</code> &rarr; every event streams with the sentinel name instead of the real string ID.</li>
+                                <li><strong>Fix &mdash; website recovers without waiting for client re-install:</strong> bundled <code>itemmap.json</code> (11,175 entries) on the frontend; new <code>rewriteUnknownItemId</code> helper maps <code>UNKNOWN_1954</code> &rarr; <code>T4_RUNE</code> &rarr; &ldquo;Adept&rsquo;s Rune&rdquo; using either <code>numeric_id</code> from the payload or the suffix parsed out of the item ID. Normalization runs at every ingestion point: accountability fetch (session / live / shared), live WebSocket loot events, and chest-capture handler (before the cosmetic filter &mdash; otherwise mapped items would be wrongly filtered).</li>
+                                <li>Verified against the friend&rsquo;s real share link: 651/651 events resolved, 429 item rows now show proper names (&ldquo;Grandmaster&rsquo;s Bag&rdquo;, &ldquo;Major Gigantify Potion&rdquo;, &ldquo;Grandmaster&rsquo;s Hellion Jacket&rdquo;&hellip;). Works for viewers who never ran the Go client themselves.</li>
+                            </ul>
+                        </div>
+                        <div class="changelog-entry">
                             <div class="changelog-date">April 20, 2026</div>
                             <div class="changelog-title">🔗 Loot Buyer &mdash; multi-tab select + combine</div>
                             <ul>

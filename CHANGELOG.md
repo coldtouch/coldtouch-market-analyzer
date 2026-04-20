@@ -2,6 +2,27 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-04-21 — Accountability: recover item names when Go client ships without itemmap
+
+**Bug:** a friend ran a CTA and shared the accountability report — every item rendered as "Unknown 1954", "Unknown 2409", "Unknown 9090"... 651 events, all unusable. Regear was impossible.
+
+**Root cause:** the Go client resolves numeric item IDs via a companion `itemmap.json` file placed next to the binary. If that file is missing or stale (friend's case), `resolveItemName` falls back to `UNKNOWN_<numericID>` — so every loot event streamed to the VPS carries `item_id: "UNKNOWN_1954"` instead of `"T4_RUNE"`. The frontend's `getFriendlyName` has no way to recover from that, so the UI shows "Unknown 1954".
+
+**Fix — frontend recovers numeric IDs without waiting for client re-install:**
+
+- Added [itemmap.json](itemmap.json) to the website (11,175 numeric → string-ID mappings — same file the Go client uses).
+- `loadData()` now fetches it alongside `items.json` / `recipes.json` into a `NUMERIC_ITEM_MAP` global.
+- New `rewriteUnknownItemId(itemId, numericId)` helper: if `item_id` starts with `UNKNOWN_` and we have the numeric (either from the event payload or parsed out of the suffix), map it back to the real string ID. Falls through safely when the numeric isn't in our map.
+- Normalization applied at every event ingestion point so the rest of the rendering pipeline works unchanged:
+  - `runAccountabilityCheck` — normalizes after fetching session events (all three sources: `__live__`, `__shared__`, and the authenticated `/api/loot-session/:id` fetch).
+  - `_pushLiveEvent` — recovers IDs on every WebSocket loot event.
+  - `msg.type === 'chest-capture'` handler — recovers nested `items[].itemId` before the non-tradeable cosmetic filter runs (important: otherwise mapped items like T4_RUNE would be lost to the `UNKNOWN_` prefix filter).
+  - `_renderPublicAccountabilityView` — normalizes shared captures as they're injected.
+
+Verified against the friend's actual share link ([accShare=8WqBnRjy...](https://coldtouch.github.io/coldtouch-market-analyzer/?accShare=8WqBnRjy322hvOTr7gxPvCdXDG3TCdVz)): all 651 events resolved, 0 `UNKNOWN_*` left, 429 item rows render real names ("Battle Memento", "Grandmaster's Bag .1", "Major Gigantify Potion", "Grandmaster's Hellion Jacket .2"...). Works even for viewers who never ran the Go client themselves.
+
+---
+
 ### 2026-04-20 — Loot Buyer: multi-tab select + combine
 
 Each chest tab was a separate card — analysing a bulk purchase that spanned multiple tabs meant eyeballing them one by one. Now every capture card has a checkbox; ticking 2+ reveals a sticky combine bar with a live `N tabs · M item lines · X total qty · Y kg` summary. Click **🔗 Combine & Analyze** and we merge:

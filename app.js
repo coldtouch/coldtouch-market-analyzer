@@ -304,6 +304,11 @@ const DEBUG = false;
 // ====== STATE ======
 let ITEM_NAMES = {};
 let ITEM_WEIGHTS = {};
+// Numeric item ID → string ID (e.g. "1954" → "T4_RUNE"). Fallback resolver for
+// loot events coming from an out-of-date Go client where itemmap.json wasn't
+// loaded — the client stamps "UNKNOWN_<numericID>" as item_id but still sends
+// numeric_id, so we can recover the real string ID here.
+let NUMERIC_ITEM_MAP = {};
 let itemsList = [];
 let recipesData = {};
 let currentTab = 'browser';
@@ -425,6 +430,36 @@ function showPrompt(message, defaultValue, onSubmit) {
 function getFriendlyName(id) {
     if (ITEM_NAMES[id] && ITEM_NAMES[id].trim() !== '') return ITEM_NAMES[id];
     return id.replace(/_/g, ' ').replace(/T(\d+)/, 'Tier $1').toLowerCase().replace(/\b\w/g, l => l.toUpperCase());
+}
+
+// If an itemId arrives as "UNKNOWN_<numericID>" (friend's Go client was missing
+// itemmap.json), recover the real string ID via numeric_id + NUMERIC_ITEM_MAP.
+// Safe no-op when the id is already resolved or the numeric isn't in our map.
+function rewriteUnknownItemId(itemId, numericId) {
+    if (typeof itemId !== 'string' || !itemId.startsWith('UNKNOWN_')) return itemId;
+    const n = parseInt(numericId != null ? numericId : itemId.slice(8), 10);
+    if (!Number.isFinite(n) || n <= 0) return itemId;
+    const mapped = NUMERIC_ITEM_MAP[String(n)];
+    return (mapped && typeof mapped === 'string' && mapped.trim()) ? mapped : itemId;
+}
+
+// Normalize loot events in place — handles both snake_case (backend replay) and
+// camelCase (direct WS relay) field shapes.
+function normalizeLootEventInPlace(ev) {
+    if (!ev || typeof ev !== 'object') return ev;
+    if (typeof ev.item_id === 'string') ev.item_id = rewriteUnknownItemId(ev.item_id, ev.numeric_id);
+    if (typeof ev.itemId === 'string')  ev.itemId  = rewriteUnknownItemId(ev.itemId, ev.numericId);
+    return ev;
+}
+
+// Normalize a chest capture (and its nested items array) in place.
+function normalizeChestCaptureInPlace(cap) {
+    if (cap && Array.isArray(cap.items)) {
+        for (const it of cap.items) {
+            if (typeof it.itemId === 'string') it.itemId = rewriteUnknownItemId(it.itemId, it.numericId);
+        }
+    }
+    return cap;
 }
 
 function getItemWeight(id) {
@@ -631,15 +666,19 @@ function hideError(container) {
 async function loadData() {
     try {
         const cb = '?v=' + Date.now();
-        const [resItems, resRecipes, resWeights] = await Promise.all([
+        const [resItems, resRecipes, resWeights, resItemMap] = await Promise.all([
             fetch('items.json' + cb),
             fetch('recipes.json' + cb),
-            fetch('itemweights.json' + cb).catch(() => ({ ok: false }))
+            fetch('itemweights.json' + cb).catch(() => ({ ok: false })),
+            fetch('itemmap.json' + cb).catch(() => ({ ok: false }))
         ]);
         ITEM_NAMES = await resItems.json();
         itemsList = Object.keys(ITEM_NAMES).filter(k => k && ITEM_NAMES[k]);
         recipesData = await resRecipes.json();
         if (resWeights.ok) ITEM_WEIGHTS = await resWeights.json();
+        if (resItemMap.ok) {
+            try { NUMERIC_ITEM_MAP = await resItemMap.json(); } catch { NUMERIC_ITEM_MAP = {}; }
+        }
     } catch (e) {
         console.error('Failed to load data files:', e);
     }
@@ -11356,6 +11395,7 @@ async function runAccountabilityCheck() {
             looted_by_name: e.looted_by_name || e.lootedBy?.name || '',
             looted_by_guild: e.looted_by_guild || e.lootedBy?.guild || '',
             item_id: e.item_id || e.itemId || '',
+            numeric_id: e.numeric_id != null ? e.numeric_id : e.numericId,
             quantity: e.quantity || 1
         }));
     } else if (sessionId === '__shared__' && Array.isArray(window._sharedAccountabilityEvents)) {
@@ -11372,6 +11412,10 @@ async function runAccountabilityCheck() {
             return;
         }
     }
+    // Recover UNKNOWN_<n> item IDs — friend's Go client was missing itemmap.json
+    // on their machine, so everything streamed as "UNKNOWN_<numericID>". We still
+    // have numeric_id in every event, so map it back to real string IDs here.
+    if (Array.isArray(lootEvents)) lootEvents.forEach(normalizeLootEventInPlace);
 
     // Merge selected chest captures into deposit inventory
     const captures = window._chestCaptures || [];
@@ -11940,6 +11984,8 @@ function _liveEventKey(ev) {
 }
 
 function _pushLiveEvent(ev) {
+    // Recover UNKNOWN_<n> -> real string ID before anything else touches the event
+    normalizeLootEventInPlace(ev);
     // Skip if we've already seen this exact event (replayed via WS reconnect, etc.)
     const key = _liveEventKey(ev);
     if (window._liveEventKeys.has(key)) return;
@@ -11996,6 +12042,10 @@ function handleLootLoggerWsMessage(msg) {
         } else if (!chestCaptureActive) {
             // Skip if capture mode is off and not on accountability tab
         }
+        // Recover UNKNOWN_<n> item IDs from a stale/missing client itemmap before
+        // cosmetic filtering (otherwise mapped items like T4_RUNE would be lost
+        // to the UNKNOWN_ prefix filter in isNonTradeableItemId).
+        normalizeChestCaptureInPlace(msg.data);
         // Filter out account-bound cosmetics that the game sometimes leaks into chest slot maps
         // (mount skins, unlock tokens, TELLAFRIEND rewards, etc.). Defense-in-depth with Go client filter.
         if (Array.isArray(msg.data.items)) {
@@ -15754,7 +15804,9 @@ async function _renderPublicAccountabilityView(data) {
     window._chestCaptures = window._chestCaptures || [];
     const sharedCapStartIdx = window._chestCaptures.length;
     for (const cap of (data.captures || [])) {
-        window._chestCaptures.push({ ...cap, _isSharedView: true });
+        const shared = { ...cap, _isSharedView: true };
+        normalizeChestCaptureInPlace(shared); // recover UNKNOWN_<n> items from shared view
+        window._chestCaptures.push(shared);
     }
 
     // 5. Pre-populate the dropdowns so runAccountabilityCheck reads exactly what was shared.
