@@ -5474,9 +5474,18 @@ WantedBy=multi-user.target
     b64_svc = base64.b64encode(svc.encode()).decode()
     run_wait(f"echo '{b64_svc}' | base64 -d > /etc/systemd/system/albion-saas.service")
 
-    # DO-3: install/refresh SQLite backup cron. Runs every 6h, keeps 7 days.
-    backup_cron = """# Albion SaaS DB backup — 4x daily, retain 7 days. Managed by deploy_saas.py.
-0 */6 * * * root sqlite3 /opt/albion-saas/database.sqlite ".backup /opt/albion-saas/backups/db-$(date +\\%Y\\%m\\%d-\\%H).sqlite" 2>>/var/log/albion-backup.log && find /opt/albion-saas/backups -name 'db-*.sqlite' -mtime +7 -delete
+    # DO-3: install/refresh SQLite backup cron. Runs every 6h, keeps last 4 snapshots (~1 day).
+    #
+    # Prior version used `&&` between backup and prune and an mtime-based `find ... -mtime +7
+    # -delete` retention. Two failure modes:
+    #   (1) && means prune only runs when the backup succeeds — so if the disk filled up and
+    #       the backup failed, the prune never ran, and the disk stayed full forever.
+    #   (2) 7 days × 4 snapshots/day × ~6GB each = 168 GB projected on a 96 GB disk.
+    #
+    # New version uses `;` so prune ALWAYS runs, and keep-by-count instead of keep-by-time
+    # so disk usage is bounded regardless of DB growth rate.
+    backup_cron = """# Albion SaaS DB backup — 4x daily, keep last 4 snapshots (~24h rollback window). Managed by deploy_saas.py.
+0 */6 * * * root sqlite3 /opt/albion-saas/database.sqlite ".backup /opt/albion-saas/backups/db-$(date +\\%Y\\%m\\%d-\\%H).sqlite" 2>>/var/log/albion-backup.log; ls -t /opt/albion-saas/backups/db-*.sqlite 2>/dev/null | tail -n +5 | xargs -r rm -f
 """
     b64_cron = base64.b64encode(backup_cron.encode()).decode()
     run_wait(f"echo '{b64_cron}' | base64 -d > /etc/cron.d/albion-backup && chmod 644 /etc/cron.d/albion-backup")
