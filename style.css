@@ -6284,6 +6284,77 @@ footer {
     overflow-y: auto;
 }
 
+/* 2026-04-21 deaths redesign — split into friendly/enemy sub-groups so a
+   ZvZ with 70+ enemy kills doesn't dominate the accountability view. */
+.ll-deaths-body {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+    padding: 0.3rem 0.2rem;
+}
+.ll-deaths-subgroup {
+    background: rgba(255, 255, 255, 0.015);
+    border: 1px solid rgba(255, 255, 255, 0.05);
+    border-radius: 6px;
+    overflow: hidden;
+}
+.ll-deaths-subgroup-friendly {
+    border-left: 3px solid var(--profit-green);
+}
+.ll-deaths-subgroup-enemy {
+    border-left: 3px solid var(--loss-red);
+    opacity: 0.92;
+}
+.ll-deaths-subgroup-summary {
+    cursor: pointer;
+    padding: 0.45rem 0.7rem;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.85rem;
+    font-weight: 600;
+    list-style: none;
+    user-select: none;
+    background: rgba(255, 255, 255, 0.03);
+}
+.ll-deaths-subgroup-summary::-webkit-details-marker { display: none; }
+.ll-deaths-subgroup-summary::before {
+    content: '▸';
+    font-size: 0.7rem;
+    color: var(--text-muted);
+    transition: transform 0.12s ease;
+    flex-shrink: 0;
+}
+.ll-deaths-subgroup[open] .ll-deaths-subgroup-summary::before {
+    transform: rotate(90deg);
+}
+.ll-deaths-subgroup-icon { font-size: 1rem; line-height: 1; }
+.ll-deaths-subgroup-title { color: var(--text-primary); }
+.ll-deaths-subgroup-count {
+    background: rgba(255, 255, 255, 0.1);
+    padding: 0.1rem 0.5rem;
+    border-radius: 10px;
+    font-size: 0.72rem;
+    font-weight: 700;
+    color: var(--text-secondary);
+}
+.ll-deaths-subgroup-value {
+    margin-left: 0.3rem;
+    font-size: 0.74rem;
+    color: var(--accent);
+    font-weight: 500;
+}
+.ll-deaths-subgroup-friendly .ll-deaths-subgroup-value { color: var(--loss-red); }
+.ll-deaths-subgroup-enemy .ll-deaths-subgroup-value { color: var(--profit-green); }
+.ll-deaths-subgroup-hint {
+    margin-left: auto;
+    font-size: 0.7rem;
+    color: var(--text-muted);
+    font-style: italic;
+    font-weight: 400;
+}
+.ll-deaths-subgroup[open] .ll-deaths-subgroup-hint { display: none; }
+
 /* Individual death row — compact one-liner that expands on click */
 .ll-death-row {
     border-left: 3px solid var(--border);

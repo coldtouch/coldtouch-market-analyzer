@@ -2,6 +2,20 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-04-21 — Deaths section: split friendly vs enemy, collapse enemy kills
+
+74-death sessions (ZvZ) made the Accountability view unreadable — one flat list of death rows scrolled forever. Redesign:
+
+- **Deaths section body** now splits into two `<details>` sub-groups:
+  - **🛡️ Friendly deaths** — auto-expanded. Sorted by estimated silver lost. Header shows total value at risk for regear.
+  - **💀 Enemy kills** — collapsed by default with "click to expand" hint on the right. Sorted by silver taken. Irrelevant to regear but kept for audit.
+- Sub-group headers show count badge + silver total at a glance.
+- Rows within each sub-group keep the existing per-looter grouping + item rows from the prior redesign.
+
+Also fixed a latent bug — the `__live__` session event mapping was stripping `looted_from_guild` and `looted_from_alliance`, which broke the alliance-aware friendly detection for live sessions (everything rendered as "enemy"). Now preserved.
+
+---
+
 ### 2026-04-21 — Death attribution via pickup timestamps + chest-log permission note
 
 **Death-attribution rewrite.** Old logic only marked items as "lost on death" when another tracked player looted them off the corpse — this under-counted losses any time the victim died out of range of all tracked looters, or when enemies out of range did the looting.

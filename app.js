@@ -10246,7 +10246,7 @@ function renderDeathsSection(deaths) {
         </div>`;
     };
 
-    const rows = deaths.map(d => {
+    const renderDeathRow = (d) => {
         const safeVictim = esc(d.victim);
         const sideClass = d.wasFriendly ? 'll-death-friendly' : 'll-death-enemy';
         const sideIcon = d.wasFriendly ? '🛡️' : '💀';
@@ -10333,8 +10333,45 @@ function renderDeathsSection(deaths) {
                 </div>
             </div>
         </details>`;
-    }).join('');
-    // Whole section wrapped in one <details> — click the summary to collapse the list entirely.
+    };
+
+    // 2026-04-21 redesign — 74 death rows in one flat list was a wall of text.
+    // Now split into two collapsible sub-sections:
+    //   • Friendly deaths — auto-open, sorted by value desc (what matters for regear)
+    //   • Enemy kills — collapsed by default (useful for audit but noisy in a ZvZ)
+    // The overall Deaths section stays OPEN so the counts are always visible,
+    // but sub-sections hide the detail rows until the user asks for them.
+    const byValue = (a, b) => (b.estimatedValue || 0) - (a.estimatedValue || 0);
+    const friendlyDeaths = deaths.filter(d => d.wasFriendly).sort(byValue);
+    const enemyDeaths = deaths.filter(d => !d.wasFriendly).sort(byValue);
+
+    // Aggregate silver for the sub-section headers so users see the relative weight at a glance.
+    const friendlyValue = friendlyDeaths.reduce((s, d) => s + (d.estimatedValue || 0), 0);
+    const enemyValue = enemyDeaths.reduce((s, d) => s + (d.estimatedValue || 0), 0);
+
+    const friendlyHtml = friendlyDeaths.length > 0 ? `
+        <details class="ll-deaths-subgroup ll-deaths-subgroup-friendly" open>
+            <summary class="ll-deaths-subgroup-summary">
+                <span class="ll-deaths-subgroup-icon">🛡️</span>
+                <span class="ll-deaths-subgroup-title">Friendly deaths</span>
+                <span class="ll-deaths-subgroup-count">${friendlyDeaths.length}</span>
+                ${friendlyValue > 0 ? `<span class="ll-deaths-subgroup-value">${formatSilver(friendlyValue)} lost</span>` : ''}
+            </summary>
+            <div class="ll-deaths-list">${friendlyDeaths.map(renderDeathRow).join('')}</div>
+        </details>` : '';
+
+    const enemyHtml = enemyDeaths.length > 0 ? `
+        <details class="ll-deaths-subgroup ll-deaths-subgroup-enemy">
+            <summary class="ll-deaths-subgroup-summary">
+                <span class="ll-deaths-subgroup-icon">💀</span>
+                <span class="ll-deaths-subgroup-title">Enemy kills</span>
+                <span class="ll-deaths-subgroup-count">${enemyDeaths.length}</span>
+                ${enemyValue > 0 ? `<span class="ll-deaths-subgroup-value">${formatSilver(enemyValue)} taken</span>` : ''}
+                <span class="ll-deaths-subgroup-hint">click to expand</span>
+            </summary>
+            <div class="ll-deaths-list">${enemyDeaths.map(renderDeathRow).join('')}</div>
+        </details>` : '';
+
     return `<details class="ll-deaths-section" open>
         <summary class="ll-deaths-summary">
             <span style="font-size:1.1rem;">☠</span>
@@ -10344,7 +10381,7 @@ function renderDeathsSection(deaths) {
             ${enemyCount > 0 ? `<span class="ll-deaths-enemy-count">💀 ${enemyCount}</span>` : ''}
             ${filterActive ? `<button class="btn-small" style="margin-left:auto;" onclick="event.preventDefault();clearDeathFilter()">&times; Clear filter (${esc(_llDeathFilterVictim)})</button>` : ''}
         </summary>
-        <div class="ll-deaths-list">${rows}</div>
+        <div class="ll-deaths-body">${friendlyHtml}${enemyHtml}</div>
     </details>`;
 }
 
@@ -11583,6 +11620,8 @@ async function runAccountabilityCheck() {
             looted_by_guild: e.looted_by_guild || e.lootedBy?.guild || '',
             looted_by_alliance: e.looted_by_alliance || e.lootedBy?.alliance || '',
             looted_from_name: e.looted_from_name || e.lootedFrom?.name || '',
+            looted_from_guild: e.looted_from_guild || e.lootedFrom?.guild || '',
+            looted_from_alliance: e.looted_from_alliance || e.lootedFrom?.alliance || '',
             item_id: e.item_id || e.itemId || '',
             numeric_id: e.numeric_id != null ? e.numeric_id : e.numericId,
             quantity: e.quantity || 1

@@ -2286,6 +2286,16 @@
                     <div class="changelog-list">
                         <div class="changelog-entry">
                             <div class="changelog-date">April 21, 2026</div>
+                            <div class="changelog-title">☠️ Deaths section &mdash; split friendly vs enemy, collapse enemy kills</div>
+                            <ul>
+                                <li>A 74-death ZvZ used to be a flat wall of rows. Now the Deaths section body splits into two collapsible sub-groups.</li>
+                                <li><strong>🛡️ Friendly deaths</strong> &mdash; auto-expanded, sorted by silver lost. Header shows total regear exposure.</li>
+                                <li><strong>💀 Enemy kills</strong> &mdash; collapsed by default with &ldquo;click to expand&rdquo; hint. Sorted by silver taken. Kept for audit but out of the way.</li>
+                                <li>Fixed: <code>__live__</code> session event mapping was stripping <code>looted_from_guild</code>/<code>looted_from_alliance</code>, making every death render as enemy in live sessions.</li>
+                            </ul>
+                        </div>
+                        <div class="changelog-entry">
+                            <div class="changelog-date">April 21, 2026</div>
                             <div class="changelog-title">💀 Death attribution via pickup timestamps + chest-log permission note</div>
                             <ul>
                                 <li><strong>Old logic:</strong> items were only marked &ldquo;lost on death&rdquo; when another tracked player looted them off the corpse. This missed losses whenever the victim died out of range of all tracked looters, or when enemies out of range did the looting.</li>
