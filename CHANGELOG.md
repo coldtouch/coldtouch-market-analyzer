@@ -2,6 +2,37 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-04-20 — Craft Runs: Tab Scan linking + Portfolio sync + Refining Planner
+
+**Tab Scan Linking (frontend for existing `POST /api/craft-runs/:id/scan`)**
+
+- New **📦 From Scan** button in the run detail toolbar (all statuses except `complete`).
+- Capture-picker modal lists every chest capture in memory from the custom client: tab name, vault type, item-line count, total qty, time ago.
+- User picks a capture + enters total silver paid + allocation method (`equal_split` by qty, or `by_market_value`).
+- Each item becomes a `tab_scan`-sourced BUY transaction; run `total_cost` increments by the paid amount.
+- Submit disabled until both a capture is selected and paid > 0.
+- Escape closes the scan modal (added to `modalMap`).
+
+**Portfolio Integration**
+
+- New **📊 Sync to Portfolio** button (visible when run has ≥1 transaction).
+- Pushes `buy` + `sell` transactions into `localStorage['albion_portfolio']`, tagged `_craftRunId` + `_source:'craft_run'` + `_craftRunName`.
+- Re-sync is idempotent — prior entries for the same run id are removed before new ones insert.
+- Internal pipeline steps (`refine_in`/`refine_out`/`craft_in`/`craft_out`) skipped — they're run-internal, not market transactions.
+- Auto-refreshes Portfolio view if user is on that tab.
+
+**Refining Planner**
+
+- Collapsible helper at the top of the Craft Runs tab, toggled by **⚒️ Refine Planner**.
+- Inputs: material (Ore/Wood/Fiber/Hide/Rock), raw qty, tier (T2-T8), Focus, Hideout, PL (0-8), Core % (0-30).
+- Output: best royal city (e.g. Ore → Thetford +40%) OR hideout mode (15% base + PL×2% + core), refined product name, RRR %, expected output = `floor(qty / (1 − RRR))`, materials saved.
+- Live recalc on every input change via existing `calculateRRR()` helper.
+- Formula footer explains the math.
+
+**Backend**: no changes — all three features are frontend-only consumers of existing endpoints.
+
+---
+
 ### 2026-04-20 — Craft Runs: full buy→refine→craft→sell pipeline tracker
 
 **New tab: "Craft Runs" (Trading group)**

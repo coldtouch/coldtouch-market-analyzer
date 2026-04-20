@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "albion-market",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["serve", "-l", "3333", "-s", "."],
+      "port": 3333
+    },
+    {
+      "name": "albion-friendly-dubinsky",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["serve", "-l", "3334", "-s", ".claude/worktrees/friendly-dubinsky"],
+      "port": 3334
+    }
+  ]
+}

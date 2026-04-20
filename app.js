@@ -15014,6 +15014,7 @@ document.addEventListener('keydown', function(e) {
         ['feedback-modal',        () => closeFeedbackModal()],
         ['chart-modal',           () => { document.getElementById('chart-modal')?.classList.add('hidden'); }],
         ['cr-txn-modal',          () => { document.getElementById('cr-txn-modal')?.classList.add('hidden'); }],
+        ['cr-scan-modal',         () => { document.getElementById('cr-scan-modal')?.classList.add('hidden'); }],
         ['ll-shortcut-help',      () => { document.getElementById('ll-shortcut-help')?.remove(); }],
     ];
     for (const [id, closeFn] of modalMap) {
@@ -16417,6 +16418,30 @@ function initCraftRunsTab() {
             document.getElementById('cr-txn-modal')?.classList.add('hidden');
         });
 
+        // Scan picker modal wiring
+        document.getElementById('cr-scan-close-btn')?.addEventListener('click', () => {
+            document.getElementById('cr-scan-modal')?.classList.add('hidden');
+        });
+        document.getElementById('cr-scan-cancel-btn')?.addEventListener('click', () => {
+            document.getElementById('cr-scan-modal')?.classList.add('hidden');
+        });
+
+        // Refining planner wiring
+        document.getElementById('cr-refine-planner-toggle')?.addEventListener('click', () => {
+            const panel = document.getElementById('cr-refine-planner');
+            if (!panel) return;
+            panel.style.display = panel.style.display === 'none' || !panel.style.display ? 'flex' : 'none';
+        });
+        document.getElementById('cr-refine-planner-close')?.addEventListener('click', () => {
+            const panel = document.getElementById('cr-refine-planner');
+            if (panel) panel.style.display = 'none';
+        });
+        document.getElementById('cr-rp-calc')?.addEventListener('click', crRunRefinePlanner);
+        // Also recalc when any input changes for live feel
+        ['cr-rp-material','cr-rp-qty','cr-rp-tier','cr-rp-focus','cr-rp-hideout','cr-rp-pl','cr-rp-core'].forEach(id => {
+            document.getElementById(id)?.addEventListener('change', crRunRefinePlanner);
+        });
+
         // Item autocomplete for new run target field
         crSetupTargetAutocomplete();
     }
@@ -16610,6 +16635,12 @@ function crRenderDetail(run, txns, scans) {
             <button id="cr-btn-buy" class="btn-primary" style="font-size:0.82rem;">+ Buy</button>
             <button id="cr-btn-sell" class="btn-secondary" style="font-size:0.82rem;">+ Sell</button>
             <button id="cr-btn-craft" class="btn-secondary" style="font-size:0.82rem;">+ Craft</button>
+            ${run.status !== 'complete'
+                ? `<button id="cr-btn-scan" class="btn-secondary" style="font-size:0.82rem;" title="Attach a chest capture as a bulk buy">📦 From Scan</button>`
+                : ''}
+            ${txns.length > 0
+                ? `<button id="cr-btn-sync-portfolio" class="btn-secondary" style="font-size:0.82rem;color:#a78bfa;" title="Sync buys/sells from this run into the Portfolio Tracker">📊 Sync to Portfolio</button>`
+                : ''}
             ${nextStatus
                 ? `<button id="cr-advance-btn" class="btn-secondary" style="font-size:0.82rem;color:var(--accent);" title="Advance to ${CR_STATUS_LABELS[nextStatus]}">→ ${CR_STATUS_LABELS[nextStatus]}</button>`
                 : ''}
@@ -16654,6 +16685,8 @@ function crRenderDetail(run, txns, scans) {
     document.getElementById('cr-btn-buy')?.addEventListener('click', () => crOpenTxnModal(run.id, 'buy'));
     document.getElementById('cr-btn-sell')?.addEventListener('click', () => crOpenTxnModal(run.id, 'sell'));
     document.getElementById('cr-btn-craft')?.addEventListener('click', () => crOpenTxnModal(run.id, 'craft_out'));
+    document.getElementById('cr-btn-scan')?.addEventListener('click', () => crOpenScanPicker(run.id));
+    document.getElementById('cr-btn-sync-portfolio')?.addEventListener('click', () => crSyncToPortfolio(run, txns));
     const advBtn = document.getElementById('cr-advance-btn');
     if (advBtn && nextStatus) advBtn.addEventListener('click', () => crAdvanceStatus(run.id, nextStatus));
 }
@@ -16767,6 +16800,235 @@ async function crAdvanceStatus(runId, newStatus) {
             showToast(d.error || 'Failed to update status.', 'error');
         }
     } catch { showToast('Network error.', 'error'); }
+}
+
+// ─── Scan Picker (attach chest capture to run) ───────────────────────
+let _crScanSelectedCapIdx = null;
+
+function crOpenScanPicker(runId) {
+    const modal = document.getElementById('cr-scan-modal');
+    if (!modal) return;
+    _crScanSelectedCapIdx = null;
+
+    const paidEl = document.getElementById('cr-scan-paid-input');
+    if (paidEl) paidEl.value = '';
+    const submitBtn = document.getElementById('cr-scan-submit-btn');
+    if (submitBtn) submitBtn.disabled = true;
+
+    // Render capture list
+    crRenderScanCaptureList();
+
+    // Replace submit btn with fresh clone (no duplicate listeners)
+    if (submitBtn) {
+        const fresh = submitBtn.cloneNode(true);
+        submitBtn.replaceWith(fresh);
+        fresh.addEventListener('click', () => crSubmitScan(runId));
+    }
+    // Enable submit only when both a capture is picked AND a paid value > 0 is entered
+    paidEl?.addEventListener('input', () => crUpdateScanSubmitState());
+
+    modal.classList.remove('hidden');
+}
+
+function crRenderScanCaptureList() {
+    const list  = document.getElementById('cr-scan-captures-list');
+    const empty = document.getElementById('cr-scan-empty');
+    if (!list) return;
+    const captures = Array.isArray(window._chestCaptures) ? window._chestCaptures : [];
+    if (captures.length === 0) {
+        list.innerHTML = '';
+        if (empty) empty.classList.remove('hidden');
+        return;
+    }
+    if (empty) empty.classList.add('hidden');
+
+    list.innerHTML = captures.map((cap, idx) => {
+        const capturedMs = typeof cap.capturedAt === 'number' ? cap.capturedAt : (cap.capturedAt ? new Date(cap.capturedAt).getTime() : 0);
+        const ago = capturedMs > 0 ? timeAgo(new Date(capturedMs).toISOString()) : '—';
+        const name = cap.customName || cap.tabName
+            || (cap.vaultTabs && typeof cap.tabIndex === 'number' && cap.vaultTabs[cap.tabIndex]?.name)
+            || 'Chest Capture';
+        const vaultType = cap.isGuild ? 'Guild' : (cap.isGuild === false ? 'Bank' : '');
+        const itemCount = cap.items?.length || 0;
+        const totalQty = (cap.items || []).reduce((s, it) => s + (it.quantity || 1), 0);
+        return `<div class="cr-scan-capture-row" data-cap-idx="${idx}" style="display:flex; justify-content:space-between; align-items:center; padding:0.55rem 0.75rem; border:1px solid var(--border); border-radius:6px; cursor:pointer; background:var(--bg-elevated);">
+            <div>
+                <div style="display:flex; align-items:center; gap:0.4rem;">
+                    <strong>${esc(name)}</strong>
+                    ${vaultType ? `<span style="font-size:0.65rem; padding:0.1rem 0.35rem; background:var(--bg-card); border-radius:8px; color:var(--text-muted);">${vaultType}</span>` : ''}
+                </div>
+                <div style="color:var(--text-secondary); font-size:0.75rem; margin-top:0.15rem;">${itemCount} lines · ${totalQty} items total · ${esc(ago)}</div>
+            </div>
+            <input type="radio" name="cr-scan-cap-pick" value="${idx}" style="transform:scale(1.2);">
+        </div>`;
+    }).join('');
+
+    list.querySelectorAll('.cr-scan-capture-row').forEach(row => {
+        row.addEventListener('click', () => {
+            const idx = parseInt(row.dataset.capIdx);
+            _crScanSelectedCapIdx = isNaN(idx) ? null : idx;
+            list.querySelectorAll('.cr-scan-capture-row').forEach(r => {
+                const radio = r.querySelector('input[type=radio]');
+                const isSel = r === row;
+                if (radio) radio.checked = isSel;
+                r.style.borderColor = isSel ? 'var(--accent)' : 'var(--border)';
+            });
+            crUpdateScanSubmitState();
+        });
+    });
+}
+
+function crUpdateScanSubmitState() {
+    const submitBtn = document.getElementById('cr-scan-submit-btn');
+    const paid = parseFloat(document.getElementById('cr-scan-paid-input')?.value) || 0;
+    if (!submitBtn) return;
+    submitBtn.disabled = _crScanSelectedCapIdx === null || paid <= 0;
+}
+
+async function crSubmitScan(runId) {
+    if (_crScanSelectedCapIdx === null) { showToast('Pick a capture first.', 'error'); return; }
+    const paid = parseFloat(document.getElementById('cr-scan-paid-input')?.value) || 0;
+    if (paid <= 0) { showToast('Enter a total paid value.', 'error'); return; }
+    const alloc = document.getElementById('cr-scan-alloc-select')?.value || 'equal_split';
+    const cap   = (window._chestCaptures || [])[_crScanSelectedCapIdx];
+    if (!cap || !cap.items?.length) { showToast('Capture has no items.', 'error'); return; }
+
+    const items = cap.items.map(it => ({
+        item_id: it.itemId || it.item_id,
+        qty:     it.quantity || 1,
+    })).filter(x => x.item_id);
+    if (!items.length) { showToast('Capture has no valid items.', 'error'); return; }
+
+    const container_id = cap.containerGuid || cap.tabName || cap.customName || '';
+
+    try {
+        const r = await fetch(`${VPS_BASE}/api/craft-runs/${runId}/scan`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', ...authHeaders() },
+            body: JSON.stringify({ container_id, items_json: items, total_paid: paid, allocation_method: alloc })
+        });
+        const d = await r.json();
+        if (d.success) {
+            document.getElementById('cr-scan-modal')?.classList.add('hidden');
+            showToast(`Attached: ${d.txns_created} line${d.txns_created !== 1 ? 's' : ''} added.`, 'success');
+            crOpenRun(runId);
+        } else {
+            showToast(d.error || 'Failed to attach scan.', 'error');
+        }
+    } catch {
+        showToast('Network error.', 'error');
+    }
+}
+
+// ─── Portfolio Integration ────────────────────────────────────────────
+function crSyncToPortfolio(run, txns) {
+    const trades = getPortfolioTrades();
+    const tagKey = `_craftRunId`;
+    const runId  = run.id;
+
+    // Remove any prior syncs for this run (idempotent re-sync)
+    const before = trades.length;
+    const kept = trades.filter(t => t[tagKey] !== runId);
+    const removed = before - kept.length;
+
+    // Only market-facing lines go to the portfolio:
+    //   buy  → BUY entry (cost basis)
+    //   sell → SELL entry (revenue)
+    // refine_in/out and craft_in/out are internal pipeline steps, not market transactions.
+    let buyCount = 0, sellCount = 0;
+    const now = Date.now();
+    let idx = 0;
+
+    for (const t of txns) {
+        if (t.type !== 'buy' && t.type !== 'sell') continue;
+        const qty  = Math.max(1, parseInt(t.quantity) || 1);
+        const unit = Math.max(0, parseFloat(t.unit_price) || 0);
+        if (unit <= 0 && t.type === 'buy') continue; // Skip zero-cost buys (placeholder entries)
+
+        kept.push({
+            id: now + (idx++),
+            [tagKey]: runId,
+            _source: 'craft_run',
+            _craftRunName: run.name,
+            type: t.type,
+            itemId: t.item_id,
+            itemName: getFriendlyName(t.item_id) || t.item_id,
+            quality: 1,
+            quantity: qty,
+            price: unit,
+            city: t.city || '',
+            date: new Date(t.timestamp || now).toISOString(),
+        });
+        if (t.type === 'buy') buyCount++; else sellCount++;
+    }
+
+    savePortfolioTrades(kept);
+
+    const verb = removed > 0 ? 'Re-synced' : 'Synced';
+    showToast(`${verb}: ${buyCount} buy + ${sellCount} sell entries → Portfolio.`, 'success');
+
+    // Optional: if user is on portfolio tab, refresh; otherwise no-op
+    if (typeof renderPortfolio === 'function' && document.getElementById('pane-portfolio')?.classList.contains('hidden') === false) {
+        renderPortfolio();
+    }
+}
+
+// ─── Refining Planner ─────────────────────────────────────────────────
+const CR_REFINE_CITY_MAP = {
+    ore:   { city: 'Thetford',      icon: '⛏️', refined: 'Metal Bars',  bonus: 40 },
+    wood:  { city: 'Fort Sterling', icon: '🌲', refined: 'Planks',      bonus: 40 },
+    fiber: { city: 'Lymhurst',      icon: '🧵', refined: 'Cloth',       bonus: 40 },
+    hide:  { city: 'Martlock',      icon: '🐄', refined: 'Leather',     bonus: 40 },
+    rock:  { city: 'Bridgewatch',   icon: '🪨', refined: 'Stone Blocks', bonus: 40 },
+};
+
+async function crRunRefinePlanner() {
+    const container = document.getElementById('cr-rp-result');
+    if (!container) return;
+
+    const mat   = document.getElementById('cr-rp-material')?.value || 'ore';
+    const qty   = Math.max(1, parseInt(document.getElementById('cr-rp-qty')?.value) || 0);
+    const tier  = parseInt(document.getElementById('cr-rp-tier')?.value) || 5;
+    const focus = document.getElementById('cr-rp-focus')?.checked || false;
+    const useHideout = document.getElementById('cr-rp-hideout')?.checked || false;
+    const pl    = Math.min(8, Math.max(0, parseInt(document.getElementById('cr-rp-pl')?.value) || 0));
+    const core  = Math.min(30, Math.max(0, parseFloat(document.getElementById('cr-rp-core')?.value) || 0));
+
+    const info = CR_REFINE_CITY_MAP[mat] || CR_REFINE_CITY_MAP.ore;
+    // Bonus: +40% from specialist city (royal) OR 15% base + 2%/PL + core% (hideout)
+    const cityBonus = info.bonus;
+    const hideoutBonus = useHideout ? (15 + pl * 2 + core) : 0;
+    const effectiveBonus = useHideout ? hideoutBonus : cityBonus;
+
+    // RRR using existing formula (refining activity)
+    const rrr = typeof calculateRRR === 'function'
+        ? calculateRRR(focus, effectiveBonus, 'refining')
+        : (1 - 1 / (1 + (18 + effectiveBonus + (focus ? 59 : 0)) / 100));
+    const rrrPct = (rrr * 100);
+
+    // Estimate output: for tier T2, no lower-tier input needed; T3+ uses same-tier + one lower-tier.
+    // Refining produces 1 refined per raw (before RRR returns).
+    // Effective output = raw_qty / (1 - RRR)   (since each refine returns a material with prob = RRR,
+    // which reduces net consumption — classic albion formula).
+    const effectiveOutput = Math.floor(qty / (1 - rrr));
+    const materialsSaved  = effectiveOutput - qty;
+
+    const cityRow = useHideout
+        ? `<div><strong>Location:</strong> Hideout (Black Zone) · PL${pl} · Core +${core}% → <strong>${hideoutBonus}% bonus</strong></div>`
+        : `<div><strong>Best City:</strong> ${info.icon} <strong>${esc(info.city)}</strong> · +${cityBonus}% specialist bonus</div>`;
+
+    container.innerHTML = `<div style="margin-top:0.5rem; padding:0.75rem 1rem; background:var(--bg-elevated); border:1px solid var(--border); border-radius:6px; display:flex; flex-direction:column; gap:0.4rem;">
+        ${cityRow}
+        <div><strong>Refined into:</strong> T${tier} ${esc(info.refined)}</div>
+        <div style="display:flex; gap:1.5rem; flex-wrap:wrap; margin-top:0.25rem;">
+            <div><span style="color:var(--text-secondary); font-size:0.75rem;">RRR</span><br><strong style="font-size:1.1rem;">${rrrPct.toFixed(1)}%</strong></div>
+            <div><span style="color:var(--text-secondary); font-size:0.75rem;">Input</span><br><strong>${qty.toLocaleString()}</strong></div>
+            <div><span style="color:var(--text-secondary); font-size:0.75rem;">Expected Output</span><br><strong style="color:var(--profit-green); font-size:1.1rem;">${effectiveOutput.toLocaleString()}</strong></div>
+            <div><span style="color:var(--text-secondary); font-size:0.75rem;">Material Bonus</span><br><strong style="color:#a78bfa;">+${materialsSaved.toLocaleString()} saved</strong></div>
+            ${focus ? `<div><span style="color:var(--text-secondary); font-size:0.75rem;">Focus</span><br><strong>Enabled (+59% PB)</strong></div>` : ''}
+        </div>
+        <div style="color:var(--text-secondary); font-size:0.72rem; margin-top:0.25rem;">Formula: RRR = 1 − 1/(1 + totalPB/100), where totalPB = 18 (base refine) + location bonus + focus (59 if enabled). Output = floor(qty / (1 − RRR)).</div>
+    </div>`;
 }
 
 // Item autocomplete for new run target field

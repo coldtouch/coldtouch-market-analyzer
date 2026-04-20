@@ -2286,6 +2286,16 @@
                     <div class="changelog-list">
                         <div class="changelog-entry">
                             <div class="changelog-date">April 20, 2026</div>
+                            <div class="changelog-title">⚒️ Craft Runs &mdash; Tab Scan linking, Portfolio sync, Refining Planner</div>
+                            <ul>
+                                <li><strong>📦 From Scan</strong> button in run detail &mdash; attach a chest capture directly to an active run. Cost is split across items by quantity (or by market value); each line becomes a <code>tab_scan</code>-sourced buy transaction.</li>
+                                <li><strong>📊 Sync to Portfolio</strong> button &mdash; pushes every buy/sell transaction from a run into the Portfolio Tracker (FIFO cost basis preserved). Re-sync is idempotent &mdash; prior syncs for the same run are replaced, not duplicated. Only market-facing lines sync; internal refine/craft pipeline steps stay in the run log.</li>
+                                <li><strong>⚒️ Refining Planner</strong> &mdash; collapsible helper at the top of the Craft Runs tab. Pick material type (ore / wood / fiber / hide / rock) and input quantity; shows best royal city + bonus, or hideout mode (PL + Core %), applies RRR formula with optional Focus, and displays expected output and materials saved. Live recalc on every change.</li>
+                                <li>Escape now closes the Scan picker modal too.</li>
+                            </ul>
+                        </div>
+                        <div class="changelog-entry">
+                            <div class="changelog-date">April 20, 2026</div>
                             <div class="changelog-title">🔨 Craft Runs — full buy &rarr; refine &rarr; craft &rarr; sell tracker</div>
                             <ul>
                                 <li><strong>New &ldquo;Craft Runs&rdquo; tab</strong> in Trading group &mdash; track every crafting cycle from material purchase to final sale.</li>
@@ -3396,8 +3406,64 @@
                     <h2 style="color:var(--accent); margin:0 0 0.25rem; font-size:1.2rem;">🔨 Craft Runs</h2>
                     <p style="color:var(--text-secondary); margin:0; font-size:0.82rem;">Track full buy &rarr; refine &rarr; craft &rarr; sell cycles. Log costs and revenue in one place.</p>
                 </div>
+                <button id="cr-refine-planner-toggle" class="btn-secondary" style="white-space:nowrap;" title="Show refining planner: auto-suggest city + batch output">⚒️ Refine Planner</button>
                 <button id="cr-new-btn" class="btn-primary" style="white-space:nowrap;">+ New Run</button>
                 <button id="cr-back-btn" class="btn-secondary" style="display:none; white-space:nowrap;">← Back</button>
+            </div>
+
+            <!-- Refining Planner (collapsible helper) -->
+            <div id="cr-refine-planner" class="controls-panel" style="display:none; flex-direction:column; align-items:stretch; gap:0.6rem; margin-top:0.5rem; padding:0.9rem 1rem;">
+                <div style="display:flex; justify-content:space-between; align-items:center;">
+                    <div>
+                        <strong style="color:var(--accent);">⚒️ Refining Planner</strong>
+                        <span style="color:var(--text-secondary); font-size:0.78rem; margin-left:0.5rem;">Auto-suggest city + calculate output with RRR</span>
+                    </div>
+                    <button id="cr-refine-planner-close" class="modal-close" style="position:static; font-size:1.2rem;">&times;</button>
+                </div>
+                <div style="display:flex; gap:0.75rem; flex-wrap:wrap;">
+                    <div class="control-group" style="min-width:140px;">
+                        <label for="cr-rp-material">Material Type</label>
+                        <select id="cr-rp-material" style="width:100%;">
+                            <option value="ore">⛏️ Ore → Metal Bars</option>
+                            <option value="wood">🌲 Wood → Planks</option>
+                            <option value="fiber">🧵 Fiber → Cloth</option>
+                            <option value="hide">🐄 Hide → Leather</option>
+                            <option value="rock">🪨 Rock → Stone Blocks</option>
+                        </select>
+                    </div>
+                    <div class="control-group" style="min-width:90px;">
+                        <label for="cr-rp-qty">Raw Qty</label>
+                        <input type="number" id="cr-rp-qty" min="1" value="100" style="width:100%;">
+                    </div>
+                    <div class="control-group" style="min-width:70px;">
+                        <label for="cr-rp-tier" title="Tier of material (affects requirement for T5+ lower-tier mats)">Tier</label>
+                        <select id="cr-rp-tier" style="width:100%;">
+                            <option value="2">T2</option>
+                            <option value="3">T3</option>
+                            <option value="4">T4</option>
+                            <option value="5" selected>T5</option>
+                            <option value="6">T6</option>
+                            <option value="7">T7</option>
+                            <option value="8">T8</option>
+                        </select>
+                    </div>
+                    <div class="control-group" style="min-width:80px;">
+                        <label><input type="checkbox" id="cr-rp-focus"> Use Focus</label>
+                        <label style="margin-top:0.25rem;"><input type="checkbox" id="cr-rp-hideout"> Hideout</label>
+                    </div>
+                    <div class="control-group" style="min-width:70px;">
+                        <label for="cr-rp-pl" title="Hideout PL (0-8)">PL</label>
+                        <input type="number" id="cr-rp-pl" min="0" max="8" value="0" style="width:56px;">
+                    </div>
+                    <div class="control-group" style="min-width:80px;">
+                        <label for="cr-rp-core" title="Core Bonus % (0-30)">Core %</label>
+                        <input type="number" id="cr-rp-core" min="0" max="30" value="0" step="0.5" style="width:60px;">
+                    </div>
+                    <div style="display:flex; align-items:flex-end; padding-bottom:0.1rem;">
+                        <button id="cr-rp-calc" class="btn-primary">Calculate</button>
+                    </div>
+                </div>
+                <div id="cr-rp-result"></div>
             </div>
 
             <!-- New run form (hidden until + New Run clicked) -->
@@ -3486,6 +3552,40 @@
                         <div style="display:flex; gap:0.5rem; justify-content:flex-end; padding-top:0.25rem;">
                             <button id="cr-txn-cancel-btn" class="btn-secondary">Cancel</button>
                             <button id="cr-txn-submit-btn" class="btn-primary">Add Transaction</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Scan Picker modal (attach chest capture to run) -->
+            <div id="cr-scan-modal" class="modal hidden">
+                <div class="modal-content" style="max-width:600px; width:100%;">
+                    <div class="modal-header">
+                        <h3 class="modal-title">📦 Attach Chest Capture</h3>
+                        <button class="modal-close" id="cr-scan-close-btn">&times;</button>
+                    </div>
+                    <div style="display:flex; flex-direction:column; gap:0.75rem; padding:0.25rem 0 0.5rem;">
+                        <p style="color:var(--text-secondary); font-size:0.83rem; margin:0;">Pick a chest capture to log as a bulk buy. Cost will be split across all items by quantity.</p>
+                        <div id="cr-scan-captures-list" style="max-height:300px; overflow-y:auto; display:flex; flex-direction:column; gap:0.4rem;"></div>
+                        <div id="cr-scan-empty" class="empty-state hidden" style="padding:1rem 0;">
+                            <p style="margin:0;">No captures available. Open a chest in-game first — the custom client pushes captures to the Loot Buyer tab.</p>
+                        </div>
+                        <div style="display:flex; gap:0.75rem; align-items:flex-end; border-top:1px solid var(--border); padding-top:0.75rem;">
+                            <div class="control-group" style="flex:1;">
+                                <label for="cr-scan-paid-input">Total Paid (silver)</label>
+                                <input type="number" id="cr-scan-paid-input" min="0" placeholder="e.g. 5000000" style="width:100%;">
+                            </div>
+                            <div class="control-group" style="min-width:130px;">
+                                <label for="cr-scan-alloc-select" title="How to split cost across items">Allocation</label>
+                                <select id="cr-scan-alloc-select" style="width:100%;">
+                                    <option value="equal_split">Equal Split (by qty)</option>
+                                    <option value="by_market_value">By Market Value</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div style="display:flex; gap:0.5rem; justify-content:flex-end; padding-top:0.25rem;">
+                            <button id="cr-scan-cancel-btn" class="btn-secondary">Cancel</button>
+                            <button id="cr-scan-submit-btn" class="btn-primary" disabled>Attach to Run</button>
                         </div>
                     </div>
                 </div>
