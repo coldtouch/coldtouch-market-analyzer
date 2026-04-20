@@ -1,6 +1,10 @@
 // Service Worker for Coldtouch Market Analyzer (PWA app shell caching)
-// FE-H3: bumped to v45; switched fetch strategy to stale-while-revalidate
-const CACHE_NAME = 'coldtouch-v45';
+// v46: ship UNKNOWN_ recovery (itemmap.json + rewriteUnknownItemId). Visitors had
+// stale-while-revalidate copies of app.js v45 that pre-dated the fix, so their
+// first share-link visit after the fix still rendered "Unknown 1954" etc.
+// Bumping the cache name triggers the activate handler to delete the old cache
+// and re-fetch the updated app shell on next load.
+const CACHE_NAME = 'coldtouch-v46';
 const APP_SHELL = [
     './',
     './index.html',
@@ -8,6 +12,7 @@ const APP_SHELL = [
     './style.css',
     './db.js',
     './items.json',
+    './itemmap.json',
     './manifest.json'
 ];
 
