@@ -1623,6 +1623,12 @@ setInterval(() => {
 
 // === CAPTURE TOKEN + LOOT BUYER ===
 const clientCaptures = {}; // { userId: [{ items, capturedAt, ... }] } — auto-expire 1h
+// Chest log batches — parallel store to clientCaptures but for the in-game
+// chest Log tab (deposit/withdraw history), captured via opcode 157 in the
+// Go client. Each batch is one response page (up to 101 entries). Used by the
+// frontend to cross-check pickup events vs verified deposits in the
+// Accountability view. Auto-expires 1h like captures.
+const clientChestLogs = {}; // { userId: [{ capturedAt, action, filterValue, entries: [...] }] }
 
 // Generate a capture token for the custom client
 app.post('/api/generate-capture-token', (req, res) => {
@@ -1765,12 +1771,23 @@ app.get('/api/chest-captures', (req, res) => {
   res.json({ captures });
 });
 
+// Get pending chest log batches for this user
+app.get('/api/chest-logs', (req, res) => {
+  if (!req.user) return res.status(401).json({ error: 'Login required.' });
+  const batches = clientChestLogs[req.user.id] || [];
+  res.json({ batches });
+});
+
 // Evict stale captures every 30 min
 setInterval(() => {
   const cutoff = Date.now() - 60 * 60 * 1000;
   for (const userId of Object.keys(clientCaptures)) {
     clientCaptures[userId] = clientCaptures[userId].filter(c => c.capturedAt > cutoff);
     if (clientCaptures[userId].length === 0) delete clientCaptures[userId];
+  }
+  for (const userId of Object.keys(clientChestLogs)) {
+    clientChestLogs[userId] = clientChestLogs[userId].filter(b => b.capturedAt > cutoff);
+    if (clientChestLogs[userId].length === 0) delete clientChestLogs[userId];
   }
 }, 30 * 60 * 1000);
 
@@ -3708,6 +3725,11 @@ wss.on('connection', (ws, req) => {
           if (pending && pending.length > 0) {
             wsSafeSend(ws, { type: 'chest-captures', data: pending });
           }
+          // Send any pending chest-log batches (deposit/withdraw ground truth)
+          const pendingLogs = clientChestLogs[ws.user.id];
+          if (pendingLogs && pendingLogs.length > 0) {
+            wsSafeSend(ws, { type: 'chest-log-batches', data: pendingLogs });
+          }
         } catch(e) {
           wsAuthRecordFailure(ws._ip);
           wsSafeSend(ws, { type: 'auth', success: false, error: 'Invalid token' });
@@ -3814,6 +3836,37 @@ wss.on('connection', (ws, req) => {
         for (const wc of wsClients) {
           if (wc.clientType === 'browser' && wc.isAuthenticated && wc.user && wc.user.id === ws.user.id) {
             wsSafeSend(wc, { type: 'chest-capture', data: capture });
+          }
+        }
+      }
+
+      // Chest log batch from game client — decoded opcode 157 response pages.
+      // One batch = one call to opGetChestLogs (up to 101 entries). Used by the
+      // Accountability view to cross-check pickups vs verified deposits.
+      if (msg.type === 'chest-log-batch' && ws.clientType === 'game-client' && ws.user) {
+        const batch = msg.data;
+        if (!batch || !Array.isArray(batch.entries) || batch.entries.length === 0) return;
+
+        // Defensive cap: a single batch should be <=101; reject anything wildly larger.
+        if (batch.entries.length > 500) {
+          console.warn(`[ChestLog] Rejecting oversized batch (${batch.entries.length} entries) from ${ws.user.username}`);
+          return;
+        }
+
+        batch.playerName = ws.user.username;
+        batch.userId = ws.user.id;
+
+        if (!clientChestLogs[ws.user.id]) clientChestLogs[ws.user.id] = [];
+        clientChestLogs[ws.user.id].push(batch);
+        // Keep max 20 batches per user (chest log viewings produce 2 batches each, so ~10 viewings)
+        if (clientChestLogs[ws.user.id].length > 20) clientChestLogs[ws.user.id].shift();
+
+        console.log(`[ChestLog] Received ${batch.entries.length} ${batch.action} entries from ${ws.user.username}`);
+
+        // Push to user's browser session(s) in real-time
+        for (const wc of wsClients) {
+          if (wc.clientType === 'browser' && wc.isAuthenticated && wc.user && wc.user.id === ws.user.id) {
+            wsSafeSend(wc, { type: 'chest-log-batch', data: batch });
           }
         }
       }

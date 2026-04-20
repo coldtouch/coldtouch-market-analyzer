@@ -9705,6 +9705,68 @@ function resetChestCaptures() {
     showToast('Captures cleared', 'info');
 }
 
+// --- Chest LOG capture controls (deposit/withdraw ground truth) ---
+// Parallel to chest captures but for opcode 157 responses. Each batch is one
+// page from the game (up to 101 entries, tagged deposit or withdraw via the
+// request-side pairing done in the Go client).
+window._chestLogBatches = window._chestLogBatches || [];
+let chestLogCaptureActive = false;
+
+function toggleChestLogCapture() {
+    chestLogCaptureActive = !chestLogCaptureActive;
+    const btn = document.getElementById('ll-chestlog-toggle-btn');
+    const bar = document.getElementById('ll-chestlog-status-bar');
+    if (chestLogCaptureActive) {
+        if (btn) { btn.textContent = 'Stop Capturing'; btn.classList.add('active'); }
+        if (bar) bar.classList.remove('hidden');
+    } else {
+        if (btn) { btn.textContent = 'Start Capturing'; btn.classList.remove('active'); }
+        if (bar) bar.classList.add('hidden');
+    }
+}
+
+function resetChestLogCaptures() {
+    window._chestLogBatches.length = 0;
+    chestLogCaptureActive = false;
+    const btn = document.getElementById('ll-chestlog-toggle-btn');
+    if (btn) { btn.textContent = 'Start Capturing'; btn.classList.remove('active'); }
+    document.getElementById('ll-chestlog-status-bar')?.classList.add('hidden');
+    renderChestLogChips();
+    populateAccountabilityDropdowns();
+    showToast('Chest log captures cleared', 'info');
+}
+
+function renderChestLogChips() {
+    const chips = document.getElementById('ll-chestlog-chips');
+    if (!chips) return;
+    const batches = window._chestLogBatches;
+    if (!batches || batches.length === 0) {
+        chips.innerHTML = '<span style="font-size:0.75rem; color:var(--text-muted);">No chest log captures yet — open a chest Log tab in-game and scroll through entries</span>';
+        return;
+    }
+    chips.innerHTML = batches.map((b, i) => {
+        const action = b.action || 'unknown';
+        const n = (b.entries || []).length;
+        const when = b.capturedAt ? timeAgo(new Date(b.capturedAt).toISOString()) : '';
+        const actionColor = action === 'deposit' ? 'var(--profit-green)'
+            : action === 'withdraw' ? 'var(--accent)'
+            : 'var(--text-muted)';
+        const actionIcon = action === 'deposit' ? '📥' : action === 'withdraw' ? '📤' : '❔';
+        return `<div class="ll-capture-chip" style="background:rgba(91,141,239,0.08); border:1px solid rgba(91,141,239,0.3);" title="${n} ${action} entries">
+            <span style="color:${actionColor}; font-weight:600;">${actionIcon} ${esc(action)}</span>
+            <span style="color:var(--text-muted); font-size:0.72rem;">${n} entries · ${when}</span>
+            <button class="btn-small" style="padding:0; background:none; border:none; color:var(--text-muted); cursor:pointer;" onclick="removeChestLogBatch(${i})" title="Remove this batch">&times;</button>
+        </div>`;
+    }).join('');
+}
+
+function removeChestLogBatch(idx) {
+    if (idx < 0 || idx >= window._chestLogBatches.length) return;
+    window._chestLogBatches.splice(idx, 1);
+    renderChestLogChips();
+    populateAccountabilityDropdowns();
+}
+
 function renderCaptureChips() {
     _updateLootLoggerModePillCounts();
     const chips = document.getElementById('ll-capture-chips');
@@ -11199,10 +11261,50 @@ function populateAccountabilityDropdowns() {
             return `<option value="${i}">${esc(name)} — ${count} items${weightStr}${timeStr}</option>`;
         }).join('');
     }
+
+    // Populate the chest-log selector (optional verification input).
+    const chestLogSel = document.getElementById('acc-chestlog-select');
+    if (chestLogSel) {
+        const batches = window._chestLogBatches || [];
+        if (batches.length === 0) {
+            chestLogSel.innerHTML = '<option value="" disabled>No chest log captures yet — open a chest Log tab in-game</option>';
+        } else {
+            chestLogSel.innerHTML = batches.map((b, i) => {
+                const capturedMs = typeof b.capturedAt === 'number' ? b.capturedAt : (b.capturedAt ? new Date(b.capturedAt).getTime() : 0);
+                const rel = capturedMs > 0 ? timeAgo(new Date(capturedMs).toISOString()) : 'unknown';
+                const abs = capturedMs > 0 ? new Date(capturedMs).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
+                const action = b.action || 'unknown';
+                const icon = action === 'deposit' ? '📥' : action === 'withdraw' ? '📤' : '❔';
+                const count = (b.entries || []).length;
+                return `<option value="${i}">${icon} ${esc(action)} — ${count} entries · ${rel}${abs ? ' (' + abs + ')' : ''}</option>`;
+            }).join('');
+        }
+    }
 }
 
 // Re-run the last accountability check. Useful when people deposit loot a bit later
 // and the user wants to check again without re-selecting the dropdowns.
+// Merge & Verify — sugar wrapper over runAccountabilityCheck that ensures at
+// least one chest log batch is selected (auto-selects all of them if the user
+// forgot). The verification logic inside runAccountabilityCheck keys off the
+// #acc-chestlog-select element's selected options.
+async function runAccountabilityCheckWithMerge() {
+    const chestLogSel = document.getElementById('acc-chestlog-select');
+    const batches = window._chestLogBatches || [];
+    if (!chestLogSel || batches.length === 0) {
+        showToast('No chest log captures yet — open a chest Log tab in-game first', 'warning');
+        return;
+    }
+    const anySelected = Array.from(chestLogSel.selectedOptions).some(o => o.value !== '');
+    if (!anySelected) {
+        for (const opt of chestLogSel.options) {
+            if (opt.value !== '') opt.selected = true;
+        }
+        showToast(`Auto-selected all ${batches.length} chest log capture${batches.length !== 1 ? 's' : ''}`, 'info');
+    }
+    runAccountabilityCheck();
+}
+
 async function rerunAccountabilityCheck() {
     const sessionSel = document.getElementById('acc-session-select');
     const captureSel = document.getElementById('acc-capture-select');
@@ -11517,6 +11619,33 @@ async function runAccountabilityCheck() {
         }
     }
 
+    // Chest-log cross-check — build { playerName: { itemId: depositedQty } } from
+    // selected chest log batches. Ground truth for the verified-on-hover badges.
+    const chestLogSel = document.getElementById('acc-chestlog-select');
+    const chestLogIdxs = chestLogSel
+        ? Array.from(chestLogSel.selectedOptions).map(o => parseInt(o.value)).filter(v => !isNaN(v))
+        : [];
+    const chestLogDeposits = {};
+    const mergedLogMeta = { batches: 0, deposits: 0, withdrawals: 0 };
+    const _logBatches = window._chestLogBatches || [];
+    for (const idx of chestLogIdxs) {
+        const b = _logBatches[idx];
+        if (!b || !Array.isArray(b.entries)) continue;
+        mergedLogMeta.batches++;
+        // Only deposits count for verification. Withdrawals tracked for the badge count only.
+        if (b.action !== 'deposit') {
+            if (b.action === 'withdraw') mergedLogMeta.withdrawals += b.entries.length;
+            continue;
+        }
+        mergedLogMeta.deposits += b.entries.length;
+        for (const e of b.entries) {
+            if (!e.playerName || !e.itemId) continue;
+            if (!chestLogDeposits[e.playerName]) chestLogDeposits[e.playerName] = {};
+            chestLogDeposits[e.playerName][e.itemId] = (chestLogDeposits[e.playerName][e.itemId] || 0) + (e.quantity || 1);
+        }
+    }
+    window._llChestLogMerged = mergedLogMeta;
+
     // Per-player looted inventory + death tracking
     const lootedByPlayer = {};
     const deathVictims = new Set(); // players who died (items lost)
@@ -11591,7 +11720,16 @@ async function runAccountabilityCheck() {
                 const inChest = Math.min(effectiveQty, Math.round(share));
                 const missing = effectiveQty - inChest;
                 totalDeposited += inChest;
-                itemResults.push({ itemId, looted: effectiveQty, inChest, missing });
+                // Chest-log verification: if this player has a deposit record for this item
+                // in the selected chest logs, mark the row as ✓ verified — the icon gets a
+                // green ring + tooltip explaining the evidence.
+                const verifiedQty = chestLogDeposits[name] ? (chestLogDeposits[name][itemId] || 0) : 0;
+                const verified = verifiedQty > 0;
+                const fullyVerified = verifiedQty >= effectiveQty;
+                itemResults.push({
+                    itemId, looted: effectiveQty, inChest, missing,
+                    verified, verifiedQty, fullyVerified,
+                });
             } else if (effectiveQty > 0) {
                 // Enemy loot source — don't check deposits, just list items
                 itemResults.push({ itemId, looted: effectiveQty, inChest: -1, missing: -1 }); // -1 = N/A
@@ -11717,11 +11855,33 @@ async function runAccountabilityCheck() {
         </div>`;
     }
 
+    // Verification summary — total verified item-lines from the chest log cross-check.
+    const verifiedLines = playerResults.reduce((s, p) =>
+        s + (p.items || []).filter(it => it.verified).length, 0);
+    const fullyVerifiedLines = playerResults.reduce((s, p) =>
+        s + (p.items || []).filter(it => it.fullyVerified).length, 0);
+    if (mergedLogMeta.batches > 0) {
+        html += `<div class="ll-verify-banner">
+            <span class="ll-verify-icon">✓</span>
+            <div>
+                <strong>Chest log merged</strong> &mdash;
+                ${mergedLogMeta.batches} batch${mergedLogMeta.batches !== 1 ? 'es' : ''} ·
+                ${mergedLogMeta.deposits} deposit record${mergedLogMeta.deposits !== 1 ? 's' : ''}${mergedLogMeta.withdrawals > 0 ? ` · ${mergedLogMeta.withdrawals} withdrawal record${mergedLogMeta.withdrawals !== 1 ? 's' : ''}` : ''}.
+                <br>
+                <span style="font-size:0.78rem; color:var(--text-muted);">
+                    <strong style="color:var(--profit-green);">${verifiedLines}</strong> item line${verifiedLines !== 1 ? 's' : ''} verified
+                    (${fullyVerifiedLines} fully · ${verifiedLines - fullyVerifiedLines} partial). Hover the green ✓ on any item to see who deposited what.
+                </span>
+            </div>
+        </div>`;
+    }
+
     html += `<div class="ll-acc-summary">
         <div class="loot-tracked-stat"><span class="loot-tracked-stat-label">Looted</span><span class="loot-tracked-stat-value">${totalLooted}</span></div>
         <div class="loot-tracked-stat"><span class="loot-tracked-stat-label">In Chest</span><span class="loot-tracked-stat-value" style="color:var(--profit-green);">${totalDeposited}</span></div>
         <div class="loot-tracked-stat"><span class="loot-tracked-stat-label">Missing</span><span class="loot-tracked-stat-value" style="color:var(--loss-red);">${totalMissing}${totalMissingSilver > 0 ? ` (${formatSilver(totalMissingSilver)})` : ''}</span></div>
         <div class="loot-tracked-stat"><span class="loot-tracked-stat-label">Players</span><span class="loot-tracked-stat-value">${playerResults.length}</span></div>
+        ${mergedLogMeta.batches > 0 ? `<div class="loot-tracked-stat"><span class="loot-tracked-stat-label">Verified</span><span class="loot-tracked-stat-value" style="color:var(--profit-green);">${verifiedLines}</span></div>` : ''}
     </div>`;
 
     // Deaths section — reconstructed from __DEATH__ events in the session.
@@ -11841,9 +12001,15 @@ async function runAccountabilityCheck() {
             } else {
                 rowClass = 'll-item-missing'; dotClass = 'll-dot-missing'; statusLabel = 'Missing';
             }
-            return `<div class="ll-item-row ${rowClass}">
-                <img src="${iconUrl}" class="ll-item-icon" loading="lazy" onerror="this.style.display='none'">
-                <span class="ll-item-name">${esc(iName)}</span>
+            // ✓ Verified badge — chest log has a deposit record for this player+item.
+            // Green ring on the icon + hover tooltip explaining the evidence.
+            const verifiedClass = it.verified ? (it.fullyVerified ? 'll-item-verified-full' : 'll-item-verified-partial') : '';
+            const verifiedTitle = it.verified
+                ? `✓ Verified: chest log shows ${p.name} deposited ${it.verifiedQty} of this item${it.fullyVerified ? '' : ` (covers ${it.verifiedQty}/${it.looted} of pickup)`}`
+                : '';
+            return `<div class="ll-item-row ${rowClass} ${verifiedClass}">
+                <img src="${iconUrl}" class="ll-item-icon ${it.verified ? 'll-icon-verified' : ''}" loading="lazy" onerror="this.style.display='none'" title="${esc(verifiedTitle)}">
+                <span class="ll-item-name">${esc(iName)}${it.verified ? ' <span class="ll-verified-check" title="'+esc(verifiedTitle)+'">✓</span>' : ''}</span>
                 <span class="ll-item-qty">&times;${it.looted}</span>
                 <span class="ll-item-value">${totalVal > 0 ? formatSilver(totalVal) : '—'}</span>
                 <span class="ll-item-weight">${weightStr}</span>
@@ -12169,6 +12335,42 @@ function handleLootLoggerWsMessage(msg) {
                 _llShowLiveTimer = setTimeout(showLiveSession, 2000);
             }
         }
+    }
+
+    // Chest log batch — deposit/withdraw ground truth from opcode 157.
+    // Accept if the chest-log capture toggle is on OR if we're on the
+    // accountability tab (same pattern as regular chest captures).
+    if (msg.type === 'chest-log-batch' && msg.data) {
+        _ingestChestLogBatch(msg.data);
+    }
+    // On (re)connect the backend sends any pending batches accumulated while the browser was offline.
+    if (msg.type === 'chest-log-batches' && Array.isArray(msg.data)) {
+        for (const b of msg.data) _ingestChestLogBatch(b);
+    }
+}
+
+function _ingestChestLogBatch(batch) {
+    if (!batch || !Array.isArray(batch.entries) || batch.entries.length === 0) return;
+    if (!chestLogCaptureActive && lootLoggerMode !== 'accountability') {
+        // Capture toggle is off and user isn't on the Accountability tab — drop it.
+        return;
+    }
+    // Normalize any UNKNOWN_<n> IDs in case the Go client's itemmap was stale.
+    for (const e of batch.entries) {
+        if (typeof e.itemId === 'string' && e.itemId.startsWith('UNKNOWN_')) {
+            e.itemId = rewriteUnknownItemId(e.itemId, e.numericId);
+        }
+    }
+    window._chestLogBatches = window._chestLogBatches || [];
+    // Dedup on (capturedAt, action, first entry signature) — WS reconnects can replay the same batch
+    const sig = `${batch.capturedAt}|${batch.action}|${batch.entries[0]?.playerName || ''}|${batch.entries[0]?.itemId || ''}|${batch.entries[0]?.timestamp || ''}`;
+    if (window._chestLogBatches.some(b => `${b.capturedAt}|${b.action}|${b.entries[0]?.playerName || ''}|${b.entries[0]?.itemId || ''}|${b.entries[0]?.timestamp || ''}` === sig)) return;
+    window._chestLogBatches.push(batch);
+    if (window._chestLogBatches.length > 40) window._chestLogBatches.shift();
+    showToast(`Chest log received: ${batch.entries.length} ${batch.action} entries`, 'success');
+    if (lootLoggerMode === 'accountability') {
+        populateAccountabilityDropdowns();
+        renderChestLogChips();
     }
 }
 

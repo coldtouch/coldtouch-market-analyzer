@@ -2,6 +2,30 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-04-21 — Accountability: chest-log cross-check with ✓ verified badges
+
+Existing accountability had two data sources — pickups tracked by the Go client and snapshots of chest tab contents. Attribution was **inferred** proportionally: if total pickups matched chest quantities, the math blamed whoever picked up the most. This missed deposits by the local player (protocol doesn't broadcast own pickups) and over-attributed missing items when multiple guild members touched the same chest.
+
+**New: chest log capture** — the Go client now decodes opcode 157 (`opGetChestLogs`, +6 shift in the April 2026 build), which streams the in-game chest **Log tab** to the client whenever a player views it. Each entry is `(player, item, quality, qty, timestamp, action)`. Deposit vs withdraw isn't in the response body — it's inferred from the REQUEST's param 6 via Photon invocation-counter pairing (filter `1` = withdraw, filter `28` = deposit, confirmed against a mixed-direction capture).
+
+**New UX:**
+
+- New **Chest Log Captures** card in the Accountability tab (parallel to Chest Captures) with Start Capturing / Reset + chip list of received batches (📥 deposit / 📤 withdraw, entry counts, time-ago).
+- New selector above Run Check lets user pick which batches to merge.
+- New **🔗 Merge & Verify** button (auto-selects all batches if none picked). Cross-checks each player's pickup events against chest-log deposit records keyed by `(player, itemId)`.
+- **Verified items get a green ring on the icon + ✓ badge next to the name** with hover tooltip: `"Verified: chest log shows {player} deposited {qty} of this item"`. Partially verified (log qty < picked up) shows a yellow ring.
+- **Verify banner** above the summary strip reports `N batches · M deposit records` and counts fully vs partially verified rows.
+
+**Full-stack transport:**
+
+- Go client: `SendChestLogBatch` via existing WS relay.
+- Backend: `chest-log-batch` WS handler stores per-user batches in `clientChestLogs`, forwards to user's browser sessions in real-time. New `GET /api/chest-logs` endpoint + auto-dispatch pending batches on browser connect. 1h auto-eviction.
+- Frontend: `_ingestChestLogBatch` handles both live messages and the dispatch-on-connect batch list.
+
+**Important scope note:** chest log is a **verification layer, not a replacement**. It only tells us what was deposited/withdrawn from the chest — it can't see pickups in the field. The existing loot-client pipeline remains the source of truth for "who picked up what". The merge highlights rows where both sources agree; the absence of a verification badge isn't proof of theft, just absence of corroboration.
+
+---
+
 ### 2026-04-21 — Deaths: per-looter grouping with readable item rows
 
 **Complaint:** expanded death cards in the accountability deaths section were an anonymous grid of 36px icons — you had to hover each one to learn what was looted. With a ZvZ death (8+ items, multiple looters), the whole row was unreadable.

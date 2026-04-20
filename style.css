@@ -2250,6 +2250,14 @@ select:focus {
 .ll-item-partial { background: rgba(251, 191, 36, 0.04); }
 .ll-item-partial:hover { background: rgba(251, 191, 36, 0.08); }
 .ll-item-died { opacity: 0.65; border-left: 2px solid var(--loss-red); background: rgba(239, 68, 68, 0.04); }
+/* 2026-04-21 chest-log verification — pickup events cross-matched against a
+   deposit record in the chest log get a green ring on the icon + check badge. */
+.ll-item-verified-full {
+    box-shadow: inset 2px 0 0 var(--profit-green);
+}
+.ll-item-verified-partial {
+    box-shadow: inset 2px 0 0 #fbbf24;
+}
 .ll-item-icon {
     width: 40px;
     height: 40px;
@@ -2258,6 +2266,37 @@ select:focus {
     background: var(--bg-elevated);
     border: 1px solid rgba(255, 255, 255, 0.06);
     image-rendering: pixelated;
+    transition: border-color 0.15s, box-shadow 0.15s;
+}
+.ll-icon-verified {
+    border-color: var(--profit-green) !important;
+    box-shadow: 0 0 0 1px var(--profit-green), 0 0 6px rgba(74, 222, 128, 0.35);
+}
+.ll-verified-check {
+    color: var(--profit-green);
+    font-weight: 700;
+    margin-left: 0.25rem;
+    font-size: 0.78rem;
+    cursor: help;
+}
+.ll-verify-banner {
+    display: flex;
+    gap: 0.6rem;
+    align-items: flex-start;
+    background: rgba(74, 222, 128, 0.07);
+    border: 1px solid rgba(74, 222, 128, 0.35);
+    border-radius: 8px;
+    padding: 0.6rem 0.85rem;
+    margin-bottom: 0.75rem;
+    font-size: 0.83rem;
+    color: var(--text-secondary);
+}
+.ll-verify-icon {
+    font-size: 1.1rem;
+    color: var(--profit-green);
+    font-weight: 700;
+    line-height: 1;
+    flex-shrink: 0;
 }
 .ll-item-name {
     flex: 1;

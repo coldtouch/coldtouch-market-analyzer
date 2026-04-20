@@ -2286,6 +2286,17 @@
                     <div class="changelog-list">
                         <div class="changelog-entry">
                             <div class="changelog-date">April 21, 2026</div>
+                            <div class="changelog-title">✓ Accountability &mdash; chest-log cross-check with verified badges</div>
+                            <ul>
+                                <li><strong>New Chest Log Captures card</strong> in Accountability (parallel to Chest Captures). Start Capturing → open any chest <strong>Log tab</strong> in-game → the client decodes opcode 157 and streams deposit/withdraw records to your browser.</li>
+                                <li><strong>Deposit vs withdraw tagging</strong> — the game doesn&rsquo;t mark direction in the response; we pair each response to its originating request via the Photon invocation counter and infer direction from REQUEST param 6 (filter 1 = withdraw, 28 = deposit).</li>
+                                <li><strong>🔗 Merge &amp; Verify button</strong> &mdash; cross-checks each player&rsquo;s pickup events against chest-log deposit records by `(player, itemId)`. Matches get a <strong>green ring on the icon + ✓ badge</strong> next to the item name; hover reveals <em>&ldquo;Verified: chest log shows {player} deposited {qty}&rdquo;</em>. Partial matches (log qty &lt; pickup) show a yellow ring.</li>
+                                <li>New <strong>Verified</strong> count in the summary strip; verify banner above it reports batches + deposit/withdraw totals.</li>
+                                <li><strong>Important scope:</strong> chest log is a <em>verification layer, not a replacement</em> &mdash; it only sees deposits/withdrawals, not field pickups. The loot client remains the source of truth for &ldquo;who picked up what&rdquo;. Merge only raises confidence on matched items; absence of a badge isn&rsquo;t evidence of theft.</li>
+                            </ul>
+                        </div>
+                        <div class="changelog-entry">
+                            <div class="changelog-date">April 21, 2026</div>
                             <div class="changelog-title">☠️ Deaths &mdash; per-looter grouping with readable item rows</div>
                             <ul>
                                 <li><strong>Problem:</strong> expanded death cards were an anonymous grid of 36px icons. In a ZvZ death with 8+ items and multiple looters, you had to hover each one to learn what was taken &mdash; unreadable.</li>
@@ -3872,6 +3883,31 @@
                         </div>
                     </div>
 
+                    <!-- Chest Log Captures — supplementary ground truth. Pair with a session + merge to
+                         mark items that have a matching deposit record in the chest log as ✓ verified. -->
+                    <div class="ll-capture-panel" style="border-left: 3px solid #5b8def;">
+                        <div class="ll-capture-header">
+                            <div>
+                                <h3 style="margin:0 0 0.2rem; font-size:0.92rem; color:var(--text-primary);">
+                                    Chest Log Captures
+                                    <span style="font-size:0.66rem; color:#5b8def; background:rgba(91,141,239,0.12); padding:0.1rem 0.4rem; border-radius:6px; margin-left:0.3rem; vertical-align:middle;">VERIFICATION</span>
+                                </h3>
+                                <p style="margin:0; font-size:0.78rem; color:var(--text-secondary);">Open the <strong>Log tab</strong> inside any chest in-game — the client captures deposit/withdraw records used to cross-check what people picked up.</p>
+                            </div>
+                            <div style="display:flex; gap:0.5rem; align-items:center; flex-shrink:0;">
+                                <button id="ll-chestlog-toggle-btn" class="ll-capture-toggle" onclick="toggleChestLogCapture()">Start Capturing</button>
+                                <button class="btn-small" onclick="resetChestLogCaptures()">Reset</button>
+                            </div>
+                        </div>
+                        <div id="ll-chestlog-status-bar" class="ll-capture-status-bar hidden">
+                            <span class="ll-pulse-dot"></span>
+                            Capturing&hellip; open a chest <strong>Log tab</strong> in-game and click Deposits / Withdrawals filters
+                        </div>
+                        <div id="ll-chestlog-chips" class="ll-capture-chips">
+                            <span style="font-size:0.75rem; color:var(--text-muted);">No chest log captures yet</span>
+                        </div>
+                    </div>
+
                     <!-- Compare Panel -->
                     <div style="background:var(--bg-card); border:1px solid var(--border-color); border-radius:var(--radius); padding:1rem; margin-bottom:1rem;">
                         <h3 style="color:var(--accent); margin:0 0 0.4rem; font-size:0.9rem;">Run Accountability Check</h3>
@@ -3891,9 +3927,20 @@
                                 <select id="acc-capture-select" class="transport-select" style="width:100%; min-height:4.5rem;" multiple><option value="">-- No captures yet --</option></select>
                             </div>
                         </div>
+                        <!-- Chest log selector — optional merge input. When populated, Merge cross-checks
+                             pickup events vs deposits and tags matching items as ✓ verified in the result. -->
+                        <div style="margin-bottom:1rem; padding:0.6rem 0.75rem; background:rgba(91,141,239,0.06); border:1px dashed rgba(91,141,239,0.4); border-radius:6px;">
+                            <label style="font-size:0.78rem; color:#9fb4e8; display:flex; justify-content:space-between; align-items:center; margin-bottom:0.3rem;">
+                                <span><strong>Chest Log Captures</strong> (optional — cross-checks pickups against deposit ground truth)</span>
+                                <button class="btn-small" style="padding:0.15rem 0.45rem; font-size:0.68rem;" onclick="populateAccountabilityDropdowns();" title="Refresh chest log list">🔄</button>
+                            </label>
+                            <select id="acc-chestlog-select" class="transport-select" style="width:100%; min-height:3.5rem;" multiple><option value="">-- No chest log captures yet --</option></select>
+                            <div style="font-size:0.7rem; color:var(--text-muted); margin-top:0.3rem;">Hold Ctrl to multi-select. Merging a chest log marks items with a matching deposit as ✓ verified (green icon outline + hover tooltip).</div>
+                        </div>
                         <div style="display:flex; gap:0.5rem; align-items:center; flex-wrap:wrap;">
                             <button class="btn-small-accent" onclick="runAccountabilityCheck()">Run Check</button>
                             <button class="btn-small" onclick="rerunAccountabilityCheck()" title="Re-run the last accountability check (useful after people deposit loot later)">🔄 Re-run Check</button>
+                            <button class="btn-small" style="background:rgba(91,141,239,0.2); color:#c7d2ff; border:1px solid rgba(91,141,239,0.5);" onclick="runAccountabilityCheckWithMerge()" title="Run accountability + cross-check against selected chest logs (verifies deposits)">🔗 Merge &amp; Verify</button>
                             <span id="acc-last-run" style="font-size:0.72rem; color:var(--text-muted);"></span>
                         </div>
                     </div>
