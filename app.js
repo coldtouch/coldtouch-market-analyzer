@@ -10737,6 +10737,28 @@ function _llRenderFiltered() {
     else if (sortVal === 'weight') entries.sort((a, b) => b[1].totalWeight - a[1].totalWeight);
     else if (sortVal === 'name') entries.sort((a, b) => a[0].localeCompare(b[0]));
 
+    // Guild grouping: unless a specific guild is filtered, cluster entries by
+    // guild so cards from the same guild appear together under a collapsible
+    // header. Within each guild, the user's sort (value/items/weight/name) is
+    // preserved. Guilds themselves are ordered by their aggregate totalValue
+    // (biggest contributor first) so the header-ordering matches expectations.
+    const _llGuildTotals = new Map(); // guild -> sum(totalValue) across ALL entries
+    const _llGuildCounts = new Map(); // guild -> member count
+    for (const [, d] of entries) {
+        const g = d.guild || '';
+        _llGuildTotals.set(g, (_llGuildTotals.get(g) || 0) + (d.totalValue || 0));
+        _llGuildCounts.set(g, (_llGuildCounts.get(g) || 0) + 1);
+    }
+    const _llGroupByGuild = !guildFilter;
+    if (_llGroupByGuild) {
+        entries.sort((a, b) => {
+            const ga = a[1].guild || '';
+            const gb = b[1].guild || '';
+            if (ga === gb) return 0; // stable within-guild order (preserves sortVal)
+            return (_llGuildTotals.get(gb) || 0) - (_llGuildTotals.get(ga) || 0);
+        });
+    }
+
     // Totals (from full dataset, not filtered — exclude death events for count/value)
     const lootEventsOnly = events.filter(e => e.item_id !== '__DEATH__');
     const deathEvents = events.filter(e => e.item_id === '__DEATH__');
@@ -10903,8 +10925,36 @@ function _llRenderFiltered() {
     const visibleEntries = (!showAll && entries.length > CARD_BATCH) ? entries.slice(0, CARD_BATCH) : entries;
     const hiddenCount = entries.length - visibleEntries.length;
 
-    // Player cards
+    // Player cards. When guild grouping is on, emit a <details> wrapper per
+    // guild whose header shows count + totalValue; cards for the same guild
+    // render inside the same wrapper. A mutable `_llLastGuildEmitted` tracks
+    // the transition so we open/close wrappers around guild boundaries.
+    let _llLastGuildEmitted = null;  // '' sentinel for "not started"; actual guild string once emitted
+    const _llGuildBlockOpen = () => {
+        if (!_llGroupByGuild || _llLastGuildEmitted === null) return '';
+        return '</div></details>';
+    };
     html += visibleEntries.map(([name, data]) => {
+        // Guild header injection (only when grouping)
+        let guildHeader = '';
+        if (_llGroupByGuild) {
+            const g = data.guild || '';
+            if (g !== _llLastGuildEmitted) {
+                // Close previous guild's wrapper (if any), then open new one
+                if (_llLastGuildEmitted !== null) guildHeader += '</div></details>';
+                const color = (data.guild && guildColorMap[data.guild]) || 'var(--border)';
+                const label = data.guild ? esc(data.guild) : '<em style="color:var(--text-muted);">No guild</em>';
+                const gTotal = _llGuildTotals.get(g) || 0;
+                const gCount = _llGuildCounts.get(g) || 0;
+                guildHeader += `<details class="ll-guild-group" open>
+                    <summary class="ll-guild-summary" style="border-left:3px solid ${color};display:flex;justify-content:space-between;align-items:center;padding:0.4rem 0.7rem;margin-top:0.5rem;background:var(--bg-subtle,rgba(255,255,255,0.03));border-radius:4px;cursor:pointer;font-size:0.85rem;">
+                        <span class="ll-guild-name" style="font-weight:600;">${label}</span>
+                        <span class="ll-guild-stats" style="color:var(--text-muted);font-size:0.78rem;">${gCount} player${gCount !== 1 ? 's' : ''} · ${gTotal > 0 ? formatSilver(gTotal) : '—'}</span>
+                    </summary>
+                    <div class="ll-guild-members" style="padding-top:0.3rem;">`;
+                _llLastGuildEmitted = g;
+            }
+        }
         const playerValue = data.totalValue;
         const weightStr = data.totalWeight > 0 ? data.totalWeight.toFixed(1) + ' kg' : '—';
         const guildBorder = data.guild && guildColorMap[data.guild]
@@ -11054,7 +11104,7 @@ function _llRenderFiltered() {
             trendLine = `<div class="ll-player-trend" title="Aggregated across all of your saved loot sessions">📊 ${parts.join(' · ')}</div>`;
         }
 
-        return `<div class="${cardClass}">
+        return guildHeader + `<div class="${cardClass}">
             <div class="ll-player-header" onclick="this.closest('.ll-player-card').classList.toggle('expanded')">
                 <button class="ll-remove-player" onclick="event.stopPropagation();_llRemovedPlayers.add('${esc(name)}');_llRenderFiltered()" title="Remove player from view" aria-label="Remove ${esc(name)} from view">&times;</button>
                 <div class="ll-player-info">
@@ -11086,6 +11136,11 @@ function _llRenderFiltered() {
         </div>`;
     }).join('');
 
+    // Close trailing guild wrapper (if grouping was active and at least one was opened)
+    if (_llGroupByGuild && _llLastGuildEmitted !== null) {
+        html += '</div></details>';
+    }
+
     if (entries.length === 0 && searchVal) {
         html += '<div class="empty-state"><p>No players match your search.</p></div>';
     }
@@ -11097,13 +11152,35 @@ function _llRenderFiltered() {
         </div>`;
     }
 
+    // Preserve scroll so filter changes don't snap the viewport back up to
+    // the Deaths section above. Capture scrollY + the currently-focused filter
+    // control before replacing DOM, then restore both after.
+    const _llPreScrollY = window.scrollY;
+    const _llActiveFocusId = document.activeElement ? document.activeElement.id : null;
+    const _llActiveSelStart = (document.activeElement && typeof document.activeElement.selectionStart === 'number')
+        ? document.activeElement.selectionStart : null;
+
     detail.innerHTML = html;
 
-    // Restore search focus + cursor position after re-render
-    const newSearch = document.getElementById('ll-search');
-    if (newSearch && searchVal) {
-        newSearch.focus();
-        newSearch.setSelectionRange(searchVal.length, searchVal.length);
+    // Restore scroll position first (before focus so layout doesn't jump).
+    window.scrollTo(0, _llPreScrollY);
+
+    // Restore focus + cursor on the filter control the user was interacting with
+    if (_llActiveFocusId) {
+        const el = document.getElementById(_llActiveFocusId);
+        if (el) {
+            el.focus({ preventScroll: true });
+            if (_llActiveSelStart !== null && typeof el.setSelectionRange === 'function') {
+                try { el.setSelectionRange(_llActiveSelStart, _llActiveSelStart); } catch {}
+            }
+        }
+    } else {
+        // Fallback: restore search focus + cursor if there's a search term
+        const newSearch = document.getElementById('ll-search');
+        if (newSearch && searchVal) {
+            newSearch.focus({ preventScroll: true });
+            newSearch.setSelectionRange(searchVal.length, searchVal.length);
+        }
     }
 }
 

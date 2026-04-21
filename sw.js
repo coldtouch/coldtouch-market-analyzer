@@ -1,9 +1,8 @@
 // Service Worker for Coldtouch Market Analyzer (PWA app shell caching)
-// v55: fix craft-runs ReferenceError (fmtSilver -> formatSilver, fmtNum ->
-// toLocaleString). The broken references threw inside crRunCardHTML and the
-// broad fetch catch block then showed a bogus "Could not reach server"
-// message, making a JS bug look like a network outage.
-const CACHE_NAME = 'coldtouch-v55';
+// v56: loot logger — group player cards by guild (collapsible <details>),
+// preserve window.scrollY across filter changes so the viewport doesn't snap
+// back to the Deaths section above the filter bar.
+const CACHE_NAME = 'coldtouch-v56';
 const APP_SHELL = [
     './',
     './index.html',

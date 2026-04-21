@@ -1038,8 +1038,17 @@ app.use(helmet({ contentSecurityPolicy: false }));
 // Individual endpoints still enforce their own size caps (e.g. captures_json ≤ 500 KB).
 app.use(express.json({ limit: '5mb' }));
 
-// Global request timeout
+// Global request timeout + double-response guard.
+// When a handler runs long, the timeout fires a 503 early. The ORIGINAL handler
+// eventually completes and calls res.json(), hitting ERR_HTTP_HEADERS_SENT
+// (logged as [FATAL] Uncaught exception: Cannot set headers after they are sent).
+// Patch res.json/send/status to no-op after headersSent, so late completions
+// silently drop instead of crashing out of the catch boundary.
 app.use((req, res, next) => {
+    const origJson = res.json.bind(res);
+    const origSend = res.send.bind(res);
+    res.json = (body) => { if (res.headersSent) return res; return origJson(body); };
+    res.send = (body) => { if (res.headersSent) return res; return origSend(body); };
     res.setTimeout(30000, () => {
         if (!res.headersSent) {
             console.warn('[Timeout] Request timed out:', req.method, req.url);
@@ -3459,7 +3468,7 @@ app.patch('/api/craft-runs/:id', requireAuth, (req, res) => {
   if (!runId) return res.status(400).json({ error: 'Invalid run id.' });
   const { name, status, target_item, hideout_power_level, hideout_core_bonus } = req.body;
   if (status && !CR_VALID_STATUSES.has(status)) return res.status(400).json({ error: 'Invalid status.' });
-  db.get(`SELECT id FROM craft_runs WHERE id = ? AND user_id = ?`, [runId, req.user.id], (err, row) => {
+  readDb.get(`SELECT id FROM craft_runs WHERE id = ? AND user_id = ?`, [runId, req.user.id], (err, row) => {
     if (err) return res.status(500).json({ error: 'An internal error occurred.' });
     if (!row) return res.status(404).json({ error: 'Run not found.' });
     const fields = [];
@@ -3482,7 +3491,7 @@ app.patch('/api/craft-runs/:id', requireAuth, (req, res) => {
 app.delete('/api/craft-runs/:id', requireAuth, (req, res) => {
   const runId = parseInt(req.params.id);
   if (!runId) return res.status(400).json({ error: 'Invalid run id.' });
-  db.get(`SELECT id FROM craft_runs WHERE id = ? AND user_id = ?`, [runId, req.user.id], (err, row) => {
+  readDb.get(`SELECT id FROM craft_runs WHERE id = ? AND user_id = ?`, [runId, req.user.id], (err, row) => {
     if (err) return res.status(500).json({ error: 'An internal error occurred.' });
     if (!row) return res.status(404).json({ error: 'Run not found.' });
     db.run(`DELETE FROM craft_runs WHERE id = ?`, [runId], (err2) => {
@@ -3504,7 +3513,7 @@ app.post('/api/craft-runs/:id/txn', requireAuth, (req, res) => {
   const totalP = qty * unitP;
   const src = ['manual','tab_scan','market_auto'].includes(source) ? source : 'manual';
 
-  db.get(`SELECT id FROM craft_runs WHERE id = ? AND user_id = ?`, [runId, req.user.id], (err, row) => {
+  readDb.get(`SELECT id FROM craft_runs WHERE id = ? AND user_id = ?`, [runId, req.user.id], (err, row) => {
     if (err) return res.status(500).json({ error: 'An internal error occurred.' });
     if (!row) return res.status(404).json({ error: 'Run not found.' });
     const now = Date.now();
@@ -3537,7 +3546,7 @@ app.post('/api/craft-runs/:id/scan', requireAuth, (req, res) => {
   const paid = Math.max(0, parseFloat(total_paid) || 0);
   const method = ['by_market_value','equal_split','manual'].includes(allocation_method) ? allocation_method : 'equal_split';
 
-  db.get(`SELECT id FROM craft_runs WHERE id = ? AND user_id = ?`, [runId, req.user.id], (err, row) => {
+  readDb.get(`SELECT id FROM craft_runs WHERE id = ? AND user_id = ?`, [runId, req.user.id], (err, row) => {
     if (err) return res.status(500).json({ error: 'An internal error occurred.' });
     if (!row) return res.status(404).json({ error: 'Run not found.' });
     const now = Date.now();
@@ -4715,9 +4724,17 @@ setInterval(computeSpreadStats, 60 * 60 * 1000);
 // Prevents the WAL file from growing unbounded on a write-heavy database.
 function runWalCheckpoint() {
   if (dbBusy) return;
+  // TRUNCATE requires no other connection to hold a read transaction — otherwise
+  // it returns SQLITE_LOCKED and the WAL doesn't shrink. Try TRUNCATE first; on
+  // lock, fall back to PASSIVE which merges what it can without blocking.
   db.run('PRAGMA wal_checkpoint(TRUNCATE)', (err) => {
-    if (err) console.error('[WAL] Checkpoint error:', err.message);
-    else console.log('[WAL] Checkpoint (TRUNCATE) complete');
+    if (!err) { console.log('[WAL] Checkpoint (TRUNCATE) complete'); return; }
+    const isLocked = /SQLITE_LOCKED|locked|busy/i.test(err.message || '');
+    if (!isLocked) { console.error('[WAL] Checkpoint error:', err.message); return; }
+    db.run('PRAGMA wal_checkpoint(PASSIVE)', (err2) => {
+      if (err2) console.error('[WAL] Checkpoint PASSIVE fallback also failed:', err2.message);
+      else console.log('[WAL] Checkpoint (PASSIVE fallback) complete — WAL not fully truncated');
+    });
   });
 }
 setInterval(runWalCheckpoint, 30 * 60 * 1000); // every 30 min (was 6 hours — WAL grew to 5.4GB)
