@@ -2286,6 +2286,15 @@
                     <div class="changelog-list">
                         <div class="changelog-entry">
                             <div class="changelog-date">April 21, 2026</div>
+                            <div class="changelog-title">🔍 Accountability audit &mdash; session time window + dedupe + special-item filter</div>
+                            <ul>
+                                <li><strong>Chest-log selector fixes:</strong> each in-game chest log viewing produces two batches (📥 deposits + 📤 withdraws). Selector now auto-selects all batches on render (users were having to Ctrl-click) and has a taller default height so both entries fit visibly.</li>
+                                <li><strong>Date cross-check:</strong> chest logs retain ~4 weeks of history. Deposits from outside the session's time window (±buffer) are now automatically excluded from verification — a 2-week-old deposit won't get credited toward today's fight. Verify banner shows the exact date range + how many entries were dropped.</li>
+                                <li><strong>Loot-logger audit:</strong> extracted <code>sanitizeLootEvents</code> as the single cleanup pass. Applied in both session view + accountability. Dedupes (matches backend UNIQUE INDEX), drops empty <code>item_id</code>s, filters special internals (SILVER / GOLD / FAME_CREDIT / POUCHes / TOME_OF_INSIGHT / SEASONAL_TOKEN). Defensive — Go client already skips silver, but belt-and-suspenders at the JS layer prevents any leakage.</li>
+                            </ul>
+                        </div>
+                        <div class="changelog-entry">
+                            <div class="changelog-date">April 21, 2026</div>
                             <div class="changelog-title">☠️ Deaths section &mdash; split friendly vs enemy, collapse enemy kills</div>
                             <ul>
                                 <li>A 74-death ZvZ used to be a flat wall of rows. Now the Deaths section body splits into two collapsible sub-groups.</li>
@@ -3956,8 +3965,8 @@
                                 <span><strong>Chest Log Captures</strong> (optional — cross-checks pickups against deposit ground truth)</span>
                                 <button class="btn-small" style="padding:0.15rem 0.45rem; font-size:0.68rem;" onclick="populateAccountabilityDropdowns();" title="Refresh chest log list">🔄</button>
                             </label>
-                            <select id="acc-chestlog-select" class="transport-select" style="width:100%; min-height:3.5rem;" multiple><option value="">-- No chest log captures yet --</option></select>
-                            <div style="font-size:0.7rem; color:var(--text-muted); margin-top:0.3rem;">Hold Ctrl to multi-select. Merging a chest log marks items with a matching deposit as ✓ verified (green icon outline + hover tooltip).</div>
+                            <select id="acc-chestlog-select" class="transport-select" style="width:100%; min-height:6rem;" multiple size="5"><option value="">-- No chest log captures yet --</option></select>
+                            <div style="font-size:0.7rem; color:var(--text-muted); margin-top:0.3rem;">Each in-game chest log viewing produces <strong>two captures</strong> (📥 deposits + 📤 withdraws) &mdash; both are auto-selected. Only deposits count for verification; entries outside the session time window (±buffer) are automatically excluded.</div>
                         </div>
                         <div style="display:flex; gap:0.5rem; align-items:center; flex-wrap:wrap;">
                             <button class="btn-small-accent" onclick="runAccountabilityCheck()">Run Check</button>

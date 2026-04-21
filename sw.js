@@ -4,7 +4,7 @@
 // UNKNOWN_* keys locked into the accountability grouping maps. runAccountabilityCheck
 // now awaits loadData(); loadData is memoized so concurrent callers share one
 // round-trip.
-const CACHE_NAME = 'coldtouch-v53';
+const CACHE_NAME = 'coldtouch-v54';
 const APP_SHELL = [
     './',
     './index.html',

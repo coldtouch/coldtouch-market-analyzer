@@ -2,6 +2,26 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-04-21 — Accountability audit pass: session time window + dedupe + special-item filter
+
+**Chest-log selector bug (user-reported).** Chips showed at the top but the selector below the Run Check button was empty or blank. Two root causes:
+
+1. Each in-game chest-log viewing produces **two** batches (deposits + withdrawals), so the selector needed to fit multiple rows. The select had `min-height: 3.5rem` (~56 px, ~2 rows). Increased to `min-height: 6rem` + explicit `size="5"`.
+2. User had to Ctrl-click to multi-select — non-discoverable. Now **auto-selects all batches on render** until the user manually interacts with the select (then it preserves their choices).
+
+**Date cross-check (user-reported).** In-game chest logs retain ~4 weeks of history. Previously every deposit in that window counted toward verification, even ones from weeks ago. Now `runAccountabilityCheck` computes the session's actual time window from loot-event timestamps and filters chest-log entries to `[sessionStart - 1h, sessionEnd + 24h]`. Entries outside drop out of the verification math; the count is surfaced in the verify banner as *"N deposits outside window dropped"* with the exact date range shown.
+
+**Loot-logger audit.** Extracted `sanitizeLootEvents(events)` as the one-stop cleanup pass used by both `runAccountabilityCheck` and `renderLootSessionEvents`. Does:
+
+- Normalize `UNKNOWN_<n>` → real string IDs (via `NUMERIC_ITEM_MAP`)
+- Dedupe on `(ts, looter, item, victim, qty)` matching backend's UNIQUE INDEX — prevents double-counting from old DB rows + WS-reconnect replays
+- Drop events with missing `item_id` (protocol quirk — would create a phantom `""` key in the player→items map otherwise)
+- Drop special/internal items: `SILVER`, `GOLD`, `FAME_CREDIT`, `FAME_CREDIT_PREMIUM`, `FACTION_TOKEN`, `SILVER_POUCH`, `GOLD_POUCH`, `TOME_OF_INSIGHT`, `SEASONAL_TOKEN`. Go client already skips silver via `IsSilver`, but `resolveItemName` returns string names for negative IDs — defensive belt-and-suspenders filter at the JS layer
+
+Verified end-to-end: Alice picked up ×3 T4_RUNE + a duplicate event of the same + a SILVER pickup. After sanitize she shows ×3 T4_RUNE only (not ×6), no SILVER row. Chest log contained her deposit (in window) + a 4-week-old deposit from a different player (out of window) — only the in-window deposit counted, banner reports 1 dropped.
+
+---
+
 ### 2026-04-21 — Deaths section: split friendly vs enemy, collapse enemy kills
 
 74-death sessions (ZvZ) made the Accountability view unreadable — one flat list of death rows scrolled forever. Redesign:

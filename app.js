@@ -10447,6 +10447,34 @@ function copyDeathReport(victim, timestamp) {
 // duplicate rows in the DB (from before the April 18 dedupe migration) don't
 // inflate looter totals in the UI. Also hardens against double-pushes from WS
 // reconnects that sneak past the backend.
+// Special/internal item IDs that should never be treated as loot. The Go
+// client already skips silver pickups via IsSilver, but resolveItemName
+// returns names like "GOLD", "FAME_CREDIT", etc. for negative numeric IDs —
+// defensive filter here so they can't leak into accountability math.
+const _specialInternalItemNames = new Set([
+    'SILVER', 'GOLD', 'FAME_CREDIT', 'FAME_CREDIT_PREMIUM',
+    'FACTION_TOKEN', 'SILVER_POUCH', 'GOLD_POUCH',
+    'TOME_OF_INSIGHT', 'SEASONAL_TOKEN',
+]);
+
+// One-stop sanitize pass for loot-event arrays before any aggregation:
+//   • UNKNOWN_<n> → real string ID (requires NUMERIC_ITEM_MAP loaded)
+//   • Dedup on (ts, looter, item, victim, qty) — matches backend UNIQUE INDEX
+//   • Drop events with missing item_id (protocol quirk → "" phantom key)
+//   • Drop special/internal items (SILVER, GOLD, etc.)
+// __DEATH__ events always pass through unchanged — they're not loot rows.
+function sanitizeLootEvents(events) {
+    if (!Array.isArray(events)) return events;
+    events.forEach(normalizeLootEventInPlace);
+    return _dedupeLootEvents(events).filter(ev => {
+        if (ev.item_id === '__DEATH__') return true;
+        const id = ev.item_id || ev.itemId || '';
+        if (!id) return false;
+        if (_specialInternalItemNames.has(id)) return false;
+        return true;
+    });
+}
+
 function _dedupeLootEvents(events) {
     if (!Array.isArray(events)) return events;
     const seen = new Set();
@@ -10467,10 +10495,11 @@ function _dedupeLootEvents(events) {
 }
 
 async function renderLootSessionEvents(events, targetEl, depositedMap) {
-    // Dedupe before any aggregation — prevents phantom doubled totals when old
-    // duplicate rows exist in the DB (dedupe migration hasn't run yet or the
-    // session predated it).
-    events = _dedupeLootEvents(events);
+    // One-stop sanitize: dedupe, drop empty item_ids, drop special internals
+    // (SILVER, GOLD, etc.), normalize UNKNOWN_<n> → real IDs. Keeps this
+    // path aligned with runAccountabilityCheck so both views attribute the
+    // same way.
+    events = sanitizeLootEvents(events);
     // depositedMap: optional { itemId: qty } for accountability coloring
     const isDetail = !targetEl;
     const detail = targetEl || document.getElementById('loot-session-detail');
@@ -11316,11 +11345,32 @@ function populateAccountabilityDropdowns() {
     }
 
     // Populate the chest-log selector (optional verification input).
+    //
+    // UX: the game streams each chest-log viewing as TWO separate batches
+    // (deposits page + withdrawals page), so users naturally expect to see
+    // both entries. We auto-select ALL batches by default until the user
+    // manually interacts with the select — most users just click Merge &
+    // Verify, so "select all the things" is the right default. Once a user
+    // deselects something manually, we preserve their intent across
+    // subsequent populates (when new batches arrive).
     const chestLogSel = document.getElementById('acc-chestlog-select');
     if (chestLogSel) {
         const batches = window._chestLogBatches || [];
+        // One-time hook so we track when the user has manually changed the
+        // selection. From that point on we preserve their choices instead
+        // of blindly re-selecting-all.
+        if (!chestLogSel._interactionHookAttached) {
+            chestLogSel.addEventListener('change', () => {
+                chestLogSel.dataset.userInteracted = 'yes';
+            });
+            chestLogSel._interactionHookAttached = true;
+        }
+        const userInteracted = chestLogSel.dataset.userInteracted === 'yes';
+        const priorSelected = new Set(
+            Array.from(chestLogSel.selectedOptions).map(o => o.value).filter(v => v !== '')
+        );
         if (batches.length === 0) {
-            chestLogSel.innerHTML = '<option value="" disabled>No chest log captures yet — open a chest Log tab in-game</option>';
+            chestLogSel.innerHTML = '<option value="" disabled>No chest log captures yet — open a chest Log tab in-game (each viewing produces a deposit + withdraw capture)</option>';
         } else {
             chestLogSel.innerHTML = batches.map((b, i) => {
                 const capturedMs = typeof b.capturedAt === 'number' ? b.capturedAt : (b.capturedAt ? new Date(b.capturedAt).getTime() : 0);
@@ -11329,7 +11379,10 @@ function populateAccountabilityDropdowns() {
                 const action = b.action || 'unknown';
                 const icon = action === 'deposit' ? '📥' : action === 'withdraw' ? '📤' : '❔';
                 const count = (b.entries || []).length;
-                return `<option value="${i}">${icon} ${esc(action)} — ${count} entries · ${rel}${abs ? ' (' + abs + ')' : ''}</option>`;
+                // Before user interacts: auto-select everything.
+                // After they manually click: preserve prior selection (only).
+                const shouldSelect = userInteracted ? priorSelected.has(String(i)) : true;
+                return `<option value="${i}"${shouldSelect ? ' selected' : ''}>${icon} ${esc(action)} — ${count} entries · ${rel}${abs ? ' (' + abs + ')' : ''}</option>`;
             }).join('');
         }
     }
@@ -11656,10 +11709,26 @@ async function runAccountabilityCheck() {
             return;
         }
     }
-    // Recover UNKNOWN_<n> item IDs — friend's Go client was missing itemmap.json
-    // on their machine, so everything streamed as "UNKNOWN_<numericID>". We still
-    // have numeric_id in every event, so map it back to real string IDs here.
-    if (Array.isArray(lootEvents)) lootEvents.forEach(normalizeLootEventInPlace);
+    // Sanitize: dedupe, drop empty item_ids, drop special internals (SILVER,
+    // GOLD, etc.), normalize UNKNOWN_<n> → real IDs. See sanitizeLootEvents.
+    lootEvents = sanitizeLootEvents(lootEvents);
+
+    // Compute the session's actual time window from loot events — used to
+    // filter chest-log entries to the right date range. In-game chest logs
+    // retain up to 4 weeks of history; merging ALL of those into an
+    // accountability check would flag every deposit in the last month as
+    // "verified" even if it has nothing to do with today's fight.
+    const _allTs = (lootEvents || [])
+        .map(e => +new Date(e.timestamp))
+        .filter(t => t > 0 && Number.isFinite(t));
+    const sessionStart = _allTs.length ? Math.min(..._allTs) : 0;
+    const sessionEnd = _allTs.length ? Math.max(..._allTs) : 0;
+    // Time buffer: 1h before (people often deposit "seeds" before the fight starts)
+    // and 24h after (late deposits — loot trickling back from carriers/mail).
+    const SESSION_PRE_BUFFER = 60 * 60 * 1000;
+    const SESSION_POST_BUFFER = 24 * 60 * 60 * 1000;
+    const chestLogWindowStart = sessionStart > 0 ? sessionStart - SESSION_PRE_BUFFER : 0;
+    const chestLogWindowEnd = sessionEnd > 0 ? sessionEnd + SESSION_POST_BUFFER : Infinity;
 
     // Merge selected chest captures into deposit inventory
     const captures = window._chestCaptures || [];
@@ -11679,12 +11748,24 @@ async function runAccountabilityCheck() {
 
     // Chest-log cross-check — build { playerName: { itemId: depositedQty } } from
     // selected chest log batches. Ground truth for the verified-on-hover badges.
+    //
+    // IMPORTANT: in-game chest logs retain ~4 weeks of history. We filter to
+    // the session's actual time window (± buffer) so a deposit from 2 weeks
+    // ago doesn't get credited toward today's fight's pickups.
     const chestLogSel = document.getElementById('acc-chestlog-select');
     const chestLogIdxs = chestLogSel
         ? Array.from(chestLogSel.selectedOptions).map(o => parseInt(o.value)).filter(v => !isNaN(v))
         : [];
     const chestLogDeposits = {};
-    const mergedLogMeta = { batches: 0, deposits: 0, withdrawals: 0 };
+    const mergedLogMeta = {
+        batches: 0,
+        deposits: 0,
+        withdrawals: 0,
+        depositsInWindow: 0,
+        depositsOutOfWindow: 0,
+        windowStart: chestLogWindowStart,
+        windowEnd: chestLogWindowEnd,
+    };
     const _logBatches = window._chestLogBatches || [];
     for (const idx of chestLogIdxs) {
         const b = _logBatches[idx];
@@ -11698,6 +11779,14 @@ async function runAccountabilityCheck() {
         mergedLogMeta.deposits += b.entries.length;
         for (const e of b.entries) {
             if (!e.playerName || !e.itemId) continue;
+            // Drop entries outside the session window — e.g. a deposit from
+            // last week that happened to be in the chest log's 4-week history.
+            const entryTs = +new Date(e.timestamp) || 0;
+            if (chestLogWindowStart > 0 && (entryTs < chestLogWindowStart || entryTs > chestLogWindowEnd)) {
+                mergedLogMeta.depositsOutOfWindow++;
+                continue;
+            }
+            mergedLogMeta.depositsInWindow++;
             if (!chestLogDeposits[e.playerName]) chestLogDeposits[e.playerName] = {};
             chestLogDeposits[e.playerName][e.itemId] = (chestLogDeposits[e.playerName][e.itemId] || 0) + (e.quantity || 1);
         }
@@ -11943,16 +12032,26 @@ async function runAccountabilityCheck() {
     const fullyVerifiedLines = playerResults.reduce((s, p) =>
         s + (p.items || []).filter(it => it.fullyVerified).length, 0);
     if (mergedLogMeta.batches > 0) {
+        // Session time window label — shows what slice of chest-log history counted.
+        // Chest logs retain ~4 weeks; we filter to session start (-1h) to end (+24h).
+        let windowLabel = '';
+        if (mergedLogMeta.windowStart > 0 && Number.isFinite(mergedLogMeta.windowEnd)) {
+            const fmt = (ms) => new Date(ms).toLocaleString([], { month:'short', day:'numeric', hour:'2-digit', minute:'2-digit' });
+            windowLabel = ` Filtered to session window <code style="background:rgba(255,255,255,0.04);padding:0.05rem 0.3rem;border-radius:3px;font-size:0.75rem;">${esc(fmt(mergedLogMeta.windowStart))} → ${esc(fmt(mergedLogMeta.windowEnd))}</code>.`;
+        }
+        const droppedLabel = mergedLogMeta.depositsOutOfWindow > 0
+            ? ` <span style="color:#fbbf24;" title="These deposits happened outside the session time window (±buffer) and were excluded from verification">${mergedLogMeta.depositsOutOfWindow} deposit${mergedLogMeta.depositsOutOfWindow !== 1 ? 's' : ''} outside window dropped</span>.`
+            : '';
         html += `<div class="ll-verify-banner">
             <span class="ll-verify-icon">✓</span>
             <div>
                 <strong>Chest log merged</strong> &mdash;
                 ${mergedLogMeta.batches} batch${mergedLogMeta.batches !== 1 ? 'es' : ''} ·
-                ${mergedLogMeta.deposits} deposit record${mergedLogMeta.deposits !== 1 ? 's' : ''}${mergedLogMeta.withdrawals > 0 ? ` · ${mergedLogMeta.withdrawals} withdrawal record${mergedLogMeta.withdrawals !== 1 ? 's' : ''}` : ''}.
+                <strong>${mergedLogMeta.depositsInWindow}</strong> deposit${mergedLogMeta.depositsInWindow !== 1 ? 's' : ''} in window${mergedLogMeta.withdrawals > 0 ? ` · ${mergedLogMeta.withdrawals} withdrawal record${mergedLogMeta.withdrawals !== 1 ? 's' : ''}` : ''}.${droppedLabel}
                 <br>
                 <span style="font-size:0.78rem; color:var(--text-muted);">
                     <strong style="color:var(--profit-green);">${verifiedLines}</strong> item line${verifiedLines !== 1 ? 's' : ''} verified
-                    (${fullyVerifiedLines} fully · ${verifiedLines - fullyVerifiedLines} partial). Hover the green ✓ on any item to see who deposited what.
+                    (${fullyVerifiedLines} fully · ${verifiedLines - fullyVerifiedLines} partial). Hover the green ✓ on any item to see who deposited what.${windowLabel}
                 </span>
             </div>
         </div>`;
