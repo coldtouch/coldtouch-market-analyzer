@@ -10248,6 +10248,11 @@ function renderDeathsSection(deaths) {
 
     const renderDeathRow = (d) => {
         const safeVictim = esc(d.victim);
+        // User request 2026-04-21: prefix player names with their guild in the
+        // death-row summary — [Guild] Name instead of just Name. Applies to
+        // both friendly-deaths and enemy-kills subsections.
+        const victimGuildPrefix = d.victimGuild ? `<span class="ll-death-row-guild" style="color:var(--text-muted);font-size:0.78rem;margin-right:0.25rem;">[${esc(d.victimGuild)}]</span>` : '';
+        const killerGuildPrefix = d.killerGuild ? `<span class="ll-death-row-guild" style="color:var(--text-muted);font-size:0.78rem;margin-right:0.25rem;">[${esc(d.killerGuild)}]</span>` : '';
         const sideClass = d.wasFriendly ? 'll-death-friendly' : 'll-death-enemy';
         const sideIcon = d.wasFriendly ? '🛡️' : '💀';
         const sideLabel = d.wasFriendly ? 'friendly' : 'enemy';
@@ -10283,8 +10288,8 @@ function renderDeathsSection(deaths) {
             const statsStr = `${looter.items} item${looter.items !== 1 ? 's' : ''}${looter.silver > 0 ? ` · ${formatSilver(looter.silver)}` : ''}`;
             return `<div class="ll-death-looter-group">
                 <div class="ll-death-looter-header">
-                    <span class="ll-death-looter-name">${esc(looter.name)}</span>
                     ${guildBadge}
+                    <span class="ll-death-looter-name">${esc(looter.name)}</span>
                     <span class="ll-death-looter-stats">${statsStr}</span>
                 </div>
                 <div class="ll-death-looter-items">${rowsHtml}</div>
@@ -10318,9 +10323,9 @@ function renderDeathsSection(deaths) {
             <summary class="ll-death-row-summary">
                 <span class="ll-death-row-icon">${sideIcon}</span>
                 <span class="ll-death-row-time">${esc(when)}</span>
-                <span class="ll-death-row-victim">${safeVictim}</span>
+                <span class="ll-death-row-victim">${victimGuildPrefix}${safeVictim}</span>
                 <span class="ll-death-row-sep">→</span>
-                <span class="ll-death-row-killer">${esc(d.killer) || 'unknown'}</span>
+                <span class="ll-death-row-killer">${killerGuildPrefix}${esc(d.killer) || 'unknown'}</span>
                 <span class="ll-death-row-value">${value}</span>
                 <span class="ll-death-badge">${sideLabel}</span>
             </summary>

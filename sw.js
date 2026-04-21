@@ -1,9 +1,9 @@
 // Service Worker for Coldtouch Market Analyzer (PWA app shell caching)
-// v57: loot logger player cards stretch dynamically — removed max-height
-// clip on .ll-item-preview so cards grow vertically to fit however many
-// unique items each player has. Header align-items: flex-start so name +
-// stats top-anchor as the icon strip cascades downward.
-const CACHE_NAME = 'coldtouch-v57';
+// v58: deaths section now shows [Guild] prefix on victim + killer names in
+// both Friendly Deaths and Enemy Kills subsections (plus looter rows inside
+// the expanded death body). Helps ZvZ audits where many players share
+// similar names but wear different guild tags.
+const CACHE_NAME = 'coldtouch-v58';
 const APP_SHELL = [
     './',
     './index.html',
