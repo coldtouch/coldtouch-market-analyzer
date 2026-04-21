@@ -10337,17 +10337,31 @@ function renderDeathsSection(deaths) {
 
     // 2026-04-21 redesign — 74 death rows in one flat list was a wall of text.
     // Now split into two collapsible sub-sections:
-    //   • Friendly deaths — auto-open, sorted by value desc (what matters for regear)
+    //   • Friendly deaths — auto-open (what matters for regear)
     //   • Enemy kills — collapsed by default (useful for audit but noisy in a ZvZ)
-    // The overall Deaths section stays OPEN so the counts are always visible,
-    // but sub-sections hide the detail rows until the user asks for them.
-    const byValue = (a, b) => (b.estimatedValue || 0) - (a.estimatedValue || 0);
-    const friendlyDeaths = deaths.filter(d => d.wasFriendly).sort(byValue);
-    const enemyDeaths = deaths.filter(d => !d.wasFriendly).sort(byValue);
+    // Both sorted chronologically (oldest first) so users can follow the fight
+    // as it unfolded rather than jumping around by silver value.
+    const byTime = (a, b) => (a.timestamp || 0) - (b.timestamp || 0);
+    const friendlyDeaths = deaths.filter(d => d.wasFriendly).sort(byTime);
+    const enemyDeaths = deaths.filter(d => !d.wasFriendly).sort(byTime);
 
     // Aggregate silver for the sub-section headers so users see the relative weight at a glance.
     const friendlyValue = friendlyDeaths.reduce((s, d) => s + (d.estimatedValue || 0), 0);
     const enemyValue = enemyDeaths.reduce((s, d) => s + (d.estimatedValue || 0), 0);
+
+    // Column-header row — same grid as the row summaries so labels sit exactly
+    // above their data columns. User feedback: "no label indicating killer, users
+    // have to guess". Header also helps explain the layout at a glance.
+    const columnsHeader = `
+        <div class="ll-death-row-header">
+            <span></span>
+            <span class="ll-death-col-label">Time</span>
+            <span class="ll-death-col-label">Victim</span>
+            <span></span>
+            <span class="ll-death-col-label">Killer</span>
+            <span class="ll-death-col-label" style="text-align:right;">Value</span>
+            <span></span>
+        </div>`;
 
     const friendlyHtml = friendlyDeaths.length > 0 ? `
         <details class="ll-deaths-subgroup ll-deaths-subgroup-friendly" open>
@@ -10357,6 +10371,7 @@ function renderDeathsSection(deaths) {
                 <span class="ll-deaths-subgroup-count">${friendlyDeaths.length}</span>
                 ${friendlyValue > 0 ? `<span class="ll-deaths-subgroup-value">${formatSilver(friendlyValue)} lost</span>` : ''}
             </summary>
+            ${columnsHeader}
             <div class="ll-deaths-list">${friendlyDeaths.map(renderDeathRow).join('')}</div>
         </details>` : '';
 
@@ -10369,6 +10384,7 @@ function renderDeathsSection(deaths) {
                 ${enemyValue > 0 ? `<span class="ll-deaths-subgroup-value">${formatSilver(enemyValue)} taken</span>` : ''}
                 <span class="ll-deaths-subgroup-hint">click to expand</span>
             </summary>
+            ${columnsHeader}
             <div class="ll-deaths-list">${enemyDeaths.map(renderDeathRow).join('')}</div>
         </details>` : '';
 

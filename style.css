@@ -6342,6 +6342,37 @@ footer {
     text-overflow: ellipsis;
     min-width: 0;
 }
+
+/* Column-header row — same 7-column grid as .ll-death-row-summary so labels
+   ("Time", "Victim", "Killer", "Value") sit exactly above their data. */
+.ll-death-row-header {
+    padding: 0.25rem 0.6rem;
+    display: grid;
+    grid-template-columns: 24px 50px 1fr auto 1fr auto auto;
+    gap: 0.5rem;
+    align-items: center;
+    font-size: 0.66rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-muted);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    margin: 0 0.3rem;
+    font-weight: 600;
+}
+.ll-death-col-label {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+/* Mobile: header collapses in lock-step with .ll-death-row-summary so columns stay aligned. */
+@media (max-width: 640px) {
+    .ll-death-row-header {
+        grid-template-columns: 20px 1fr auto auto;
+    }
+    .ll-death-row-header > span:nth-child(2),
+    .ll-death-row-header > span:nth-child(4),
+    .ll-death-row-header > span:nth-child(5) { display: none; }
+}
 .ll-deaths-subgroup-summary {
     cursor: pointer;
     padding: 0.45rem 0.7rem;
