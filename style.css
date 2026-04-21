@@ -6303,7 +6303,44 @@ footer {
 }
 .ll-deaths-subgroup-enemy {
     border-left: 3px solid var(--loss-red);
-    opacity: 0.92;
+    /* No opacity dim — rows should be as crisp as friendly. The sub-group
+       is already collapsed by default; if the user expanded it they want
+       to read it. */
+}
+/* Constrain the enemy list so it's always scrollable within a bounded box
+   instead of pushing the rest of the Accountability view down when a ZvZ
+   has 50+ kills. Friendly list stays uncapped — it's usually 1-10 rows. */
+.ll-deaths-subgroup-enemy .ll-deaths-list {
+    max-height: 400px;
+    overflow-y: auto;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(239, 68, 68, 0.4) transparent;
+}
+.ll-deaths-subgroup-enemy .ll-deaths-list::-webkit-scrollbar {
+    width: 8px;
+}
+.ll-deaths-subgroup-enemy .ll-deaths-list::-webkit-scrollbar-track {
+    background: transparent;
+}
+.ll-deaths-subgroup-enemy .ll-deaths-list::-webkit-scrollbar-thumb {
+    background: rgba(239, 68, 68, 0.35);
+    border-radius: 4px;
+}
+.ll-deaths-subgroup-enemy .ll-deaths-list::-webkit-scrollbar-thumb:hover {
+    background: rgba(239, 68, 68, 0.55);
+}
+/* Friendly list — uncapped but still shows a scrollbar if needed. */
+.ll-deaths-subgroup-friendly .ll-deaths-list {
+    max-height: none;
+    overflow: visible;
+}
+/* Keep summary rows single-line so long guild names don't break the grid
+   into two rows and bloat the list. */
+.ll-death-row-summary > span {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    min-width: 0;
 }
 .ll-deaths-subgroup-summary {
     cursor: pointer;
@@ -6362,6 +6399,11 @@ footer {
     border-radius: 4px;
     overflow: hidden;
     transition: background 0.12s;
+    /* Inside a flex-column list with a fixed max-height, 50 collapsed <details>
+       children were being flex-shrunk to ~8px each and the summary content
+       got clipped. Pin each row to its content height so overflow:auto on the
+       parent actually scrolls instead of squashing. */
+    flex-shrink: 0;
 }
 .ll-death-row.ll-death-friendly { border-left-color: var(--profit-green); }
 .ll-death-row.ll-death-enemy { border-left-color: var(--loss-red); }
