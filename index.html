@@ -2286,6 +2286,17 @@
                     <div class="changelog-list">
                         <div class="changelog-entry">
                             <div class="changelog-date">April 21, 2026</div>
+                            <div class="changelog-title">🚨 Outage recovery &mdash; analytics rewrite, read-path isolation, craft-runs render fix</div>
+                            <ul>
+                                <li><strong>12-hour outage resolved.</strong> Live site was timing out (HTTP 000) because the scheduled analytics job was running 1,700 SQL batches that took ~22 min total &mdash; over the 25-min "stuck" reset &mdash; and each reset spawned an overlapping run on top of the old one. 20+ concurrent EMA chains pegged the event loop.</li>
+                                <li><strong>Analytics rewrite:</strong> added a generation token so stale callbacks from reset runs abort silently, AND replaced the 1,700-query batch loop with one ordered streaming pass. First cycle after deploy finalized in 504s &mdash; the success signal that had never fired before. New composite index <code>idx_pa_ema_stream</code> covers the ORDER BY.</li>
+                                <li><strong>Read-path isolation:</strong> moved <code>/api/craft-runs</code>, <code>/api/loot-tabs</code>, <code>/api/loot-session</code>, <code>/api/alerts</code>, <code>/api/transport-routes</code>, <code>/api/spread-stats</code> and others to the dedicated read-only DB connection (<code>readDb</code>). They used to queue behind writes on the main connection and stall during analytics. Reads now return in &lt;200 ms regardless of analytics activity.</li>
+                                <li><strong>Craft Runs "network error" fix:</strong> user-reported. Turned out to be a pure JavaScript <code>ReferenceError: fmtSilver is not defined</code> in <code>crRunCardHTML</code> &mdash; the broad <code>catch {}</code> in the fetch wrapper swallowed it and showed the misleading "Could not reach server" message. 8 typo'd <code>fmtSilver(...)</code> calls renamed to <code>formatSilver(...)</code>, 1 <code>fmtNum</code> replaced with <code>toLocaleString()</code>. Cache bumped to v55.</li>
+                                <li><strong>DB busy_timeout 5s → 30s:</strong> absorbs SQLITE_BUSY during analytics bulk flush (was spamming the log with <code>[FATAL]</code> every 30s).</li>
+                            </ul>
+                        </div>
+                        <div class="changelog-entry">
+                            <div class="changelog-date">April 21, 2026</div>
                             <div class="changelog-title">🔍 Accountability audit &mdash; session time window + dedupe + special-item filter</div>
                             <ul>
                                 <li><strong>Chest-log selector fixes:</strong> each in-game chest log viewing produces two batches (📥 deposits + 📤 withdraws). Selector now auto-selects all batches on render (users were having to Ctrl-click) and has a taller default height so both entries fit visibly.</li>

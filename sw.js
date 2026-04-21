@@ -1,10 +1,9 @@
 // Service Worker for Coldtouch Market Analyzer (PWA app shell caching)
-// v47: fix UNKNOWN_ recovery race — NUMERIC_ITEM_MAP wasn't loaded in time when
-// the share handler raced loadData(), so normalization silently no-opped and
-// UNKNOWN_* keys locked into the accountability grouping maps. runAccountabilityCheck
-// now awaits loadData(); loadData is memoized so concurrent callers share one
-// round-trip.
-const CACHE_NAME = 'coldtouch-v54';
+// v55: fix craft-runs ReferenceError (fmtSilver -> formatSilver, fmtNum ->
+// toLocaleString). The broken references threw inside crRunCardHTML and the
+// broad fetch catch block then showed a bogus "Could not reach server"
+// message, making a JS bug look like a network outage.
+const CACHE_NAME = 'coldtouch-v55';
 const APP_SHELL = [
     './',
     './index.html',

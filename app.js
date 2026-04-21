@@ -17225,9 +17225,9 @@ function crRunCardHTML(run) {
         </div>
         <div class="cr-flow-steps">${flowHTML}</div>
         <div class="cr-run-stats">
-            <div class="cr-stat"><span class="cr-stat-label">Cost</span><span class="cr-stat-val">${fmtSilver(run.total_cost || 0)}</span></div>
-            <div class="cr-stat"><span class="cr-stat-label">Revenue</span><span class="cr-stat-val">${fmtSilver(run.total_revenue || 0)}</span></div>
-            <div class="cr-stat"><span class="cr-stat-label">Net P&amp;L</span><span class="cr-stat-val" style="color:${profitColor};">${profitSign}${fmtSilver(net)} (${marginPct}%)</span></div>
+            <div class="cr-stat"><span class="cr-stat-label">Cost</span><span class="cr-stat-val">${formatSilver(run.total_cost || 0)}</span></div>
+            <div class="cr-stat"><span class="cr-stat-label">Revenue</span><span class="cr-stat-val">${formatSilver(run.total_revenue || 0)}</span></div>
+            <div class="cr-stat"><span class="cr-stat-label">Net P&amp;L</span><span class="cr-stat-val" style="color:${profitColor};">${profitSign}${formatSilver(net)} (${marginPct}%)</span></div>
         </div>
         <div class="cr-run-actions">
             <span style="color:var(--text-secondary);font-size:0.73rem;">${esc(created)}${run.txn_count ? ` · ${run.txn_count} txn${run.txn_count > 1 ? 's' : ''}` : ''}</span>
@@ -17297,9 +17297,9 @@ function crRenderDetail(run, txns, scans) {
             <td style="color:var(--text-secondary);font-size:0.73rem;">${new Date(t.timestamp).toLocaleDateString()}</td>
             <td><span class="cr-txn-type-badge">${txnTypeLabels[t.type] || esc(t.type)}</span></td>
             <td style="max-width:140px;">${esc(t.item_id)}</td>
-            <td style="text-align:right;">${fmtNum(t.quantity)}</td>
-            <td style="text-align:right;">${fmtSilver(t.unit_price)}</td>
-            <td style="text-align:right;color:${tColor};">${isCost ? '-' : '+'}${fmtSilver(total)}</td>
+            <td style="text-align:right;">${Number(t.quantity || 0).toLocaleString()}</td>
+            <td style="text-align:right;">${formatSilver(t.unit_price)}</td>
+            <td style="text-align:right;color:${tColor};">${isCost ? '-' : '+'}${formatSilver(total)}</td>
             <td style="color:var(--text-secondary);font-size:0.73rem;">${esc(t.city || '—')}</td>
             <td style="font-size:0.7rem;color:var(--text-secondary);">${srcLabels[t.source] || esc(t.source || '')}</td>
         </tr>`;
@@ -17335,19 +17335,19 @@ function crRenderDetail(run, txns, scans) {
     <div class="cr-pnl-dashboard">
         <div class="cr-pnl-card">
             <div class="cr-pnl-label">Total Cost</div>
-            <div class="cr-pnl-val" style="color:var(--loss-red);">${fmtSilver(run.total_cost || 0)}</div>
+            <div class="cr-pnl-val" style="color:var(--loss-red);">${formatSilver(run.total_cost || 0)}</div>
         </div>
         <div class="cr-pnl-card">
             <div class="cr-pnl-label">Revenue</div>
-            <div class="cr-pnl-val" style="color:var(--profit-green);">${fmtSilver(run.total_revenue || 0)}</div>
+            <div class="cr-pnl-val" style="color:var(--profit-green);">${formatSilver(run.total_revenue || 0)}</div>
         </div>
         <div class="cr-pnl-card">
             <div class="cr-pnl-label">Tax Est. (5.5%)</div>
-            <div class="cr-pnl-val" style="color:var(--text-secondary);">−${fmtSilver(taxEst)}</div>
+            <div class="cr-pnl-val" style="color:var(--text-secondary);">−${formatSilver(taxEst)}</div>
         </div>
         <div class="cr-pnl-card" style="border-color:${net >= 0 ? 'rgba(34,197,94,0.3)' : 'rgba(239,68,68,0.3)'};">
             <div class="cr-pnl-label">Net Profit</div>
-            <div class="cr-pnl-val" style="color:${profitColor};font-size:1.15rem;">${profitSign}${fmtSilver(net)}</div>
+            <div class="cr-pnl-val" style="color:${profitColor};font-size:1.15rem;">${profitSign}${formatSilver(net)}</div>
             <div style="color:${profitColor};font-size:0.73rem;">${marginPct}% margin</div>
         </div>
     </div>

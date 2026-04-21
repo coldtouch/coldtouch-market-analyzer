@@ -2,6 +2,26 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-04-21 — Outage recovery: analytics rewrite + read-path isolation + craft-runs render fix
+
+**Production outage.** The live site was returning HTTP 000 (connection timeout) for ~12 hours. Node was pinned at 97% of one core the entire time. Root cause: the scheduled analytics job's EMA phase ran 1,700 per-batch SQL queries that each did a full-ish scan of `price_averages` (6.5 GB). Each batch took ~1 s, total ~22 min — over the 25-min "stuck flag" reset threshold. Reset fired, spawned a new analytics run, but the old run's `setTimeout` chain kept firing batches in the background. Over 12 hours, 20+ overlapping EMA chains accumulated, saturated node's event loop, and locked up accept queues. Users saw connection timeouts.
+
+**Analytics rewrite (backend).** Two fixes landed together:
+
+- **Generation token.** Every `computeAnalytics` run captures a `myGen = ++analyticsGeneration` in closure. Every async callback checks `isStale()` before doing work; `finalize()` only clears the running flag if generation still matches. Stuck-flag reset now *also* bumps the generation, so stale callbacks from the old run see `isStale() === true` and abort silently — no more accumulating overlaps.
+- **Single-pass EMA.** Replaced the 1,700-query batch loop with one ordered `statsDb.each()` that streams `price_averages` rows in `(item_id, city, quality, period_start)` order. EMA is computed incrementally per combo as rows stream, buffered, and flushed once at the end. A new composite index `idx_pa_ema_stream` covers the ORDER BY so SQLite walks the index without an external sort. Dry-run on production data: 11.4 M rows → 176 K combos in 178 s. The old version never completed in 30+ min.
+
+First scheduled cycle after deploy logged the success signal that had never fired before: `[Analytics] Finalized (ok). Total time: 504s` (8 m 24 s end-to-end, bulk + stream + flush).
+
+**Collateral fixes.**
+
+- **`db` busy_timeout 5 s → 30 s.** During the analytics bulk INSERT, `statsDb` holds the write lock for ~13 s. Any `db.run()` from the market scan that landed mid-flush used to hit the 5 s timeout and surface as `[FATAL] Uncaught exception: SQLITE_BUSY` every log cycle. Bumping to 30 s lets writes wait through.
+- **Read-path isolation.** Authenticated user-read endpoints (`/api/craft-runs`, `/api/loot-tabs`, `/api/loot-tab/:id`, `/api/loot-session/:sessionId`, `/api/alerts`, `/api/capture-token`, `/api/public/loot-session/:token`, `/api/spread-stats`, `/api/spread-stats/top`, `/api/transport-routes`) previously used the main `db` connection. `node-sqlite3` serialises all ops per connection — a SELECT queued behind a waiting write stalls until the write either commits or times out. Moved them to the existing `readDb` (OPEN_READONLY, dedicated connection) so they bypass the write queue entirely. Reads now return in <200 ms even while analytics holds the write lock.
+
+**Craft-runs "network error" (frontend).** User-reported. Turned out to be two separate bugs compounding: the serial-queue stall above *plus* a JavaScript `ReferenceError: fmtSilver is not defined` thrown inside `crRunCardHTML` at the exact moment the fetched 200 OK response tried to render. The broad `catch {}` in `initCraftRunsTab` swallowed the ReferenceError and showed the generic *"Could not reach server. Check your connection."* message — making a pure frontend bug look like a backend outage. Replaced 8 `fmtSilver(...)` calls with `formatSilver(...)` (the real function name) and 1 `fmtNum(n)` with `Number(n || 0).toLocaleString()`. Service worker bumped to v55 so clients pick up the fix.
+
+---
+
 ### 2026-04-21 — Accountability audit pass: session time window + dedupe + special-item filter
 
 **Chest-log selector bug (user-reported).** Chips showed at the top but the selector below the Run Check button was empty or blank. Two root causes:

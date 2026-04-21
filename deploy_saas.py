@@ -202,7 +202,11 @@ db.run('PRAGMA journal_mode = WAL');
 db.run('PRAGMA synchronous = NORMAL');
 db.run('PRAGMA cache_size = -32000');   // 32MB page cache (was 128MB — RSS inflated by mmap)
 db.run('PRAGMA mmap_size = 0');         // disable memory-mapped I/O to prevent RSS inflation
-db.run('PRAGMA busy_timeout = 5000');
+db.run('PRAGMA busy_timeout = 30000'); // was 5000 — bumped 2026-04-21 to survive
+                                        // analytics bulk flushes that hold the write
+                                        // lock for ~13s on statsDb. Any db.run() that
+                                        // landed mid-flush used to hit 5s timeout and
+                                        // surface as [FATAL] SQLITE_BUSY in the log.
 db.run('PRAGMA wal_autocheckpoint = 1000');
 
 // Separate connection for SpreadStats + Analytics bulk reads/writes.
@@ -315,6 +319,10 @@ db.serialize(() => {
   db.run(`ALTER TABLE price_averages ADD COLUMN max_buy INTEGER DEFAULT 0`, () => {});
   db.run(`CREATE INDEX IF NOT EXISTS idx_pa_item_city_ts ON price_averages(item_id, city, period_start)`);
   db.run(`CREATE INDEX IF NOT EXISTS idx_pa_spread_query ON price_averages(period_start, avg_sell, avg_buy)`);
+  // Added 2026-04-21 for streaming EMA pass: lets SQLite walk price_averages in
+  // (item_id, city, quality, period_start) order without an external sort step,
+  // cutting analytics EMA time from 22+ min to seconds.
+  db.run(`CREATE INDEX IF NOT EXISTS idx_pa_ema_stream ON price_averages(item_id, city, quality, period_start)`);
 
   // === PHASE 3: Community Scanning Incentives ===
   db.run(`CREATE TABLE IF NOT EXISTS contributions (
@@ -1644,7 +1652,7 @@ app.post('/api/generate-capture-token', (req, res) => {
 // Get current capture token
 app.get('/api/capture-token', (req, res) => {
   if (!req.user) return res.status(401).json({ error: 'Login required.' });
-  db.get(`SELECT capture_token FROM users WHERE id = ?`, [req.user.id], (err, row) => {
+  readDb.get(`SELECT capture_token FROM users WHERE id = ?`, [req.user.id], (err, row) => {
     if (err) return res.status(500).json({ error: 'Database error.' });
     res.json({ token: row?.capture_token || null });
   });
@@ -1814,7 +1822,8 @@ app.post('/api/loot-tab/save', requireAuth, (req, res) => {
 
 // List user's tracked tabs with revenue summary
 app.get('/api/loot-tabs', requireAuth, (req, res) => {
-  db.all(
+  // readDb: bypasses db's serial queue (see craft-runs for why)
+  readDb.all(
     `SELECT lt.id, lt.tab_name, lt.city, lt.purchase_price, lt.items_json, lt.purchased_at, lt.status,
       COALESCE(SUM(ls.sale_price * ls.quantity), 0) as revenue_so_far,
       COUNT(ls.id) as sale_records
@@ -1853,12 +1862,12 @@ app.get('/api/loot-tabs', requireAuth, (req, res) => {
 app.get('/api/loot-tab/:id', requireAuth, (req, res) => {
   const tabId = parseInt(req.params.id);
   if (!tabId) return res.status(400).json({ error: 'Invalid tab id.' });
-  db.get(`SELECT * FROM loot_tabs WHERE id = ? AND user_id = ?`, [tabId, req.user.id], (err, tab) => {
+  readDb.get(`SELECT * FROM loot_tabs WHERE id = ? AND user_id = ?`, [tabId, req.user.id], (err, tab) => {
     if (err) return res.status(500).json({ error: 'An internal error occurred.' });
     if (!tab) return res.status(404).json({ error: 'Tab not found.' });
     let items = [];
     try { items = JSON.parse(tab.items_json); } catch(e) {}
-    db.all(`SELECT * FROM loot_tab_sales WHERE loot_tab_id = ? ORDER BY sold_at DESC`, [tabId], (err2, sales) => {
+    readDb.all(`SELECT * FROM loot_tab_sales WHERE loot_tab_id = ? ORDER BY sold_at DESC`, [tabId], (err2, sales) => {
       if (err2) return res.status(500).json({ error: 'An internal error occurred.' });
       const revenue = (sales || []).reduce((s, r) => s + r.sale_price * r.quantity, 0);
       res.json({
@@ -2410,13 +2419,13 @@ app.get('/api/public/loot-session/:token', (req, res) => {
   if (!token || token.length < 8 || token.length > 64) {
     return res.status(400).json({ error: 'Invalid token.' });
   }
-  db.get(`SELECT session_id, created_at FROM loot_session_shares WHERE public_token = ?`,
+  readDb.get(`SELECT session_id, created_at FROM loot_session_shares WHERE public_token = ?`,
     [token], (err, share) => {
       if (err) return res.status(500).json({ error: 'An internal error occurred.' });
       if (!share) return res.status(404).json({ error: 'Session not found or no longer shared.' });
       // SEC-M3: expire shares after 30 days
       if (Date.now() - share.created_at > 30 * 24 * 60 * 60 * 1000) return res.status(410).json({ error: 'Share link has expired.' });
-      db.all(`SELECT timestamp, looted_by_name, looted_by_guild, looted_by_alliance,
+      readDb.all(`SELECT timestamp, looted_by_name, looted_by_guild, looted_by_alliance,
         looted_from_name, looted_from_guild, looted_from_alliance, item_id, quantity, weight
         FROM loot_events WHERE session_id = ? ORDER BY timestamp ASC LIMIT 5000`,
         [share.session_id], (err2, rows) => {
@@ -2429,7 +2438,7 @@ app.get('/api/public/loot-session/:token', (req, res) => {
 // Get all events for a specific session
 app.get('/api/loot-session/:sessionId', requireAuth, (req, res) => {
   const sessionId = req.params.sessionId;
-  db.all(`SELECT * FROM loot_events WHERE session_id = ? AND user_id = ? ORDER BY timestamp ASC`,
+  readDb.all(`SELECT * FROM loot_events WHERE session_id = ? AND user_id = ? ORDER BY timestamp ASC`,
     [sessionId, req.user.id], (err, rows) => {
       if (err) return res.status(500).json({ error: 'An internal error occurred.' });
       res.json({ events: rows || [] });
@@ -2581,7 +2590,7 @@ function requireAuth(req, res, next) {
 // This prevents any authenticated user from reading/deleting another user's alerts.
 app.get('/api/alerts', requireAuth, (req, res) => {
   const guildId = 'web-' + req.user.id;
-  db.all(`SELECT guild_id, channel_id, min_profit, cooldown_ms FROM alerts WHERE guild_id = ?`, [guildId], (err, rows) => {
+  readDb.all(`SELECT guild_id, channel_id, min_profit, cooldown_ms FROM alerts WHERE guild_id = ?`, [guildId], (err, rows) => {
     if (err) return res.status(500).json({ error: 'An internal error occurred.' });
     res.json(rows || []);
   });
@@ -2919,7 +2928,7 @@ app.get('/api/spread-stats', (req, res) => {
   const { item_id, quality } = req.query;
   if (!item_id) return res.status(400).json({ error: 'item_id required' });
   const q = parseInt(quality) || 1;
-  db.all(
+  readDb.all(
     `SELECT * FROM spread_stats WHERE item_id = ? AND quality = ? AND window_days = 7 ORDER BY confidence_score DESC`,
     [item_id, q],
     (err, rows) => {
@@ -2932,7 +2941,7 @@ app.get('/api/spread-stats', (req, res) => {
 app.get('/api/spread-stats/top', (req, res) => {
   const limit = Math.min(parseInt(req.query.limit) || 100, 200);
   const minConfidence = parseInt(req.query.min_confidence) || 0;
-  db.all(
+  readDb.all(
     `SELECT * FROM spread_stats WHERE window_days = 7 AND confidence_score >= ? AND avg_spread > 0 ORDER BY confidence_score DESC LIMIT ?`,
     [minConfidence, limit],
     (err, rows) => {
@@ -2983,7 +2992,7 @@ app.get('/api/transport-routes', (req, res) => {
   `;
   params.push(limit);
 
-  db.all(sql, params, (err, rows) => {
+  readDb.all(sql, params, (err, rows) => {
     if (err) return res.status(500).json({ error: 'An internal error occurred.' });
     res.json(rows || []);
   });
@@ -3406,7 +3415,10 @@ app.post('/api/craft-runs', requireAuth, (req, res) => {
 
 // GET /api/craft-runs — list user's runs
 app.get('/api/craft-runs', requireAuth, (req, res) => {
-  db.all(
+  // Use readDb: db's serial queue can stall behind long-running writes (e.g.
+  // during the analytics bulk flush). readDb is a dedicated OPEN_READONLY
+  // connection that bypasses that queue entirely.
+  readDb.all(
     `SELECT cr.id, cr.name, cr.status, cr.target_item, cr.total_cost, cr.total_revenue,
             cr.created_at, cr.closed_at, cr.hideout_power_level, cr.hideout_core_bonus,
             COUNT(crt.id) as txn_count
@@ -3428,12 +3440,12 @@ app.get('/api/craft-runs', requireAuth, (req, res) => {
 app.get('/api/craft-runs/:id', requireAuth, (req, res) => {
   const runId = parseInt(req.params.id);
   if (!runId) return res.status(400).json({ error: 'Invalid run id.' });
-  db.get(`SELECT * FROM craft_runs WHERE id = ? AND user_id = ?`, [runId, req.user.id], (err, run) => {
+  readDb.get(`SELECT * FROM craft_runs WHERE id = ? AND user_id = ?`, [runId, req.user.id], (err, run) => {
     if (err) return res.status(500).json({ error: 'An internal error occurred.' });
     if (!run) return res.status(404).json({ error: 'Run not found.' });
-    db.all(`SELECT * FROM craft_run_transactions WHERE run_id = ? ORDER BY timestamp ASC`, [runId], (err2, txns) => {
+    readDb.all(`SELECT * FROM craft_run_transactions WHERE run_id = ? ORDER BY timestamp ASC`, [runId], (err2, txns) => {
       if (err2) return res.status(500).json({ error: 'An internal error occurred.' });
-      db.all(`SELECT * FROM craft_run_scans WHERE run_id = ? ORDER BY scanned_at ASC`, [runId], (err3, scans) => {
+      readDb.all(`SELECT * FROM craft_run_scans WHERE run_id = ? ORDER BY scanned_at ASC`, [runId], (err3, scans) => {
         if (err3) return res.status(500).json({ error: 'An internal error occurred.' });
         res.json({ run, transactions: txns || [], scans: scans || [] });
       });
@@ -3567,10 +3579,10 @@ app.post('/api/craft-runs/:id/scan', requireAuth, (req, res) => {
 app.get('/api/craft-runs/:id/summary', requireAuth, (req, res) => {
   const runId = parseInt(req.params.id);
   if (!runId) return res.status(400).json({ error: 'Invalid run id.' });
-  db.get(`SELECT * FROM craft_runs WHERE id = ? AND user_id = ?`, [runId, req.user.id], (err, run) => {
+  readDb.get(`SELECT * FROM craft_runs WHERE id = ? AND user_id = ?`, [runId, req.user.id], (err, run) => {
     if (err) return res.status(500).json({ error: 'An internal error occurred.' });
     if (!run) return res.status(404).json({ error: 'Run not found.' });
-    db.all(
+    readDb.all(
       `SELECT type, SUM(total_price) as total FROM craft_run_transactions WHERE run_id = ? GROUP BY type`,
       [runId],
       (err2, rows) => {
@@ -4883,12 +4895,19 @@ setInterval(() => { checkDiskUsage(); compactOldData(); }, 2 * 60 * 60 * 1000);
 // per active item+city+quality combo. Runs every 30 minutes.
 let analyticsRunning = false;
 let analyticsStartTime = 0;
+// Generation token: bumped each time a run starts AND each time the stuck-flag
+// reset invalidates a stale run. Every async callback captures its own `myGen`
+// in closure and aborts if the current generation has moved on. This prevents
+// the April 21 2026 outage where stuck-flag resets spawned overlapping EMA
+// chains that pegged one core for 12+ hours.
+let analyticsGeneration = 0;
 
 function computeAnalytics() {
   if (analyticsRunning) {
     if (Date.now() - analyticsStartTime > 25 * 60 * 1000) {
-      console.error('[Analytics] Resetting stuck analyticsRunning flag after 25min');
+      console.error('[Analytics] Resetting stuck flag after 25min (invalidating stale run via generation bump)');
       analyticsRunning = false;
+      analyticsGeneration++; // any callbacks still queued from the stale run will see isStale() and abort
     } else {
       console.log('[Analytics] Busy, skipping this cycle');
       return;
@@ -4898,6 +4917,17 @@ function computeAnalytics() {
   if (statsRunning) { console.log('[Analytics] SpreadStats running, skipping this cycle'); return; }
   analyticsRunning = true;
   analyticsStartTime = Date.now();
+  const myGen = ++analyticsGeneration;
+  const isStale = () => myGen !== analyticsGeneration;
+  // Centralized termination: only the owning generation clears the flag.
+  // A stale-run callback hitting finalize() is a no-op, so the newer run's
+  // flag state is never trampled.
+  function finalize(reason) {
+    if (myGen !== analyticsGeneration) return;
+    analyticsRunning = false;
+    const elapsed = Math.round((Date.now() - analyticsStartTime) / 1000);
+    console.log(`[Analytics] Finalized (${reason}). Total time: ${elapsed}s`);
+  }
 
   const now = Date.now();
   const sevenDaysAgo  = now - 7  * 24 * 60 * 60 * 1000;
@@ -4905,7 +4935,7 @@ function computeAnalytics() {
   const oneDayAgo     = now - 24 * 60 * 60 * 1000;
   const computedAt    = new Date(now).toISOString();
 
-  console.log('[Analytics] Starting computation...');
+  console.log(`[Analytics] Starting computation (gen=${myGen})...`);
 
   // === STEP 1: Bulk SQL metrics (SMA 7d, SMA 30d, scan-weighted avg 7d, price_trend, spread_volatility) ===
   // NOTE (2026-04-18 audit): `vwap_7d` here is scan-frequency-weighted, NOT trade-volume-weighted —
@@ -4928,14 +4958,15 @@ function computeAnalytics() {
     HAVING data_points_7d >= 2`,
     [oneDayAgo, sevenDaysAgo],
     (err, rows7d) => {
+      if (isStale()) return; // stale run aborts silently; newer run owns the flag
       if (err) {
         console.error('[Analytics] 7d query FAILED:', err.message || err);
-        analyticsRunning = false;
+        finalize('7d-err');
         return;
       }
       if (!rows7d || rows7d.length === 0) {
         console.log('[Analytics] No 7d data yet, skipping');
-        analyticsRunning = false;
+        finalize('no-data');
         return;
       }
       // Build lookup for 7d results keyed by item_id|city|quality
@@ -4953,7 +4984,8 @@ function computeAnalytics() {
         GROUP BY item_id, city, quality`,
         [thirtyDaysAgo],
         (err2, rows30d) => {
-          if (err2) { console.error('[Analytics] 30d query FAILED:', err2.message || err2); analyticsRunning = false; return; }
+          if (isStale()) return;
+          if (err2) { console.error('[Analytics] 30d query FAILED:', err2.message || err2); finalize('30d-err'); return; }
 
           const map30d = {};
           for (const r of rows30d || []) {
@@ -4963,6 +4995,7 @@ function computeAnalytics() {
           // === STEP 2: Write bulk metrics (all except EMA) ===
           const bulkResults = []; // [ [item_id, city, quality, metric, value, computedAt], ... ]
           const combos = Object.keys(map7d);
+          const comboSet = new Set(combos); // fast membership check for streaming EMA
 
           for (const key of combos) {
             const r = map7d[key];
@@ -5004,90 +5037,85 @@ function computeAnalytics() {
           }
 
           flushBulk(bulkResults, () => {
+            if (isStale()) return;
             console.log(`[Analytics] Wrote ${bulkResults.length} bulk metrics (SMA/VWAP/trend/volatility)`);
 
-            // === STEP 3: EMA 7d — batched per combo (needs ordered price series) ===
-            // α = 2/(7+1) = 0.25 for a 7-period EMA
-            const EMA_ALPHA = 0.25;
-            const BATCH_SIZE = 100;
-            let batchIdx = 0;
-            let emaWritten = 0;
+            // === STEP 3: EMA 7d — single ordered streaming pass ===
+            // Replaces the old per-batch query loop (1700 full-table scans,
+            // 22+ min runtime that exceeded the 25-min stuck threshold and
+            // caused overlapping runs). New approach: ONE query, rows stream
+            // back in (item_id, city, quality, period_start) order, EMA
+            // computed incrementally in JS. Covered by idx_pa_ema_stream.
+            const EMA_ALPHA = 0.25; // α = 2/(7+1) for a 7-period EMA
+            let curKey = null;
+            let curEma = 0;
+            let rowsInGroup = 0;
+            let rowsProcessed = 0;
+            const emaResults = []; // one entry per combo
 
-            function processEmaBatch() {
-              const end = Math.min(batchIdx + BATCH_SIZE, combos.length);
-              if (batchIdx >= combos.length) {
-                const elapsed = Math.round((Date.now() - analyticsStartTime) / 1000);
-                console.log(`[Analytics] Done. EMA rows written: ${emaWritten}. Total time: ${elapsed}s`);
-                analyticsRunning = false;
-                return;
-              }
-
-              const batchCombos = combos.slice(batchIdx, end);
-              batchIdx = end;
-
-              // Build IN clause using concatenated key (compatible with all SQLite versions)
-              const placeholders = batchCombos.map(() => '?').join(',');
-
-              statsDb.all(
-                `SELECT item_id, city, quality, avg_sell
+            statsDb.each(
+              `SELECT item_id, city, quality, avg_sell
                 FROM price_averages
-                WHERE period_start > ?
-                  AND avg_sell > 0
-                  AND (item_id || '|' || city || '|' || quality) IN (${placeholders})
+                WHERE period_start > ? AND avg_sell > 0
                 ORDER BY item_id, city, quality, period_start ASC`,
-                [sevenDaysAgo, ...batchCombos],
-                (errEma, priceRows) => {
-                  if (errEma || !priceRows || priceRows.length === 0) {
-                    setTimeout(processEmaBatch, 20);
-                    return;
+              [sevenDaysAgo],
+              (errRow, row) => {
+                if (errRow || isStale()) return; // swallow per-row errors, abort if stale
+                const k = row.item_id + '|' + row.city + '|' + row.quality;
+                // Skip combos not in our 7d-eligible set (saves writing rows
+                // with data_points_7d < 2 into price_analytics)
+                if (!comboSet.has(k)) return;
+                if (k !== curKey) {
+                  // Finalize previous group
+                  if (curKey && rowsInGroup > 0) {
+                    const [ii, cc, qq] = curKey.split('|');
+                    emaResults.push([ii, cc, parseInt(qq), 'ema_7d', curEma, computedAt]);
                   }
-
-                  // Group rows by combo key and compute EMA
-                  const emaResults = [];
-                  let curKey = null, curPrices = [];
-
-                  function computeEmaForKey(key, prices) {
-                    if (prices.length === 0) return;
-                    let ema = prices[0].avg_sell;
-                    for (let i = 1; i < prices.length; i++) {
-                      ema = EMA_ALPHA * prices[i].avg_sell + (1 - EMA_ALPHA) * ema;
-                    }
-                    const [ii, cc, qq] = key.split('|');
-                    emaResults.push([ii, cc, parseInt(qq), 'ema_7d', ema, computedAt]);
-                  }
-
-                  for (const pr of priceRows) {
-                    const k = pr.item_id + '|' + pr.city + '|' + pr.quality;
-                    if (k !== curKey) {
-                      if (curKey) computeEmaForKey(curKey, curPrices);
-                      curKey = k;
-                      curPrices = [pr];
-                    } else {
-                      curPrices.push(pr);
-                    }
-                  }
-                  if (curKey) computeEmaForKey(curKey, curPrices);
-
-                  if (emaResults.length === 0) {
-                    setTimeout(processEmaBatch, 20);
-                    return;
-                  }
-
-                  statsDb.serialize(() => {
-                    statsDb.run('BEGIN TRANSACTION');
-                    const stmt = statsDb.prepare(`INSERT OR REPLACE INTO price_analytics (item_id, city, quality, metric, value, computed_at) VALUES (?, ?, ?, ?, ?, ?)`);
-                    for (const row of emaResults) stmt.run(...row);
-                    stmt.finalize();
-                    statsDb.run('COMMIT', () => {
-                      emaWritten += emaResults.length;
-                      setTimeout(processEmaBatch, 30); // yield to event loop
-                    });
-                  });
+                  curKey = k;
+                  curEma = row.avg_sell;
+                  rowsInGroup = 1;
+                } else {
+                  curEma = EMA_ALPHA * row.avg_sell + (1 - EMA_ALPHA) * curEma;
+                  rowsInGroup++;
                 }
-              );
-            }
-
-            processEmaBatch();
+                rowsProcessed++;
+              },
+              (errDone, _rowCount) => {
+                if (isStale()) return;
+                if (errDone) {
+                  console.error('[Analytics] EMA stream FAILED:', errDone.message || errDone);
+                  finalize('ema-err');
+                  return;
+                }
+                // Flush the last group
+                if (curKey && rowsInGroup > 0) {
+                  const [ii, cc, qq] = curKey.split('|');
+                  emaResults.push([ii, cc, parseInt(qq), 'ema_7d', curEma, computedAt]);
+                }
+                if (emaResults.length === 0) {
+                  console.log(`[Analytics] EMA stream: ${rowsProcessed} rows, 0 combos written`);
+                  finalize('ema-empty');
+                  return;
+                }
+                // Single bulk flush
+                statsDb.serialize(() => {
+                  statsDb.run('BEGIN TRANSACTION');
+                  const stmt = statsDb.prepare(`INSERT OR REPLACE INTO price_analytics (item_id, city, quality, metric, value, computed_at) VALUES (?, ?, ?, ?, ?, ?)`);
+                  for (const row of emaResults) stmt.run(...row);
+                  stmt.finalize();
+                  statsDb.run('COMMIT', (errCommit) => {
+                    if (isStale()) return;
+                    if (errCommit) {
+                      console.error('[Analytics] EMA commit FAILED:', errCommit.message || errCommit);
+                      finalize('ema-commit-err');
+                      return;
+                    }
+                    console.log(`[Analytics] EMA stream: ${rowsProcessed} rows processed, ${emaResults.length} combos written`);
+                    finalize('ok');
+                  });
+                });
+              }
+            );
           });
         }
       );
