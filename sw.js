@@ -1,8 +1,9 @@
 // Service Worker for Coldtouch Market Analyzer (PWA app shell caching)
-// v56: loot logger — group player cards by guild (collapsible <details>),
-// preserve window.scrollY across filter changes so the viewport doesn't snap
-// back to the Deaths section above the filter bar.
-const CACHE_NAME = 'coldtouch-v56';
+// v57: loot logger player cards stretch dynamically — removed max-height
+// clip on .ll-item-preview so cards grow vertically to fit however many
+// unique items each player has. Header align-items: flex-start so name +
+// stats top-anchor as the icon strip cascades downward.
+const CACHE_NAME = 'coldtouch-v57';
 const APP_SHELL = [
     './',
     './index.html',
