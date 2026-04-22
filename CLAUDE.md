@@ -303,6 +303,7 @@
 ### Short Term
 - [ ] **ReadMail opcode handler** — capture sale mail notifications, auto-match to tracked loot tabs
 - [ ] **Go client GitHub Releases** — automated builds via GitHub Actions
+- [ ] **Multi-file loot log merging** — allow users to upload multiple .txt loot log files (from different guild members running the client) and merge/cross-reference them into a single unified session. Use case: player A dies mid-fight and stops capturing, player B picks up the rest. Needs: deduplication by timestamp+item+player (same event captured by two clients), unified timeline view, accountability check across the merged dataset. Improves accuracy since no single client captures everything if the operator dies.
 
 ### Major New Feature — Loot Logger Viewer
 - [ ] **Go client:** Port EvOtherGrabbedLoot (275), EvNewCharacter (29), EvCharacterStats (143), OpInventoryMoveItem (29)
