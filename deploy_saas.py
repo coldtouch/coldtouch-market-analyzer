@@ -38,6 +38,22 @@ def main():
         print("[deploy_saas] --frontend-only: backend/VPS not affected. Push frontend to GitHub Pages via `git push origin main` instead.")
         return
 
+    # SEC-L2 / DO-1: auto-bump sw.js CACHE_NAME version so every deploy invalidates the
+    # browser cache. Modifies sw.js locally — include it in your git commit before pushing.
+    import re as _re
+    sw_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'sw.js')
+    if os.path.exists(sw_path):
+        sw_src = open(sw_path).read()
+        def _bump_sw(m):
+            prefix, n = m.group(1), int(m.group(2))
+            return f"{prefix}{n + 1}'"
+        new_sw, count = _re.subn(r"(CACHE_NAME\s*=\s*'coldtouch-v)(\d+)", _bump_sw, sw_src)
+        if count:
+            open(sw_path, 'w').write(new_sw)
+            print(f"[SW] Bumped CACHE_NAME version in sw.js ({count} replacement(s)) — remember to git add sw.js")
+        else:
+            print("[SW] Warning: could not find CACHE_NAME pattern in sw.js to bump")
+
     print("Connecting to VPS...")
     ssh = paramiko.SSHClient()
     # PY-C2: Load known_hosts so we reject unexpected host keys (MITM protection).
@@ -151,6 +167,8 @@ const SERVER_VERSION = process.env.SERVER_VERSION || 'unknown';
 const SERVER_STARTED_AT = new Date().toISOString();
 
 const GAME_SERVER = process.env.GAME_SERVER || 'europe';
+// SEC-M3: admin identity via env var (falls back to owner's Discord ID)
+const ADMIN_DISCORD_ID = process.env.ADMIN_DISCORD_ID || '325634482524782592';
 const API_BASE = `https://${GAME_SERVER}.albion-online-data.com/api/v2/stats/prices`;
 const CHARTS_BASE = `https://${GAME_SERVER}.albion-online-data.com/api/v2/stats/charts`;
 const HISTORY_BASE = `https://${GAME_SERVER}.albion-online-data.com/api/v2/stats/history`;
@@ -163,6 +181,10 @@ function maskEmail(email) {
     if (!email) return '***';
     const [local, domain] = email.split('@');
     return local.slice(0, 2) + '***@' + (domain || '***');
+}
+// SEC-M1: escape HTML in email templates to prevent injection via username
+function escHtml(s) {
+    return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 }
 
 function logAudit(userId, action, detail, ip) {
@@ -1063,6 +1085,10 @@ const apiLimiter = rateLimit({ windowMs: 60 * 1000, max: 60, standardHeaders: tr
 app.use('/api/', apiLimiter);
 // SEC-H2: tighter limit for the heavy batch-prices endpoint (10 req/min per IP)
 const batchPricesLimiter = rateLimit({ windowMs: 60 * 1000, max: 10, standardHeaders: true, legacyHeaders: false, message: { error: 'Too many batch-price requests. Slow down.' } });
+// SEC-H1: tight limit on the O(n²) transport-routes-live endpoint (5 req/min per IP)
+const transportLiveLimiter = rateLimit({ windowMs: 60 * 1000, max: 5, standardHeaders: true, legacyHeaders: false, message: { error: 'Too many transport-routes requests. Slow down.' } });
+let _transportLiveCache = null; // { ts, params, routes } — 30s cache to avoid repeated O(n²) builds
+let _transportLiveCacheTs = 0;
 
 
 // Manual Discord OAuth2 flow (replaces passport-discord which has no HTTP timeouts)
@@ -1138,13 +1164,15 @@ app.get('/auth/discord/callback', async (req, res) => {
       ON CONFLICT(id) DO UPDATE SET username=excluded.username, avatar=excluded.avatar, last_login=?`,
       [profile.id, profile.username, profile.avatar, now, now, now]);
 
-    // Issue JWT (bypasses cross-origin cookie issues)
+    // Issue JWT and deliver via short-lived exchange code (SEC-C1: keeps JWT out of URL/logs/GA).
     const token = jwt.sign(
       { id: profile.id, username: profile.username, avatar: profile.avatar },
       SESSION_SECRET,
       { expiresIn: '30d' }
     );
-    res.redirect(`${SITE}?login=success&token=${encodeURIComponent(token)}`);
+    const exchCode = require('crypto').randomBytes(16).toString('hex');
+    authCodes[exchCode] = { token, expiresAt: Date.now() + 60 * 1000 }; // 60s TTL
+    res.redirect(`${SITE}?login=success&code=${exchCode}`);
   } catch (err) {
     console.error('[OAuth] Discord auth error:', err.message);
     res.redirect(`${SITE}?login=failed`);
@@ -1181,7 +1209,7 @@ app.get('/api/news', (req, res) => {
 // Admin-only: set the news banner (requires auth + admin check)
 app.post('/api/news', requireAuth, (req, res) => {
   // Only allow the site owner to update
-  if (req.user.id !== '325634482524782592') return res.status(403).json({ error: 'Admin only' });
+  if (req.user.id !== ADMIN_DISCORD_ID) return res.status(403).json({ error: 'Admin only' });
   const { message, type, active, link } = req.body;
   const banner = JSON.stringify({
     active: active !== false,
@@ -1196,11 +1224,15 @@ app.post('/api/news', requireAuth, (req, res) => {
   });
 });
 
-// /health and /healthz return the same payload — /healthz is the conventional
-// name used by uptime monitors (UptimeRobot, BetterStack, k8s probes). DO-2.
-function healthPayload() {
+// SEC-H2: public health endpoints return minimal payload (status only).
+// Full diagnostics available at /api/admin/health (auth + admin required).
+app.get('/health', (req, res) => res.json({ status: 'ok' }));
+app.get('/healthz', (req, res) => res.json({ status: 'ok' }));
+
+app.get('/api/admin/health', requireAuth, (req, res) => {
+  if (req.user.id !== ADMIN_DISCORD_ID) return res.status(403).json({ error: 'Admin only' });
   const mem = process.memoryUsage();
-  return {
+  res.json({
     status: 'ok',
     uptime: Math.floor(process.uptime()),
     memory: {
@@ -1217,10 +1249,8 @@ function healthPayload() {
     alertDbItems: Object.keys(alertMarketDb).length,
     version: SERVER_VERSION,
     startedAt: SERVER_STARTED_AT
-  };
-}
-app.get('/health', (req, res) => res.json(healthPayload()));
-app.get('/healthz', (req, res) => res.json(healthPayload()));
+  });
+});
 
 app.get('/api/me', (req, res) => {
   if(req.user) {
@@ -1256,6 +1286,8 @@ const { randomUUID } = require('crypto');
 
 // Rate limit: 5 registration attempts per 15 minutes per IP
 const registerLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 5, message: { error: 'Too many registration attempts. Try again in 15 minutes.' } });
+// UX-3: rate limit on login to prevent brute-force (10 per 15 min per IP)
+const loginLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 10, message: { error: 'Too many login attempts. Try again in 15 minutes.' } });
 
 app.post('/api/register', registerLimiter, async (req, res) => {
   const { email, password, username } = req.body;
@@ -1265,9 +1297,10 @@ app.post('/api/register', registerLimiter, async (req, res) => {
   const emailRegex = /^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/;
   if (!emailRegex.test(email)) return res.status(400).json({ error: 'Invalid email format.' });
 
-  // Validate password strength
+  // Validate password strength (SEC-M5)
   if (password.length < 8) return res.status(400).json({ error: 'Password must be at least 8 characters.' });
   if (password.length > 128) return res.status(400).json({ error: 'Password too long.' });
+  if (!/[a-zA-Z]/.test(password) || !/[0-9]/.test(password)) return res.status(400).json({ error: 'Password must contain at least one letter and one digit.' });
 
   // Validate username
   const trimUser = username.trim();
@@ -1303,7 +1336,7 @@ app.post('/api/register', registerLimiter, async (req, res) => {
           mailTransporter.sendMail({
             from: SMTP_FROM, to: emailLower,
             subject: 'Verify your Coldtouch Market Analyzer account',
-            html: `<div style="font-family:sans-serif;max-width:500px;margin:0 auto;padding:20px;background:#1a1a26;color:#e8e8f0;border-radius:8px"><h2 style="color:#d4af37">Welcome, ${trimUser}!</h2><p>Click below to verify your email address:</p><a href="${verifyUrl}" style="display:inline-block;padding:12px 24px;background:#d4af37;color:#000;text-decoration:none;border-radius:6px;font-weight:bold">Verify Email</a><p style="color:#8888a0;font-size:12px;margin-top:20px">This link expires in 24 hours. If you didn't create this account, ignore this email.</p></div>`
+            html: `<div style="font-family:sans-serif;max-width:500px;margin:0 auto;padding:20px;background:#1a1a26;color:#e8e8f0;border-radius:8px"><h2 style="color:#d4af37">Welcome, ${escHtml(trimUser)}!</h2><p>Click below to verify your email address:</p><a href="${verifyUrl}" style="display:inline-block;padding:12px 24px;background:#d4af37;color:#000;text-decoration:none;border-radius:6px;font-weight:bold">Verify Email</a><p style="color:#8888a0;font-size:12px;margin-top:20px">This link expires in 24 hours. If you didn't create this account, ignore this email.</p></div>`
           }).catch(e => console.error('[SMTP] Verification email failed:', e.message));
         }
 
@@ -1459,7 +1492,7 @@ app.post('/api/forgot-password', registerLimiter, (req, res) => {
         mailTransporter.sendMail({
           from: SMTP_FROM, to: emailLower,
           subject: 'Reset your Coldtouch Market Analyzer password',
-          html: '<div style="font-family:sans-serif;max-width:500px;margin:0 auto;padding:20px;background:#1a1a26;color:#e8e8f0;border-radius:8px"><h2 style="color:#d4af37">Password Reset</h2><p>Hi ' + user.username + ', click below to reset your password:</p><a href="' + resetUrl + '" style="display:inline-block;padding:12px 24px;background:#d4af37;color:#000;text-decoration:none;border-radius:6px;font-weight:bold">Reset Password</a><p style="color:#8888a0;font-size:12px;margin-top:20px">This link expires in 1 hour. If you did not request this, ignore this email.</p></div>'
+          html: '<div style="font-family:sans-serif;max-width:500px;margin:0 auto;padding:20px;background:#1a1a26;color:#e8e8f0;border-radius:8px"><h2 style="color:#d4af37">Password Reset</h2><p>Hi ' + escHtml(user.username) + ', click below to reset your password:</p><a href="' + resetUrl + '" style="display:inline-block;padding:12px 24px;background:#d4af37;color:#000;text-decoration:none;border-radius:6px;font-weight:bold">Reset Password</a><p style="color:#8888a0;font-size:12px;margin-top:20px">This link expires in 1 hour. If you did not request this, ignore this email.</p></div>'
         }).catch(e => console.error('[SMTP] Password reset email failed:', e.message));
       }
 
@@ -1474,6 +1507,7 @@ app.post('/api/reset-password', registerLimiter, async (req, res) => {
   if (!token || !newPassword) return res.status(400).json({ error: 'Token and new password are required.' });
   if (newPassword.length < 8) return res.status(400).json({ error: 'Password must be at least 8 characters.' });
   if (newPassword.length > 128) return res.status(400).json({ error: 'Password too long.' });
+  if (!/[a-zA-Z]/.test(newPassword) || !/[0-9]/.test(newPassword)) return res.status(400).json({ error: 'Password must contain at least one letter and one digit.' });
 
   db.get(`SELECT id FROM users WHERE reset_token = ? AND reset_expires > ?`, [token, Date.now()], async (err, user) => {
     if (err || !user) return res.status(400).json({ error: 'Invalid or expired reset token.' });
@@ -1496,7 +1530,7 @@ app.post('/api/reset-password', registerLimiter, async (req, res) => {
 app.get('/api/admin/audit-log', (req, res) => {
   if (!req.user) return res.status(401).json({ error: 'Login required' });
   // Admin check: site owner or expand this list as needed
-  if (req.user.id !== '325634482524782592') return res.status(403).json({ error: 'Admin only' });
+  if (req.user.id !== ADMIN_DISCORD_ID) return res.status(403).json({ error: 'Admin only' });
   const limit = Math.min(parseInt(req.query.limit) || 100, 500);
   readDb.all(`SELECT id, user_id, action, detail, ip, created_at FROM audit_log ORDER BY created_at DESC LIMIT ?`, [limit], (err, rows) => {
     if (err) return res.status(500).json({ error: 'Database error.' });
@@ -1542,11 +1576,34 @@ app.post('/api/unlink-discord', (req, res) => {
   });
 });
 
+// === AUTH CODE EXCHANGE (SEC-C1: prevents JWT from appearing in URLs/logs) ===
+// Short-lived (60s) codes issued after OAuth; frontend POSTs code here to get JWT.
+const authCodes = {}; // { hexCode: { token, expiresAt } }
+setInterval(() => {
+  const now = Date.now();
+  for (const c of Object.keys(authCodes)) { if (now > authCodes[c].expiresAt) delete authCodes[c]; }
+}, 60 * 1000);
+
+app.post('/api/auth/exchange', (req, res) => {
+  const { code } = req.body;
+  if (!code || typeof code !== 'string') return res.status(400).json({ error: 'code required' });
+  const entry = authCodes[code];
+  if (!entry || Date.now() > entry.expiresAt) return res.status(400).json({ error: 'Invalid or expired code.' });
+  const { token } = entry;
+  delete authCodes[code]; // one-time use
+  res.json({ token });
+});
+
 // === DEVICE AUTHORIZATION (OAuth 2.0 Device Flow) ===
 const deviceCodes = {}; // { userCode: { deviceCode, userId, username, captureToken, expiresAt, authorized } }
 
+// SEC-H3: per-IP rate limit on device code creation: 3 per 15 min
+const deviceCodeLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 3, message: { error: 'Too many device code requests. Try again later.' } });
+
 // Step 1: Client requests a device code
-app.post('/api/device/code', (req, res) => {
+app.post('/api/device/code', deviceCodeLimiter, (req, res) => {
+  // SEC-H3: hard cap on in-memory deviceCodes to prevent unbounded accumulation
+  if (Object.keys(deviceCodes).length >= 200) return res.status(429).json({ error: 'Server busy — too many pending authorizations.' });
   const userCode = require('crypto').randomBytes(3).toString('hex').toUpperCase().match(/.{3}/g).join('-'); // ABC-DEF
   const deviceCode = require('crypto').randomBytes(32).toString('hex');
   const expiresAt = Date.now() + 10 * 60 * 1000; // 10 min expiry
@@ -2460,8 +2517,10 @@ app.post('/api/loot-upload', requireAuth, (req, res) => {
   if (!lines || !Array.isArray(lines) || lines.length === 0) {
     return res.status(400).json({ error: 'No loot data provided.' });
   }
-  // SEC-C5: cap upload payload to prevent DoS via oversized batch
-  if (lines.length > 100) return res.status(400).json({ error: 'Too many lines. Maximum 100 per upload.' });
+  // FEAT-M1: cap by payload size (2 MB) rather than line count — real sessions have thousands of lines
+  if (lines.length > 5000) return res.status(400).json({ error: 'Too many lines. Maximum 5000 per upload.' });
+  const payloadBytes = lines.reduce((n, l) => n + (l ? l.length : 0), 0);
+  if (payloadBytes > 2 * 1024 * 1024) return res.status(400).json({ error: 'Upload payload too large (max 2 MB).' });
   // Append-to-existing mode: caller may pass an existing sessionId they own.
   // Useful for backfilling death rows into a previously-uploaded session that was
   // created before the Go client started writing __DEATH__ lines to its .txt log.
@@ -3098,7 +3157,11 @@ setTimeout(initPriceRefCache, 15000);
 // Every 10 min: incrementally update cache with last 2h data, then rebuild in-memory refs
 setInterval(() => { refreshPriceRefCache(); setTimeout(buildPriceReference, 5000); }, 10 * 60 * 1000);
 
-app.get('/api/transport-routes-live', (req, res) => {
+app.get('/api/transport-routes-live', transportLiveLimiter, (req, res) => {
+  // SEC-H1: serve cached result for 30s to avoid repeated O(n²) computation per IP
+  if (_transportLiveCache && Date.now() - _transportLiveCacheTs < 30 * 1000) {
+    return res.json(_transportLiveCache);
+  }
   try {
   const buyCity = req.query.buy_city || '';
   const sellCity = req.query.sell_city || '';
@@ -3248,8 +3311,10 @@ app.get('/api/transport-routes-live', (req, res) => {
       if (r.instant_profit > 0) instantAvailable++;
     }
   }
+  const payload = { routes: result, total: routes.length, dataPoints: Object.keys(alertMarketDb).length };
+  _transportLiveCache = payload; _transportLiveCacheTs = Date.now(); // SEC-H1: cache 30s
   console.log(`[Transport-Live] ${routes.length} routes (strategy=${sellStrategy}, maxAge=${maxAge}m, instant=${instantAvailable})`);
-  res.json({ routes: result, total: routes.length, dataPoints: Object.keys(alertMarketDb).length });
+  res.json(payload);
   } catch(e) {
     console.error('[Transport-Live] Computation error:', e);
     res.status(500).json({ error: 'Failed to compute transport routes.' });
@@ -3352,7 +3417,7 @@ app.get('/api/analytics/:itemId', (req, res) => {
 // Returns DB size, row counts per table, oldest/newest timestamps for monitoring.
 app.get('/api/admin/db-stats', requireAuth, (req, res) => {
   // SEC-C4: owner-only endpoint
-  if (req.user.id !== '325634482524782592') return res.status(403).json({ error: 'Admin only.' });
+  if (req.user.id !== ADMIN_DISCORD_ID) return res.status(403).json({ error: 'Admin only.' });
   const tables = [
     'price_averages', 'price_hourly', 'price_analytics',
     'spread_stats', 'price_snapshots', 'users', 'contributions', 'loot_tabs'
@@ -3721,7 +3786,9 @@ wss.on('connection', (ws, req) => {
   wsClients.add(ws);
   ws.isAuthenticated = false;
   ws._lastActivity = Date.now();
-  ws._ip = (req && (req.headers['x-forwarded-for'] || req.socket?.remoteAddress)) || 'unknown';
+  // SEC-M2: take only the first (client) IP from x-forwarded-for to prevent rate-limit spoofing
+  const _xff = req && req.headers['x-forwarded-for'];
+  ws._ip = (_xff ? _xff.split(',')[0].trim() : (req?.socket?.remoteAddress)) || 'unknown';
   ws.on('pong', () => { ws._lastActivity = Date.now(); }); // keepalive response
   ws.on('message', data => {
     ws._lastActivity = Date.now();
@@ -5479,6 +5546,7 @@ require('http').createServer((req, res) => {
     # DO-2: surface the deploy timestamp via /healthz so monitors can detect new versions.
     import datetime
     server_version = datetime.datetime.utcnow().strftime('%Y%m%d-%H%M%S')
+    admin_discord_id = os.environ.get('ADMIN_DISCORD_ID', '325634482524782592')
     env_content = f"""DOMAIN={domain}
 DISCORD_CLIENT_ID={CLIENT_ID}
 DISCORD_CLIENT_SECRET={CLIENT_SECRET}
@@ -5487,6 +5555,7 @@ DISCORD_FEEDBACK_WEBHOOK={feedback_webhook}
 SESSION_SECRET={session_secret}
 GAME_SERVER={game_server}
 SERVER_VERSION={server_version}
+ADMIN_DISCORD_ID={admin_discord_id}
 SMTP_HOST={smtp_host}
 SMTP_PORT={smtp_port}
 SMTP_USER={smtp_user}

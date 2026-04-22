@@ -87,8 +87,10 @@
     <!-- Styles -->
     <link rel="stylesheet" href="style.css">
 
-    <!-- Chart.js -->
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <!-- Chart.js (SEC-M4: pinned version + SRI integrity check) -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.9/dist/chart.umd.min.js"
+            integrity="sha384-b0GXujLkk9eYYSmcSfoyZbfyElGAQnDyY0skCHSG6w3JgTMFnz11ggrTAr7seu9f"
+            crossorigin="anonymous"></script>
 
     <!-- Google Analytics -->
     <script async src="https://www.googletagmanager.com/gtag/js?id=G-S3GS92QKC9"></script>
@@ -190,7 +192,7 @@
                             <input type="email" id="register-email" placeholder="Email" autocomplete="email" required>
                         </div>
                         <div class="auth-input-group">
-                            <input type="password" id="register-password" placeholder="Password (8+ characters)" autocomplete="new-password" minlength="8" required>
+                            <input type="password" id="register-password" placeholder="Password (8+ chars, letter + digit)" autocomplete="new-password" minlength="8" required>
                         </div>
                         <button type="submit" class="btn-auth-submit btn-auth-register">
                             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="8.5" cy="7" r="4"/><line x1="20" y1="8" x2="20" y2="14"/><line x1="23" y1="11" x2="17" y2="11"/></svg>
@@ -2285,6 +2287,30 @@
                     <div id="changelog-wrapper" style="max-height: 500px; overflow-y: auto; position: relative;">
                     <div class="changelog-list">
                         <div class="changelog-entry">
+                            <div class="changelog-date">April 22, 2026</div>
+                            <div class="changelog-title">🔒 Security hardening &mdash; exchange code flow, rate limiters, SRI, UX polish</div>
+                            <ul>
+                                <li><strong>JWT never in URL (CRITICAL):</strong> Discord OAuth callback now issues a short-lived exchange code (60s TTL) instead of embedding the JWT in the redirect URL. Frontend exchanges the code for the token via <code>POST /api/auth/exchange</code> &mdash; token goes straight to localStorage, never into browser history or server logs.</li>
+                                <li><strong>Transport-routes-live hardened (HIGH):</strong> added dedicated rate limiter (5 req/min) and 30s server-side cache so the O(n²) join isn't computed on every unauthenticated hit.</li>
+                                <li><strong>Health endpoints stripped (HIGH):</strong> <code>/health</code> and <code>/healthz</code> now return only <code>{"status":"ok"}</code>. Full diagnostics (uptime, DB sizes, job timings) moved to <code>/api/admin/health</code> behind JWT.</li>
+                                <li><strong>Device code hard cap (HIGH):</strong> added per-IP rate limit (3 per 15 min) and a 200-entry global cap on the <code>deviceCodes</code> map to prevent unbounded memory growth.</li>
+                                <li><strong>Password reset token removed from URL (HIGH):</strong> added <code>?reset=</code> param handler + modal in the frontend so the reset link exchanges the token immediately on page load and strips it from the URL bar.</li>
+                                <li><strong>Email HTML injection (MEDIUM):</strong> added <code>escHtml()</code> helper — username is now escaped before insertion into email templates.</li>
+                                <li><strong>WS IP extraction (MEDIUM):</strong> <code>x-forwarded-for</code> header is now split on comma and the first entry taken, preventing client-spoofed IPs via multi-value headers.</li>
+                                <li><strong>Admin Discord ID (MEDIUM):</strong> hardcoded string replaced with <code>ADMIN_DISCORD_ID</code> env constant (defaulting to existing value).</li>
+                                <li><strong>SRI on Chart.js (MEDIUM):</strong> CDN script tag pinned to <code>chart.js@4.4.9</code> with <code>sha384</code> integrity hash and <code>crossorigin="anonymous"</code>.</li>
+                                <li><strong>Password complexity (MEDIUM):</strong> registration and password-change now require at least one letter and one digit. Error message and input placeholder updated.</li>
+                                <li><strong>Loot upload cap (MEDIUM):</strong> file uploads now reject payloads &gt;5,000 lines or &gt;2 MB with a clear error message.</li>
+                                <li><strong>Login rate limiter (UX/SEC):</strong> <code>loginLimiter</code> (10 per 15 min) wired to <code>POST /api/login</code>.</li>
+                                <li><strong>SW auto-bump (DevOps):</strong> <code>deploy_saas.py</code> now auto-increments <code>sw.js</code> <code>CACHE_NAME</code> version on every deploy so stale assets are always evicted.</li>
+                                <li><strong>Go client cleanup (CODE):</strong> <code>device_auth.go</code> <code>writeConfigFile</code> rewritten using stdlib <code>strings</code> package; custom <code>splitLines</code>/<code>trimSpace</code>/<code>startsWith</code> helpers removed.</li>
+                                <li><strong>Toast callback registry (CODE):</strong> <code>showConfirm</code>/<code>showPrompt</code> replaced inline <code>onclick</code> function serialisation with a <code>_toastCallbacks</code> ID registry &mdash; eliminates the XSS vector from arbitrary content reaching <code>onclick</code> attributes.</li>
+                                <li><strong>Toast stack cap (UX):</strong> confirm/prompt toasts are capped at <code>MAX_VISIBLE_TOASTS</code> (5) to prevent stacking loops from burying the UI.</li>
+                                <li><strong>Offline indicator (UX):</strong> banner appears when the browser goes offline; a success toast fires when connectivity returns.</li>
+                                <li><strong>Tab titles (UX):</strong> browser tab title now reflects the active tab (e.g. &ldquo;Market Flipping — Albion Market Analyzer&rdquo;).</li>
+                            </ul>
+                        </div>
+                        <div class="changelog-entry">
                             <div class="changelog-date">April 21, 2026</div>
                             <div class="changelog-title">🚨 Outage recovery &mdash; analytics rewrite, read-path isolation, craft-runs render fix</div>
                             <ul>
@@ -4200,6 +4226,27 @@
             <a href="https://www.albion-online-data.com/" target="_blank" rel="noopener noreferrer">Albion Online Data Project</a>
         </p>
     </footer>
+
+    <!-- SEC-H4: password reset modal (shown when ?reset= param is detected) -->
+    <div id="reset-password-modal" class="modal" style="display:none;">
+        <div class="modal-content" style="max-width:420px;">
+            <div class="modal-header"><h3>Set New Password</h3></div>
+            <div class="modal-body">
+                <div id="reset-pw-error" class="landing-auth-error" style="display:none; margin-bottom:0.75rem;">
+                    <span id="reset-pw-error-text"></span>
+                </div>
+                <div id="reset-pw-success" class="landing-auth-success" style="display:none; margin-bottom:0.75rem;">
+                    <span>Password updated successfully. You can now log in.</span>
+                </div>
+                <div id="reset-pw-form-wrap">
+                    <div class="auth-input-group" style="margin-bottom:0.75rem;">
+                        <input type="password" id="reset-pw-input" placeholder="New password (8+ chars, letter + digit)" class="input-field" style="width:100%;" autocomplete="new-password">
+                    </div>
+                    <button id="reset-pw-submit" class="btn-auth-submit" style="width:100%;">Set Password</button>
+                </div>
+            </div>
+        </div>
+    </div>
 
     <script src="db.js"></script>
     <script src="app.js"></script>

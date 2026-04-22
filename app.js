@@ -390,6 +390,14 @@ function showToast(message, type = 'info', duration = 4000) {
     }, duration);
 }
 
+// CODE-L3: callback registry — avoids serialising function source into onclick attributes
+const _toastCallbacks = {};
+function _runToastCb(id) { try { _toastCallbacks[id]?.(); } finally { delete _toastCallbacks[id]; } }
+function _runToastPrompt(id, inputId) {
+    const v = document.getElementById(inputId)?.value ?? '';
+    try { _toastCallbacks[id]?.(v); } finally { delete _toastCallbacks[id]; }
+}
+
 function showConfirm(message, onYes) {
     let container = document.getElementById('toast-container');
     if (!container) {
@@ -397,12 +405,17 @@ function showConfirm(message, onYes) {
         container.id = 'toast-container';
         document.body.appendChild(container);
     }
+    // UX-4: cap confirm dialogs at MAX_VISIBLE_TOASTS — dismiss oldest if exceeded
+    const existing = container.querySelectorAll('.toast-confirm');
+    if (existing.length >= MAX_VISIBLE_TOASTS) existing[0].remove();
+    const cbId = 'cb_' + Date.now() + '_' + Math.random().toString(36).slice(2);
+    _toastCallbacks[cbId] = onYes;
     const toast = document.createElement('div');
     toast.className = 'toast toast-confirm show';
     toast.innerHTML = `<div style="margin-bottom:0.5rem;">${esc(message)}</div>
         <div style="display:flex; gap:0.5rem; justify-content:flex-end;">
             <button class="btn-small" onclick="this.closest('.toast').remove()">Cancel</button>
-            <button class="btn-small-danger" onclick="this.closest('.toast').remove(); (${onYes.toString()})()">Confirm</button>
+            <button class="btn-small-danger" onclick="this.closest('.toast').remove(); _runToastCb('${cbId}')">Confirm</button>
         </div>`;
     container.appendChild(toast);
 }
@@ -414,6 +427,11 @@ function showPrompt(message, defaultValue, onSubmit) {
         container.id = 'toast-container';
         document.body.appendChild(container);
     }
+    // UX-4: cap prompts at MAX_VISIBLE_TOASTS
+    const existing = container.querySelectorAll('.toast-confirm');
+    if (existing.length >= MAX_VISIBLE_TOASTS) existing[0].remove();
+    const cbId = 'cb_' + Date.now() + '_' + Math.random().toString(36).slice(2);
+    _toastCallbacks[cbId] = onSubmit;
     const toast = document.createElement('div');
     toast.className = 'toast toast-confirm show';
     const inputId = 'show-prompt-input-' + Date.now();
@@ -421,7 +439,7 @@ function showPrompt(message, defaultValue, onSubmit) {
         <input id="${inputId}" type="text" class="input-field" value="${esc(defaultValue || '')}" style="width:100%; margin-bottom:0.5rem;">
         <div style="display:flex; gap:0.5rem; justify-content:flex-end;">
             <button class="btn-small" onclick="this.closest('.toast').remove()">Cancel</button>
-            <button class="btn-small-accent" onclick="const v=document.getElementById('${inputId}').value; this.closest('.toast').remove(); (${onSubmit.toString()})(v)">OK</button>
+            <button class="btn-small-accent" onclick="this.closest('.toast').remove(); _runToastPrompt('${cbId}', '${inputId}')">OK</button>
         </div>`;
     container.appendChild(toast);
     setTimeout(() => { const inp = document.getElementById(inputId); if (inp) { inp.focus(); inp.select(); } }, 50);
@@ -818,6 +836,10 @@ function initTabs() {
             const url = new URL(window.location);
             url.searchParams.set('tab', currentTab);
             history.replaceState(null, '', url);
+
+            // UX-2: update browser tab title
+            const _TAB_TITLES = { browser:'Market Browser', arbitrage:'Market Flipping', bmflipper:'BM Flipper', compare:'City Comparison', toptraded:'Top Traded', itempower:'Item Power', favorites:'Favorites', crafting:'Crafting Profits', 'craft-top-n':'Top-N Ranker', 'refining-lab':'Refining Lab', journals:'Journals', rrr:'Return Rate Calc', repair:'Repair Cost', transport:'Transport Routes', 'live-flips':'Live Flips', portfolio:'Portfolio Tracker', 'craft-runs':'Craft Runs', 'loot-buyer':'Loot Buyer', 'loot-logger':'Loot Logger', farming:'Farm Calculator', alerts:'Alerts', about:'About', community:'Community', profile:'Profile' };
+            document.title = (_TAB_TITLES[currentTab] ? _TAB_TITLES[currentTab] + ' — ' : '') + 'Albion Market Analyzer';
 
             // Close dropdown after selection
             closeAllDropdowns();
@@ -5635,6 +5657,53 @@ function updateHeaderProfile(user) {
     if (profileTab) profileTab.style.display = '';
 }
 
+// SEC-H4: handle ?reset=<token> email link — strip token from URL, show reset modal
+function _handlePasswordResetParam() {
+    const params = new URLSearchParams(window.location.search);
+    const resetToken = params.get('reset');
+    if (!resetToken) return;
+    history.replaceState(null, '', window.location.pathname); // strip token from URL immediately
+
+    const modal = document.getElementById('reset-password-modal');
+    if (!modal) return;
+    modal.style.display = 'flex';
+
+    const submitBtn = document.getElementById('reset-pw-submit');
+    const errDiv = document.getElementById('reset-pw-error');
+    const errText = document.getElementById('reset-pw-error-text');
+    const successDiv = document.getElementById('reset-pw-success');
+    const formWrap = document.getElementById('reset-pw-form-wrap');
+
+    submitBtn.addEventListener('click', async () => {
+        const newPassword = document.getElementById('reset-pw-input').value;
+        if (errDiv) errDiv.style.display = 'none';
+        if (!newPassword || newPassword.length < 8) {
+            if (errDiv && errText) { errText.textContent = 'Password must be at least 8 characters.'; errDiv.style.display = 'flex'; }
+            return;
+        }
+        submitBtn.disabled = true; submitBtn.textContent = 'Saving...';
+        try {
+            const res = await fetch(`${VPS_BASE}/api/reset-password`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ token: resetToken, newPassword })
+            });
+            const data = await res.json();
+            if (data.ok) {
+                if (formWrap) formWrap.style.display = 'none';
+                if (successDiv) successDiv.style.display = 'flex';
+                setTimeout(() => { modal.style.display = 'none'; }, 3000);
+            } else {
+                if (errDiv && errText) { errText.textContent = data.error || 'Reset failed. The link may have expired.'; errDiv.style.display = 'flex'; }
+                submitBtn.disabled = false; submitBtn.textContent = 'Set Password';
+            }
+        } catch {
+            if (errDiv && errText) { errText.textContent = 'Could not reach server. Please try again.'; errDiv.style.display = 'flex'; }
+            submitBtn.disabled = false; submitBtn.textContent = 'Set Password';
+        }
+    });
+}
+
 async function checkDiscordAuth() {
     const overlay = document.getElementById('landing-overlay');
     const authChecking = document.getElementById('landing-auth-checking');
@@ -5642,10 +5711,13 @@ async function checkDiscordAuth() {
     const authError = document.getElementById('landing-auth-error');
     const authErrorText = document.getElementById('landing-auth-error-text');
 
+    _handlePasswordResetParam(); // SEC-H4: detect ?reset= before clearing URL params
+
     // Handle redirect back from OAuth callback
     const urlParams = new URLSearchParams(window.location.search);
     const loginParam = urlParams.get('login');
-    const tokenParam = urlParams.get('token');
+    const codeParam = urlParams.get('code');   // SEC-C1: exchange code replaces raw token in URL
+    const tokenParam = urlParams.get('token'); // legacy fallback (kept for any direct links)
     const linkParam = urlParams.get('link');
     const verifyParam = urlParams.get('verify');
     const deviceParam = urlParams.get('device');
@@ -5660,11 +5732,26 @@ async function checkDiscordAuth() {
         history.replaceState(null, '', window.location.pathname);
         // Will be handled after login check completes
     }
-    if (loginParam || tokenParam) {
-        // Store JWT from OAuth redirect — used as Authorization: Bearer header
-        // instead of session cookies (which are blocked as third-party by Safari/Chrome).
-        if (tokenParam) localStorage.setItem('albion_auth_token', tokenParam);
-        history.replaceState(null, '', window.location.pathname);
+    if (loginParam || codeParam || tokenParam) {
+        // SEC-C1: exchange short-lived code for JWT (code never stays in URL/history/logs).
+        if (codeParam) {
+            history.replaceState(null, '', window.location.pathname); // strip code from URL immediately
+            try {
+                const exchRes = await fetch(`${VPS_BASE}/api/auth/exchange`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ code: codeParam })
+                });
+                if (exchRes.ok) {
+                    const exchData = await exchRes.json();
+                    if (exchData.token) localStorage.setItem('albion_auth_token', exchData.token);
+                }
+            } catch { /* exchange failed — fall through, user will see login UI */ }
+        } else if (tokenParam) {
+            // Legacy: direct token param (e.g. from old bookmarks)
+            localStorage.setItem('albion_auth_token', tokenParam);
+            history.replaceState(null, '', window.location.pathname);
+        }
         if (loginParam === 'failed') {
             // Show login UI immediately with error
             if (authChecking) authChecking.style.display = 'none';
@@ -6525,6 +6612,23 @@ async function init() {
 
     // Initial render (now we have item data)
     renderBrowser();
+
+    // UX-1: offline/online indicator
+    let _offlineToastEl = null;
+    window.addEventListener('offline', () => {
+        if (_offlineToastEl) return;
+        const container = document.getElementById('toast-container') || document.body;
+        const el = document.createElement('div');
+        el.className = 'toast toast-warn';
+        el.style.cssText = 'position:fixed;bottom:1rem;left:50%;transform:translateX(-50%);z-index:9999;padding:0.6rem 1.2rem;border-radius:8px;background:rgba(239,120,30,0.95);color:#fff;font-weight:600;pointer-events:none;white-space:nowrap;';
+        el.textContent = '⚠ You are offline — prices may be stale';
+        container.appendChild(el);
+        _offlineToastEl = el;
+    });
+    window.addEventListener('online', () => {
+        if (_offlineToastEl) { _offlineToastEl.remove(); _offlineToastEl = null; }
+        showToast('Back online', 'success', 3000);
+    });
 }
 
 // ====== 0-DELAY LIVE SYNC (VPS WEBSOCKET) ======

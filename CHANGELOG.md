@@ -2,6 +2,38 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-04-22 — Full security audit remediation + UX polish
+
+**17 findings fixed** from FULL_AUDIT_2026-04-22.md.
+
+**CRITICAL**
+- **SEC-C1: JWT never in URL.** Discord OAuth callback now issues a one-time exchange code (60s TTL, `crypto.randomBytes(16)`) stored in server memory. Redirect contains `?code=` only. Frontend calls `POST /api/auth/exchange`, gets the JWT, stores it in localStorage, strips the param from the URL — token never reaches browser history or server logs.
+
+**HIGH**
+- **SEC-H1: Transport-routes-live.** Added `transportLiveLimiter` (5 req/min) and 30s server-side result cache — the O(n²) join is no longer computed on every unauthenticated hit.
+- **SEC-H2: Health endpoints stripped.** `GET /health` and `GET /healthz` now return `{"status":"ok"}` only. Full diagnostics (uptime, DB sizes, job timings, VPS stats) moved to `GET /api/admin/health` behind JWT auth.
+- **SEC-H3: Unbounded deviceCodes map.** Added `deviceCodeLimiter` (3 per 15 min per IP) on `POST /api/device/code` and a hard cap of 200 active entries.
+- **SEC-H4: Password reset token in URL.** Frontend `?reset=` param handler added (`_handlePasswordResetParam()`). Reads the token, immediately strips it from the URL, opens a Reset Password modal that POSTs `{ token, newPassword }` to the backend.
+
+**MEDIUM**
+- **SEC-M1: Email HTML injection.** `escHtml()` helper added; username is now escaped before insertion into HTML email templates.
+- **SEC-M2: WS IP spoofing via x-forwarded-for.** IP extraction now splits on comma and takes the first entry.
+- **SEC-M3: Hardcoded admin Discord ID.** Extracted to `ADMIN_DISCORD_ID = process.env.ADMIN_DISCORD_ID || '...'` constant.
+- **SEC-M4: SRI on Chart.js CDN.** `chart.js@4.4.9` tag now has `integrity="sha384-..."` + `crossorigin="anonymous"`.
+- **SEC-M5: Weak password policy.** Registration and password-change endpoints reject passwords missing at least one letter or one digit. UI placeholder updated.
+- **FEAT-M1: Loot upload cap.** Loot file uploads now reject payloads > 5,000 lines or > 2 MB.
+
+**LOW / DevOps / Code**
+- **UX-3: Login rate limiter.** `loginLimiter` (10 per 15 min) was referenced but never defined — definition added.
+- **SEC-L2 + DO-1: Auto SW version bump.** `deploy_saas.py` now increments `sw.js` `CACHE_NAME` on every deploy so stale assets are always purged.
+- **CODE-L1/L2: Go strings package.** `device_auth.go` `writeConfigFile` rewritten with stdlib `strings.Split/ReplaceAll/TrimSpace/HasPrefix/Join`; three hand-rolled helpers removed.
+- **CODE-L3: Toast callback registry.** `showConfirm`/`showPrompt` replaced inline function serialization with `_toastCallbacks` ID map — closes XSS vector from arbitrary content reaching `onclick` strings.
+- **UX-4: Toast stack cap.** Confirm/prompt toasts capped at `MAX_VISIBLE_TOASTS` (5).
+- **UX-1: Offline indicator.** Persistent banner on `window offline`; success toast on `window online`.
+- **UX-2: Tab titles.** `document.title` updated on every tab switch (e.g. "Market Flipping — Albion Market Analyzer").
+
+---
+
 ### 2026-04-21 — Outage recovery: analytics rewrite + read-path isolation + craft-runs render fix
 
 **Production outage.** The live site was returning HTTP 000 (connection timeout) for ~12 hours. Node was pinned at 97% of one core the entire time. Root cause: the scheduled analytics job's EMA phase ran 1,700 per-batch SQL queries that each did a full-ish scan of `price_averages` (6.5 GB). Each batch took ~1 s, total ~22 min — over the 25-min "stuck flag" reset threshold. Reset fired, spawned a new analytics run, but the old run's `setTimeout` chain kept firing batches in the background. Over 12 hours, 20+ overlapping EMA chains accumulated, saturated node's event loop, and locked up accept queues. Users saw connection timeouts.
