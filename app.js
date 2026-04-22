@@ -9837,25 +9837,34 @@ function buildDeathTimeline(events, byPlayer, priceMap, primaryGuild, primaryAll
                 estimatedValue += value;
             }
         }
-        // Determine if victim was "ours" or "theirs" — mirrors isFriendly logic
+        // Determine if victim/killer was "ours" or "theirs" to categorize the death
         const victimData = byPlayer[victim];
         const victimGuild = victimData?.guild || ev.looted_from_guild || '';
         const victimAlliance = victimData?.alliance || ev.looted_from_alliance || '';
         const wasVictimFriendly = primaryAlliance && victimAlliance
             ? victimAlliance === primaryAlliance
             : (primaryGuild && victimGuild === primaryGuild);
+        const killerGuildVal = ev.looted_by_guild || '';
+        const killerData = byPlayer[killer];
+        const killerAlliance = killerData?.alliance || '';
+        const wasKillerFriendly = primaryAlliance && killerAlliance
+            ? killerAlliance === primaryAlliance
+            : (primaryGuild && killerGuildVal === primaryGuild);
         deaths.push({
             victim,
             victimGuild,
             victimAlliance,
             killer,
-            killerGuild: ev.looted_by_guild || '',
+            killerGuild: killerGuildVal,
+            location: ev.location || '',
             timestamp: deathTs,
             lootedItems,
             equipmentAtDeath,
             estimatedValue,
             lootedBy: Object.values(byLooter).sort((a, b) => b.silver - a.silver || b.items - a.items),
-            wasFriendly: !!wasVictimFriendly
+            wasFriendly: !!wasVictimFriendly,
+            isEnemy: !wasVictimFriendly && !!wasKillerFriendly,
+            isOther: !wasVictimFriendly && !wasKillerFriendly,
         });
     }
     // Sort newest-first — most recent death shows at top
@@ -9954,16 +9963,15 @@ function renderSessionTimeline(events, deaths) {
 function renderDeathsSection(deaths) {
     if (!deaths || deaths.length === 0) return '';
     const filterActive = _llDeathFilterVictim !== null;
-    const friendlyCount = deaths.filter(d => d.wasFriendly).length;
-    const enemyCount = deaths.length - friendlyCount;
-    const rows = deaths.map(d => {
+
+    const buildDeathRow = (d) => {
         const safeVictim = esc(d.victim);
-        const sideClass = d.wasFriendly ? 'll-death-friendly' : 'll-death-enemy';
-        const sideIcon = d.wasFriendly ? '🛡️' : '💀';
-        const sideLabel = d.wasFriendly ? 'friendly' : 'enemy';
+        const sideClass = d.wasFriendly ? 'll-death-friendly' : d.isEnemy ? 'll-death-enemy' : 'll-death-other';
+        const sideIcon = d.wasFriendly ? '🛡️' : d.isEnemy ? '💀' : '👁️';
+        const sideLabel = d.wasFriendly ? 'friendly' : d.isEnemy ? 'enemy' : 'other';
         const when = d.timestamp ? new Date(d.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '—';
         const value = d.estimatedValue > 0 ? formatSilver(d.estimatedValue) : '—';
-        // Expanded details: items + equipment + looters + actions
+        const zoneBadge = d.location ? `<span class="ll-zone-badge" title="Zone">📍 ${esc(d.location)}</span>` : '';
         const seen = new Set();
         const uniqueItems = d.lootedItems.filter(li => li.item_id && !seen.has(li.item_id) && seen.add(li.item_id));
         const itemsHtml = uniqueItems.map(li => {
@@ -9994,6 +10002,7 @@ function renderDeathsSection(deaths) {
                 <span class="ll-death-row-sep">→</span>
                 <span class="ll-death-row-killer">${esc(d.killer) || 'unknown'}</span>
                 <span class="ll-death-row-value">${value}</span>
+                ${zoneBadge}
                 <span class="ll-death-badge">${sideLabel}</span>
             </summary>
             <div class="ll-death-row-body">
@@ -10007,18 +10016,42 @@ function renderDeathsSection(deaths) {
                 </div>
             </div>
         </details>`;
-    }).join('');
-    // Whole section wrapped in one <details> — click the summary to collapse the list entirely.
+    };
+
+    const friendly = deaths.filter(d => d.wasFriendly);
+    const enemy    = deaths.filter(d => d.isEnemy);
+    const other    = deaths.filter(d => d.isOther);
+
+    const friendlyHtml = friendly.length > 0
+        ? `<details class="ll-death-category" open>
+            <summary class="ll-death-cat-summary">🛡️ Friendly deaths <span class="ll-deaths-count">${friendly.length}</span></summary>
+            <div class="ll-deaths-list">${friendly.map(buildDeathRow).join('')}</div>
+           </details>`
+        : '';
+    const enemyHtml = enemy.length > 0
+        ? `<details class="ll-death-category" open>
+            <summary class="ll-death-cat-summary">💀 Enemy kills <span class="ll-deaths-count">${enemy.length}</span></summary>
+            <div class="ll-deaths-list">${enemy.map(buildDeathRow).join('')}</div>
+           </details>`
+        : '';
+    const otherHtml = other.length > 0
+        ? `<details class="ll-death-category ll-death-cat-other">
+            <summary class="ll-death-cat-summary" style="color:var(--text-muted);">👁️ Other / bystanders <span class="ll-deaths-count">${other.length}</span></summary>
+            <div class="ll-deaths-list">${other.map(buildDeathRow).join('')}</div>
+           </details>`
+        : '';
+
     return `<details class="ll-deaths-section" open>
         <summary class="ll-deaths-summary">
             <span style="font-size:1.1rem;">☠</span>
             <span class="ll-deaths-title-text">Deaths</span>
             <span class="ll-deaths-count">${deaths.length}</span>
-            ${friendlyCount > 0 ? `<span class="ll-deaths-friendly-count">🛡️ ${friendlyCount}</span>` : ''}
-            ${enemyCount > 0 ? `<span class="ll-deaths-enemy-count">💀 ${enemyCount}</span>` : ''}
+            ${friendly.length > 0 ? `<span class="ll-deaths-friendly-count">🛡️ ${friendly.length}</span>` : ''}
+            ${enemy.length > 0 ? `<span class="ll-deaths-enemy-count">💀 ${enemy.length}</span>` : ''}
+            ${other.length > 0 ? `<span style="font-size:0.72rem; color:var(--text-muted); margin-left:0.3rem;">👁️ ${other.length}</span>` : ''}
             ${filterActive ? `<button class="btn-small" style="margin-left:auto;" onclick="event.preventDefault();clearDeathFilter()">&times; Clear filter (${esc(_llDeathFilterVictim)})</button>` : ''}
         </summary>
-        <div class="ll-deaths-list">${rows}</div>
+        ${friendlyHtml}${enemyHtml}${otherHtml}
     </details>`;
 }
 
@@ -11239,6 +11272,7 @@ async function runAccountabilityCheck() {
     const lootedByPlayer = {};
     const deathVictims = new Set(); // players who died (items lost)
     const lostByDeath = {};        // { playerName: { itemId: qty } } — items looted FROM dead players
+    const evsByPlayerItem = {};    // { name: { itemId: [{ts, location}] } } — for missing-item tooltip
     for (const ev of lootEvents) {
         // Track deaths
         if (ev.item_id === '__DEATH__') {
@@ -11246,8 +11280,13 @@ async function runAccountabilityCheck() {
             continue;
         }
         const name = ev.looted_by_name || 'Unknown';
+        const evTs = +new Date(ev.timestamp) || 0;
         if (!lootedByPlayer[name]) lootedByPlayer[name] = { guild: ev.looted_by_guild || '', alliance: ev.looted_by_alliance || '', items: {} };
         lootedByPlayer[name].items[ev.item_id] = (lootedByPlayer[name].items[ev.item_id] || 0) + (ev.quantity || 1);
+        // Collect per-event timestamps + location for missing-item tooltip
+        if (!evsByPlayerItem[name]) evsByPlayerItem[name] = {};
+        if (!evsByPlayerItem[name][ev.item_id]) evsByPlayerItem[name][ev.item_id] = [];
+        if (evTs > 0) evsByPlayerItem[name][ev.item_id].push({ ts: evTs, location: ev.location || '' });
         // Track items looted from players who died (those items are gone from the victim)
         if (ev.looted_from_name && deathVictims.has(ev.looted_from_name)) {
             if (!lostByDeath[ev.looted_from_name]) lostByDeath[ev.looted_from_name] = {};
@@ -11309,7 +11348,7 @@ async function runAccountabilityCheck() {
                 const inChest = Math.min(effectiveQty, Math.round(share));
                 const missing = effectiveQty - inChest;
                 totalDeposited += inChest;
-                itemResults.push({ itemId, looted: effectiveQty, inChest, missing });
+                itemResults.push({ itemId, looted: effectiveQty, inChest, missing, pickupEvs: evsByPlayerItem[name]?.[itemId] || [] });
             } else if (effectiveQty > 0) {
                 // Enemy loot source — don't check deposits, just list items
                 itemResults.push({ itemId, looted: effectiveQty, inChest: -1, missing: -1 }); // -1 = N/A
@@ -11559,7 +11598,20 @@ async function runAccountabilityCheck() {
             } else {
                 rowClass = 'll-item-missing'; dotClass = 'll-dot-missing'; statusLabel = 'Missing';
             }
-            return `<div class="ll-item-row ${rowClass}">
+            // Missing-item hover tooltip: who picked it up, when, and where
+            const missingTooltipHtml = (rowClass === 'll-item-missing' && it.pickupEvs && it.pickupEvs.length > 0)
+                ? (() => {
+                    const evs = it.pickupEvs.slice(0, 4);
+                    const guildPart = p.guild ? ` [${esc(p.guild)}]` : '';
+                    const lines = evs.map(e => {
+                        const t = esc(new Date(e.ts).toLocaleTimeString());
+                        const loc = e.location ? ` · <span style="color:var(--accent);font-size:0.68rem;">📍 ${esc(e.location)}</span>` : '';
+                        return `<span style="color:var(--text-muted)">At: ${t}${loc}</span>`;
+                    });
+                    return `<span class="ll-missing-tooltip"><strong>Picked up by:</strong> ${esc(p.name)}${guildPart}<br>${lines.join('<br>')}</span>`;
+                })()
+                : '';
+            return `<div class="ll-item-row ${rowClass}${missingTooltipHtml ? ' ll-has-tooltip' : ''}">
                 <img src="${iconUrl}" class="ll-item-icon" loading="lazy" onerror="this.style.display='none'">
                 <span class="ll-item-name">${esc(iName)}</span>
                 <span class="ll-item-qty">&times;${it.looted}</span>
@@ -11567,6 +11619,7 @@ async function runAccountabilityCheck() {
                 <span class="ll-item-weight">${weightStr}</span>
                 <span class="ll-item-status-dot ${dotClass}" title="${statusLabel}"></span>
                 <span style="font-size:0.67rem; flex-shrink:0; color:${dotClass === 'll-dot-missing' ? 'var(--loss-red)' : dotClass === 'll-dot-partial' ? '#fbbf24' : 'var(--profit-green)'};">${statusLabel}</span>
+                ${missingTooltipHtml}
             </div>`;
         }).join('');
 
@@ -16802,3 +16855,16 @@ function crSetupTargetAutocomplete() {
         }
     }, { passive: true });
 }
+
+// Mobile touch support for .ll-missing-tooltip — tap the row to toggle
+document.addEventListener('touchstart', (e) => {
+    const row = e.target.closest('.ll-item-row.ll-has-tooltip');
+    if (row) {
+        e.preventDefault();
+        const wasActive = row.classList.contains('tt-active');
+        document.querySelectorAll('.ll-item-row.tt-active').forEach(r => r.classList.remove('tt-active'));
+        if (!wasActive) row.classList.add('tt-active');
+    } else {
+        document.querySelectorAll('.ll-item-row.tt-active').forEach(r => r.classList.remove('tt-active'));
+    }
+}, { passive: false });

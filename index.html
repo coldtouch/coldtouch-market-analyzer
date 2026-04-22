@@ -2285,6 +2285,17 @@
                     <div id="changelog-wrapper" style="max-height: 500px; overflow-y: auto; position: relative;">
                     <div class="changelog-list">
                         <div class="changelog-entry">
+                            <div class="changelog-date">April 23, 2026</div>
+                            <div class="changelog-title">📍 Zone tracking &mdash; location on loot &amp; death events</div>
+                            <ul>
+                                <li><strong>Go client:</strong> captures current zone on every cluster transition (via <code>operationJoinResponse</code>). Zone is now attached to every loot event and death event sent to the VPS.</li>
+                                <li><strong>Backend:</strong> <code>loot_events</code> table gains <code>location</code> column; loot and death ingestion endpoints store the zone; accountability share endpoint returns it.</li>
+                                <li><strong>Deaths section (3 categories):</strong> Friendly (our members died), Enemy (we killed them), Other (bystanders &mdash; collapsed by default, grey styling).</li>
+                                <li><strong>Zone badge</strong> <code>📍 ZoneName</code> shown on each death card when location is known.</li>
+                                <li><strong>Missing-item tooltip</strong> in accountability now shows zone/location alongside pickup timestamp (desktop hover + mobile tap).</li>
+                            </ul>
+                        </div>
+                        <div class="changelog-entry">
                             <div class="changelog-date">April 20, 2026</div>
                             <div class="changelog-title">🔨 Craft Runs — full buy &rarr; refine &rarr; craft &rarr; sell tracker</div>
                             <ul>

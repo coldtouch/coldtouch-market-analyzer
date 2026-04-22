@@ -2,6 +2,26 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-04-23 — Zone tracking: location on loot + death events
+
+**Go client (`albiondata-client-custom`)**
+- `albionState` gains `CurrentZone string` field with `GetCurrentZone`/`SetCurrentZone` (RWMutex pattern).
+- `operationJoinResponse.Process` now calls `state.SetCurrentZone(op.Location)` on every zone transition.
+- `LootEvent` gains `Location string json:"location"` — populated from `state.GetCurrentZone()`.
+- `DeathEvent` gains `Location string json:"location"` — populated in both `eventDied` and `eventKilledPlayer`.
+
+**Backend (deploy_saas.py)**
+- `loot_events` table: new `location TEXT DEFAULT ''` column (CREATE TABLE + ALTER TABLE migration for existing DBs).
+- WS loot-event ingestion: `location` accepted and stored from Go client payload.
+- WS death-event ingestion: `location` accepted and stored from Go client payload.
+- Accountability public share endpoint returns `location` in SELECT columns.
+
+**Frontend (app.js / style.css)**
+- Deaths section: three categories — **Friendly** (our members died), **Enemy** (we killed them), **Other** (bystanders, collapsed by default, grey styling).
+- Zone badge `📍 ZoneName` on every death card row when `location` is present.
+- Missing-item hover tooltip in accountability now shows zone/location alongside pickup timestamp.
+- Mobile touch toggle for missing-item tooltip added.
+
 ### 2026-04-20 — Craft Runs: full buy→refine→craft→sell pipeline tracker
 
 **New tab: "Craft Runs" (Trading group)**

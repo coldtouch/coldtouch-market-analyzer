@@ -404,10 +404,13 @@ db.serialize(() => {
     numeric_id INTEGER DEFAULT 0,
     quantity INTEGER DEFAULT 1,
     weight REAL DEFAULT 0,
-    is_silver INTEGER DEFAULT 0
+    is_silver INTEGER DEFAULT 0,
+    location TEXT DEFAULT ''
   )`);
   // B6: equipment-at-death column. Added via ALTER for existing DBs (safe — fails silently if column already exists).
   db.run(`ALTER TABLE loot_events ADD COLUMN equipment_json TEXT DEFAULT NULL`, () => {});
+  // Zone tracking: location column added post-launch. ALTER is a no-op if column already exists.
+  db.run(`ALTER TABLE loot_events ADD COLUMN location TEXT DEFAULT ''`, () => {});
   db.run(`CREATE INDEX IF NOT EXISTS idx_loot_events_user_session ON loot_events(user_id, session_id)`);
   db.run(`CREATE INDEX IF NOT EXISTS idx_loot_events_session ON loot_events(session_id, timestamp)`);
 
@@ -2130,7 +2133,7 @@ app.get('/api/accountability/public/:token', (req, res) => {
         if (!row) return res.status(404).json({ error: 'Share not found or revoked' });
         // SEC-M3: expire shares after 30 days
         if (Date.now() - row.created_at > 30 * 24 * 60 * 60 * 1000) return res.status(410).json({ error: 'Share link has expired.' });
-        readDb.all(`SELECT timestamp, looted_by_name, looted_by_guild, looted_by_alliance, looted_from_name, looted_from_guild, looted_from_alliance, item_id, numeric_id, quantity, weight, equipment_json FROM loot_events WHERE session_id = ? AND user_id = ? ORDER BY timestamp ASC`,
+        readDb.all(`SELECT timestamp, looted_by_name, looted_by_guild, looted_by_alliance, looted_from_name, looted_from_guild, looted_from_alliance, item_id, numeric_id, quantity, weight, equipment_json, location FROM loot_events WHERE session_id = ? AND user_id = ? ORDER BY timestamp ASC`,
             [row.session_id, row.user_id], (err2, events) => {
                 if (err2) return res.status(500).json({ error: 'An internal error occurred.' });
                 // Bump view counter (fire-and-forget)
@@ -3752,12 +3755,13 @@ wss.on('connection', (ws, req) => {
 
         // INSERT OR IGNORE — if the Go client WS reconnects and replays the same event,
         // the dedupe index drops the replay silently.
-        db.run(`INSERT OR IGNORE INTO loot_events (user_id, session_id, timestamp, looted_by_name, looted_by_guild, looted_by_alliance, looted_from_name, looted_from_guild, looted_from_alliance, item_id, numeric_id, quantity, weight, is_silver)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        db.run(`INSERT OR IGNORE INTO loot_events (user_id, session_id, timestamp, looted_by_name, looted_by_guild, looted_by_alliance, looted_from_name, looted_from_guild, looted_from_alliance, item_id, numeric_id, quantity, weight, is_silver, location)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           [ws.user.id, ws.lootSessionId, ev.timestamp || Date.now(),
            ev.lootedBy.name, ev.lootedBy.guild || '', ev.lootedBy.alliance || '',
            ev.lootedFrom?.name || '', ev.lootedFrom?.guild || '', ev.lootedFrom?.alliance || '',
-           ev.itemId || '', ev.numericId || 0, ev.quantity || 1, ev.weight || 0, ev.isSilver ? 1 : 0]);
+           ev.itemId || '', ev.numericId || 0, ev.quantity || 1, ev.weight || 0, ev.isSilver ? 1 : 0,
+           ev.location || '']);
 
         // Push to user's browser session(s) in real-time
         for (const wc of wsClients) {
@@ -3779,12 +3783,12 @@ wss.on('connection', (ws, req) => {
         if (Array.isArray(ev.equipmentAtDeath) && ev.equipmentAtDeath.length > 0) {
           try { equipJson = JSON.stringify(ev.equipmentAtDeath.slice(0, 32)); } catch {}
         }
-        db.run(`INSERT OR IGNORE INTO loot_events (user_id, session_id, timestamp, looted_by_name, looted_by_guild, looted_by_alliance, looted_from_name, looted_from_guild, looted_from_alliance, item_id, numeric_id, quantity, weight, is_silver, equipment_json)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '__DEATH__', 0, 0, 0, 0, ?)`,
+        db.run(`INSERT OR IGNORE INTO loot_events (user_id, session_id, timestamp, looted_by_name, looted_by_guild, looted_by_alliance, looted_from_name, looted_from_guild, looted_from_alliance, item_id, numeric_id, quantity, weight, is_silver, equipment_json, location)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '__DEATH__', 0, 0, 0, 0, ?, ?)`,
           [ws.user.id, ws.lootSessionId, ev.timestamp || Date.now(),
            ev.killerName || '', ev.killerGuild || '', '',
            ev.victimName || '', ev.victimGuild || '', '',
-           equipJson]);
+           equipJson, ev.location || '']);
         // Push to browser (already includes equipmentAtDeath via spread)
         for (const wc of wsClients) {
           if (wc.clientType === 'browser' && wc.isAuthenticated && wc.user && wc.user.id === ws.user.id) {
