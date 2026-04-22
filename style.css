@@ -48,13 +48,15 @@ body {
     color: var(--text-primary);
     line-height: 1.6;
     min-height: 100vh;
+    display: flex;
+    flex-direction: column;
 }
 
 /* ====== HEADER ====== */
 header {
     background: linear-gradient(135deg, #080810 0%, #14142a 50%, #0a0a14 100%);
     border-bottom: 1px solid var(--border-color);
-    padding: 2.5rem 1rem 2rem;
+    padding: 1.1rem 1rem 0.9rem;
     text-align: center;
     position: relative;
     overflow: hidden;
@@ -82,10 +84,10 @@ header::after {
 }
 
 .sleek-title {
-    font-size: clamp(1.8rem, 4vw, 3rem);
+    font-size: clamp(1.1rem, 2.4vw, 1.8rem);
     text-transform: uppercase;
-    letter-spacing: 4px;
-    margin-bottom: 0.5rem;
+    letter-spacing: 3px;
+    margin-bottom: 0.3rem;
     background: linear-gradient(135deg, #fff 0%, var(--accent) 40%, #e0a96d 80%, #fff 100%);
     background-size: 200% 200%;
     -webkit-background-clip: text;
@@ -101,10 +103,7 @@ header::after {
 }
 
 .header-subtitle {
-    color: var(--text-secondary);
-    font-size: 1rem;
-    letter-spacing: 1px;
-    opacity: 0.8;
+    display: none;
 }
 
 /* ====== TOP BAR ====== */
@@ -412,6 +411,8 @@ main {
     max-width: 1400px;
     margin: 0 auto;
     padding: 1.5rem 1.5rem 3rem;
+    flex: 1;
+    width: 100%;
 }
 
 /* ====== CONTROLS PANEL ====== */
@@ -3175,19 +3176,23 @@ footer a:hover {
     text-decoration: underline;
 }
 
+/* ====== STATUS BAR TIMERS ====== */
+.topbar-timers {
+    font-size: 0.72rem;
+    color: var(--text-muted);
+    letter-spacing: 0.02em;
+    white-space: nowrap;
+}
+
 /* ====== RESPONSIVE ====== */
 @media (max-width: 768px) {
     .sleek-title {
-        font-size: 1.4rem;
+        font-size: 1.1rem;
         letter-spacing: 1px;
     }
 
-    .header-subtitle {
-        font-size: 0.8rem;
-    }
-
     header {
-        padding: 1.5rem 1rem;
+        padding: 0.8rem 1rem;
     }
 
     .top-bar-inner {
@@ -7261,7 +7266,7 @@ footer {
 }
 
 .cr-flow-step {
-    font-size: 0.78rem;
+    font-size: 1rem;
     color: var(--text-secondary);
     white-space: nowrap;
     padding: 0.15rem 0.35rem;

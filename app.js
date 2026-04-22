@@ -390,7 +390,7 @@ function showToast(message, type = 'info', duration = 4000) {
     }, duration);
 }
 
-function showConfirm(message, onYes) {
+function showConfirm(message, onYes, autoMs) {
     let container = document.getElementById('toast-container');
     if (!container) {
         container = document.createElement('div');
@@ -405,6 +405,8 @@ function showConfirm(message, onYes) {
             <button class="btn-small-danger" onclick="this.closest('.toast').remove(); (${onYes.toString()})()">Confirm</button>
         </div>`;
     container.appendChild(toast);
+    if (autoMs) setTimeout(() => toast.remove(), autoMs);
+    return toast;
 }
 
 function showPrompt(message, defaultValue, onSubmit) {
@@ -813,6 +815,21 @@ function initTabs() {
             // Tab name is 'farming' in data-tab, NOT 'farm' — this guard never fired before this fix.
             if (currentTab === 'farming') { if (typeof renderFarmBreed === 'function') renderFarmBreed(); }
             if (currentTab === 'loot-logger') { if (typeof renderLootLoggerTab === 'function') renderLootLoggerTab(); }
+
+            // Update browser tab title
+            const TAB_TITLES = {
+                browser: 'Market Browser', arbitrage: 'Market Flipping', bmflipper: 'BM Flipper',
+                compare: 'City Comparison', toptraded: 'Top Traded', itempower: 'Item Power',
+                favorites: 'Favorites', crafting: 'Crafting Profits', 'craft-top-n': 'Top-N Ranker',
+                'refining-lab': 'Refining Lab', journals: 'Journals', rrr: 'RRR Calculator',
+                repair: 'Repair Cost', transport: 'Transport Routes', 'live-flips': 'Live Flips',
+                portfolio: 'Portfolio Tracker', 'craft-runs': 'Craft Runs',
+                'loot-buyer': 'Loot Buyer', 'loot-logger': 'Loot Logger',
+                farming: 'Farm & Breed', alerts: 'Alerts', community: 'Community',
+                profile: 'Profile', about: 'About',
+            };
+            const tabLabel = TAB_TITLES[currentTab];
+            if (tabLabel) document.title = `${tabLabel} \u2014 Coldtouch Market Analyzer`;
 
             // Update URL with current tab (shareable deep link)
             const url = new URL(window.location);
@@ -3867,9 +3884,20 @@ function updateCrafterProfilePill() {
     const active = getActiveCrafterProfile();
     if (active) {
         pill.innerHTML = `🧑‍🔧 ${esc(active.name)} <span style="opacity:0.7;font-size:0.7rem;">· spec ${active.spec || 0} · ${esc(active.foodBuff || 'no food')}</span>`;
+        pill.title = '';
         pill.style.display = '';
     } else {
-        pill.innerHTML = `🧑‍🔧 No profile — click to create`;
+        const seen = localStorage.getItem('crafterPillSeen');
+        if (!seen) {
+            // First visit: show full CTA, mark as seen for next time
+            localStorage.setItem('crafterPillSeen', '1');
+            pill.innerHTML = `🧑‍🔧 No profile — click to create`;
+            pill.title = '';
+        } else {
+            // Subsequent visits: compact icon only with tooltip
+            pill.innerHTML = `🧑‍🔧`;
+            pill.title = 'No crafter profile — click to create one';
+        }
         pill.style.display = '';
     }
 }
@@ -9410,7 +9438,8 @@ function restoreLiveDraftIfAny() {
         if (liveLootEvents.length > 0) return;
         const when = draft.savedAt ? new Date(draft.savedAt).toLocaleString() : 'earlier';
         const eventsCount = draft.events.length;
-        showConfirm(`A loot logger draft from ${when} was auto-saved (${eventsCount} events${draft.name ? ', "' + draft.name + '"' : ''}). Restore it?`, () => {
+        const restoreMsg = `Auto-saved draft from ${when}: ${eventsCount} event${eventsCount !== 1 ? 's' : ''}${draft.name ? ` ("${draft.name}")` : ''}. Restore?`;
+        showConfirm(restoreMsg, () => {
             liveLootEvents = draft.events;
             liveSessionName = draft.name || '';
             try { localStorage.setItem(LL_SESSION_NAME_KEY, liveSessionName); } catch {}
@@ -9419,7 +9448,7 @@ function restoreLiveDraftIfAny() {
             updateLiveLootIndicator();
             if (lootLoggerMode === 'live') loadLootSessions();
             showToast(`Restored ${eventsCount} events from draft`, 'success');
-        });
+        }, 30000);
     } catch(e) {
         console.warn('[loot logger] restore draft failed:', e);
     }
@@ -15881,27 +15910,17 @@ function renderCmdKResults(query) {
 }
 document.addEventListener('keydown', (e) => { if ((e.metaKey || e.ctrlKey) && e.key === 'k') { e.preventDefault(); openCmdK(); } });
 
-// ===== IN-GAME TIMERS WIDGET =====
+// ===== IN-GAME TIMERS (status bar) =====
 function initTimersWidget() {
-    const w = document.createElement('div');
-    w.id = 'timers-widget';
-    w.style.cssText = 'position:fixed;bottom:70px;right:16px;background:var(--bg-card,#1a1d26);border:1px solid var(--border-color,#2d3040);border-radius:10px;padding:0.5rem 0.7rem;font-size:0.72rem;color:var(--text-muted);z-index:50;cursor:pointer;transition:opacity 0.2s;opacity:0.7;';
-    w.onmouseenter = () => w.style.opacity = '1';
-    w.onmouseleave = () => w.style.opacity = '0.7';
-    w.innerHTML = '<div style="font-weight:600;margin-bottom:0.2rem;color:var(--text-primary);">Timers</div><div id="timer-daily"></div><div id="timer-monthly"></div>';
-    document.body.appendChild(w);
-    let collapsed = false;
-    w.onclick = () => { collapsed = !collapsed; w.querySelectorAll('#timer-daily,#timer-monthly').forEach(el => el.style.display = collapsed ? 'none' : ''); };
     setInterval(() => {
         const now = new Date();
         const utcH = now.getUTCHours(), utcM = now.getUTCMinutes(), utcS = now.getUTCSeconds();
         const secToDaily = ((24 - utcH - 1) * 3600) + ((60 - utcM - 1) * 60) + (60 - utcS);
         const nextMonth = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1));
         const secToMonthly = Math.floor((nextMonth - now) / 1000);
-        const fmt = (s) => { const h=Math.floor(s/3600),m=Math.floor((s%3600)/60),ss=s%60; return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(ss).padStart(2,'0')}`; };
-        const d = document.getElementById('timer-daily'), mo = document.getElementById('timer-monthly');
-        if (d) d.textContent = `Daily Reset: ${fmt(secToDaily)}`;
-        if (mo) mo.textContent = `Monthly: ${fmt(secToMonthly)}`;
+        const fmt = (s) => { const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60); return `${String(h).padStart(2, '0')}h ${String(m).padStart(2, '0')}m`; };
+        const el = document.getElementById('topbar-timers');
+        if (el) el.textContent = `Daily: ${fmt(secToDaily)} \u2022 Monthly: ${fmt(secToMonthly)}`;
     }, 1000);
 }
 
@@ -17297,6 +17316,11 @@ function crRunCardHTML(run) {
         return `<span class="cr-flow-step ${done ? 'done' : ''} ${active ? 'active' : ''}" title="${CR_STATUS_LABELS[s]}">${icon}</span>${i < CR_STATUS_FLOW.length - 1 ? '<span class="cr-flow-arrow">›</span>' : ''}`;
     }).join('');
 
+    const hasData = (run.total_cost || 0) > 0 || (run.total_revenue || 0) > 0;
+    const costDisplay = hasData ? formatSilver(run.total_cost || 0) : '0';
+    const revenueDisplay = hasData ? formatSilver(run.total_revenue || 0) : '0';
+    const pnlDisplay = hasData ? `${profitSign}${formatSilver(net)} (${marginPct}%)` : '—';
+
     return `<div class="trade-card cr-run-card">
         <div class="cr-run-header">
             <div>
@@ -17307,9 +17331,9 @@ function crRunCardHTML(run) {
         </div>
         <div class="cr-flow-steps">${flowHTML}</div>
         <div class="cr-run-stats">
-            <div class="cr-stat"><span class="cr-stat-label">Cost</span><span class="cr-stat-val">${formatSilver(run.total_cost || 0)}</span></div>
-            <div class="cr-stat"><span class="cr-stat-label">Revenue</span><span class="cr-stat-val">${formatSilver(run.total_revenue || 0)}</span></div>
-            <div class="cr-stat"><span class="cr-stat-label">Net P&amp;L</span><span class="cr-stat-val" style="color:${profitColor};">${profitSign}${formatSilver(net)} (${marginPct}%)</span></div>
+            <div class="cr-stat"><span class="cr-stat-label">Cost</span><span class="cr-stat-val">${costDisplay}</span></div>
+            <div class="cr-stat"><span class="cr-stat-label">Revenue</span><span class="cr-stat-val">${revenueDisplay}</span></div>
+            <div class="cr-stat"><span class="cr-stat-label">Net P&amp;L</span><span class="cr-stat-val" style="color:${hasData ? profitColor : 'var(--text-muted)'};">${pnlDisplay}</span></div>
         </div>
         <div class="cr-run-actions">
             <span style="color:var(--text-secondary);font-size:0.73rem;">${esc(created)}${run.txn_count ? ` · ${run.txn_count} txn${run.txn_count > 1 ? 's' : ''}` : ''}</span>

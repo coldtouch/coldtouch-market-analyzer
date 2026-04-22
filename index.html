@@ -292,6 +292,9 @@
                     <span class="live-sync-text">Live Sync Off</span>
                 </div>
             </div>
+            <div class="top-bar-right">
+                <span id="topbar-timers" class="topbar-timers" title="Daily reset &amp; monthly timer (UTC)">Daily: -- • Monthly: --</span>
+            </div>
             </div>
     </div>
 
@@ -626,7 +629,13 @@
                 <p>Fetching market data...</p>
             </div>
             <div id="arb-error" class="error-message hidden"></div>
-            <div class="results-grid" id="arbitrage-results"></div>
+            <div class="results-grid" id="arbitrage-results">
+                <div class="empty-state" style="grid-column:1/-1;">
+                    <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"></polyline><polyline points="17 6 23 6 23 12"></polyline></svg>
+                    <p>Click <strong>Scan Markets</strong> to find profitable flips</p>
+                    <p class="hint">Compares buy prices vs sell prices across all cities to surface arbitrage opportunities.</p>
+                </div>
+            </div>
         </section>
 
         <!-- ====== TAB: CITY COMPARISON ====== -->
@@ -2284,6 +2293,20 @@
                     <h2 class="about-heading">Changelog</h2>
                     <div id="changelog-wrapper" style="max-height: 500px; overflow-y: auto; position: relative;">
                     <div class="changelog-list">
+                        <div class="changelog-entry">
+                            <div class="changelog-date">April 22, 2026</div>
+                            <div class="changelog-title">✨ UI polish &mdash; header, timers, empty states, dynamic tab title, footer, profile pill</div>
+                            <ul>
+                                <li><strong>Header shrunk:</strong> title reduced to ~60% of previous size; SEO keyword line hidden (kept in DOM for crawlers). Recovers ~45 px of vertical space.</li>
+                                <li><strong>Timers in status bar:</strong> Daily Reset &amp; Monthly countdown are now inline in the top status bar — removed the floating bottom-right widget.</li>
+                                <li><strong>Dynamic tab title:</strong> browser tab now reflects the active section (e.g. "Market Flipping — Coldtouch Market Analyzer").</li>
+                                <li><strong>Footer anchored:</strong> footer now sticks to the bottom of the viewport or content, whichever is lower — no more floating in dead space.</li>
+                                <li><strong>Craft Runs empty state:</strong> runs with no transactions show "0" for cost/revenue and "—" for Net P&amp;L instead of the broken "— / — / +— (—%)" display. Phase strip emoji enlarged.</li>
+                                <li><strong>Market Flipping empty state:</strong> shows a hint placeholder instead of a blank area on first load.</li>
+                                <li><strong>Loot logger restore banner:</strong> auto-dismisses after 30 seconds; message condensed.</li>
+                                <li><strong>Crafter profile pill:</strong> collapses to icon-only after first view — reduces persistent visual noise when no profile is set.</li>
+                            </ul>
+                        </div>
                         <div class="changelog-entry">
                             <div class="changelog-date">April 21, 2026</div>
                             <div class="changelog-title">🚨 Outage recovery &mdash; analytics rewrite, read-path isolation, craft-runs render fix</div>
