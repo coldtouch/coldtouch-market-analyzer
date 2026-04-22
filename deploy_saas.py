@@ -249,7 +249,7 @@ statsDb.run('PRAGMA busy_timeout = 30000'); // longer timeout — bulk writes ca
 // A separate connection bypasses that queue entirely.
 const readDb = new sqlite3.Database('/opt/albion-saas/database.sqlite', sqlite3.OPEN_READONLY);
 readDb.run('PRAGMA journal_mode = WAL');
-readDb.run('PRAGMA busy_timeout = 5000');
+readDb.run('PRAGMA busy_timeout = 30000'); // match db/statsDb — prevents SQLITE_BUSY on concurrent analytics flush
 readDb.run('PRAGMA mmap_size = 0');
 readDb.run('PRAGMA cache_size = -8000');  // 8MB — read-only, doesn't need large cache
 

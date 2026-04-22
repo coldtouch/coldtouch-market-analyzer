@@ -2,6 +2,14 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-04-23 — SQLITE_BUSY hardening + Accountability tooltip + Portfolio craft runs section
+
+- **SQLITE_BUSY hardening:** `readDb` busy_timeout bumped 5s → 30s, matching `db` and `statsDb`. All three connections now wait up to 30 seconds before failing — eliminates SQLITE_BUSY errors on `readDb` during concurrent analytics batch-writes that hold the WAL write lock.
+- **Accountability missing-item hover tooltip:** Hovering (or tapping on mobile) a red "Missing" item row in the accountability check now shows a tooltip with who picked it up and at what time(s). Pickup events are collected in Pass 2 of the accountability loop and attached to each item result; the tooltip renders with player name, guild, and up to 4 pickup timestamps. CSS class `.ll-missing-tooltip` + `.ll-has-tooltip` + `.tt-active` (touch toggle). Applies to accountability result cards only (not the session detail view).
+- **Portfolio — Completed Craft Runs section:** The Portfolio Tracker tab now shows a collapsible "Completed Craft Runs" table (requires login) listing all runs at `status=complete`, with closed date, cost, revenue, net P/L (after 5.5% tax estimate), margin %, and total net across all runs. Fetches live from `/api/craft-runs`. Opens inline below the trade history.
+
+---
+
 ### 2026-04-22 — Fixes: Stop-Live-Session save/display + Accountability share chest-log snapshot
 
 - **Stop Live Session now saves + displays.** Clicking Stop on the Loot Logger live session previously just flipped a flag — the user had to click Save separately and then click the session card to view what they captured. Stop now: (a) auto-saves the in-memory events via `/api/loot-session/consolidate` if they weren't already saved, (b) opens the session detail panel and renders the run via `showLiveSession()`. If there are no events or the session is already saved, Stop just stops silently.

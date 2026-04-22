@@ -1885,6 +1885,9 @@
             <!-- Trade History -->
             <div id="portfolio-trades" style="margin-top:1rem;"></div>
 
+            <!-- Completed Craft Runs (server-side, requires login) -->
+            <div id="portfolio-craft-runs" style="margin-top:1rem;"></div>
+
             <!-- ====== RECENT SALES (from in-game mail) — moved from Loot Buyer tab ====== -->
             <details id="loot-sales-section" class="controls-panel" style="margin-top:1rem;" open>
                 <summary style="cursor:pointer; display:flex; justify-content:space-between; align-items:center; list-style:none;">
@@ -2295,6 +2298,15 @@
                     <h2 class="about-heading">Changelog</h2>
                     <div id="changelog-wrapper" style="max-height: 500px; overflow-y: auto; position: relative;">
                     <div class="changelog-list">
+                        <div class="changelog-entry">
+                            <div class="changelog-date">April 23, 2026</div>
+                            <div class="changelog-title">🔧 SQLITE_BUSY hardening + Accountability tooltip + Portfolio craft runs</div>
+                            <ul>
+                                <li><strong>SQLITE_BUSY hardening:</strong> <code>readDb</code> busy_timeout bumped 5s → 30s (matches <code>db</code> and <code>statsDb</code>). All three connections now retry for up to 30 seconds before failing, eliminating SQLITE_BUSY on the read path during analytics batch writes.</li>
+                                <li><strong>Accountability missing-item hover tooltip:</strong> hovering (or tapping on mobile) a red "Missing" item row now shows a tooltip with who picked it up and at what time(s). Pickup events are tracked during the accountability pass and rendered per item.</li>
+                                <li><strong>Portfolio — Completed Craft Runs:</strong> the Portfolio Tracker tab now shows a collapsible table of all completed craft runs (requires login) with cost, revenue, net P/L after tax, and margin &mdash; totalled across all runs.</li>
+                            </ul>
+                        </div>
                         <div class="changelog-entry">
                             <div class="changelog-date">April 22, 2026</div>
                             <div class="changelog-title">🛠️ Loot Logger fixes &mdash; Stop-Live-Session auto-save + Accountability share chest-log snapshot</div>

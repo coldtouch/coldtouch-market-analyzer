@@ -6657,6 +6657,19 @@ async function init() {
         if (_offlineToastEl) { _offlineToastEl.remove(); _offlineToastEl = null; }
         showToast('Back online', 'success', 3000);
     });
+
+    // Mobile touch support for .ll-missing-tooltip — tap the row to toggle
+    document.addEventListener('touchstart', (e) => {
+        const row = e.target.closest('.ll-item-row.ll-has-tooltip');
+        if (row) {
+            e.preventDefault();
+            const wasActive = row.classList.contains('tt-active');
+            document.querySelectorAll('.ll-item-row.tt-active').forEach(r => r.classList.remove('tt-active'));
+            if (!wasActive) row.classList.add('tt-active');
+        } else {
+            document.querySelectorAll('.ll-item-row.tt-active').forEach(r => r.classList.remove('tt-active'));
+        }
+    }, { passive: false });
 }
 
 // ====== 0-DELAY LIVE SYNC (VPS WEBSOCKET) ======
@@ -12080,12 +12093,17 @@ async function runAccountabilityCheck() {
 
     // Pass 2 — attribute each pickup to "survived" or "lost on death"
     const lostByDeath = {};  // { name: { itemId: qty } } — items the player lost by dying
+    const evsByPlayerItem = {};  // { name: { itemId: [{ts, guild}] } } — for hover tooltip
     for (const ev of lootEvents) {
         if (ev.item_id === '__DEATH__') continue;
         const name = ev.looted_by_name || 'Unknown';
         const evTs = +new Date(ev.timestamp) || 0;
         if (!lootedByPlayer[name]) lootedByPlayer[name] = { guild: ev.looted_by_guild || '', alliance: ev.looted_by_alliance || '', items: {} };
         lootedByPlayer[name].items[ev.item_id] = (lootedByPlayer[name].items[ev.item_id] || 0) + (ev.quantity || 1);
+        // Collect per-event timestamps for missing-item tooltip
+        if (!evsByPlayerItem[name]) evsByPlayerItem[name] = {};
+        if (!evsByPlayerItem[name][ev.item_id]) evsByPlayerItem[name][ev.item_id] = [];
+        if (evTs > 0) evsByPlayerItem[name][ev.item_id].push(evTs);
         // If this player died at some point AFTER picking this up, it's lost.
         const deaths = deathTimesByPlayer[name];
         if (deaths && evTs > 0 && deaths.some(dTs => dTs > evTs)) {
@@ -12157,6 +12175,7 @@ async function runAccountabilityCheck() {
                 itemResults.push({
                     itemId, looted: effectiveQty, inChest, missing,
                     verified, verifiedQty, fullyVerified,
+                    pickupEvs: evsByPlayerItem[name]?.[itemId] || [],
                 });
             } else if (effectiveQty > 0) {
                 // Enemy loot source — don't check deposits, just list items
@@ -12445,7 +12464,15 @@ async function runAccountabilityCheck() {
             const verifiedTitle = it.verified
                 ? `✓ Verified: chest log shows ${p.name} deposited ${it.verifiedQty} of this item${it.fullyVerified ? '' : ` (covers ${it.verifiedQty}/${it.looted} of pickup)`}`
                 : '';
-            return `<div class="ll-item-row ${rowClass} ${verifiedClass}">
+            // Missing-item hover tooltip: show who picked it up + when
+            const missingTooltipHtml = (rowClass === 'll-item-missing' && it.pickupEvs && it.pickupEvs.length > 0)
+                ? (() => {
+                    const times = it.pickupEvs.slice(0, 4).map(ts => new Date(ts).toLocaleTimeString());
+                    const guildPart = p.guild ? ` [${esc(p.guild)}]` : '';
+                    return `<span class="ll-missing-tooltip"><strong>Picked up by:</strong> ${esc(p.name)}${guildPart}<br>${times.map(t => `<span style="color:var(--text-muted)">At: ${esc(t)}</span>`).join('<br>')}</span>`;
+                })()
+                : '';
+            return `<div class="ll-item-row ${rowClass} ${verifiedClass}${missingTooltipHtml ? ' ll-has-tooltip' : ''}">
                 <img src="${iconUrl}" class="ll-item-icon ${it.verified ? 'll-icon-verified' : ''}" loading="lazy" onerror="this.style.display='none'" title="${esc(verifiedTitle)}">
                 <span class="ll-item-name">${esc(iName)}${it.verified ? ' <span class="ll-verified-check" title="'+esc(verifiedTitle)+'">✓</span>' : ''}</span>
                 <span class="ll-item-qty">&times;${it.looted}</span>
@@ -12453,6 +12480,7 @@ async function runAccountabilityCheck() {
                 <span class="ll-item-weight">${weightStr}</span>
                 <span class="ll-item-status-dot ${dotClass}" title="${statusLabel}"></span>
                 <span style="font-size:0.67rem; flex-shrink:0; color:${dotClass === 'll-dot-missing' ? 'var(--loss-red)' : dotClass === 'll-dot-partial' ? '#fbbf24' : 'var(--profit-green)'};">${statusLabel}</span>
+                ${missingTooltipHtml}
             </div>`;
         }).join('');
 
@@ -15158,6 +15186,69 @@ function renderPortfolio() {
     tradesEl.querySelectorAll('.portfolio-delete-btn').forEach(btn => {
         btn.addEventListener('click', () => deletePortfolioTrade(btn.dataset.tradeId));
     });
+
+    // Completed Craft Runs section — server-side, requires auth
+    _renderPortfolioCraftRuns();
+}
+
+async function _renderPortfolioCraftRuns() {
+    const el = document.getElementById('portfolio-craft-runs');
+    if (!el) return;
+    const token = typeof getAuthToken === 'function' ? getAuthToken() : null;
+    if (!token) { el.innerHTML = ''; return; }
+
+    try {
+        const r = await fetch(`${VPS_BASE}/api/craft-runs`, { headers: authHeaders() });
+        if (!r.ok) { el.innerHTML = ''; return; }
+        const data = await r.json();
+        const completed = (data.runs || []).filter(run => run.status === 'complete');
+        if (!completed.length) { el.innerHTML = ''; return; }
+
+        const rows = completed.map(run => {
+            const cost    = run.total_cost || 0;
+            const rev     = run.total_revenue || 0;
+            const taxEst  = rev * 0.055;
+            const net     = rev - cost - taxEst;
+            const sign    = net >= 0 ? '+' : '';
+            const color   = net >= 0 ? 'var(--profit-green)' : 'var(--loss-red)';
+            const margin  = cost > 0 ? ((net / cost) * 100).toFixed(1) + '%' : '—';
+            const closedDate = run.closed_at ? new Date(run.closed_at).toLocaleDateString() : '—';
+            return `<tr>
+                <td>${esc(closedDate)}</td>
+                <td style="font-weight:600; color:var(--accent);">${esc(run.name)}</td>
+                <td>${run.target_item ? esc(getFriendlyName(run.target_item) || run.target_item) : '—'}</td>
+                <td style="color:var(--loss-red);">${formatSilver(cost)}</td>
+                <td style="color:var(--profit-green);">${formatSilver(rev)}</td>
+                <td style="font-weight:700; color:${color};">${sign}${formatSilver(net)}</td>
+                <td style="color:${color};">${margin}</td>
+                <td><button class="btn-small" onclick="switchTab('craft-runs')" title="Open in Craft Runs tab">Open</button></td>
+            </tr>`;
+        }).join('');
+
+        const totalNet = completed.reduce((s, run) => {
+            const net = (run.total_revenue || 0) - (run.total_cost || 0) - (run.total_revenue || 0) * 0.055;
+            return s + net;
+        }, 0);
+        const totalColor = totalNet >= 0 ? 'var(--profit-green)' : 'var(--loss-red)';
+
+        el.innerHTML = `
+        <details class="controls-panel" open style="margin-top:0;">
+            <summary style="cursor:pointer; display:flex; justify-content:space-between; align-items:center; list-style:none;">
+                <h3 style="color:var(--text-primary); margin:0; font-size:1rem;">🔨 Completed Craft Runs <span style="font-size:0.72rem; color:var(--text-muted); font-weight:normal;">(${completed.length} run${completed.length !== 1 ? 's' : ''})</span></h3>
+                <span style="color:${totalColor}; font-weight:700; font-size:0.9rem;">${totalNet >= 0 ? '+' : ''}${formatSilver(totalNet)} net</span>
+            </summary>
+            <div class="table-scroll-wrapper" style="margin-top:0.75rem;">
+                <table class="compare-table">
+                    <thead><tr>
+                        <th>Closed</th><th>Run Name</th><th>Target</th><th>Cost</th><th>Revenue</th><th>Net P/L</th><th>Margin</th><th></th>
+                    </tr></thead>
+                    <tbody>${rows}</tbody>
+                </table>
+            </div>
+        </details>`;
+    } catch {
+        el.innerHTML = '';
+    }
 }
 
 // ============================================================
