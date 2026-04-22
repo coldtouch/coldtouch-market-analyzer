@@ -34,6 +34,19 @@ All notable changes to the Coldtouch Market Analyzer will be documented in this 
 
 ---
 
+### 2026-04-22 — UI polish: header, timers, empty states, tab titles, footer, profile pill
+
+- **Header shrunk** — title reduced to ~60% of previous size; SEO keyword line hidden (kept in DOM for crawlers). Saves ~45 px of vertical space.
+- **Timers moved to status bar** — Daily Reset & Monthly countdown now inline in the top bar ("Daily: 21h 30m • Monthly: 213h") instead of the floating bottom-right widget. Removed the widget entirely.
+- **Dynamic browser tab title** — title updates to reflect the active tab: "Market Flipping — Coldtouch Market Analyzer", etc.
+- **Footer sticks to bottom** — body is now a flex column with `flex:1` on `<main>`, so footer always anchors to the viewport bottom or below content (whichever is lower).
+- **Craft Runs empty state** — runs with no transactions now show "0" for cost/revenue and "—" for Net P&L instead of the confusing "— / — / +— (—%)" broken look. Phase emoji strip made slightly larger (1rem → readable on small screens).
+- **Market Flipping empty state** — shows "Click Scan Markets to find profitable flips" placeholder instead of blank results area on first load.
+- **Loot logger restore banner** — auto-dismisses after 30 seconds; message shortened and less visually loud.
+- **Crafter profile pill collapse** — on first visit shows full "No profile — click to create" CTA; on subsequent visits collapses to the 🧑‍🔧 icon with a tooltip, reducing persistent yellow noise.
+
+---
+
 ### 2026-04-21 — Outage recovery: analytics rewrite + read-path isolation + craft-runs render fix
 
 **Production outage.** The live site was returning HTTP 000 (connection timeout) for ~12 hours. Node was pinned at 97% of one core the entire time. Root cause: the scheduled analytics job's EMA phase ran 1,700 per-batch SQL queries that each did a full-ish scan of `price_averages` (6.5 GB). Each batch took ~1 s, total ~22 min — over the 25-min "stuck flag" reset threshold. Reset fired, spawned a new analytics run, but the old run's `setTimeout` chain kept firing batches in the background. Over 12 hours, 20+ overlapping EMA chains accumulated, saturated node's event loop, and locked up accept queues. Users saw connection timeouts.
