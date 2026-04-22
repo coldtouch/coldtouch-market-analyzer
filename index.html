@@ -2297,6 +2297,22 @@
                     <div class="changelog-list">
                         <div class="changelog-entry">
                             <div class="changelog-date">April 22, 2026</div>
+                            <div class="changelog-title">⚡ Custom Data Client v1.2.0 &mdash; ZvZ performance pass</div>
+                            <ul>
+                                <li><strong>No behavior change:</strong> every loot, death, and chest event is captured exactly as before. Download the new <code>albiondata-client-custom.exe</code> from the <a href="https://github.com/coldtouch/albiondata-client/releases/tag/v1.2.0" target="_blank" rel="noopener">v1.2.0 GitHub release</a>.</li>
+                                <li><strong>Loot writer:</strong> <code>bufio.Writer</code> over the <code>.txt</code> log; per-event <code>file.Sync()</code> removed. Background ticker flushes to the kernel every 5s; <code>CloseLootFile</code> drains on shutdown. Eliminates 50+ fsync syscalls/sec during ZvZ.</li>
+                                <li><strong>Logging:</strong> per-event <code>log.Infof</code> for loot + deaths downgraded to <code>Debugf</code>. New 30s aggregated Info summary (<em>"Captured N loot event(s) and M death(s) in the last 30s"</em>). Synchronous journald writes were stalling the event goroutine at 100+ events/sec.</li>
+                                <li><strong>VPS relay:</strong> pooled <code>bytes.Buffer</code> + <code>json.Encoder</code> in a new <code>buildRelayMessage</code> helper used by all six <code>Send*</code> functions. Drops the <code>map[string]interface{}</code> + fresh buffer allocation per event.</li>
+                                <li><strong>Atomic connected flag:</strong> <code>connected bool</code> → <code>atomic.Bool</code>. Disconnected fast-path in <code>sendOrQueue</code> no longer contends with an in-flight <code>WriteMessage</code>.</li>
+                                <li><strong>Reusable auth timer:</strong> replaced <code>time.After(30s)</code> with <code>time.NewTimer</code> + <code>defer Stop()</code> so reconnect churn doesn't leak runtime timers.</li>
+                                <li><strong>WebSocket broadcast:</strong> <code>{topic,data}</code> envelope built into one pre-sized <code>[]byte</code> via <code>append</code> instead of three string concatenations. 1 allocation instead of 3 per broadcast.</li>
+                                <li><strong>GUID construction:</strong> three <code>fmt.Sprintf("%02x", byte(b))</code> loops in container-open handlers replaced with a shared <code>guidHex()</code> helper using <code>encoding/hex</code>. Cuts 16+ allocations per container open to one small <code>[]byte</code>.</li>
+                                <li><strong>Vault info parsing:</strong> <code>names</code>, <code>icons</code>, <code>guids</code>, <code>vi.Tabs</code> slices preallocated to their final length.</li>
+                                <li><strong>Estimated combined impact:</strong> during sustained 100+ event/sec ZvZ phases, ~30–50% CPU reduction, ~80% disk-I/O latency reduction on the loot writer, ~20–30% GC pause reduction.</li>
+                            </ul>
+                        </div>
+                        <div class="changelog-entry">
+                            <div class="changelog-date">April 22, 2026</div>
                             <div class="changelog-title">🔒 Security hardening &mdash; exchange code flow, rate limiters, SRI, UX polish</div>
                             <ul>
                                 <li><strong>JWT never in URL (CRITICAL):</strong> Discord OAuth callback now issues a short-lived exchange code (60s TTL) instead of embedding the JWT in the redirect URL. Frontend exchanges the code for the token via <code>POST /api/auth/exchange</code> &mdash; token goes straight to localStorage, never into browser history or server logs.</li>

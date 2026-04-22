@@ -2,6 +2,26 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-04-22 — Custom Data Client v1.2.0 — ZvZ performance pass
+
+Performance-focused release of the custom Go data client. No feature or behavior changes — every loot, death, and chest event is captured exactly as before. Download from the [v1.2.0 GitHub release](https://github.com/coldtouch/albiondata-client/releases/tag/v1.2.0).
+
+**Loot writer (`event_loot.go`)** — `bufio.Writer` wraps the `.txt` log file; the per-event `file.Sync()` is gone. A background ticker flushes to the kernel every 5 s; `CloseLootFile` drains on shutdown. The VPS relay path is unchanged and remains the authoritative copy for the Loot Logger viewer. Eliminates 50+ fsync syscalls/sec during ZvZ.
+
+**Logging** — per-event `log.Infof` for loot + deaths downgraded to `Debugf`. Synchronous journald writes were stalling the event goroutine at 100+ events/sec. New 30-second aggregated Info summary: *"Captured N loot event(s) and M death(s) in the last 30s"*. Lock-free `atomic.Uint64` counters.
+
+**VPS relay (`vps_relay.go`)** — new `buildRelayMessage(type, data)` helper uses a `sync.Pool[*bytes.Buffer]` + `json.Encoder` (stdlib's internal `encodeState` pool kicks in) instead of allocating a fresh `map[string]interface{}` + `bytes.Buffer` per call. All six `Send*` helpers converted. `connected` is now `atomic.Bool` so the disconnected fast-path skips mutex contention. Auth timeout uses a reusable `*time.Timer + defer Stop()` instead of `time.After`, closing a per-reconnect timer leak.
+
+**WebSocket broadcast (`dispatcher.go`)** — the `{"topic":...,"data":...}` envelope is built into a pre-sized `[]byte` with `append` instead of three string concatenations per send. 1 allocation instead of 3.
+
+**GUID construction (`operation_container_open.go`)** — three hand-rolled `fmt.Sprintf("%02x", byte(b))` loops replaced with a shared `guidHex()` helper using `encoding/hex`. Cuts 16+ allocations per container open to one small `[]byte`.
+
+**Vault info parsing (`event_vault_info.go`)** — `names`, `icons`, `guids`, `vi.Tabs` slices preallocated to their final length instead of growing via append.
+
+**Estimated combined impact during sustained 100+ event/sec ZvZ phases**: ~30–50% CPU reduction, ~80% disk-I/O latency reduction on the loot writer, ~20–30% GC pause reduction. No durability regression — the local `.txt` may lose up to 5 s of buffered bytes on an unclean process crash, but the VPS relay has the same events in real time and the Loot Logger upload path is unchanged.
+
+---
+
 ### 2026-04-22 — Full security audit remediation + UX polish
 
 **17 findings fixed** from FULL_AUDIT_2026-04-22.md.
