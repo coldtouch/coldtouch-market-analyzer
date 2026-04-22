@@ -2297,6 +2297,18 @@
                     <div class="changelog-list">
                         <div class="changelog-entry">
                             <div class="changelog-date">April 22, 2026</div>
+                            <div class="changelog-title">🛠️ Loot Logger fixes &mdash; Stop-Live-Session auto-save + Accountability share chest-log snapshot</div>
+                            <ul>
+                                <li><strong>Stop Live Session now auto-saves + renders:</strong> previously Stop only flipped a flag; the user had to click Save Session then click the session card. Now Stop: auto-saves in-memory events via <code>/api/loot-session/consolidate</code> (if not already saved), opens the detail panel, and renders the run via <code>showLiveSession()</code>. No-op if there are no events or the session is already saved.</li>
+                                <li><strong>Accountability share now includes chest-log batches:</strong> shared links were rendering the accountability check without any "verified deposited" badges because the snapshot omitted the opcode-157 chest-log batches (deposit/withdraw ground truth). Recipients saw pre-chest-log logic.</li>
+                                <li><strong>Schema:</strong> new <code>chest_logs_json</code> column on <code>accountability_shares</code>, with an idempotent <code>ALTER TABLE&hellip;ADD COLUMN</code> migration for existing DBs.</li>
+                                <li><strong>Backend:</strong> <code>POST /api/accountability/share</code> now accepts a <code>chestLogs</code> array (user's selected batches or all loaded), size-capped at 40 batches, 400 entries/batch, 500 KB JSON. <code>GET /api/accountability/public/:token</code> returns the parsed batches.</li>
+                                <li><strong>Frontend:</strong> <code>shareAccountability()</code> snapshots the relevant batches into the POST body. <code>_renderPublicAccountabilityView()</code> restores them into <code>window._chestLogBatches</code>, rebuilds the <code>acc-chestlog-select</code> dropdown with shared batches auto-selected, and marks it as user-interacted so it can't be rebuilt out from under the shared view. Banner footer now shows the batch count.</li>
+                                <li><strong>VPS outage recovery:</strong> backend process was stuck in a <code>SQLITE_BUSY</code> loop that the <code>uncaughtException</code> handler swallowed without unblocking the event loop — logs went silent for 22 min. Force-killed stuck PID, clean restart via systemd.</li>
+                            </ul>
+                        </div>
+                        <div class="changelog-entry">
+                            <div class="changelog-date">April 22, 2026</div>
                             <div class="changelog-title">⚡ Custom Data Client v1.2.0 &mdash; ZvZ performance pass</div>
                             <ul>
                                 <li><strong>No behavior change:</strong> every loot, death, and chest event is captured exactly as before. Download the new <code>albiondata-client-custom.exe</code> from the <a href="https://github.com/coldtouch/albiondata-client/releases/tag/v1.2.0" target="_blank" rel="noopener">v1.2.0 GitHub release</a>.</li>

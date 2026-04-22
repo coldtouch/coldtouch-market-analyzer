@@ -474,7 +474,8 @@ db.serialize(() => {
   db.run(`CREATE INDEX IF NOT EXISTS idx_loot_session_shares_token ON loot_session_shares(public_token)`);
 
   // Accountability share tokens — snapshots session + selected chest captures
-  // so anyone with the link can view the breakdown (before/after accountability).
+  // + the chest-log batches (deposit/withdraw ground truth from opcode 157) so
+  // anyone with the link sees exactly the verification info the owner had.
   db.run(`CREATE TABLE IF NOT EXISTS accountability_shares (
     token TEXT PRIMARY KEY,
     user_id TEXT NOT NULL,
@@ -482,9 +483,13 @@ db.serialize(() => {
     captures_json TEXT NOT NULL,
     session_name TEXT DEFAULT '',
     created_at INTEGER NOT NULL,
-    view_count INTEGER DEFAULT 0
+    view_count INTEGER DEFAULT 0,
+    chest_logs_json TEXT DEFAULT NULL
   )`);
   db.run(`CREATE INDEX IF NOT EXISTS idx_acc_shares_user ON accountability_shares(user_id)`);
+  // Migrate existing DBs that pre-date the chest-log snapshot (err is ignored —
+  // "duplicate column" is the expected no-op on an already-migrated DB).
+  db.run(`ALTER TABLE accountability_shares ADD COLUMN chest_logs_json TEXT DEFAULT NULL`, () => {});
 
   // === ANALYTICS TABLES ===
   db.run(`CREATE TABLE IF NOT EXISTS price_analytics (
@@ -1352,8 +1357,7 @@ app.post('/api/register', registerLimiter, async (req, res) => {
   });
 });
 
-// Rate limit: 10 login attempts per 15 minutes per IP
-const loginLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 10, message: { error: 'Too many login attempts. Try again in 15 minutes.' } });
+// loginLimiter declared above (UX-3). Additional limiters below.
 const deviceAuthLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 10, message: { error: 'Too many device authorization attempts. Try again in 15 minutes.' }, keyGenerator: (req) => req.user ? req.user.id : req.ip });
 const evalLimiter = rateLimit({ windowMs: 60 * 1000, max: 10, message: { error: 'Too many loot evaluations. Slow down.' }, keyGenerator: (req) => req.user ? req.user.id : req.ip });
 
@@ -2175,7 +2179,7 @@ app.get('/api/loot-sessions', requireAuth, (req, res) => {
 // chest captures into the row (they're ephemeral in the Go client otherwise).
 // Viewers get session events + captures and can toggle before/after views.
 app.post('/api/accountability/share', requireAuth, (req, res) => {
-    const { sessionId, captures, sessionName } = req.body || {};
+    const { sessionId, captures, sessionName, chestLogs } = req.body || {};
     if (!sessionId || typeof sessionId !== 'string') return res.status(400).json({ error: 'sessionId required' });
     if (!Array.isArray(captures) || captures.length === 0) return res.status(400).json({ error: 'At least one capture required' });
     if (captures.length > 20) return res.status(400).json({ error: 'Too many captures (max 20)' });
@@ -2203,9 +2207,34 @@ app.post('/api/accountability/share', requireAuth, (req, res) => {
         }));
         const capturesJson = JSON.stringify(trimmedCaptures);
         if (capturesJson.length > 500000) return res.status(400).json({ error: 'Captures payload too large (max 500KB)' });
+
+        // Serialize chest-log batches (opcode 157 deposit/withdraw ground truth).
+        // Without this snapshot the shared viewer renders the accountability check
+        // with zero deposits, so no "verified deposited" badges appear — users
+        // reported the shared view "missing info". Size-capped separately from
+        // captures so we fail fast on oversized payloads.
+        let chestLogsJson = null;
+        if (Array.isArray(chestLogs) && chestLogs.length > 0) {
+            if (chestLogs.length > 40) return res.status(400).json({ error: 'Too many chest-log batches (max 40)' });
+            const trimmedLogs = chestLogs.map(b => ({
+                capturedAt: b.capturedAt || 0,
+                action: (b.action || '').slice(0, 20),
+                filterValue: typeof b.filterValue === 'number' ? b.filterValue : 0,
+                entries: Array.isArray(b.entries) ? b.entries.slice(0, 400).map(e => ({
+                    playerName: (e.playerName || '').slice(0, 80),
+                    itemId: (e.itemId || '').slice(0, 80),
+                    numericId: parseInt(e.numericId) || 0,
+                    quantity: parseInt(e.quantity) || 1,
+                    timestamp: e.timestamp || null,
+                })) : [],
+            }));
+            chestLogsJson = JSON.stringify(trimmedLogs);
+            if (chestLogsJson.length > 500000) return res.status(400).json({ error: 'Chest-log payload too large (max 500KB)' });
+        }
+
         const token = require('crypto').randomBytes(24).toString('base64url');
-        db.run(`INSERT INTO accountability_shares (token, user_id, session_id, captures_json, session_name, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
-            [token, req.user.id, finalSessionId, capturesJson, (sessionName || '').slice(0, 120), Date.now()],
+        db.run(`INSERT INTO accountability_shares (token, user_id, session_id, captures_json, session_name, created_at, chest_logs_json) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+            [token, req.user.id, finalSessionId, capturesJson, (sessionName || '').slice(0, 120), Date.now(), chestLogsJson],
             function(iErr) {
                 if (iErr) return res.status(500).json({ error: 'An internal error occurred.' });
                 res.json({ token, url: `/?accShare=${token}` });
@@ -2217,7 +2246,7 @@ app.post('/api/accountability/share', requireAuth, (req, res) => {
 app.get('/api/accountability/public/:token', (req, res) => {
     const token = req.params.token;
     if (!token || !/^[A-Za-z0-9_-]{20,40}$/.test(token)) return res.status(400).json({ error: 'Invalid token' });
-    readDb.get(`SELECT user_id, session_id, captures_json, session_name, created_at FROM accountability_shares WHERE token = ?`, [token], (err, row) => {
+    readDb.get(`SELECT user_id, session_id, captures_json, session_name, created_at, chest_logs_json FROM accountability_shares WHERE token = ?`, [token], (err, row) => {
         if (err) return res.status(500).json({ error: 'An internal error occurred.' });
         if (!row) return res.status(404).json({ error: 'Share not found or revoked' });
         // SEC-M3: expire shares after 30 days
@@ -2229,11 +2258,14 @@ app.get('/api/accountability/public/:token', (req, res) => {
                 db.run(`UPDATE accountability_shares SET view_count = view_count + 1 WHERE token = ?`, [token]);
                 let captures = [];
                 try { captures = JSON.parse(row.captures_json || '[]'); } catch {}
+                let chestLogs = [];
+                try { chestLogs = row.chest_logs_json ? JSON.parse(row.chest_logs_json) : []; } catch {}
                 res.json({
                     sessionName: row.session_name || '',
                     createdAt: row.created_at,
                     events: events || [],
                     captures,
+                    chestLogs,
                 });
             });
     });

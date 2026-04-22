@@ -2,6 +2,19 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-04-22 — Fixes: Stop-Live-Session save/display + Accountability share chest-log snapshot
+
+- **Stop Live Session now saves + displays.** Clicking Stop on the Loot Logger live session previously just flipped a flag — the user had to click Save separately and then click the session card to view what they captured. Stop now: (a) auto-saves the in-memory events via `/api/loot-session/consolidate` if they weren't already saved, (b) opens the session detail panel and renders the run via `showLiveSession()`. If there are no events or the session is already saved, Stop just stops silently.
+
+- **Accountability share now includes chest-log batches.** When a user creates a share link after running Verify / Merge & Verify, the backend was only snapshotting chest *captures* — not the chest-log *batches* (opcode 157 deposit/withdraw ground truth added in a recent release). Recipients of the share link therefore saw the accountability check rendered without any "verified deposited" badges, because `window._chestLogBatches` was empty on their side.
+  - **Schema:** added `chest_logs_json TEXT` column to `accountability_shares` with an idempotent `ALTER TABLE ... ADD COLUMN` migration for existing DBs.
+  - **Backend:** `POST /api/accountability/share` now accepts a `chestLogs` array (selected batches from the user's chestlog dropdown, or all loaded batches if they haven't interacted), validates size + entry caps (max 40 batches, 400 entries per batch, 500 KB total JSON), and persists. `GET /api/accountability/public/:token` returns the parsed array as `chestLogs`.
+  - **Frontend:** `shareAccountability()` snapshots the relevant batches into the POST body. `_renderPublicAccountabilityView()` restores them into `window._chestLogBatches`, rebuilds the `acc-chestlog-select` dropdown with the shared batches auto-selected, and marks it `userInteracted` so a later `populateAccountabilityDropdowns()` call can't rebuild the indexes out from under the shared view. Banner footer now shows the batch count alongside events + captures.
+
+- **VPS outage recovery.** Backend process was stuck in a `SQLITE_BUSY` chain that the `uncaughtException` handler caught without unblocking the event loop — logs went silent for 22 min while the port kept refusing new reads. Force-killed stuck PID, clean restart via systemd. Site + WS broadcast restored. Follow-up investigation pending on the `statsDb` vs. main `db` write serialization under WAL.
+
+---
+
 ### 2026-04-22 — Custom Data Client v1.2.0 — ZvZ performance pass
 
 Performance-focused release of the custom Go data client. No feature or behavior changes — every loot, death, and chest event is captured exactly as before. Download from the [v1.2.0 GitHub release](https://github.com/coldtouch/albiondata-client/releases/tag/v1.2.0).

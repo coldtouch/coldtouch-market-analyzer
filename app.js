@@ -9674,18 +9674,43 @@ function resetLiveSessionFlags() {
 window.liveSessionState = liveSessionState;
 
 // --- Live session controls ---
-function toggleLiveSession() {
+// On Stop, if the user has captured events we auto-save AND render the session
+// so they immediately see what they just logged. Previously Stop only toggled
+// the flag, leaving users to guess they still had to click Save + click the
+// session card to view their own run.
+async function toggleLiveSession() {
+    const wasActive = liveSessionActive;
     liveSessionActive = !liveSessionActive;
     const btn = document.getElementById('ll-live-toggle-btn');
     if (liveSessionActive) {
         btn.innerHTML = `<svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12"/></svg> Stop Live Session`;
         btn.classList.add('active');
         document.getElementById('ll-live-indicator')?.classList.remove('hidden');
-    } else {
-        btn.innerHTML = `<svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="10"/></svg> Start Live Session`;
-        btn.classList.remove('active');
+        updateLiveLootIndicator();
+        return;
     }
+
+    // Stopping: normal UI reset
+    btn.innerHTML = `<svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="10"/></svg> Start Live Session`;
+    btn.classList.remove('active');
     updateLiveLootIndicator();
+
+    // If there's nothing to save, just stop silently.
+    if (!wasActive || liveLootEvents.length === 0) return;
+
+    // Auto-save (no-op if already saved) and render the session view.
+    try {
+        if (!liveSessionSaved) await saveLiveSession();
+    } catch (e) {
+        // saveLiveSession already shows a toast on failure; swallow so we
+        // still render what the user captured in-memory.
+        console.warn('[LiveSession] auto-save failed:', e);
+    }
+    // Render whatever we have — either the freshly saved session or the
+    // in-memory events (showLiveSession reads liveLootEvents directly).
+    const detail = document.getElementById('loot-session-detail');
+    if (detail) detail.style.display = '';
+    showLiveSession();
 }
 
 function updateLiveLootIndicator() {
@@ -11756,6 +11781,23 @@ async function shareAccountability(sessionId) {
     const captures = window._chestCaptures || [];
     const selectedCaptures = selectedIdxs.map(i => captures[i]).filter(Boolean);
     if (selectedCaptures.length === 0) { showToast('Selected captures no longer available', 'warn'); return; }
+    // Snapshot the chest-log batches the user has selected for verification
+    // (opcode 157 deposit/withdraw ground truth). Without this the shared view
+    // renders the accountability check with zero deposits and no "verified"
+    // badges. If the user hasn't touched the chestlog dropdown we include ALL
+    // loaded batches so the recipient sees the same verification result.
+    const chestLogSel = document.getElementById('acc-chestlog-select');
+    const allBatches = window._chestLogBatches || [];
+    let batchesForShare = [];
+    if (chestLogSel) {
+        const selBatchIdxs = Array.from(chestLogSel.selectedOptions)
+            .map(o => parseInt(o.value)).filter(v => !isNaN(v));
+        batchesForShare = selBatchIdxs.length > 0
+            ? selBatchIdxs.map(i => allBatches[i]).filter(Boolean)
+            : allBatches; // fall back to all loaded batches
+    } else {
+        batchesForShare = allBatches;
+    }
     // Get the session name from saved names if available.
     let sessionName = '';
     try {
@@ -11766,7 +11808,7 @@ async function shareAccountability(sessionId) {
         const res = await fetch(`${VPS_BASE}/api/accountability/share`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', ...authHeaders() },
-            body: JSON.stringify({ sessionId, captures: selectedCaptures, sessionName })
+            body: JSON.stringify({ sessionId, captures: selectedCaptures, sessionName, chestLogs: batchesForShare })
         });
         const data = await res.json();
         if (!res.ok) { showToast('Share failed: ' + (data.error || res.status), 'error'); return; }
@@ -16484,9 +16526,22 @@ async function _renderPublicAccountabilityView(data) {
         window._chestCaptures.push(shared);
     }
 
+    // 4b. Inject the shared chest-log batches (opcode 157 deposit/withdraw ground
+    //     truth) into window._chestLogBatches so runAccountabilityCheck can build
+    //     its `chestLogDeposits` map and render the "verified deposited" badges
+    //     the owner saw. Prior to this, shares omitted this snapshot entirely
+    //     and recipients saw a stale, pre-chest-log rendering.
+    window._chestLogBatches = window._chestLogBatches || [];
+    const sharedLogStartIdx = window._chestLogBatches.length;
+    const sharedChestLogs = Array.isArray(data.chestLogs) ? data.chestLogs : [];
+    for (const batch of sharedChestLogs) {
+        window._chestLogBatches.push({ ...batch, _isSharedView: true });
+    }
+
     // 5. Pre-populate the dropdowns so runAccountabilityCheck reads exactly what was shared.
     const sessionSel = document.getElementById('acc-session-select');
     const captureSel = document.getElementById('acc-capture-select');
+    const chestLogSel = document.getElementById('acc-chestlog-select');
     if (sessionSel) {
         // Synthetic option for the shared session id so the dropdown accepts it.
         const stubVal = '__shared__';
@@ -16499,6 +16554,17 @@ async function _renderPublicAccountabilityView(data) {
             const name = cap.tabName || `Shared capture ${i + 1}`;
             const count = cap.items?.length || 0;
             return `<option value="${sharedCapStartIdx + i}" selected>${esc(name)} — ${count} items</option>`;
+        }).join('');
+    }
+    if (chestLogSel && sharedChestLogs.length > 0) {
+        // Mark userInteracted so populateAccountabilityDropdowns doesn't later
+        // rebuild this dropdown and drop our indexes into the shared batches.
+        chestLogSel.dataset.userInteracted = 'yes';
+        chestLogSel.innerHTML = sharedChestLogs.map((b, i) => {
+            const action = b.action || 'unknown';
+            const icon = action === 'deposit' ? '📥' : action === 'withdraw' ? '📤' : '❔';
+            const count = (b.entries || []).length;
+            return `<option value="${sharedLogStartIdx + i}" selected>${icon} ${esc(action)} — ${count} entries (shared)</option>`;
         }).join('');
     }
 
@@ -16521,7 +16587,7 @@ async function _renderPublicAccountabilityView(data) {
         banner.innerHTML = `
             <span>🔗</span>
             <span><strong>Shared accountability check</strong>${data.sessionName ? ` — "${esc(data.sessionName)}"` : ''}${when ? ` · created ${esc(when)}` : ''}</span>
-            <span style="margin-left:auto; color:var(--text-muted); font-size:0.72rem;">Read-only view — ${(data.events || []).length} events · ${(data.captures || []).length} chest capture${(data.captures || []).length !== 1 ? 's' : ''}</span>`;
+            <span style="margin-left:auto; color:var(--text-muted); font-size:0.72rem;">Read-only view — ${(data.events || []).length} events · ${(data.captures || []).length} chest capture${(data.captures || []).length !== 1 ? 's' : ''}${sharedChestLogs.length > 0 ? ` · ${sharedChestLogs.length} log batch${sharedChestLogs.length !== 1 ? 'es' : ''}` : ''}</span>`;
         // Insert right at the top of the accountability mode container.
         const accMode = document.getElementById('loot-log-accountability');
         if (accMode) accMode.insertBefore(banner, accMode.firstChild);
