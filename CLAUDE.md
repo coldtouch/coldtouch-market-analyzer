@@ -118,7 +118,23 @@
 
 ## Recent Session History
 
-### April 20 — Craft Runs Feature + Bug Fixes — Latest
+### April 22 — Security Audit + Design Polish + Outage Recovery — Latest
+
+- **FULL_AUDIT_2026-04-22.md — 17 findings fixed:**
+  - CRITICAL: JWT never in URL — Discord OAuth now issues a 60s one-time exchange code; frontend calls `POST /api/auth/exchange`, token goes direct to localStorage, never hits browser history.
+  - HIGH: `transportLiveLimiter` (5 req/min) + 30s server cache on live routes; health endpoints stripped to `{"status":"ok"}` only; `deviceCodes` map capped at 200 + per-IP rate limit; password reset token moved out of URL into modal flow.
+  - MEDIUM: `escHtml()` for email templates, x-forwarded-for comma split, ADMIN_DISCORD_ID env constant, Chart.js SRI hash, password complexity check, loot upload 5k-line/2MB cap.
+  - LOW/DevOps/Code: login rate limiter wired, SW CACHE_NAME auto-bump on deploy, Go `device_auth.go` rewritten with stdlib strings, toast callback registry (`_toastCallbacks`), toast stack cap (5), offline indicator, dynamic tab titles.
+- **UI/Design improvements (separate branch, merged):**
+  - Header shrunk ~60%, SEO line hidden (stays in DOM for crawlers). Timers moved from floating widget into status bar. Footer anchored with flex column layout. Dynamic browser tab title. Craft Runs empty state (shows 0/—). Market Flipping first-load placeholder. Loot logger restore banner auto-dismisses 30s. Crafter profile pill collapses to icon after first visit.
+- **VPS outage #1:** Duplicate `loginLimiter` definition in merged backend.js → syntax error → 14h downtime. Removed, deployed, restored.
+- **VPS outage #2:** `SQLITE_BUSY` chain swallowed by `uncaughtException` handler → event loop stalled silently for 22 min, ports alive but reads refused. Force-killed stuck PID, clean systemd restart. Root cause (WAL write contention between `statsDb` batch writes and `db` real-time writes) **unresolved — expected to recur**.
+- **Go client v1.2.0 released** (ZvZ performance pass): `bufio.Writer` on loot file (drops per-event fsync), 30s aggregated log summary, `sync.Pool[*bytes.Buffer]` + `json.Encoder` in VPS relay, `atomic.Bool` for connected flag, reusable `*time.Timer`, `guidHex()` with `encoding/hex`, slice preallocs in vault info. ~30-50% CPU, ~80% disk I/O improvement. Published at https://github.com/coldtouch/albiondata-client/releases/tag/v1.2.0.
+- **Loot Logger — Stop button fix:** Stop now auto-saves (calls `/api/loot-session/consolidate`) and renders the session. Previously just flipped a flag.
+- **Accountability share — chest-log snapshot:** Added `chest_logs_json TEXT` column to `accountability_shares`. Share creation snapshots selected chest-log batches; public viewer restores them so recipients see the same verified-deposited badges as the owner.
+- All committed + deployed to VPS.
+
+### April 20 — Craft Runs Feature + Bug Fixes
 
 **Craft Runs full pipeline tracker (buy→refine→craft→sell):**
 - 3 new SQLite tables: `craft_runs`, `craft_run_transactions`, `craft_run_scans`
@@ -253,7 +269,16 @@
 - [x] .env now uploaded via SFTP (PY-H1)
 - [x] 19 scratch files deleted, .gitignore updated (CLEAN-1, CLEAN-4)
 
+### Done (April 22)
+- [x] FULL_AUDIT_2026-04-22.md remediation — 17 findings fixed
+- [x] UI/Design polish — header, status bar timers, footer, empty states, tab title, profile pill
+- [x] Go client v1.2.0 — ZvZ performance pass, GitHub Release published
+- [x] Loot Logger Stop button auto-saves + renders session
+- [x] Accountability share carries chest-log snapshot (`chest_logs_json` column)
+- [x] VPS outage ×2 — both resolved (deploys + kill -9)
+
 ### Pending
+- [ ] **SQLITE_BUSY root cause fix** — WAL write contention between `statsDb` (analytics/spreadstats batch writes) and `db` (real-time inserts) causes intermittent SQLITE_BUSY chains. Survived by two force-kills in one day. Fix: add `PRAGMA busy_timeout = 30000` to all three DB connections (db, statsDb, readDb) + verify cross-guards (`statsRunning`/`analyticsRunning`) are solid.
 - [ ] **Accountability missing-item hover tooltip** — when a user runs Verify / Merge & Verify and an item shows up as "missing" on a player card, hovering the item should surface: pickup timestamp, who picked it up, and which map/zone it happened in.
   - Data already in loot_events: `timestamp`, `looted_by_name`, `looted_by_guild`. Item row already ties back to the event via `session_id` + `looted_by_name` + `item_id` in [app.js:12047+](app.js:12047).
   - **Missing field — map/zone is NOT captured today.** Neither the Go client event handler ([event_loot.go:139+](../albiondata-client-custom/client/event_loot.go:139)) nor the backend loot_events table has a location column. Two sub-tasks: (a) Go client — plumb current zone string from `albionState` through `LootEvent.Location`; (b) backend — add `location` column + forward through relay + frontend render. Could ship the tooltip WITHOUT map first (time + looter) and add map in a follow-up once the client update rolls out.
