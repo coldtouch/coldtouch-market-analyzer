@@ -295,6 +295,10 @@
 ### In-Game Testing Required
 - [ ] **Device Auth end-to-end test** — device code flow from Go client to browser approval
 - [ ] **Verify negative item ID mappings** — IDs -1 to -9 are guesses. Also discovered IDs far beyond -9: -54, -57, -60, etc.
+- [ ] **Castle chest + Outpost chest capture** — test whether existing chest capture handlers (BankVaultInfo / GuildVaultInfo / container events) fire for castle and outpost chests, or if those use different opcodes. If they don't fire, capture the relevant opcodes with Wireshark/debug logging and add handlers.
+
+### Investigation Required
+- [ ] **Capture .4 enchanted material gathering** — determine if the Go client can detect when players gather .4 (enchanted) resources. Check whether the gathering event includes enchantment level; if so, wire it into loot logger and accountability. Need to identify the relevant opcode and verify in-game.
 
 ### Short Term
 - [ ] **ReadMail opcode handler** — capture sale mail notifications, auto-match to tracked loot tabs
