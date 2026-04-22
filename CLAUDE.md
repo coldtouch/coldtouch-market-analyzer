@@ -254,6 +254,10 @@
 - [x] 19 scratch files deleted, .gitignore updated (CLEAN-1, CLEAN-4)
 
 ### Pending
+- [ ] **Accountability missing-item hover tooltip** — when a user runs Verify / Merge & Verify and an item shows up as "missing" on a player card, hovering the item should surface: pickup timestamp, who picked it up, and which map/zone it happened in.
+  - Data already in loot_events: `timestamp`, `looted_by_name`, `looted_by_guild`. Item row already ties back to the event via `session_id` + `looted_by_name` + `item_id` in [app.js:12047+](app.js:12047).
+  - **Missing field — map/zone is NOT captured today.** Neither the Go client event handler ([event_loot.go:139+](../albiondata-client-custom/client/event_loot.go:139)) nor the backend loot_events table has a location column. Two sub-tasks: (a) Go client — plumb current zone string from `albionState` through `LootEvent.Location`; (b) backend — add `location` column + forward through relay + frontend render. Could ship the tooltip WITHOUT map first (time + looter) and add map in a follow-up once the client update rolls out.
+  - Render on the existing `.ll-player-card` missing-item list — see `renderAccountabilityResult` / player card markup around [app.js:12300+](app.js:12300).
 - [ ] **Craft Runs — Tab Scan linking UI** — frontend flow to link a chest capture to an active run (backend endpoint exists at `POST /api/craft-runs/:id/scan`)
 - [ ] **Craft Runs — Portfolio integration** — completed runs appear in Portfolio Tracker with full cost basis
 - [ ] **Craft Runs — Refining Planner** — auto-suggest city from material type, batch calculator (backend `/api/refine/optimal-city` exists)
