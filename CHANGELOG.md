@@ -2,6 +2,16 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-04-24 — Player card "died with" preview section
+
+Player cards in loot reports now surface what each player died with. After the normal pickup-icon strip, players who died during the session get a 💀 divider followed by the items looted off their corpse — rendered with reduced opacity (0.55), 55% grayscale filter, and a red border so they read as "lost". Hover shows the full death context: time, zone (from Go client v1.3.0+), killer, and who looted the items ("Died at 2:30:43 AM in Thetford Outskirts — killed by Gank — looted by Bob (2 items)").
+
+Data source is authoritative: items looted off the victim's corpse are captured via `ev.looted_from_name === victim` across the session events, aggregated per victim by `_llDiedWithByVictim`. Handles multiple deaths per session ("Died 3× — last at …") and merges items across deaths. `buildDeathTimeline` now also carries `location` through each death record so the tooltip can report the zone.
+
+Visual styling lives in `.ll-preview-died` + `.ll-preview-died-divider` in style.css. Uses the existing native `title` attribute for hover — no new tooltip infrastructure needed.
+
+---
+
 ### 2026-04-24 — SQLITE_BUSY stability overhaul (Tiers 1+2+3+5)
 
 Root-cause fix for the recurring 15-min silent-wedge outages on April 22 + 23. `busy_timeout=30000` alone was insufficient because the `uncaughtException` handler was swallowing `SQLITE_BUSY` from async `stmt.run()` callbacks, leaving `BEGIN TRANSACTION` open on the connection, unfinalized prepared statements, and a cascade of queued writes behind a corrupted state. Memory grew to 11.1 GB RSS and GC stalls froze the event loop (ports stayed bound but HTTP never responded).

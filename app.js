@@ -9301,6 +9301,7 @@ let _llDepositedMap = null;         // accountability deposit map (null in norma
 let _llTargetEl = null;             // DOM element to render into
 let _llIsDetail = false;            // true = viewing a specific saved session
 let _llDeaths = [];                 // computed death timeline for current session
+let _llDiedWithByVictim = {};       // { victimName: { items: [{itemId,quality,qty}], deaths: [{ts,location,killer,lootedBy[]}] } } — used by player-card "died with" preview section
 let _llPrimaryGuild = '';           // most-common guild among looters (= "our" side)
 let _llPrimaryAlliance = '';        // most-common alliance
 let _llDeathFilterVictim = null;    // when set, restricts view to that death's chain
@@ -10297,6 +10298,10 @@ function buildDeathTimeline(events, byPlayer, priceMap, primaryGuild, primaryAll
             killer,
             killerGuild: ev.looted_by_guild || '',
             timestamp: deathTs,
+            // Zone where the death happened — Go client v1.3.0+ emits this on
+            // every DeathEvent; older .txt-log uploads won't have it. Used by
+            // the player-card "died-with" preview tooltip.
+            location: ev.location || '',
             lootedItems,
             equipmentAtDeath,
             estimatedValue,
@@ -10758,6 +10763,33 @@ async function renderLootSessionEvents(events, targetEl, depositedMap) {
     _llPrimaryGuild = primaryGuild;
     _llPrimaryAlliance = primaryAlliance;
     _llDeaths = buildDeathTimeline(events, byPlayer, priceMap, primaryGuild, primaryAlliance);
+    // Build per-victim "died-with" lookup — aggregates items looted off their
+    // corpse across ALL deaths this session, so the player card preview can
+    // surface the items they died with (greyed out + red border). A player may
+    // have died multiple times; we merge the death metadata so the hover
+    // tooltip reads "Died 3x — last at 3:45 PM in Bridgewatch — killed by ..."
+    _llDiedWithByVictim = {};
+    for (const d of _llDeaths) {
+        if (!d.victim) continue;
+        if (!_llDiedWithByVictim[d.victim]) {
+            _llDiedWithByVictim[d.victim] = { items: new Map(), deaths: [] };
+        }
+        _llDiedWithByVictim[d.victim].deaths.push({
+            ts: d.timestamp,
+            location: d.location || '',
+            killer: d.killer || '',
+            lootedBy: d.lootedBy || [],
+        });
+        for (const li of d.lootedItems || []) {
+            if (!li.item_id || li.item_id === '__DEATH__') continue;
+            const q = li.quality || 1;
+            const key = li.item_id + '_' + q;
+            const existing = _llDiedWithByVictim[d.victim].items.get(key);
+            const qty = li.quantity || 1;
+            if (existing) existing.qty += qty;
+            else _llDiedWithByVictim[d.victim].items.set(key, { itemId: li.item_id, quality: q, qty });
+        }
+    }
     // G6: fetch per-player trends across all of this user's saved sessions
     // (fire-and-forget — if it's slow, we re-render when it arrives)
     _llPlayerTrends = {};
@@ -11160,7 +11192,7 @@ function _llRenderFiltered() {
         }
         // Sort by total value desc (most valuable first) so the header stripe leads with the big hits.
         const aggSorted = [...itemAgg.values()].sort((a, b) => b.totalValue - a.totalValue);
-        const iconStripHtml = aggSorted.map(agg => {
+        let iconStripHtml = aggSorted.map(agg => {
             const valAttr = agg.totalValue > 0 ? ` data-tip-value="${Math.floor(agg.totalValue)}"` : '';
             const qtyBadge = agg.qty > 1 ? `<span class="ll-preview-qty-badge">${agg.qty}</span>` : '';
             const qLabel = agg.quality > 1 ? ` q${agg.quality}` : '';
@@ -11169,6 +11201,38 @@ function _llRenderFiltered() {
                 ${qtyBadge}
             </div>`;
         }).join('');
+
+        // "Died with" preview: for players who died, append the items looted off
+        // their corpse (= what they died with) with red/greyed styling. Per-icon
+        // `title` shows the death context: time, zone (if Go client v1.3.0+), killer,
+        // and who looted the items. Reuses the same _llDiedWithByVictim map built
+        // alongside _llDeaths in renderLootSessionEvents.
+        const diedWith = _llDiedWithByVictim && _llDiedWithByVictim[name];
+        if (diedWith && diedWith.items.size > 0) {
+            const diedItems = [...diedWith.items.values()].sort((a, b) => b.qty - a.qty);
+            // Aggregate title text once — same tooltip on every died-with icon.
+            const deathCount = diedWith.deaths.length;
+            const latest = diedWith.deaths.reduce((a, b) => (a.ts > b.ts ? a : b), diedWith.deaths[0]);
+            const whenStr = latest && latest.ts ? new Date(latest.ts).toLocaleTimeString() : 'unknown time';
+            const whereStr = latest && latest.location ? ` in ${latest.location}` : '';
+            const killerStr = latest && latest.killer ? ` — killed by ${latest.killer}` : '';
+            const lootedByStr = latest && latest.lootedBy && latest.lootedBy.length > 0
+                ? ` — looted by ${latest.lootedBy.slice(0, 3).map(l => `${l.name}${l.items ? ` (${l.items} items)` : ''}`).join(', ')}${latest.lootedBy.length > 3 ? ` +${latest.lootedBy.length - 3} more` : ''}`
+                : '';
+            const countPrefix = deathCount > 1 ? `Died ${deathCount}× — last at ${whenStr}` : `Died at ${whenStr}`;
+            const diedTitle = `${countPrefix}${whereStr}${killerStr}${lootedByStr}`;
+            const diedDivider = `<span class="ll-preview-died-divider" title="${esc(diedTitle)}">💀</span>`;
+            const diedIcons = diedItems.map(it => {
+                const qtyBadge = it.qty > 1 ? `<span class="ll-preview-qty-badge">${it.qty}</span>` : '';
+                const qLabel = it.quality > 1 ? ` q${it.quality}` : '';
+                const iName = getFriendlyName(it.itemId) || it.itemId;
+                return `<div class="ll-preview-slot ll-preview-died" title="${esc(iName)}${qLabel} × ${it.qty} — ${diedTitle}">
+                    <img src="https://render.albiononline.com/v1/item/${encodeURIComponent(it.itemId)}.png?quality=${it.quality}" class="ll-preview-icon" loading="lazy" onerror="this.style.display='none'" alt="${esc(iName)}${qLabel} x${it.qty}">
+                    ${qtyBadge}
+                </div>`;
+            }).join('');
+            iconStripHtml += diedDivider + diedIcons;
+        }
 
         // F2: Build a lookup of item IDs that have been sold recently (after this session's last event).
         // If a sale post-dates a pickup, the pickup LIKELY fed that sale (not guaranteed — could be
