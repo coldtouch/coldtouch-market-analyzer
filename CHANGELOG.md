@@ -23,6 +23,20 @@ All notable changes to the Coldtouch Market Analyzer will be documented in this 
 
 ---
 
+### 2026-04-23 — Custom Data Client v1.3.0 — Zone tracking
+
+Feature release of the custom Go data client. Download from the [v1.3.0 GitHub release](https://github.com/coldtouch/albiondata-client/releases/tag/v1.3.0).
+
+**Zone tracking (`albion_state.go`, `operation_join.go`)** — `albionState` gains a `CurrentZone string` field (RWMutex, thread-safe getter/setter). `operationJoinResponse.Process` calls `state.SetCurrentZone(op.Location)` on every zone transition (the same op that already set `LocationId`). Zone is updated atomically before any loot or death events in the new zone can fire.
+
+**LootEvent** — new `Location string json:"location"` field. Populated from `state.GetCurrentZone()` in `eventOtherGrabbedLoot.Process`. Stored in the `loot_events` DB column and returned by all session/accountability API endpoints.
+
+**DeathEvent** — new `Location string json:"location"` field. Populated in both `eventDied.Process` and `eventKilledPlayer.Process`.
+
+**Website (deployed alongside client)** — accountability deaths section now splits into three collapsible categories: 🛡️ Friendly (our members died), 💀 Enemy (we killed them), 👁️ Other (bystanders, collapsed by default). Zone badge `📍 ZoneName` shown on each death card. Missing-item hover tooltip now shows the zone where the pickup happened alongside the timestamp.
+
+---
+
 ### 2026-04-22 — Custom Data Client v1.2.0 — ZvZ performance pass
 
 Performance-focused release of the custom Go data client. No feature or behavior changes — every loot, death, and chest event is captured exactly as before. Download from the [v1.2.0 GitHub release](https://github.com/coldtouch/albiondata-client/releases/tag/v1.2.0).
