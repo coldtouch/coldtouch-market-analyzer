@@ -11000,10 +11000,10 @@ function _llRenderFiltered() {
             <button class="btn-small" onclick="exportLootSession()" title="Export to CSV">CSV</button>
             <button class="btn-small" onclick="exportLootSessionTxt()" title="Export as .txt in ao-loot-logger format">.txt</button>
             <button class="btn-small" onclick="exportLootSessionJson()" title="Export raw session data as JSON">JSON</button>
-            ${_llCurrentSessionId
+            ${_llCurrentSessionId && !window._sharedSessionViewActive
                 ? `<button class="btn-small-accent" onclick="openShareSessionModal('${esc(_llCurrentSessionId)}', null)" title="Generate a public link — anyone with it can view this session">🔗 Share</button>
                    <button class="btn-small-accent" onclick="runAccountabilityForSession('${esc(_llCurrentSessionId)}')" title="Cross-reference this session against chest deposits">✓ Accountability</button>`
-                : '<span id="ll-report-share-slot"></span>'}
+                : (window._sharedSessionViewActive ? '' : '<span id="ll-report-share-slot"></span>')}
             ${isDetail ? `<button class="btn-small" onclick="hideLootSessionDetail()">&#x2190; Back</button>` : ''}
         </div>
     </div>`;
@@ -16758,21 +16758,68 @@ function _renderPublicShareError(msg) {
     document.body.appendChild(overlay);
 }
 
-function _renderPublicShareView(data) {
-    const overlay = document.createElement('div');
-    overlay.id = 'public-share-overlay';
-    overlay.innerHTML = `
-        <div class="public-share-banner">
-            <span>🔗 Viewing a shared loot session — read-only</span>
-            <a href="${window.location.pathname}" class="btn-small">Continue to Coldtouch &rarr;</a>
-        </div>
-        <div class="public-share-container" id="public-share-container"></div>`;
-    document.body.appendChild(overlay);
-    // Reuse renderLootSessionEvents to produce the full session view
-    const target = document.getElementById('public-share-container');
-    // Set target + flags so the shared renderer writes into our overlay container
-    _llTargetEl = target;
-    _llIsDetail = true;
+// Render shared LOOT SESSION inside the normal Loot Logger → Upload mode pane —
+// recipient sees the EXACT same report the uploader saw (full death timeline,
+// player cards, deaths section, export buttons, etc.). No separate overlay, no
+// "Continue to Coldtouch" button. A thin banner at the top marks it read-only.
+//
+// Mirror of _renderPublicAccountabilityView (line ~16636) which uses the same
+// approach for accountability shares.
+async function _renderPublicShareView(data) {
+    // 0. Flag active so action-row templates skip the Share/Accountability
+    //    buttons (non-functional for an unauthenticated viewer).
+    window._sharedSessionViewActive = true;
+
+    // 1. Kill the landing overlay so the view is usable without forcing login.
+    const landing = document.getElementById('landing-overlay');
+    if (landing) { landing.style.display = 'none'; landing.classList.add('dismissed'); }
+
+    // 2. Wait for the basic app init (tabs, handlers) to be in place before navigating.
+    const waitFor = (pred, timeout = 5000) => new Promise((resolve, reject) => {
+        const start = Date.now();
+        const tick = () => {
+            if (pred()) return resolve();
+            if (Date.now() - start > timeout) return reject(new Error('timeout'));
+            setTimeout(tick, 50);
+        };
+        tick();
+    });
+    try {
+        await waitFor(() => typeof showLootLoggerMode === 'function' && document.querySelector('[data-tab="loot-logger"]'));
+    } catch { /* init didn't come — render anyway, may fail gracefully */ }
+
+    // 3. Navigate to Loot Logger → Upload mode (the same pane the uploader uses).
+    document.querySelector('[data-tab="loot-logger"]')?.click();
+    if (typeof showLootLoggerMode === 'function') showLootLoggerMode('upload');
+
+    // 4. Hide the upload input card — viewer can't upload anything and the
+    //    "Choose Files" prompt would be confusing for a read-only share.
+    //    Target the file input's wrapping card directly (more robust than a
+    //    positional selector, which breaks once we insert the banner).
+    const uploadCard = document.getElementById('loot-log-file-input')?.closest('div');
+    if (uploadCard) uploadCard.style.display = 'none';
+
+    // 5. Inject a thin banner above the result area so the recipient knows it's a share.
+    const uploadPane = document.getElementById('loot-log-upload');
+    if (uploadPane && !document.getElementById('shared-session-banner')) {
+        const when = data.sharedAt ? new Date(data.sharedAt).toLocaleString() : '';
+        const banner = document.createElement('div');
+        banner.id = 'shared-session-banner';
+        banner.style.cssText = 'background:linear-gradient(90deg, rgba(88,101,242,0.14), rgba(88,101,242,0.06)); border:1px solid rgba(88,101,242,0.35); border-radius:8px; padding:0.55rem 0.9rem; margin:0.5rem 0 0.75rem; font-size:0.82rem; color:#c7d2ff; display:flex; gap:0.5rem; align-items:center; flex-wrap:wrap;';
+        banner.innerHTML = `
+            <span>🔗</span>
+            <span><strong>Shared loot session</strong>${when ? ` · shared ${esc(when)}` : ''}</span>
+            <span style="margin-left:auto; color:var(--text-muted); font-size:0.72rem;">Read-only view — ${(data.events || []).length} events</span>`;
+        uploadPane.insertBefore(banner, uploadPane.firstChild);
+    }
+
+    // 6. Mark the session id so the report's action row has something to key off of
+    //    (Share/Accountability buttons already suppressed via _sharedSessionViewActive).
+    _llCurrentSessionId = data.sessionId || '__shared__';
+
+    // 7. Render into the same target the uploader sees (#loot-upload-result).
+    const target = document.getElementById('loot-upload-result');
+    if (!target) return;
     renderLootSessionEvents(data.events || [], target, null).catch(e => {
         target.innerHTML = `<div class="empty-state"><p>Failed to render shared session: ${esc(e.message)}</p></div>`;
     });
