@@ -2300,10 +2300,20 @@
                     <div class="changelog-list">
                         <div class="changelog-entry">
                             <div class="changelog-date">April 23, 2026</div>
+                            <div class="changelog-title">🧹 Accountability dropdown fixes + Share on uploads + sw.js fix</div>
+                            <ul>
+                                <li><strong>Accountability dropdowns — HTML artifact fix:</strong> session / capture / chest-log dropdowns were showing literal <code>&lt;span class="time-ago" data-ts="..."&gt;5m ago&lt;/span&gt;</code> text inside each option (caused by <code>timeAgo()</code> returning an HTML wrapper that <code>&lt;option&gt;</code> can't render). Switched all three to the plain-text <code>_computeTimeAgo()</code>.</li>
+                                <li><strong>Uploaded sessions now group by upload time:</strong> a file uploaded 2 min ago with last-week's events used to show as "7d ago" in the Older group. Now renders as <em>"📤 Uploaded 5m ago · events from 7d ago &mdash; 500 events · 12 players"</em>, grouped under "Recently uploaded" (24 h window so it survives refreshes). Duplicate emoji prefixes (🆕/⚠) on each row removed.</li>
+                                <li><strong>Share button on uploaded sessions:</strong> after uploading a <code>.txt</code> loot log, the report's action row now includes <strong>🔗 Share</strong> and <strong>✓ Accountability</strong> alongside CSV / .txt / JSON. Share uses the existing public-link system (anyone with the URL can view the session; revoke any time).</li>
+                                <li><strong>sw.js CACHE_NAME fix:</strong> the deploy-time auto-bumper kept appending an extra <code>'</code> every deploy, producing a syntactically broken cache-name string. Reset to clean form and patched the bumper so future deploys stay clean.</li>
+                            </ul>
+                        </div>
+                        <div class="changelog-entry">
+                            <div class="changelog-date">April 23, 2026</div>
                             <div class="changelog-title">🔧 SQLITE_BUSY hardening + Accountability tooltip + Portfolio craft runs</div>
                             <ul>
                                 <li><strong>SQLITE_BUSY hardening:</strong> <code>readDb</code> busy_timeout bumped 5s → 30s (matches <code>db</code> and <code>statsDb</code>). All three connections now retry for up to 30 seconds before failing, eliminating SQLITE_BUSY on the read path during analytics batch writes.</li>
-                                <li><strong>Accountability missing-item hover tooltip:</strong> hovering (or tapping on mobile) a red "Missing" item row now shows a tooltip with who picked it up and at what time(s). Pickup events are tracked during the accountability pass and rendered per item.</li>
+                                <li><strong>Accountability missing-item hover tooltip:</strong> hovering (or tapping on mobile) a red "Missing" item row now shows a tooltip with who picked it up, at what time(s), and <strong>in which zone (📍 pin)</strong>. Pickup events are tracked during the accountability pass and rendered per item. Requires the v1.3.0 custom client for zone data; older events still render cleanly without the pin.</li>
                                 <li><strong>Portfolio — Completed Craft Runs:</strong> the Portfolio Tracker tab now shows a collapsible table of all completed craft runs (requires login) with cost, revenue, net P/L after tax, and margin &mdash; totalled across all runs.</li>
                             </ul>
                         </div>

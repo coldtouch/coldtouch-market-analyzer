@@ -10226,6 +10226,9 @@ function clearLootUpload() {
     document.getElementById('loot-upload-result').innerHTML = '';
     document.getElementById('loot-log-file-status').textContent = '';
     document.getElementById('ll-upload-clear-btn').style.display = 'none';
+    // Dropping the uploaded session — clear the id so the in-report Share button
+    // can't be wired to a stale session on a subsequent render.
+    _llCurrentSessionId = null;
 }
 
 // === DEATH TIMELINE (Phase 2) ===
@@ -10998,8 +11001,9 @@ function _llRenderFiltered() {
             <button class="btn-small" onclick="exportLootSessionTxt()" title="Export as .txt in ao-loot-logger format">.txt</button>
             <button class="btn-small" onclick="exportLootSessionJson()" title="Export raw session data as JSON">JSON</button>
             ${_llCurrentSessionId
-                ? `<button class="btn-small-accent" onclick="runAccountabilityForSession('${esc(_llCurrentSessionId)}')" title="Cross-reference this session against chest deposits">✓ Accountability</button>`
-                : ''}
+                ? `<button class="btn-small-accent" onclick="openShareSessionModal('${esc(_llCurrentSessionId)}', null)" title="Generate a public link — anyone with it can view this session">🔗 Share</button>
+                   <button class="btn-small-accent" onclick="runAccountabilityForSession('${esc(_llCurrentSessionId)}')" title="Cross-reference this session against chest deposits">✓ Accountability</button>`
+                : '<span id="ll-report-share-slot"></span>'}
             ${isDetail ? `<button class="btn-small" onclick="hideLootSessionDetail()">&#x2190; Back</button>` : ''}
         </div>
     </div>`;
@@ -11436,11 +11440,23 @@ async function processLootFiles(files) {
             // Remember the just-uploaded session_id so the Accountability dropdown can
             // highlight it and auto-select when the user switches to that tab.
             if (data.sessionId || data.session_id) {
-                window._justUploadedSessionId = data.sessionId || data.session_id;
+                const sid = data.sessionId || data.session_id;
+                window._justUploadedSessionId = sid;
                 window._justUploadedAt = Date.now();
                 // Auto-stamp the session name to the first file uploaded (user can rename later).
                 if (typeof setSavedSessionName === 'function' && fileNames.length > 0) {
-                    setSavedSessionName(window._justUploadedSessionId, fileNames[0].replace(/\.txt$/i, ''));
+                    setSavedSessionName(sid, fileNames[0].replace(/\.txt$/i, ''));
+                }
+                // Report row was rendered before upload completed, so _llCurrentSessionId was
+                // null and the Share/Accountability buttons weren't emitted. Populate the
+                // placeholder slot now that we know the session_id — also cross-link to the
+                // Accountability action so the user can verify against chest logs in one click.
+                _llCurrentSessionId = sid;
+                const slot = document.getElementById('ll-report-share-slot');
+                if (slot) {
+                    const safeSid = esc(sid);
+                    slot.outerHTML = `<button class="btn-small-accent" onclick="openShareSessionModal('${safeSid}', null)" title="Generate a public link — anyone with it can view this session">🔗 Share</button>
+                        <button class="btn-small-accent" onclick="runAccountabilityForSession('${safeSid}')" title="Cross-reference this session against chest deposits">✓ Accountability</button>`;
                 }
             }
         }
@@ -11475,12 +11491,22 @@ function populateAccountabilityDropdowns() {
 
             const savedNames = typeof getSavedSessionNames === 'function' ? getSavedSessionNames() : {};
             const justUploaded = window._justUploadedSessionId;
-            const recentUpload = window._justUploadedAt && (Date.now() - window._justUploadedAt < 3 * 60000); // highlight for 3 min
+            const recentUpload = window._justUploadedAt && (Date.now() - window._justUploadedAt < 3 * 60000);
+
+            // Uploaded sessions use session_id = "<userId>_upload_<uploadMs>". The events they
+            // contain carry their original (in-game) timestamps, so grouping/labeling by
+            // MIN(event.timestamp) showed things like "7 days ago" for a file uploaded 2 min
+            // ago. Detect the upload pattern and use the upload timestamp for grouping + label.
+            const parseUploadTs = (sid) => {
+                if (!sid || typeof sid !== 'string') return 0;
+                const m = sid.match(/_upload_(\d{10,})$/);
+                return m ? parseInt(m[1], 10) : 0;
+            };
+            const recentUploadWindow = 24 * 60 * 60 * 1000; // 24h — survives a browser refresh
 
             let opts = '<option value="">-- Select session --</option>';
             if (liveLootEvents.length > 0) opts += `<option value="__live__">🔴 LIVE — ${liveLootEvents.length} events</option>`;
 
-            // Build separate groups: newly uploaded (top), live, today, yesterday, older + duplicates at the end.
             const now = Date.now();
             const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0);
             const todayMs = todayStart.getTime();
@@ -11492,26 +11518,46 @@ function populateAccountabilityDropdowns() {
                 const fp = `${Math.floor((s.started_at || 0) / 60000)}_${s.event_count}_${s.player_count}_${Math.round(s.total_weight || 0)}`;
                 const isFirstOfFingerprint = fingerprintSeen.get(fp) === s.session_id;
                 const isDup = !isFirstOfFingerprint;
+                const uploadTs = parseUploadTs(s.session_id);
+                s._uploadTs = uploadTs;
                 const isNewlyUploaded = s.session_id === justUploaded && recentUpload;
-                if (isNewlyUploaded) { groupJust.push(s); continue; }
+                const isRecentUpload = uploadTs > 0 && (now - uploadTs < recentUploadWindow);
+                if (isNewlyUploaded || isRecentUpload) { groupJust.push(s); continue; }
                 if (isDup) { groupDups.push(s); continue; }
-                const ts = s.started_at || 0;
+                // For uploaded sessions older than 24h, group by upload time (not event time)
+                // so "Yesterday" means "uploaded yesterday" — the dropdown is the user's session
+                // history, not an in-game combat timeline.
+                const ts = uploadTs > 0 ? uploadTs : (s.started_at || 0);
                 if (ts >= todayMs) groupToday.push(s);
                 else if (ts >= yesterdayMs) groupYesterday.push(s);
                 else if (ts >= weekMs) groupWeek.push(s);
                 else groupOlder.push(s);
             }
 
-            const renderOpt = (s, extraPrefix = '') => {
+            const renderOpt = (s) => {
                 const customName = savedNames[s.session_id];
-                const rel = timeAgo(new Date(s.started_at).toISOString());
-                const label = customName ? `"${customName}"` : rel;
-                return `<option value="${esc(s.session_id)}">${extraPrefix}${esc(label)} — ${s.event_count} events · ${s.player_count} players</option>`;
+                // <option> content is plain text — use _computeTimeAgo(), NOT timeAgo()
+                // (which wraps in a <span class="time-ago"> for live-updating bodies and would
+                // show as literal "<span...>" text inside a dropdown).
+                let label;
+                if (customName) {
+                    label = `"${customName}"`;
+                } else if (s._uploadTs > 0) {
+                    const uploadedRel = _computeTimeAgo(new Date(s._uploadTs).toISOString());
+                    const eventRel = _computeTimeAgo(new Date(s.started_at).toISOString());
+                    const showEventTime = Math.abs(s._uploadTs - s.started_at) > 60 * 60 * 1000;
+                    label = showEventTime
+                        ? `📤 Uploaded ${uploadedRel} · events from ${eventRel}`
+                        : `📤 Uploaded ${uploadedRel}`;
+                } else {
+                    label = _computeTimeAgo(new Date(s.started_at).toISOString());
+                }
+                return `<option value="${esc(s.session_id)}">${esc(label)} — ${s.event_count} events · ${s.player_count} players</option>`;
             };
 
             if (groupJust.length > 0) {
-                opts += `<optgroup label="🆕 Just uploaded">`;
-                groupJust.forEach(s => opts += renderOpt(s, '🆕 '));
+                opts += `<optgroup label="🆕 Recently uploaded">`;
+                groupJust.forEach(s => opts += renderOpt(s));
                 opts += `</optgroup>`;
             }
             if (groupToday.length > 0) {
@@ -11536,7 +11582,7 @@ function populateAccountabilityDropdowns() {
             }
             if (groupDups.length > 0) {
                 opts += `<optgroup label="⚠ Possible duplicates (${groupDups.length})">`;
-                groupDups.forEach(s => opts += renderOpt(s, '⚠ '));
+                groupDups.forEach(s => opts += renderOpt(s));
                 opts += `</optgroup>`;
             }
 
@@ -11587,7 +11633,8 @@ function populateAccountabilityDropdowns() {
             let timeStr = '';
             if (capturedMs > 0) {
                 const iso = new Date(capturedMs).toISOString();
-                const rel = timeAgo(iso);
+                // Plain-text variant for <option> content — timeAgo() returns an HTML <span>.
+                const rel = _computeTimeAgo(iso);
                 const abs = new Date(capturedMs).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
                 timeStr = ` · ${rel} (${abs})`;
             } else {
@@ -11627,7 +11674,8 @@ function populateAccountabilityDropdowns() {
         } else {
             chestLogSel.innerHTML = batches.map((b, i) => {
                 const capturedMs = typeof b.capturedAt === 'number' ? b.capturedAt : (b.capturedAt ? new Date(b.capturedAt).getTime() : 0);
-                const rel = capturedMs > 0 ? timeAgo(new Date(capturedMs).toISOString()) : 'unknown';
+                // Plain-text variant for <option> content — timeAgo() returns an HTML <span>.
+                const rel = capturedMs > 0 ? _computeTimeAgo(new Date(capturedMs).toISOString()) : 'unknown';
                 const abs = capturedMs > 0 ? new Date(capturedMs).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
                 const action = b.action || 'unknown';
                 const icon = action === 'deposit' ? '📥' : action === 'withdraw' ? '📤' : '❔';
@@ -12093,17 +12141,17 @@ async function runAccountabilityCheck() {
 
     // Pass 2 — attribute each pickup to "survived" or "lost on death"
     const lostByDeath = {};  // { name: { itemId: qty } } — items the player lost by dying
-    const evsByPlayerItem = {};  // { name: { itemId: [{ts, guild}] } } — for hover tooltip
+    const evsByPlayerItem = {};  // { name: { itemId: [{ts, location}] } } — for missing-item tooltip
     for (const ev of lootEvents) {
         if (ev.item_id === '__DEATH__') continue;
         const name = ev.looted_by_name || 'Unknown';
         const evTs = +new Date(ev.timestamp) || 0;
         if (!lootedByPlayer[name]) lootedByPlayer[name] = { guild: ev.looted_by_guild || '', alliance: ev.looted_by_alliance || '', items: {} };
         lootedByPlayer[name].items[ev.item_id] = (lootedByPlayer[name].items[ev.item_id] || 0) + (ev.quantity || 1);
-        // Collect per-event timestamps for missing-item tooltip
+        // Collect per-event timestamp + zone for missing-item tooltip (zone from Go client v1.3.0+)
         if (!evsByPlayerItem[name]) evsByPlayerItem[name] = {};
         if (!evsByPlayerItem[name][ev.item_id]) evsByPlayerItem[name][ev.item_id] = [];
-        if (evTs > 0) evsByPlayerItem[name][ev.item_id].push(evTs);
+        if (evTs > 0) evsByPlayerItem[name][ev.item_id].push({ ts: evTs, location: ev.location || '' });
         // If this player died at some point AFTER picking this up, it's lost.
         const deaths = deathTimesByPlayer[name];
         if (deaths && evTs > 0 && deaths.some(dTs => dTs > evTs)) {
@@ -12464,12 +12512,17 @@ async function runAccountabilityCheck() {
             const verifiedTitle = it.verified
                 ? `✓ Verified: chest log shows ${p.name} deposited ${it.verifiedQty} of this item${it.fullyVerified ? '' : ` (covers ${it.verifiedQty}/${it.looted} of pickup)`}`
                 : '';
-            // Missing-item hover tooltip: show who picked it up + when
+            // Missing-item hover tooltip: who picked it up, when, and where (zone from Go client v1.3.0+)
             const missingTooltipHtml = (rowClass === 'll-item-missing' && it.pickupEvs && it.pickupEvs.length > 0)
                 ? (() => {
-                    const times = it.pickupEvs.slice(0, 4).map(ts => new Date(ts).toLocaleTimeString());
+                    const evs = it.pickupEvs.slice(0, 4);
                     const guildPart = p.guild ? ` [${esc(p.guild)}]` : '';
-                    return `<span class="ll-missing-tooltip"><strong>Picked up by:</strong> ${esc(p.name)}${guildPart}<br>${times.map(t => `<span style="color:var(--text-muted)">At: ${esc(t)}</span>`).join('<br>')}</span>`;
+                    const lines = evs.map(e => {
+                        const t = esc(new Date(e.ts).toLocaleTimeString());
+                        const loc = e.location ? ` · <span style="color:var(--accent);font-size:0.68rem;">📍 ${esc(e.location)}</span>` : '';
+                        return `<span style="color:var(--text-muted)">At: ${t}${loc}</span>`;
+                    });
+                    return `<span class="ll-missing-tooltip"><strong>Picked up by:</strong> ${esc(p.name)}${guildPart}<br>${lines.join('<br>')}</span>`;
                 })()
                 : '';
             return `<div class="ll-item-row ${rowClass} ${verifiedClass}${missingTooltipHtml ? ' ll-has-tooltip' : ''}">
