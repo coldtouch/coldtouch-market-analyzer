@@ -2,6 +2,21 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-04-24 — SQLITE_BUSY stability overhaul (Tiers 1+2+3+5)
+
+Root-cause fix for the recurring 15-min silent-wedge outages on April 22 + 23. `busy_timeout=30000` alone was insufficient because the `uncaughtException` handler was swallowing `SQLITE_BUSY` from async `stmt.run()` callbacks, leaving `BEGIN TRANSACTION` open on the connection, unfinalized prepared statements, and a cascade of queued writes behind a corrupted state. Memory grew to 11.1 GB RSS and GC stalls froze the event loop (ports stayed bound but HTTP never responded).
+
+Four tiers of fixes landed together:
+
+- **Tier 1 — fatal-error handler:** `uncaughtException` / `unhandledRejection` now detect SQLite state-corrupting errors (`SQLITE_BUSY`, `SQLITE_LOCKED`, `SQLITE_CORRUPT`, `SQLITE_IOERR`, `SQLITE_MISUSE`) and `process.exit(1)` for a clean systemd restart (< 5 s). For unrelated bugs (TypeError, etc.) the old flag-reset recovery behavior stays. Handler now also resets `analyticsRunning` and `dbBusy` (previously only `statsRunning` + `scanInProgress`).
+- **Tier 2 — safe batch writes:** every one of the seven batch-write sites (NATS flush, hourly snapshot, spreadstats, analytics bulk, analytics EMA, compaction tier 1→2 and tier 2→3, Charts-API backfill) now uses per-step error callbacks + a `batchErr` accumulator + explicit `ROLLBACK` on any error or `COMMIT` failure. No more orphan transactions, no more unfinalized prepared statements.
+- **Tier 3 — smaller batches:** `BATCH` in `recordSnapshots` 5000 → 500, `WRITE_BATCH` in `computeSpreadStats` 500 → 100. Shorter WAL lock windows (target: 10-50 ms per transaction vs. 500-2000 ms before) so concurrent connections don't pile up waiting.
+- **Tier 5 — RSS watchdog:** memory log cadence 10 min → 1 min; if RSS crosses 8 GB the process exits cleanly so systemd starts a fresh heap instead of inheriting a pathologically-bloated one. The 2026-04-23 process hit 11.1 GB before SIGTERM, within ~100 MB of OOM/SIGKILL.
+
+**Tier 4** (single-writer JS queue to eliminate cross-connection SQLITE_BUSY entirely) intentionally deferred — higher risk, 100+ line refactor. Revisit if tiers 1-3+5 don't fully stabilize.
+
+---
+
 ### 2026-04-23 — Accountability dropdown fixes + Share button on uploads + sw.js fix
 
 - **Loot Logger accountability dropdowns — HTML artifact fix.** The session / capture / chest-log dropdowns were showing literal `<span class="time-ago" data-ts="...">5m ago</span>` text inside each `<option>`. Root cause: `timeAgo()` returns an HTML `<span>` for live-updating bodies, but `<option>` content is plain text and was being passed through `esc()`. Switched all three dropdowns to `_computeTimeAgo()` (the plain-text variant).

@@ -4635,13 +4635,20 @@ function recordSnapshots(allPrices) {
   if (dbBusy) { console.log('[Snapshots] DB busy, skipping'); return; }
   const now = Date.now();
   const hourStart = Math.floor(now / 3600000) * 3600000;
-  const BATCH = 5000;
+  // Tier 3 fix (2026-04-24): 5000 → 500. 5000-row transactions held the WAL
+  // write lock for 500-2000 ms each, starving the NATS 30s-flush and triggering
+  // SQLITE_BUSY cascades. 500 rows committed in ~50-100 ms lets the NATS flush
+  // slot in between.
+  const BATCH = 500;
   let i = 0, count = 0;
 
   function writeBatch() {
     const end = Math.min(i + BATCH, allPrices.length);
+    // Tier 2 fix (2026-04-24): per-step error callbacks + explicit ROLLBACK on
+    // any failure (see NATS flushNatsBuffer for the same pattern).
     db.serialize(() => {
-      db.run('BEGIN TRANSACTION');
+      let batchErr = null;
+      db.run('BEGIN TRANSACTION', (e) => { if (e) batchErr = e; });
       const stmt = db.prepare(`INSERT INTO price_averages (item_id, quality, city, avg_sell, avg_buy, min_sell, max_buy, sample_count, period_type, period_start)
         VALUES (?, ?, ?, ?, ?, ?, ?, 1, 'hourly', ?)
         ON CONFLICT(item_id, quality, city, period_type, period_start) DO UPDATE SET
@@ -4649,23 +4656,35 @@ function recordSnapshots(allPrices) {
           avg_buy = CASE WHEN excluded.avg_buy > 0 THEN excluded.avg_buy ELSE avg_buy END,
           min_sell = CASE WHEN excluded.min_sell > 0 AND (min_sell = 0 OR excluded.min_sell < min_sell) THEN excluded.min_sell ELSE min_sell END,
           max_buy = CASE WHEN excluded.max_buy > max_buy THEN excluded.max_buy ELSE max_buy END,
-          sample_count = sample_count + 1`);
+          sample_count = sample_count + 1`, (e) => { if (e && !batchErr) batchErr = e; });
       for (; i < end; i++) {
         const entry = allPrices[i];
         if (!entry.item_id || !entry.city) continue;
         const sell = entry.sell_price_min || 0;
         const buy = entry.buy_price_max || 0;
         if (sell <= 0 && buy <= 0) continue;
-        stmt.run(entry.item_id, entry.quality || 1, entry.city, sell, buy, sell, buy, hourStart);
+        stmt.run(entry.item_id, entry.quality || 1, entry.city, sell, buy, sell, buy, hourStart, (err) => { if (err && !batchErr) batchErr = err; });
         count++;
       }
-      stmt.finalize();
-      db.run('COMMIT', () => {
-        if (i < allPrices.length) {
-          setTimeout(writeBatch, 10);
-        } else {
-          console.log(`[Snapshots] Recorded ${count} prices into price_averages (hourly)`);
+      stmt.finalize((e) => {
+        if (e && !batchErr) batchErr = e;
+        if (batchErr) {
+          console.error('[Snapshots] Batch failed, rolling back:', batchErr.message || batchErr);
+          db.run('ROLLBACK', () => {});
+          return;
         }
+        db.run('COMMIT', (commitErr) => {
+          if (commitErr) {
+            console.error('[Snapshots] COMMIT failed, rolling back:', commitErr.message);
+            db.run('ROLLBACK', () => {});
+            return;
+          }
+          if (i < allPrices.length) {
+            setTimeout(writeBatch, 10);
+          } else {
+            console.log(`[Snapshots] Recorded ${count} prices into price_averages (hourly)`);
+          }
+        });
       });
     });
   }
@@ -4739,19 +4758,35 @@ function computeSpreadStats() {
       const itemKeys = Object.keys(itemMap);
       let processed = 0;
       let statsWritten = 0;
-      const WRITE_BATCH = 500;
+      // Tier 3 fix (2026-04-24): 500 → 100. Shorter WAL lock windows so
+      // concurrent NATS-flush / readDb queries don't hit SQLITE_BUSY.
+      const WRITE_BATCH = 100;
       let writeBuf = [];
 
       function flushWrites() {
         if (writeBuf.length === 0) return;
         const batch = writeBuf.splice(0);
-        // Use statsDb so these 500-row transactions don't queue behind main db operations
+        // Use statsDb so these transactions don't queue behind main db operations.
+        // Tier 2 fix (2026-04-24): per-step error callbacks + ROLLBACK on failure.
         statsDb.serialize(() => {
-          statsDb.run('BEGIN TRANSACTION');
-          const stmt = statsDb.prepare(`INSERT OR REPLACE INTO spread_stats (item_id, quality, buy_city, sell_city, avg_spread, median_spread, consistency_pct, sample_count, window_days, confidence_score, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
-          for (const r of batch) stmt.run(...r);
-          stmt.finalize();
-          statsDb.run('COMMIT');
+          let batchErr = null;
+          statsDb.run('BEGIN TRANSACTION', (e) => { if (e) batchErr = e; });
+          const stmt = statsDb.prepare(`INSERT OR REPLACE INTO spread_stats (item_id, quality, buy_city, sell_city, avg_spread, median_spread, consistency_pct, sample_count, window_days, confidence_score, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, (e) => { if (e && !batchErr) batchErr = e; });
+          for (const r of batch) stmt.run(...r, (err) => { if (err && !batchErr) batchErr = err; });
+          stmt.finalize((e) => {
+            if (e && !batchErr) batchErr = e;
+            if (batchErr) {
+              console.error('[SpreadStats] Batch failed, rolling back:', batchErr.message || batchErr);
+              statsDb.run('ROLLBACK', () => {});
+              return;
+            }
+            statsDb.run('COMMIT', (commitErr) => {
+              if (commitErr) {
+                console.error('[SpreadStats] COMMIT failed, rolling back:', commitErr.message);
+                statsDb.run('ROLLBACK', () => {});
+              }
+            });
+          });
         });
         statsWritten += batch.length;
       }
@@ -4916,18 +4951,32 @@ function compactOldData(rawRetentionDays) {
       if (!rows || rows.length === 0) {
         console.log('[Compaction] No hourly rows to migrate');
       } else {
+        // Tier 2 fix (2026-04-24): per-step error callbacks + ROLLBACK on failure.
         db.serialize(() => {
-          db.run('BEGIN TRANSACTION');
-          const stmt = db.prepare(`INSERT OR IGNORE INTO price_hourly (item_id, city, quality, hour, open_price, high_price, low_price, close_price, avg_price, volume) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+          let batchErr = null;
+          db.run('BEGIN TRANSACTION', (e) => { if (e) batchErr = e; });
+          const stmt = db.prepare(`INSERT OR IGNORE INTO price_hourly (item_id, city, quality, hour, open_price, high_price, low_price, close_price, avg_price, volume) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, (e) => { if (e && !batchErr) batchErr = e; });
           for (const r of rows) {
-            stmt.run(r.item_id, r.city, r.quality, r.hour, r.open_price, r.high_price, r.low_price, r.close_price, r.avg_price, r.volume);
+            stmt.run(r.item_id, r.city, r.quality, r.hour, r.open_price, r.high_price, r.low_price, r.close_price, r.avg_price, r.volume, (err) => { if (err && !batchErr) batchErr = err; });
           }
-          stmt.finalize();
-          db.run('COMMIT', () => {
-            db.run(`DELETE FROM price_averages WHERE period_type = 'hourly' AND period_start < ?`, [rawCutoff], function(err2) {
-              const deleted = this.changes || 0;
-              if (!err2) console.log(`[Compaction] Tier1→2: migrated ${rows.length} rows to price_hourly, deleted ${deleted} raw rows`);
-              scheduleVacuumIfNeeded(deleted);
+          stmt.finalize((e) => {
+            if (e && !batchErr) batchErr = e;
+            if (batchErr) {
+              console.error('[Compaction] Tier1→2 batch failed, rolling back:', batchErr.message || batchErr);
+              db.run('ROLLBACK', () => {});
+              return;
+            }
+            db.run('COMMIT', (commitErr) => {
+              if (commitErr) {
+                console.error('[Compaction] Tier1→2 COMMIT failed, rolling back:', commitErr.message);
+                db.run('ROLLBACK', () => {});
+                return;
+              }
+              db.run(`DELETE FROM price_averages WHERE period_type = 'hourly' AND period_start < ?`, [rawCutoff], function(err2) {
+                const deleted = this.changes || 0;
+                if (!err2) console.log(`[Compaction] Tier1→2: migrated ${rows.length} rows to price_hourly, deleted ${deleted} raw rows`);
+                scheduleVacuumIfNeeded(deleted);
+              });
             });
           });
         });
@@ -4953,18 +5002,32 @@ function compactOldData(rawRetentionDays) {
           if (errH) { console.error('[Compaction] Tier2→3 error:', errH.message); return; }
           if (!hrows || hrows.length === 0) { console.log('[Compaction] No price_hourly rows to roll into daily'); return; }
 
+          // Tier 2 fix (2026-04-24): per-step error callbacks + ROLLBACK on failure.
           db.serialize(() => {
-            db.run('BEGIN TRANSACTION');
-            const stmt2 = db.prepare(`INSERT OR REPLACE INTO price_averages (item_id, quality, city, avg_sell, avg_buy, min_sell, max_buy, sample_count, period_type, period_start) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'daily', ?)`);
+            let batchErr = null;
+            db.run('BEGIN TRANSACTION', (e) => { if (e) batchErr = e; });
+            const stmt2 = db.prepare(`INSERT OR REPLACE INTO price_averages (item_id, quality, city, avg_sell, avg_buy, min_sell, max_buy, sample_count, period_type, period_start) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'daily', ?)`, (e) => { if (e && !batchErr) batchErr = e; });
             for (const r of hrows) {
-              stmt2.run(r.item_id, r.quality, r.city, Math.round(r.avg_sell), Math.round(r.avg_buy), r.min_sell || 0, r.max_buy || 0, r.cnt, r.day_start);
+              stmt2.run(r.item_id, r.quality, r.city, Math.round(r.avg_sell), Math.round(r.avg_buy), r.min_sell || 0, r.max_buy || 0, r.cnt, r.day_start, (err) => { if (err && !batchErr) batchErr = err; });
             }
-            stmt2.finalize();
-            db.run('COMMIT', () => {
-              db.run(`DELETE FROM price_hourly WHERE hour < ?`, [hourlyCutoffStr], function(err3) {
-                const deletedH = this.changes || 0;
-                if (!err3) console.log(`[Compaction] Tier2→3: compacted ${hrows.length} daily rows, deleted ${deletedH} price_hourly rows`);
-                scheduleVacuumIfNeeded(deletedH);
+            stmt2.finalize((e) => {
+              if (e && !batchErr) batchErr = e;
+              if (batchErr) {
+                console.error('[Compaction] Tier2→3 batch failed, rolling back:', batchErr.message || batchErr);
+                db.run('ROLLBACK', () => {});
+                return;
+              }
+              db.run('COMMIT', (commitErr) => {
+                if (commitErr) {
+                  console.error('[Compaction] Tier2→3 COMMIT failed, rolling back:', commitErr.message);
+                  db.run('ROLLBACK', () => {});
+                  return;
+                }
+                db.run(`DELETE FROM price_hourly WHERE hour < ?`, [hourlyCutoffStr], function(err3) {
+                  const deletedH = this.changes || 0;
+                  if (!err3) console.log(`[Compaction] Tier2→3: compacted ${hrows.length} daily rows, deleted ${deletedH} price_hourly rows`);
+                  scheduleVacuumIfNeeded(deletedH);
+                });
               });
             });
           });
@@ -5147,15 +5210,31 @@ function computeAnalytics() {
             }
           }
 
-          // Flush bulk results in transaction
+          // Flush bulk results in transaction.
+          // Tier 2 fix (2026-04-24): per-step error callbacks + ROLLBACK on failure.
           function flushBulk(results, cb) {
             if (results.length === 0) return cb();
             statsDb.serialize(() => {
-              statsDb.run('BEGIN TRANSACTION');
-              const stmt = statsDb.prepare(`INSERT OR REPLACE INTO price_analytics (item_id, city, quality, metric, value, computed_at) VALUES (?, ?, ?, ?, ?, ?)`);
-              for (const row of results) stmt.run(...row);
-              stmt.finalize();
-              statsDb.run('COMMIT', cb);
+              let batchErr = null;
+              statsDb.run('BEGIN TRANSACTION', (e) => { if (e) batchErr = e; });
+              const stmt = statsDb.prepare(`INSERT OR REPLACE INTO price_analytics (item_id, city, quality, metric, value, computed_at) VALUES (?, ?, ?, ?, ?, ?)`, (e) => { if (e && !batchErr) batchErr = e; });
+              for (const row of results) stmt.run(...row, (err) => { if (err && !batchErr) batchErr = err; });
+              stmt.finalize((e) => {
+                if (e && !batchErr) batchErr = e;
+                if (batchErr) {
+                  console.error('[Analytics] Bulk flush failed, rolling back:', batchErr.message || batchErr);
+                  statsDb.run('ROLLBACK', () => cb(batchErr));
+                  return;
+                }
+                statsDb.run('COMMIT', (commitErr) => {
+                  if (commitErr) {
+                    console.error('[Analytics] Bulk COMMIT failed, rolling back:', commitErr.message);
+                    statsDb.run('ROLLBACK', () => cb(commitErr));
+                    return;
+                  }
+                  cb();
+                });
+              });
             });
           }
 
@@ -5220,21 +5299,33 @@ function computeAnalytics() {
                   finalize('ema-empty');
                   return;
                 }
-                // Single bulk flush
+                // Single bulk flush.
+                // Tier 2 fix (2026-04-24): per-step error callbacks + ROLLBACK on failure.
                 statsDb.serialize(() => {
-                  statsDb.run('BEGIN TRANSACTION');
-                  const stmt = statsDb.prepare(`INSERT OR REPLACE INTO price_analytics (item_id, city, quality, metric, value, computed_at) VALUES (?, ?, ?, ?, ?, ?)`);
-                  for (const row of emaResults) stmt.run(...row);
-                  stmt.finalize();
-                  statsDb.run('COMMIT', (errCommit) => {
+                  let batchErr = null;
+                  statsDb.run('BEGIN TRANSACTION', (e) => { if (e) batchErr = e; });
+                  const stmt = statsDb.prepare(`INSERT OR REPLACE INTO price_analytics (item_id, city, quality, metric, value, computed_at) VALUES (?, ?, ?, ?, ?, ?)`, (e) => { if (e && !batchErr) batchErr = e; });
+                  for (const row of emaResults) stmt.run(...row, (err) => { if (err && !batchErr) batchErr = err; });
+                  stmt.finalize((e) => {
+                    if (e && !batchErr) batchErr = e;
                     if (isStale()) return;
-                    if (errCommit) {
-                      console.error('[Analytics] EMA commit FAILED:', errCommit.message || errCommit);
-                      finalize('ema-commit-err');
+                    if (batchErr) {
+                      console.error('[Analytics] EMA batch FAILED, rolling back:', batchErr.message || batchErr);
+                      statsDb.run('ROLLBACK', () => {});
+                      finalize('ema-batch-err');
                       return;
                     }
-                    console.log(`[Analytics] EMA stream: ${rowsProcessed} rows processed, ${emaResults.length} combos written`);
-                    finalize('ok');
+                    statsDb.run('COMMIT', (errCommit) => {
+                      if (isStale()) return;
+                      if (errCommit) {
+                        console.error('[Analytics] EMA commit FAILED, rolling back:', errCommit.message || errCommit);
+                        statsDb.run('ROLLBACK', () => {});
+                        finalize('ema-commit-err');
+                        return;
+                      }
+                      console.log(`[Analytics] EMA stream: ${rowsProcessed} rows processed, ${emaResults.length} combos written`);
+                      finalize('ok');
+                    });
                   });
                 });
               }
@@ -5280,20 +5371,33 @@ async function backfillHistoricalData() {
   dbBusy = true;
   console.log(`[Backfill] Starting historical backfill for ${itemIds.length} items...`);
 
-  // Helper: promisified batch insert
+  // Helper: promisified batch insert.
+  // Tier 2 fix (2026-04-24): per-step error callbacks + ROLLBACK on failure.
   function batchInsert(rows, periodType) {
-    return new Promise((resolve, reject) => {
+    return new Promise((resolve) => {
       if (rows.length === 0) return resolve(0);
-      db.run('BEGIN TRANSACTION', (err) => {
-        if (err) return resolve(0);
-        const stmt = db.prepare(`INSERT OR IGNORE INTO price_averages (item_id, quality, city, avg_sell, avg_buy, min_sell, max_buy, sample_count, period_type, period_start) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+      let batchErr = null;
+      db.serialize(() => {
+        db.run('BEGIN TRANSACTION', (err) => { if (err) batchErr = err; });
+        const stmt = db.prepare(`INSERT OR IGNORE INTO price_averages (item_id, quality, city, avg_sell, avg_buy, min_sell, max_buy, sample_count, period_type, period_start) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, (e) => { if (e && !batchErr) batchErr = e; });
         for (const r of rows) {
           // Charts/History API returns transaction averages — use for both sell and buy
           const price = r.avg_sell;
-          stmt.run(r.item_id, r.quality, r.city, price, price, price, price, r.count, periodType, r.period_start);
+          stmt.run(r.item_id, r.quality, r.city, price, price, price, price, r.count, periodType, r.period_start, (err) => { if (err && !batchErr) batchErr = err; });
         }
-        stmt.finalize(() => {
-          db.run('COMMIT', (err2) => {
+        stmt.finalize((e) => {
+          if (e && !batchErr) batchErr = e;
+          if (batchErr) {
+            console.error('[Backfill] Batch failed, rolling back:', batchErr.message || batchErr);
+            db.run('ROLLBACK', () => resolve(0));
+            return;
+          }
+          db.run('COMMIT', (commitErr) => {
+            if (commitErr) {
+              console.error('[Backfill] COMMIT failed, rolling back:', commitErr.message);
+              db.run('ROLLBACK', () => resolve(0));
+              return;
+            }
             resolve(rows.length);
           });
         });
@@ -5396,8 +5500,14 @@ function flushNatsBuffer() {
   const now = Date.now();
   const hourStart = Math.floor(now / 3600000) * 3600000;
 
+  // Tier 2 fix (2026-04-24): every step has an error callback + we track the
+  // first error in `batchErr`. When finalize() fires, all prior async writes
+  // have completed (node-sqlite3 serializes per-connection), so we can decide
+  // to COMMIT or ROLLBACK based on `batchErr`. This prevents a half-applied
+  // transaction from leaving BEGIN open on the connection.
   db.serialize(() => {
-    db.run('BEGIN TRANSACTION');
+    let batchErr = null;
+    db.run('BEGIN TRANSACTION', (e) => { if (e) batchErr = e; });
     const stmt = db.prepare(`INSERT INTO price_averages (item_id, quality, city, avg_sell, avg_buy, min_sell, max_buy, sample_count, period_type, period_start)
       VALUES (?, ?, ?, ?, ?, ?, ?, 1, 'hourly', ?)
       ON CONFLICT(item_id, quality, city, period_type, period_start) DO UPDATE SET
@@ -5405,16 +5515,28 @@ function flushNatsBuffer() {
         avg_buy = CASE WHEN excluded.avg_buy > 0 THEN excluded.avg_buy ELSE avg_buy END,
         min_sell = CASE WHEN excluded.min_sell > 0 AND (min_sell = 0 OR excluded.min_sell < min_sell) THEN excluded.min_sell ELSE min_sell END,
         max_buy = CASE WHEN excluded.max_buy > max_buy THEN excluded.max_buy ELSE max_buy END,
-        sample_count = sample_count + 1`);
+        sample_count = sample_count + 1`, (e) => { if (e && !batchErr) batchErr = e; });
     for (const e of batch) {
       const sell = e.sell || 0;
       const buy = e.buy || 0;
       if (sell <= 0 && buy <= 0) continue;
-      stmt.run(e.item_id, e.quality, e.city, sell, buy, sell, buy, hourStart);
+      stmt.run(e.item_id, e.quality, e.city, sell, buy, sell, buy, hourStart, (err) => { if (err && !batchErr) batchErr = err; });
     }
-    stmt.finalize();
-    db.run('COMMIT', () => {
-      if (batch.length > 50) console.log('[NATS] Flushed ' + batch.length + ' prices into price_averages');
+    stmt.finalize((e) => {
+      if (e && !batchErr) batchErr = e;
+      if (batchErr) {
+        console.error('[NATS] Flush failed, rolling back:', batchErr.message || batchErr);
+        db.run('ROLLBACK', () => {});
+      } else {
+        db.run('COMMIT', (commitErr) => {
+          if (commitErr) {
+            console.error('[NATS] COMMIT failed, rolling back:', commitErr.message);
+            db.run('ROLLBACK', () => {});
+            return;
+          }
+          if (batch.length > 50) console.log('[NATS] Flushed ' + batch.length + ' prices into price_averages');
+        });
+      }
     });
   });
 }
@@ -5520,18 +5642,39 @@ let natsConnection = null;
 })();
 
 // === GLOBAL ERROR HANDLERS ===
-// Prevent uncaught errors from silently breaking scan/stats loops
-process.on('uncaughtException', (err) => {
-  console.error('[FATAL] Uncaught exception:', err.message, err.stack);
-  // Reset flags so loops can recover
+// Tier 1 fix (2026-04-24): SQLITE_BUSY from an async stmt.run() callback used to
+// surface here, get swallowed, and leave the connection with an open BEGIN
+// TRANSACTION + unfinalized prepared statement. Subsequent writes queued behind
+// the corrupted state, timed out, threw more uncaught exceptions — 15-min silent
+// wedge, 11 GB RSS bloat (observed 2026-04-22 + 2026-04-23). The only safe
+// recovery from SQLite-level state corruption is a fresh process, so we exit
+// cleanly on DB errors and let systemd restart us (< 5 s vs. 15 min wedge).
+//
+// For unrelated bugs (TypeError, etc.) we keep the old flag-reset behavior so
+// a generic regression doesn't take the site down — those are recoverable.
+const _isSqliteFatal = (err) => {
+  if (!err) return false;
+  const msg = (err.message || String(err)).toUpperCase();
+  return msg.includes('SQLITE_BUSY') || msg.includes('SQLITE_LOCKED') ||
+         msg.includes('SQLITE_CORRUPT') || msg.includes('SQLITE_IOERR') ||
+         msg.includes('SQLITE_MISUSE');
+};
+const _handleFatal = (kind, err) => {
+  const msg = err && (err.message || err.stack) || String(err);
+  console.error(`[FATAL] ${kind}:`, msg);
   scanInProgress = false;
   statsRunning = false;
-});
-process.on('unhandledRejection', (reason) => {
-  console.error('[FATAL] Unhandled rejection:', reason);
-  scanInProgress = false;
-  statsRunning = false;
-});
+  analyticsRunning = false;
+  dbBusy = false;
+  if (_isSqliteFatal(err)) {
+    console.error('[FATAL] SQLite state is corrupt — exiting for clean systemd restart');
+    // Best-effort NATS buffer flush before exit (30 s of in-memory prices otherwise lost).
+    try { flushNatsBuffer(); } catch {}
+    setTimeout(() => process.exit(1), 500); // brief grace for log flush
+  }
+};
+process.on('uncaughtException', (err) => _handleFatal('Uncaught exception', err));
+process.on('unhandledRejection', (reason) => _handleFatal('Unhandled rejection', reason));
 
 // === GRACEFUL SHUTDOWN ===
 function shutdown(signal) {
@@ -5550,11 +5693,22 @@ function shutdown(signal) {
 process.on('SIGTERM', () => shutdown('SIGTERM'));
 process.on('SIGINT', () => shutdown('SIGINT'));
 
-// Log memory usage periodically for diagnostics
+// Log memory usage + proactive watchdog for a clean rollover before systemd
+// has to SIGKILL us. The 2026-04-23 outage hit 11.1 GB RSS; Contabo VPS has
+// 11 GB total, so we were within ~100 MB of OOM and SIGKILL already. If RSS
+// crosses 8 GB we exit cleanly so systemd restarts us with a fresh heap
+// instead of inheriting a pathologically-bloated one.
+const RSS_EXIT_THRESHOLD_MB = 8192;
 setInterval(() => {
   const mem = process.memoryUsage();
-  console.log(`[Memory] RSS: ${Math.round(mem.rss/1024/1024)}MB Heap: ${Math.round(mem.heapUsed/1024/1024)}/${Math.round(mem.heapTotal/1024/1024)}MB External: ${Math.round(mem.external/1024/1024)}MB`);
-}, 10 * 60 * 1000);
+  const rssMb = Math.round(mem.rss / 1024 / 1024);
+  console.log(`[Memory] RSS: ${rssMb}MB Heap: ${Math.round(mem.heapUsed/1024/1024)}/${Math.round(mem.heapTotal/1024/1024)}MB External: ${Math.round(mem.external/1024/1024)}MB`);
+  if (rssMb > RSS_EXIT_THRESHOLD_MB) {
+    console.error(`[FATAL] RSS ${rssMb}MB > ${RSS_EXIT_THRESHOLD_MB}MB — exiting for clean systemd restart`);
+    try { flushNatsBuffer(); } catch {}
+    setTimeout(() => process.exit(1), 500);
+  }
+}, 60 * 1000); // was 10 min; 1 min for faster detection of runaway growth
 
 server.listen(443, () => console.log('SaaS Backend (Express + Discord + WSS + Market Cache) listening on 443!'));
 
