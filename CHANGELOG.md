@@ -2,6 +2,14 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-04-24 — Player card "Lost" stat
+
+Player cards now show a **Lost** stat alongside Items / Value / Weight when the player died. It's the total market value of items looted off their corpse (using live price reference). Rendered in red (`--loss-red`). Only appears when > 0. Tile carries a hover tooltip explaining that Lost is intentionally separate from Value (which counts pickups only) to avoid double-counting across the session total.
+
+Victim-only players now finally surface useful info: "Items 0 · Lost 1.2M" — previously their card had only Items 0 and no value indication.
+
+---
+
 ### 2026-04-24 — Player card "died with" — expansion + .txt upload fix
 
 Follow-up to the earlier player-card "died with" feature. Two issues surfaced when viewing an uploaded .txt file:

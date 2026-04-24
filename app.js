@@ -11303,6 +11303,17 @@ function _llRenderFiltered() {
         // and who looted the items. Reuses the same _llDiedWithByVictim map built
         // alongside _llDeaths in renderLootSessionEvents.
         const diedWith = _llDiedWithByVictim && _llDiedWithByVictim[name];
+        // Value of what they died with — shown as a separate "Lost" stat tile
+        // alongside Items/Value/Weight. Kept separate from `playerValue` (pickups
+        // only) so session totals don't double-count corpse drops that are
+        // already attributed to the looter's Value.
+        let lostValue = 0;
+        if (diedWith && diedWith.items.size > 0) {
+            for (const it of diedWith.items.values()) {
+                const pe = priceMap[it.itemId];
+                if (pe && pe.price > 0) lostValue += pe.price * it.qty;
+            }
+        }
         if (diedWith && diedWith.items.size > 0) {
             const diedItems = [...diedWith.items.values()].sort((a, b) => b.qty - a.qty);
             // Aggregate title text once — same tooltip on every died-with icon.
@@ -11513,6 +11524,10 @@ function _llRenderFiltered() {
                     ${playerValue > 0 ? `<div class="ll-player-stat">
                         <span class="ll-stat-label">Value</span>
                         <span class="ll-stat-value accent">${formatSilver(playerValue)}</span>
+                    </div>` : ''}
+                    ${lostValue > 0 ? `<div class="ll-player-stat" title="Total market value of items looted off this player's corpse. Not included in Value (which counts pickups only) to avoid double-counting across the session.">
+                        <span class="ll-stat-label">Lost</span>
+                        <span class="ll-stat-value ll-stat-lost">${formatSilver(lostValue)}</span>
                     </div>` : ''}
                     <div class="ll-player-stat">
                         <span class="ll-stat-label">Weight</span>

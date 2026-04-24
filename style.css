@@ -6787,6 +6787,12 @@ footer {
     text-align: right;
 }
 
+/* "Lost" stat value — total market value of items looted off this player's
+   corpse. Red to echo the died-with visual language. */
+.ll-stat-lost {
+    color: var(--loss-red) !important;
+}
+
 /* Item state dots (used in both normal and accountability views).
    Consistent color semantics:
    - green  = deposited (in the guild chest)
