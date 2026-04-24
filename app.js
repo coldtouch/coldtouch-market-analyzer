@@ -10309,6 +10309,68 @@ function buildDeathTimeline(events, byPlayer, priceMap, primaryGuild, primaryAll
             wasFriendly: !!wasVictimFriendly
         });
     }
+    // Fallback — many .txt uploads (older Go client builds, upstream
+    // ao-loot-logger) don't write __DEATH__ rows, so the explicit-death pass
+    // above produces zero deaths and the "died with" preview never appears.
+    // Evidence-based inference: a name that shows up as `looted_from_name`
+    // AND carries a guild (mobs/chests have no guild) is almost certainly a
+    // dead player. Synthesize a death entry using the earliest corpse-loot
+    // timestamp as the time-of-death proxy.
+    const explicitVictims = new Set(deaths.map(d => d.victim));
+    for (const [victim, corpseLoots] of lootByVictim.entries()) {
+        if (!victim || explicitVictims.has(victim)) continue;
+        // Require guild evidence — skips mobs and world drops.
+        const hasGuild = corpseLoots.some(ev => ev.looted_from_guild);
+        // ALSO require the name to appear as an actual player elsewhere in the
+        // session (they picked up something themselves at some point) OR there
+        // to be at least 2 distinct items looted off them (a mob rarely drops
+        // 2+ different items of equipment). This filters out name-collisions
+        // with world chests / loot bags / mobs that happen to have a "guild".
+        const isKnownPlayer = !!byPlayer[victim];
+        const distinctItems = new Set(corpseLoots.map(ev => ev.item_id)).size;
+        if (!hasGuild || (!isKnownPlayer && distinctItems < 2)) continue;
+
+        corpseLoots.sort((a, b) => (+new Date(a.timestamp) || 0) - (+new Date(b.timestamp) || 0));
+        const firstEv = corpseLoots[0];
+        const deathTs = +new Date(firstEv.timestamp) || 0;
+
+        // Aggregate looter summary (same shape as the explicit-death branch).
+        const byLooter = {};
+        let estimatedValue = 0;
+        for (const li of corpseLoots) {
+            const lname = li.looted_by_name || 'Unknown';
+            if (!byLooter[lname]) byLooter[lname] = { name: lname, items: 0, silver: 0, guild: li.looted_by_guild || '' };
+            byLooter[lname].items += (li.quantity || 1);
+            const p = priceMap[li.item_id];
+            if (p && p.price > 0) {
+                const value = p.price * (li.quantity || 1);
+                byLooter[lname].silver += value;
+                estimatedValue += value;
+            }
+        }
+        const victimData = byPlayer[victim];
+        const victimGuild = victimData?.guild || firstEv.looted_from_guild || '';
+        const victimAlliance = victimData?.alliance || firstEv.looted_from_alliance || '';
+        const wasVictimFriendly = primaryAlliance && victimAlliance
+            ? victimAlliance === primaryAlliance
+            : (primaryGuild && victimGuild === primaryGuild);
+        deaths.push({
+            victim,
+            victimGuild,
+            victimAlliance,
+            killer: '',          // unknown without __DEATH__ row
+            killerGuild: '',
+            timestamp: deathTs,
+            location: firstEv.location || '',
+            lootedItems: corpseLoots.slice(),
+            equipmentAtDeath: null,
+            estimatedValue,
+            lootedBy: Object.values(byLooter).sort((a, b) => b.silver - a.silver || b.items - a.items),
+            wasFriendly: !!wasVictimFriendly,
+            inferred: true,       // flag so UI can distinguish if it ever cares
+        });
+    }
+
     // Sort newest-first — most recent death shows at top
     deaths.sort((a, b) => b.timestamp - a.timestamp);
     return deaths;
@@ -10779,6 +10841,7 @@ async function renderLootSessionEvents(events, targetEl, depositedMap) {
             location: d.location || '',
             killer: d.killer || '',
             lootedBy: d.lootedBy || [],
+            inferred: !!d.inferred,
         });
         for (const li of d.lootedItems || []) {
             if (!li.item_id || li.item_id === '__DEATH__') continue;
@@ -10789,6 +10852,38 @@ async function renderLootSessionEvents(events, targetEl, depositedMap) {
             if (existing) existing.qty += qty;
             else _llDiedWithByVictim[d.victim].items.set(key, { itemId: li.item_id, quality: q, qty });
         }
+    }
+    // Mark `data.died = true` for INFERRED victims too (the explicit-death pass
+    // at ~line 10715 only caught __DEATH__-row victims). Without this, the 💀
+    // icon in the player header wouldn't appear for players whose death was
+    // reconstructed from corpse-loot evidence in older .txt uploads.
+    //
+    // Also: ensure victims who never picked up anything themselves (they only
+    // show up as `looted_from_name` in the events) get a player card. Without
+    // this they'd have no card to show the died-with preview on — the whole
+    // point of the feature. Create synthetic byPlayer entries for them,
+    // sourcing guild/alliance from the first death record.
+    for (const victim of Object.keys(_llDiedWithByVictim)) {
+        if (!byPlayer[victim]) {
+            const firstDeath = _llDeaths.find(d => d.victim === victim);
+            byPlayer[victim] = {
+                guild: firstDeath?.victimGuild || '',
+                alliance: firstDeath?.victimAlliance || '',
+                items: [],        // they never looted anything themselves
+                totalQty: 0,
+                totalWeight: 0,
+                totalValue: 0,
+                _victimOnly: true, // flag in case future code wants to treat these differently
+            };
+            // Victim-only players aren't "enemies" in the ZvZ sense — they're
+            // just someone who showed up in a death. Classify by their own
+            // alliance/guild the same way regular players are classified.
+            const isFriendly = primaryAlliance && byPlayer[victim].alliance
+                ? byPlayer[victim].alliance === primaryAlliance
+                : (!primaryGuild || byPlayer[victim].guild === primaryGuild || !byPlayer[victim].guild);
+            byPlayer[victim].isEnemy = !isFriendly;
+        }
+        byPlayer[victim].died = true;
     }
     // G6: fetch per-player trends across all of this user's saved sessions
     // (fire-and-forget — if it's slow, we re-render when it arrives)
@@ -11319,6 +11414,56 @@ function _llRenderFiltered() {
             </div>`;
         }).join('');
 
+        // "Died with" rows inside the expanded card — same data as the preview
+        // strip, but as full item rows so users can see names / qty / value.
+        // Styled with the existing `ll-item-died` class (red left border + dim)
+        // and prefixed by a small section header so it reads as a separate block
+        // below the normal pickups.
+        let diedWithRowsHtml = '';
+        if (diedWith && diedWith.items.size > 0) {
+            const diedItems = [...diedWith.items.values()].sort((a, b) => {
+                // Sort by value desc, then qty desc — matches the visual weight of the preview strip
+                const pA = priceMap[a.itemId];
+                const pB = priceMap[b.itemId];
+                const vA = (pA && pA.price > 0 ? pA.price : 0) * a.qty;
+                const vB = (pB && pB.price > 0 ? pB.price : 0) * b.qty;
+                if (vB !== vA) return vB - vA;
+                return b.qty - a.qty;
+            });
+            const deathCount = diedWith.deaths.length;
+            const latest = diedWith.deaths.reduce((a, b) => (a.ts > b.ts ? a : b), diedWith.deaths[0]);
+            const whenStr = latest && latest.ts ? new Date(latest.ts).toLocaleTimeString() : 'unknown time';
+            const whereStr = latest && latest.location ? ` in ${latest.location}` : '';
+            const killerStr = latest && latest.killer ? ` — killed by ${latest.killer}` : '';
+            const inferredNote = latest && latest.inferred ? ' <span style="color:var(--text-muted); font-weight:400;" title="Death reconstructed from loot evidence — no __DEATH__ row in upload">(inferred)</span>' : '';
+            const countPrefix = deathCount > 1 ? `Died ${deathCount}× — last at ${whenStr}` : `Died at ${whenStr}`;
+            const headerTitle = `${countPrefix}${whereStr}${killerStr}`;
+            const rows = diedItems.map(it => {
+                const iName = getFriendlyName(it.itemId) || it.itemId;
+                const iconUrl = `https://render.albiononline.com/v1/item/${encodeURIComponent(it.itemId)}.png?quality=${it.quality}`;
+                const pe = priceMap[it.itemId];
+                const totalVal = pe && pe.price > 0 ? pe.price * it.qty : 0;
+                const iw = getItemWeight(it.itemId) * it.qty;
+                const titleAttr = `${iName}${it.quality > 1 ? ` q${it.quality}` : ''} × ${it.qty} — ${headerTitle}`;
+                return `<div class="ll-item-row ll-item-clickable ll-item-died" onclick="event.stopPropagation(); switchToBrowser('${esc(it.itemId)}')" title="${esc(titleAttr)}">
+                    <img src="${iconUrl}" class="ll-item-icon" loading="lazy" onerror="this.style.display='none'" alt="">
+                    <span class="ll-item-name">${esc(iName)}</span>
+                    <span class="ll-item-qty">&times;${it.qty}</span>
+                    <span class="ll-item-value">${totalVal > 0 ? formatSilver(totalVal) : '—'}</span>
+                    <span class="ll-item-weight">${iw > 0 ? iw.toFixed(1) + ' kg' : ''}</span>
+                    <span class="ll-item-status-dot ll-dot-died"></span>
+                </div>`;
+            }).join('');
+            diedWithRowsHtml = `
+                <div class="ll-died-with-section">
+                    <div class="ll-died-with-header" title="${esc(headerTitle)}">
+                        💀 Died with (${diedItems.length} item${diedItems.length !== 1 ? 's' : ''})${inferredNote}
+                        <span class="ll-died-with-subtitle">${esc(headerTitle)}</span>
+                    </div>
+                    ${rows}
+                </div>`;
+        }
+
         // Card class + role tag: enemy (red), friendly with known guild (green), unknown (grey)
         let cardClass = 'll-player-card';
         let roleTag;
@@ -11376,7 +11521,7 @@ function _llRenderFiltered() {
                 </div>
                 <span class="ll-player-chevron">&#x25BE;</span>
             </div>
-            <div class="ll-player-items">${itemsHtml}</div>
+            <div class="ll-player-items">${itemsHtml}${diedWithRowsHtml}</div>
         </div>`;
     }).join('');
 

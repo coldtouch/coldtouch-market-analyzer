@@ -2,6 +2,16 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-04-24 — Player card "died with" — expansion + .txt upload fix
+
+Follow-up to the earlier player-card "died with" feature. Two issues surfaced when viewing an uploaded .txt file:
+
+- **Older .txt uploads had no `__DEATH__` rows.** The ao-loot-logger upstream format doesn't emit a `__DEATH__` sentinel, and older builds of our Go client didn't either. `buildDeathTimeline` only processed explicit `__DEATH__` rows, so `_llDiedWithByVictim` was empty for those uploads and the died-with section never appeared. Added evidence-based fallback: any `looted_from_name` that carries a guild (mobs/chests don't) and has ≥2 distinct items looted OR is a known player elsewhere in the session gets a synthetic death entry (`inferred: true` flag). The timestamp is the earliest corpse-loot time; killer/equipment left blank. `(inferred)` badge shown in the card header so it's distinguishable from an explicit death.
+- **Victim-only players had no card at all.** If a player never looted anything themselves (they only appeared as `looted_from_name`), they weren't in `byPlayer` so no card was rendered — meaning their died-with section had nowhere to live. Added synthetic `byPlayer` entries for every victim in `_llDiedWithByVictim` with a `_victimOnly: true` flag, guild/alliance pulled from the first death record.
+- **Expanded card also shows died-with items.** Below the normal pickup rows, players who died get a `💀 Died with (N items)` section with full-width `.ll-item-row.ll-item-died` rows (name / qty / value / weight). Header carries the same death context as the preview-strip tooltip. CSS: new `.ll-died-with-section` + `.ll-died-with-header` + `.ll-died-with-subtitle`.
+
+---
+
 ### 2026-04-24 — Player card "died with" preview section
 
 Player cards in loot reports now surface what each player died with. After the normal pickup-icon strip, players who died during the session get a 💀 divider followed by the items looted off their corpse — rendered with reduced opacity (0.55), 55% grayscale filter, and a red border so they read as "lost". Hover shows the full death context: time, zone (from Go client v1.3.0+), killer, and who looted the items ("Died at 2:30:43 AM in Thetford Outskirts — killed by Gank — looted by Bob (2 items)").
