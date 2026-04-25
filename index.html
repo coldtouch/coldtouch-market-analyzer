@@ -2299,6 +2299,16 @@
                     <div id="changelog-wrapper" style="max-height: 500px; overflow-y: auto; position: relative;">
                     <div class="changelog-list">
                         <div class="changelog-entry">
+                            <div class="changelog-date">April 25, 2026</div>
+                            <div class="changelog-title">🧱 SQLITE_BUSY wedge: real fix (process.abort)</div>
+                            <ul>
+                                <li><strong>Yesterday's fix didn't actually exit.</strong> Tier 1 logged the FATAL but <code>setTimeout(() =&gt; process.exit(1), 500)</code> never fired — the event loop was wedged inside the native sqlite3 mutex, so the timer never ticked and <code>process.exit()</code>'s cleanup hooks hung on the same lock. Process stayed alive for 43 minutes with ports bound and zero log activity.</li>
+                                <li><strong>Switched to <code>process.abort()</code></strong> — synchronous SIGABRT, no event-loop tick required, no async cleanup. Systemd catches it and restarts in ~5 s. Same change in the RSS watchdog.</li>
+                                <li><strong>Skip <code>flushNatsBuffer()</code> in the SQLite path.</strong> It does <code>db.serialize(() =&gt; db.run('BEGIN TRANSACTION'))</code> on the locked connection — that was the second wedge step after the FATAL log fired. RSS-driven exit still flushes (DB likely healthy there).</li>
+                                <li><strong><code>_aborting</code> re-entrancy guard</strong> so a second SQLITE_BUSY landing while we're already aborting can't double-call abort.</li>
+                            </ul>
+                        </div>
+                        <div class="changelog-entry">
                             <div class="changelog-date">April 24, 2026</div>
                             <div class="changelog-title">💀 Player card "died with" preview</div>
                             <ul>

@@ -5650,6 +5650,12 @@ let natsConnection = null;
 // recovery from SQLite-level state corruption is a fresh process, so we exit
 // cleanly on DB errors and let systemd restart us (< 5 s vs. 15 min wedge).
 //
+// 2026-04-25 follow-up: `setTimeout(() => process.exit(1), 500)` did NOT exit
+// (43-min wedge). Two fixes: (a) `process.abort()` instead — synchronous SIGABRT,
+// no event-loop tick required, no async cleanup hooks. (b) skip `flushNatsBuffer()`
+// in the SQLite path: it does `db.serialize(() => db.run('BEGIN TRANSACTION'))` on
+// the locked connection, which is what wedged the loop in the first place.
+//
 // For unrelated bugs (TypeError, etc.) we keep the old flag-reset behavior so
 // a generic regression doesn't take the site down — those are recoverable.
 const _isSqliteFatal = (err) => {
@@ -5659,6 +5665,7 @@ const _isSqliteFatal = (err) => {
          msg.includes('SQLITE_CORRUPT') || msg.includes('SQLITE_IOERR') ||
          msg.includes('SQLITE_MISUSE');
 };
+let _aborting = false;
 const _handleFatal = (kind, err) => {
   const msg = err && (err.message || err.stack) || String(err);
   console.error(`[FATAL] ${kind}:`, msg);
@@ -5667,10 +5674,10 @@ const _handleFatal = (kind, err) => {
   analyticsRunning = false;
   dbBusy = false;
   if (_isSqliteFatal(err)) {
-    console.error('[FATAL] SQLite state is corrupt — exiting for clean systemd restart');
-    // Best-effort NATS buffer flush before exit (30 s of in-memory prices otherwise lost).
-    try { flushNatsBuffer(); } catch {}
-    setTimeout(() => process.exit(1), 500); // brief grace for log flush
+    if (_aborting) return; // a second SQLITE_BUSY can fire while we're aborting
+    _aborting = true;
+    console.error('[FATAL] SQLite state is corrupt — aborting for clean systemd restart');
+    process.abort();
   }
 };
 process.on('uncaughtException', (err) => _handleFatal('Uncaught exception', err));
@@ -5704,9 +5711,13 @@ setInterval(() => {
   const rssMb = Math.round(mem.rss / 1024 / 1024);
   console.log(`[Memory] RSS: ${rssMb}MB Heap: ${Math.round(mem.heapUsed/1024/1024)}/${Math.round(mem.heapTotal/1024/1024)}MB External: ${Math.round(mem.external/1024/1024)}MB`);
   if (rssMb > RSS_EXIT_THRESHOLD_MB) {
-    console.error(`[FATAL] RSS ${rssMb}MB > ${RSS_EXIT_THRESHOLD_MB}MB — exiting for clean systemd restart`);
+    if (_aborting) return;
+    _aborting = true;
+    console.error(`[FATAL] RSS ${rssMb}MB > ${RSS_EXIT_THRESHOLD_MB}MB — aborting for clean systemd restart`);
+    // RSS-driven exit: try a best-effort NATS flush — DB likely still healthy here
+    // (no SQLite error preceded this), so the flush won't re-wedge.
     try { flushNatsBuffer(); } catch {}
-    setTimeout(() => process.exit(1), 500);
+    process.abort();
   }
 }, 60 * 1000); // was 10 min; 1 min for faster detection of runaway growth
 

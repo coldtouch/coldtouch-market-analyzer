@@ -2,6 +2,20 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-04-25 — SQLITE_BUSY wedge: real fix this time (`process.abort()`)
+
+Yesterday's Tier 1 fix logged `[FATAL] SQLite state is corrupt — exiting for clean systemd restart` and called `setTimeout(() => process.exit(1), 500)`. Outage today proved that doesn't actually exit. PID stayed alive for 43 minutes after the FATAL with zero log activity, ports still bound, every HTTP request timing out. Diagnosis: when `SQLITE_BUSY` fires, the event loop is wedged inside the native sqlite3 mutex; `setTimeout` requires a loop tick to fire, and the cleanup hooks `process.exit()` runs also call back into native sqlite code that's blocked on the same lock. Both the timer and the exit hung.
+
+Two fixes:
+
+- **`process.abort()` instead of `process.exit(1)`.** `abort()` raises SIGABRT synchronously — no event-loop tick required, no async cleanup hooks. Systemd catches the SIGABRT exit and restarts within ~5 s. Same change applied to the RSS-watchdog path for consistency.
+- **Skip `flushNatsBuffer()` in the SQLite-fatal path.** That helper does `db.serialize(() => db.run('BEGIN TRANSACTION'))` on the locked connection — it was the second wedge step after the FATAL log. RSS-driven exit still flushes (DB likely healthy in that path).
+- **`_aborting` re-entrancy guard** so a second `SQLITE_BUSY` arriving while we're already aborting can't double-call `process.abort()`.
+
+Recovery for the live outage: SIGKILL on the wedged PID + `systemctl start albion-saas`. New process came up clean. The `[Analytics] 7d query FAILED: SQLITE_ERROR: integer overflow` that fired 35 min before the FATAL is a separate (cleanly-handled) bug — tracked as a follow-up; not the cause of the wedge.
+
+---
+
 ### 2026-04-24 — Player card "Lost" stat
 
 Player cards now show a **Lost** stat alongside Items / Value / Weight when the player died. It's the total market value of items looted off their corpse (using live price reference). Rendered in red (`--loss-red`). Only appears when > 0. Tile carries a hover tooltip explaining that Lost is intentionally separate from Value (which counts pickups only) to avoid double-counting across the session total.
