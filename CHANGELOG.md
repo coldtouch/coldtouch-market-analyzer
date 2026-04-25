@@ -2,6 +2,37 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-04-26 — Loot Logger: friendly-guild perspective override
+
+Accountability auto-detected the "primary guild" by picking the guild with the most captured items. When the user's own guild was in the minority of events (e.g. running a small-roster fight near a larger enemy guild), auto-detect picked the wrong side as friendly and the whole accountability math flipped — your guildmates got tagged as enemies and the enemy's deposits were treated as your own.
+
+Added a **Friendly guild** dropdown above the action buttons in the accountability report. Lists every guild seen in the session sorted by item count, with the auto-detected pick marked `(auto)`. Selecting a different guild:
+- Persists the override in `localStorage` keyed by `acc-guild-override-<sessionId>` (per-session)
+- Clears `primaryAlliance` so guild-only matching kicks in (predictable: only that exact guild is friendly, not its allies)
+- Reruns `runAccountabilityCheck()` so `isGuildMember` math, `playerResults` enemy/friendly tagging, the primary-guild banner, and the deaths section all reflect the new perspective
+
+Picking the auto-detected guild (or hitting **Reset**) drops the override and falls back to auto-detect. If a previously-selected guild isn't in the current session (different fight, different roster), the override is silently ignored and auto-detect kicks back in.
+
+---
+
+### 2026-04-26 — Loot Logger session timeline: tooltip dedup
+
+Hovering a session-timeline bar in a loot report rendered TWO tooltip cards stacked at the same screen position. The bar carries both `data-tip-html` (rich death-info card via `initTimelineRichTooltip`) AND `data-tip` (plain text via the global tooltip handler). Both handlers are document-level `mouseover` listeners and both fire on a single hover, each creating its own singleton positioned over the bar.
+
+Fix: the global tooltip handler now skips elements that have `data-tip-html` — those are owned by a dedicated rich-tooltip handler. One-line guard in [app.js:16554](app.js:16554) area. Verified via a synthetic-element test that (a) bars with both attrs render only the rich tooltip, and (b) elements with just `data-tip` (status dots, plain rows) still get the global tooltip as before.
+
+---
+
+### 2026-04-26 — Analytics 7d query: int64 overflow fix
+
+`computeAnalytics` was logging `[Analytics] 7d query FAILED: SQLITE_ERROR: integer overflow` every cycle (first surfaced 2026-04-25 at 19:57). The `SUM((min_sell - max_buy) * (min_sell - max_buy))` term in the 7d aggregate at `deploy_saas.py:5139` overflows int64 when summed across the full 7-day `price_averages` window — a single squared spread on a high-value item is ~10¹⁴, summed across tens of thousands of rows × 168 hours easily blows past `9.2 × 10¹⁸`.
+
+Fix: `CAST(min_sell - max_buy AS REAL)` on one operand promotes the multiplication to double-precision float, which then accumulates safely in the SUM. Variance/stddev downstream loses no meaningful precision since values past 2⁵³ would already be approximate anyway.
+
+The error was cleanly handled by the existing `finalize('7d-err')` path, so no outage — but analytics rows weren't being written each cycle, leaving downstream `price_analytics` data stale.
+
+---
+
 ### 2026-04-25 — SQLITE_BUSY wedge: real fix this time (`process.abort()`)
 
 Yesterday's Tier 1 fix logged `[FATAL] SQLite state is corrupt — exiting for clean systemd restart` and called `setTimeout(() => process.exit(1), 500)`. Outage today proved that doesn't actually exit. PID stayed alive for 43 minutes after the FATAL with zero log activity, ports still bound, every HTTP request timing out. Diagnosis: when `SQLITE_BUSY` fires, the event loop is wedged inside the native sqlite3 mutex; `setTimeout` requires a loop tick to fire, and the cleanup hooks `process.exit()` runs also call back into native sqlite code that's blocked on the same lock. Both the timer and the exit hung.

@@ -12110,6 +12110,26 @@ async function shareAccountability(sessionId) {
     }
 }
 
+// Override / reset the friendly-guild perspective for accountability.
+// Empty string = revert to auto-detect. Persisted per-session in localStorage so
+// reopening the same session keeps the override; reruns the full check so the
+// math (isGuildMember everywhere) reflects the new perspective.
+function _accSetGuildPerspective(guildName) {
+    const ctx = window._llAccGuildContext;
+    if (!ctx) return;
+    const key = `acc-guild-override-${ctx.sessionId}`;
+    try {
+        if (!guildName || guildName === ctx.autoPrimaryGuild) {
+            // Reset, OR explicitly picking the auto-detected guild — drop the override.
+            localStorage.removeItem(key);
+        } else {
+            localStorage.setItem(key, guildName);
+        }
+    } catch { /* localStorage may be disabled — non-fatal, just no persistence */ }
+    // Rerun the check so isGuildMember math reflects the new primaryGuild.
+    runAccountabilityCheck();
+}
+
 // Apply the Accountability result filter controls (search, guild, player).
 // Works by toggling .ll-hidden-by-filter on each .ll-player-card based on dataset attrs.
 function _accApplyFilter() {
@@ -12397,8 +12417,25 @@ async function runAccountabilityCheck() {
             allianceCounts[data.alliance] = (allianceCounts[data.alliance] || 0) + itemCount;
         }
     }
-    const primaryGuild = Object.entries(guildCounts).sort((a, b) => b[1] - a[1])[0]?.[0] || '';
-    const primaryAlliance = Object.entries(allianceCounts).sort((a, b) => b[1] - a[1])[0]?.[0] || '';
+    let primaryGuild = Object.entries(guildCounts).sort((a, b) => b[1] - a[1])[0]?.[0] || '';
+    let primaryAlliance = Object.entries(allianceCounts).sort((a, b) => b[1] - a[1])[0]?.[0] || '';
+    // Auto-detected values are kept around so the override dropdown can show
+    // "<guild> (auto)" and let the user revert.
+    const autoPrimaryGuild = primaryGuild;
+    const autoPrimaryAlliance = primaryAlliance;
+    // Per-session override: when the user picks a different guild as "friendly"
+    // (e.g. their guild is in the minority of captured events), persist + apply it.
+    // Falls back to auto-detect when the override guild isn't in this session.
+    const guildOverride = (() => {
+        try { return localStorage.getItem(`acc-guild-override-${sessionId}`) || ''; }
+        catch { return ''; }
+    })();
+    if (guildOverride && guildCounts[guildOverride]) {
+        primaryGuild = guildOverride;
+        // Clear alliance so guild-only matching kicks in — the user explicitly
+        // picked a single guild; pulling in the whole alliance would be surprising.
+        primaryAlliance = '';
+    }
 
     // Proportional deposit allocation — fair regardless of player order
     // Step 1: Sum total looted per item across all guild members
@@ -12527,6 +12564,14 @@ async function runAccountabilityCheck() {
 
     // Store for export
     window._llAccResults = { playerResults, priceMap, selectedTabNames, totalLooted, totalDeposited, totalMissing, totalMissingSilver };
+    // Stash for the guild-perspective dropdown render below.
+    window._llAccGuildContext = {
+        sessionId,
+        guildCounts,
+        autoPrimaryGuild,
+        currentPrimaryGuild: primaryGuild,
+        overrideActive: !!(guildOverride && guildCounts[guildOverride]),
+    };
 
     let html = '';
     if (selectedTabNames.length > 0) {
@@ -12653,6 +12698,29 @@ async function runAccountabilityCheck() {
             <option value="">All players</option>
             ${accPlayers.map(p => `<option value="${esc(p)}"${savedAccPlayer === p ? ' selected' : ''}>${esc(p)}</option>`).join('')}
         </select>
+    </div>`;
+
+    // Guild-perspective override: lets the user pick which guild is "friendly"
+    // for accountability when auto-detect chose wrong (e.g. their guild is in the
+    // minority of captured events). Persisted per-session in localStorage.
+    const ctx = window._llAccGuildContext;
+    const guildOptions = Object.entries(ctx.guildCounts)
+        .sort((a, b) => b[1] - a[1])
+        .map(([g, c]) => {
+            const sel = g === ctx.currentPrimaryGuild ? ' selected' : '';
+            const isAuto = g === ctx.autoPrimaryGuild ? ' (auto)' : '';
+            return `<option value="${esc(g)}"${sel}>${esc(g)} · ${c} item${c !== 1 ? 's' : ''}${isAuto}</option>`;
+        }).join('');
+    const perspectiveTitle = ctx.overrideActive
+        ? `Friendly perspective overridden — auto-detect picked ${esc(ctx.autoPrimaryGuild) || 'none'}`
+        : 'Pick which guild is "friendly" — overrides the auto-detected primary guild';
+    html += `<div class="ll-guild-perspective" style="display:flex; align-items:center; gap:0.5rem; margin-bottom:0.5rem; padding:0.45rem 0.65rem; background:var(--bg-elevated); border:1px solid var(--border-color); border-radius:6px; flex-wrap:wrap;" title="${perspectiveTitle}">
+        <span style="font-size:0.72rem; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.04em; font-weight:600;">Friendly guild</span>
+        <select id="acc-guild-perspective" class="transport-select" style="min-width:200px;" onchange="_accSetGuildPerspective(this.value)">
+            ${guildOptions || '<option value="">(no guilds detected)</option>'}
+        </select>
+        ${ctx.overrideActive ? `<button class="btn-small" onclick="_accSetGuildPerspective('')" title="Revert to auto-detected primary guild">Reset</button>` : ''}
+        ${ctx.overrideActive ? `<span style="font-size:0.7rem; color:var(--accent);">overridden</span>` : ''}
     </div>`;
 
     // Action buttons: view switcher + Share + Expand/Collapse + Discord + Export
@@ -16553,6 +16621,10 @@ function hideTooltip() {
 document.addEventListener('mouseover', (e) => {
     const target = e.target.closest('[data-tip], [data-tip-item]');
     if (!target || target === _tipCurrent) return;
+    // Skip elements owned by a dedicated rich-tooltip handler (e.g. .ll-timeline-bar
+    // uses initTimelineRichTooltip via data-tip-html). Two singleton tooltips firing
+    // on the same hover stack at the same coords.
+    if (target.hasAttribute('data-tip-html')) return;
     _tipCurrent = target;
     clearTimeout(_tipTimer);
     _tipTimer = setTimeout(() => showTooltipFor(target), 140);
@@ -16561,6 +16633,7 @@ document.addEventListener('mouseover', (e) => {
 document.addEventListener('mouseout', (e) => {
     const target = e.target.closest('[data-tip], [data-tip-item]');
     if (!target) return;
+    if (target.hasAttribute('data-tip-html')) return;
     const related = e.relatedTarget;
     if (related && target.contains(related)) return;
     clearTimeout(_tipTimer);

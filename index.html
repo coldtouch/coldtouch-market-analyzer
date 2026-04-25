@@ -2299,6 +2299,33 @@
                     <div id="changelog-wrapper" style="max-height: 500px; overflow-y: auto; position: relative;">
                     <div class="changelog-list">
                         <div class="changelog-entry">
+                            <div class="changelog-date">April 26, 2026</div>
+                            <div class="changelog-title">🛡️ Loot Logger: friendly-guild perspective override</div>
+                            <ul>
+                                <li><strong>Auto-detect was guessing wrong</strong> when your guild was in the minority of captured events — guildmates got tagged as enemies and the enemy's deposits were credited to your side. Common in small-roster fights near a larger enemy guild.</li>
+                                <li><strong>New "Friendly guild" dropdown</strong> above the action buttons in the accountability report. Lists every guild seen in the session sorted by item count, with the auto-detected pick marked <code>(auto)</code>. Picking a different guild flips the perspective: <code>isGuildMember</code> math, primary-guild banner, deaths section, and <code>playerResults</code> friendly/enemy tagging all update.</li>
+                                <li><strong>Persisted per-session</strong> in localStorage. Picking the auto-detected guild — or hitting <strong>Reset</strong> — drops the override and falls back to auto-detect. If a previously-selected guild isn't in the current session, the override is silently ignored.</li>
+                                <li>Override clears <code>primaryAlliance</code> so guild-only matching kicks in — only that exact guild is friendly, not its alliance peers.</li>
+                            </ul>
+                        </div>
+                        <div class="changelog-entry">
+                            <div class="changelog-date">April 26, 2026</div>
+                            <div class="changelog-title">🎯 Loot Logger session timeline: tooltip dedup</div>
+                            <ul>
+                                <li><strong>Two tooltips, one hover.</strong> Session-timeline bars carry both <code>data-tip-html</code> (rich death-info card) and <code>data-tip</code> (plain text). Both document-level mouseover handlers fired on a single hover, each creating a singleton tooltip positioned over the bar — they stacked at the same screen coords.</li>
+                                <li><strong>Fix:</strong> the global tooltip handler now skips elements that have <code>data-tip-html</code> — those are owned by the dedicated rich-tooltip handler. Plain <code>data-tip</code>-only elements (status dots, item rows) still get the global tooltip as before.</li>
+                            </ul>
+                        </div>
+                        <div class="changelog-entry">
+                            <div class="changelog-date">April 26, 2026</div>
+                            <div class="changelog-title">🔢 Analytics 7d query: int64 overflow fix</div>
+                            <ul>
+                                <li><strong>Cast to REAL inside SUM.</strong> <code>computeAnalytics</code> was logging <code>[Analytics] 7d query FAILED: SQLITE_ERROR: integer overflow</code> every cycle (first surfaced April 25 at 19:57). The <code>SUM((min_sell - max_buy)²)</code> term overflowed int64 when summed across the 7-day <code>price_averages</code> window — squared spreads on high-value items are ~10¹⁴, and the cumulative sum easily blew past <code>9.2 × 10¹⁸</code>.</li>
+                                <li><strong>Fix:</strong> <code>CAST(min_sell - max_buy AS REAL)</code> on one operand promotes the multiplication to double-precision float, which then accumulates safely in the SUM. Variance/stddev downstream loses no meaningful precision.</li>
+                                <li><strong>No outage</strong> — error was cleanly handled by the existing <code>finalize('7d-err')</code> path. But analytics rows weren't being written each cycle, leaving <code>price_analytics</code> data stale.</li>
+                            </ul>
+                        </div>
+                        <div class="changelog-entry">
                             <div class="changelog-date">April 25, 2026</div>
                             <div class="changelog-title">🧱 SQLITE_BUSY wedge: real fix (process.abort)</div>
                             <ul>
