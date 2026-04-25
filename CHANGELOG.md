@@ -2,6 +2,16 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-04-25 — Analytics int overflow (7d query)
+
+Tracked as a follow-up in the SQLITE_BUSY entry below: `[Analytics] 7d query FAILED: SQLITE_ERROR: integer overflow` had been firing every 30 min since at least 2026-04-25 19:57 CEST, so analytics rows weren't being written. Cleanly handled by the existing error path (logs, calls `finalize('7d-err')`), so no outage — but degraded analytics until fixed.
+
+Root cause: `SUM((min_sell - max_buy) * (min_sell - max_buy))` on Albion silver prices. Per-row values reach ~10^14 (silver prices hit tens of millions); summed across thousands of rows the accumulator blew past int64 max (9.2×10^18) and SQLite aborted the query.
+
+Fix: `CAST` both spread terms inside the SUMs to REAL so the accumulation happens in double-precision float space. `sum_spread_sq` was the actual culprit; cast `sum_spread` too for safety since it's still a difference summed over many rows. Surgical 2-line change in `computeAnalytics`'s 7d query.
+
+---
+
 ### 2026-04-25 — SQLITE_BUSY wedge: real fix this time (`process.abort()`)
 
 Yesterday's Tier 1 fix logged `[FATAL] SQLite state is corrupt — exiting for clean systemd restart` and called `setTimeout(() => process.exit(1), 500)`. Outage today proved that doesn't actually exit. PID stayed alive for 43 minutes after the FATAL with zero log activity, ports still bound, every HTTP request timing out. Diagnosis: when `SQLITE_BUSY` fires, the event loop is wedged inside the native sqlite3 mutex; `setTimeout` requires a loop tick to fire, and the cleanup hooks `process.exit()` runs also call back into native sqlite code that's blocked on the same lock. Both the timer and the exit hung.

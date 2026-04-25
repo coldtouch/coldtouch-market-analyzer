@@ -2300,6 +2300,15 @@
                     <div class="changelog-list">
                         <div class="changelog-entry">
                             <div class="changelog-date">April 25, 2026</div>
+                            <div class="changelog-title">📊 Analytics int overflow fix (7d query)</div>
+                            <ul>
+                                <li><strong>Analytics 7d query has been silently failing every 30 min</strong> with <code>SQLITE_ERROR: integer overflow</code> since around 19:57 CEST. The error path was clean (logs + skips the cycle), so no outage — but analytics rows weren't being written, so SMA / VWAP / spread-volatility were going stale.</li>
+                                <li><strong>Root cause:</strong> <code>SUM((min_sell - max_buy) * (min_sell - max_buy))</code> on Albion silver prices. Per-row values reach ~10<sup>14</sup>; summed across thousands of rows the int64 accumulator blew past 9.2×10<sup>18</sup> and SQLite aborted the query.</li>
+                                <li><strong>Fix:</strong> <code>CAST</code> both spread terms inside the SUMs to REAL so accumulation happens in double-precision float space. 2-line surgical change in <code>computeAnalytics</code>.</li>
+                            </ul>
+                        </div>
+                        <div class="changelog-entry">
+                            <div class="changelog-date">April 25, 2026</div>
                             <div class="changelog-title">🧱 SQLITE_BUSY wedge: real fix (process.abort)</div>
                             <ul>
                                 <li><strong>Yesterday's fix didn't actually exit.</strong> Tier 1 logged the FATAL but <code>setTimeout(() =&gt; process.exit(1), 500)</code> never fired — the event loop was wedged inside the native sqlite3 mutex, so the timer never ticked and <code>process.exit()</code>'s cleanup hooks hung on the same lock. Process stayed alive for 43 minutes with ports bound and zero log activity.</li>
