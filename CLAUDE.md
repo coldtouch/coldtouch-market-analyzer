@@ -118,7 +118,50 @@
 
 ## Recent Session History
 
-### April 22 — Security Audit + Design Polish + Outage Recovery — Latest
+### April 26 — Analytics Fix + Loot Logger Polish + Accountability UX — Latest
+
+- **Analytics 7d query integer overflow fixed:** `CAST(min_sell - max_buy AS REAL)` inside the `SUM(…²)` variance term promotes the multiplication to double-precision float so it no longer overflows SQLite's 64-bit int range. Commit 099d3c2.
+- **Loot logger tooltip dedup:** Two singleton tooltip systems (`data-tip` global + `data-tip-html` rich-tip) were both firing on `.ll-timeline-bar` hover, stacking at the same screen coords. Global handler now skips elements with `data-tip-html` — those are owned by the dedicated rich-tip handler.
+- **Guild perspective selector:** New "Friendly guild" dropdown in the accountability action-bar lets users flip the auto-detected `primaryGuild`. Picking a different guild re-runs `runAccountabilityCheck` so all friendly/enemy tagging, deaths section, and deposit checks update. Persisted per-session in `localStorage` (`acc-guild-override-<sessionId>`); reset button and re-picking the auto guild drop the override.
+- **"Lost" stat on player cards:** Each player card in the loot logger now shows the estimated market value of items the player died with (items looted off their corpse). Displayed in the card header stats row.
+- **Accountability icon strip:** Player card headers now show a compact icon strip (same as regular session view) with per-item green/yellow/red borders reflecting deposit status at a glance.
+- **Rich pickup tooltip with verified line:** Hover tooltip on missing items now shows: time, looter name + guild, zone (📍), and — when the item is verified by a chest log — a "✓ Verified by chest log (N/N)" line. Unverified items omit the verified line (no clutter). Commit 86bf4c3.
+- **Prominent status badges:** ✓/✗ corner badges on accountability icon strip icons; green glow for deposited, red for missing.
+- **5 scheduled cloud routines created:** Daily health sweep + weekly TODO+CHANGELOG audit (Mon), code quality sweep (Sun), security spot check (Wed), improvement suggestions (Fri). All read-only, fire at 07:00 Jerusalem (04:00 UTC). IDs logged in session file.
+- **Zone-test binary built** (`albiondata-client-zone-test.exe`, 21.8 MB): dumps every OpJoin response param under `[ZONE-DIAG]` label. **NOT YET RUN IN-GAME.** Needed to identify which param now carries zone name (current mapstructure index "8" maps to empty on all 290 live session events tested).
+
+### April 25 — process.abort() Amendment
+
+- **SQLITE_BUSY Tier 1 amended:** Yesterday's `setTimeout(() => process.exit(1), 500)` didn't actually exit on the wedge — 43-min outage recovered via `systemctl kill`. Root cause: the async exit gave the event loop one more tick, which attempted another `db.serialize() + BEGIN` on the locked connection, re-entrancy wedge. Replaced with `process.abort()` (synchronous SIGABRT — no event-loop tick required). Systemd `Restart=always` catches the non-zero exit and restarts within 1s.
+- **Skip `flushNatsBuffer()` in SQLite-fatal path:** Its `db.serialize() + BEGIN` on the locked connection was the second wedge step. Now skipped when `_aborting` flag is set.
+- **`_aborting` re-entrancy guard:** Prevents a second `uncaughtException` from firing during the abort path.
+- **Same `abort()` in RSS watchdog:** RSS-based OOM exit now also uses `process.abort()` instead of `process.exit`.
+
+### April 24 — SQLITE_BUSY Stability Overhaul
+
+- **Tiers 1+2+3+5 shipped** — complete overhaul of SQLite error handling and batch-write safety:
+  - **Tier 1:** `uncaughtException` handler exits (`process.exit(1)`) on SQLite state-corruption errors for clean systemd restart — changed to `process.abort()` next day (see April 25).
+  - **Tier 2:** All 7 batch-write sites (`recordSnapshots`, `computeSpreadStats`, `computeAnalytics`, loot ingestion, etc.) now wrap `BEGIN → prepare → run → finalize → COMMIT` in explicit error-callbacks with `ROLLBACK` on failure. No more silent partial transactions.
+  - **Tier 3:** Batch sizes reduced — `recordSnapshots` 5000→500, `computeSpreadStats` 500→100 rows per transaction — limits the lock-hold duration per batch.
+  - **Tier 5:** RSS watchdog exits at 8 GB to prevent 11 GB OOM from cascading into SQLITE_BUSY.
+  - **Flag resets:** `analyticsRunning` + `dbBusy` now reset in the handler so the scheduler can retry after a clean restart.
+
+### April 23 — Zone Tracking + Go Client v1.3.0
+
+- **Go client v1.3.0:**
+  - `CurrentZone string` field on `albionState` (RWMutex getter/setter).
+  - `operationJoinResponse.Process` calls `state.SetCurrentZone(op.Location)` on every zone transition.
+  - `LootEvent` gains `Location string json:"location"` — populated from `state.GetCurrentZone()`.
+  - `DeathEvent` gains `Location string json:"location"` — same.
+  - **v1.3.0 GitHub Release cut** via `git tag v1.3.0 && git push --tags` → GitHub Actions `tag-release.yml` fired.
+- **Backend:** `location TEXT DEFAULT ''` column added to `loot_events` (CREATE TABLE + `ALTER TABLE` migration for existing DBs). WS loot-event and death-event ingestion both store `ev.location`. Accountability public share SELECT returns `location`.
+- **Accountability deaths — 3 categories:** Friendly (victim in primary guild), Enemy (killer in primary guild), Other (bystanders — collapsed by default, grey styling). `buildDeathTimeline` now computes `wasKillerFriendly` and sets `isEnemy` / `isOther` flags.
+- **Zone badge:** `📍 ZoneName` on each death card row when `location` is non-empty.
+- **Missing-item tooltip:** Shows zone alongside pickup timestamp. Mobile tap-to-toggle supported.
+- **SQLITE_BUSY:** `readDb` busy_timeout bumped 5s→30s.
+- **Portfolio:** Completed craft runs section added — fetches `/api/craft-runs`, filters `status=complete`, renders collapsible table with cost/revenue/net P&L/margin.
+
+### April 22 — Security Audit + Design Polish + Outage Recovery
 
 - **FULL_AUDIT_2026-04-22.md — 17 findings fixed:**
   - CRITICAL: JWT never in URL — Discord OAuth now issues a 60s one-time exchange code; frontend calls `POST /api/auth/exchange`, token goes direct to localStorage, never hits browser history.
@@ -276,6 +319,21 @@
 - [x] Loot Logger Stop button auto-saves + renders session
 - [x] Accountability share carries chest-log snapshot (`chest_logs_json` column)
 - [x] VPS outage ×2 — both resolved (deploys + kill -9)
+
+### Done (April 23–26)
+- [x] Go client v1.3.0 released — zone tracking (CurrentZone on albionState, LootEvent.Location, DeathEvent.Location)
+- [x] Backend: `location TEXT` column on `loot_events`, stored on WS loot + death ingestion
+- [x] Accountability deaths — 3 categories: Friendly / Enemy / Other (bystanders, collapsed)
+- [x] Zone badge (📍) on death cards, missing-item tooltip shows zone + pickup time
+- [x] SQLITE_BUSY Tiers 1+2+3+5 — batch-write safety, uncaughtException exits, RSS watchdog
+- [x] SQLITE_BUSY Tier 1 amended — `process.abort()` replaces `process.exit` (synchronous, no event-loop tick)
+- [x] Analytics 7d query integer overflow — `CAST(… AS REAL)` fix
+- [x] Loot logger: "Lost" stat, accountability icon strip, rich pickup tooltip with verified-by-chest-log line
+- [x] Loot logger session timeline tooltip overlap resolved (rich-tip wins over global)
+- [x] Guild perspective selector in accountability (persisted per-session, localStorage)
+- [x] Portfolio: completed craft runs section (cost/revenue/net P&L/margin collapsible table)
+- [x] 5 scheduled cloud routines created (daily health + 4 weekly audits, 07:00 Jerusalem)
+- [x] Zone-test diagnostic binary built (`albiondata-client-zone-test.exe`) — NOT YET RUN IN-GAME
 
 ### Pending
 - [x] **SQLITE_BUSY root cause fix** — DONE 2026-04-24. Tiers 1+2+3+5 shipped: `uncaughtException` exits on SQLite state-corruption errors for clean systemd restart; all 7 batch-write sites now wrap BEGIN→prepare→run→finalize→COMMIT in explicit error-callback + ROLLBACK; `recordSnapshots` batches 5000→500, `computeSpreadStats` 500→100; RSS watchdog exits at 8 GB to prevent 11 GB OOM scenarios. `analyticsRunning` + `dbBusy` now reset in the handler too.
