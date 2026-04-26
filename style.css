@@ -6820,6 +6820,32 @@ footer {
 .tip-acc-missing   { background: rgba(239, 68, 68, 0.18); color: var(--loss-red); }
 .tip-acc-died      { background: rgba(255,255,255,0.06); color: var(--text-muted); }
 .tip-acc-enemy     { background: rgba(239, 68, 68, 0.10); color: var(--loss-red); }
+.tip-acc-verified {
+    margin: -0.15rem 0 0.4rem;
+    padding: 0.3rem 0.5rem;
+    border-radius: 5px;
+    font-size: 0.74rem;
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    background: rgba(74, 222, 128, 0.10);
+    color: var(--profit-green);
+    border: 1px solid rgba(74, 222, 128, 0.28);
+}
+.tip-acc-verified-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    background: var(--profit-green);
+    color: #0a0a0a;
+    font-size: 0.7rem;
+    font-weight: 800;
+    flex-shrink: 0;
+}
 .tip-pickups-section {
     margin-top: 0.45rem;
     padding-top: 0.45rem;

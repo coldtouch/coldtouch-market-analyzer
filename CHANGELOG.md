@@ -2,6 +2,16 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-04-26 — Accountability tooltip: "Verified by chest log" line
+
+When a slot represents items that the chest log corroborates as deposited (`it.verified === true`), the hover tooltip now shows a green-on-green `✓ Verified by chest log (N/M)` bar between the status banner and the Pickups section. When verification is partial (e.g. chest log shows player deposited 2/4 of a pickup), the line reads `(2/4 of pickup)` instead of `(2/4)`.
+
+When the slot has no chest-log verification, the line is omitted entirely — per the user's "if it is, state; if not, no need to state" rule.
+
+Aggregation: the strip-build loop sums `verifiedQty` across rows in the same `itemId+status` bucket, so a slot representing multiple deposit rows shows the combined count. Encoded only when > 0 to keep the data attribute minimal.
+
+---
+
 ### 2026-04-26 — Accountability strip: prominent ✓/✗ badges + rich pickup tooltip
 
 Refinements on the morning's strip-on-header feature:

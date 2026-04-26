@@ -2300,6 +2300,15 @@
                     <div class="changelog-list">
                         <div class="changelog-entry">
                             <div class="changelog-date">April 26, 2026</div>
+                            <div class="changelog-title">🛡️ Accountability tooltip: "Verified by chest log" line</div>
+                            <ul>
+                                <li><strong>Cross-reference at a glance.</strong> When a slot's items are corroborated by the chest log, the hover tooltip now shows a green <code>✓ Verified by chest log (N/M)</code> bar between the status banner and the Pickups section. Partial verification reads <code>(N/M of pickup)</code>.</li>
+                                <li><strong>Silent when no match.</strong> If the slot has no chest-log evidence, the line is omitted entirely — no "not verified" noise.</li>
+                                <li><strong>Aggregated correctly.</strong> Strip slots represent N pickups of an item with a status; the verified count sums across all matching rows so the displayed N/M reflects the full slot, not just one pickup.</li>
+                            </ul>
+                        </div>
+                        <div class="changelog-entry">
+                            <div class="changelog-date">April 26, 2026</div>
                             <div class="changelog-title">🔍 Accountability strip: prominent ✓/✗ badges + rich pickup tooltip</div>
                             <ul>
                                 <li><strong>Bigger, clearer status badges.</strong> Replaced the small corner dots with 16px ✓/✗ badges in the top-right of each icon. Deposited = green ✓, missing = red ✗ (with a soft red glow on the icon border so misses pop visually), partial = yellow ½, lost on death = 💀. Both deposited and missing now stand out at a glance — no need to expand the card.</li>

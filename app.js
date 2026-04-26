@@ -12860,6 +12860,7 @@ async function runAccountabilityCheck() {
                 existing.totalValue += valEach * it.looted;
                 if (it.inChest >= 0) existing.inChest += it.inChest;
                 if (it.missing >= 0) existing.missingQty += it.missing;
+                if (it.verified) existing.verifiedQty += (it.verifiedQty || 0);
             } else {
                 stripAgg.set(key, {
                     itemId: it.itemId,
@@ -12868,6 +12869,7 @@ async function runAccountabilityCheck() {
                     status,
                     inChest: Math.max(0, it.inChest || 0),
                     missingQty: Math.max(0, it.missing || 0),
+                    verifiedQty: it.verified ? (it.verifiedQty || 0) : 0,
                     pickups: playerEvs[it.itemId] || [],
                 });
             }
@@ -12889,13 +12891,19 @@ async function runAccountabilityCheck() {
                 ? ` data-tip-pickups="${esc(encodeURIComponent(JSON.stringify({ p: pickupsTrimmed, more: Math.max(0, pickupExtra) })))}"`
                 : '';
             const accStatusAttr = ` data-tip-acc-status="${agg.status}|${agg.inChest}|${agg.qty}|${agg.missingQty}"`;
+            // Only encode verified info when there's an actual chest-log match — keeps the
+            // tooltip silent when there's nothing to confirm (per user request: "if it is
+            // state if not no need to state").
+            const verifiedAttr = agg.verifiedQty > 0
+                ? ` data-tip-verified="${agg.verifiedQty}|${agg.qty}"`
+                : '';
             // Status overlay glyph: ✓ deposited, ✗ missing, ½ partial, 💀 died. Enemy = none.
             const badgeMap = { deposited: '✓', missing: '✗', partial: '½', died: '💀', enemy: '' };
             const badgeChar = badgeMap[agg.status] || '';
             const statusBadge = badgeChar
                 ? `<span class="ll-acc-status-badge ll-acc-status-badge-${agg.status}" aria-hidden="true">${badgeChar}</span>`
                 : '';
-            return `<div class="ll-preview-slot ll-acc-preview-${agg.status}" data-tip-item="${esc(agg.itemId)}" data-tip-source="loot" data-tip-qty="${agg.qty}"${valAttr}${pickupsAttr}${accStatusAttr}>
+            return `<div class="ll-preview-slot ll-acc-preview-${agg.status}" data-tip-item="${esc(agg.itemId)}" data-tip-source="loot" data-tip-qty="${agg.qty}"${valAttr}${pickupsAttr}${accStatusAttr}${verifiedAttr}>
                 <img src="https://render.albiononline.com/v1/item/${encodeURIComponent(agg.itemId)}.png" class="ll-preview-icon" loading="lazy" onerror="this.style.display='none'" alt="${esc(altText)}">
                 ${statusBadge}
                 ${qtyBadge}
@@ -16646,6 +16654,7 @@ function buildTooltipContent(target) {
         // Accountability extras (set on .ll-acc-preview .ll-preview-slot only).
         const accStatusRaw = target.dataset.tipAccStatus;
         const pickupsRaw = target.dataset.tipPickups;
+        const verifiedRaw = target.dataset.tipVerified;
         const lines = [];
         lines.push(`<div class="tip-header">
             <img src="https://render.albiononline.com/v1/item/${encodeURIComponent(itemId)}.png${quality ? '?quality=' + encodeURIComponent(quality) : ''}" class="tip-icon" onerror="this.style.display='none'" alt="">
@@ -16666,6 +16675,19 @@ function buildTooltipContent(target) {
             };
             const lab = labelMap[st];
             if (lab) lines.push(`<div class="tip-acc-status ${lab.cls}"><span class="tip-acc-status-icon">${lab.icon}</span> ${esc(lab.text)}</div>`);
+        }
+        // Chest-log verification — only rendered when there's a real match (the attr
+        // is omitted server-side when verifiedQty === 0). Placed right under the
+        // status banner so "deposited & verified" reads as a single thought.
+        if (verifiedRaw) {
+            const [vQty, totalQty] = verifiedRaw.split('|').map(Number);
+            if (vQty > 0) {
+                const fully = vQty >= totalQty;
+                const text = fully
+                    ? `Verified by chest log (${vQty}/${totalQty})`
+                    : `Verified by chest log (${vQty}/${totalQty} of pickup)`;
+                lines.push(`<div class="tip-acc-verified"><span class="tip-acc-verified-icon">✓</span> ${esc(text)}</div>`);
+            }
         }
         if (value && parseInt(value) > 0) lines.push(`<div class="tip-row"><span class="tip-label">Market value</span><span class="tip-val">${parseInt(value).toLocaleString()} 💰</span></div>`);
         if (crafter) lines.push(`<div class="tip-row"><span class="tip-label">Crafted by</span><span class="tip-val">${esc(crafter)}</span></div>`);
