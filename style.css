@@ -6757,24 +6757,108 @@ footer {
 .ll-acc-preview-enemy .ll-preview-icon {
     border-color: rgba(239, 68, 68, 0.45) !important;
 }
-/* Tiny status dot in the corner of each icon — reads at a glance even when the
-   border color blends with the dark theme. */
-.ll-acc-preview-deposited::before,
-.ll-acc-preview-partial::before,
-.ll-acc-preview-missing::before {
-    content: '';
+/* Prominent corner status badge — replaces the old tiny dot. Top-right so it
+   doesn't fight with the qty badge at bottom-right. Glyph + bg color makes
+   deposited/missing impossible to miss when scanning a card. */
+.ll-acc-status-badge {
     position: absolute;
-    top: -2px;
-    left: -2px;
-    width: 8px;
-    height: 8px;
+    top: -5px;
+    right: -5px;
+    width: 16px;
+    height: 16px;
     border-radius: 50%;
-    z-index: 2;
-    box-shadow: 0 0 0 1px rgba(0,0,0,0.4);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.68rem;
+    font-weight: 800;
+    line-height: 1;
+    color: #fff;
+    z-index: 3;
+    pointer-events: none;
+    box-shadow: 0 0 0 1.5px rgba(0,0,0,0.6), 0 1px 3px rgba(0,0,0,0.5);
+    text-shadow: 0 1px 1px rgba(0,0,0,0.4);
 }
-.ll-acc-preview-deposited::before { background: var(--profit-green); }
-.ll-acc-preview-partial::before   { background: #fbbf24; }
-.ll-acc-preview-missing::before   { background: var(--loss-red); }
+.ll-acc-status-badge-deposited { background: var(--profit-green); }
+.ll-acc-status-badge-partial   { background: #fbbf24; color: #1a1a1a; text-shadow: none; }
+.ll-acc-status-badge-missing   { background: var(--loss-red); }
+.ll-acc-status-badge-died      { background: rgba(0,0,0,0.85); font-size: 0.6rem; }
+/* Reinforce the missing-state by glowing the icon — pulls the eye even when a
+   card has dozens of slots side by side. */
+.ll-acc-preview-missing .ll-preview-icon {
+    box-shadow: inset 0 0 0 1px rgba(239, 68, 68, 0.45), 0 0 0 1px rgba(239, 68, 68, 0.18), 0 0 6px rgba(239, 68, 68, 0.35);
+}
+.ll-acc-preview-deposited .ll-preview-icon {
+    box-shadow: inset 0 0 0 1px rgba(74, 222, 128, 0.4), 0 0 0 1px rgba(74, 222, 128, 0.12);
+}
+
+/* Rich accountability tooltip — status banner + pickup list */
+.tip-acc-status {
+    margin: 0.4rem 0;
+    padding: 0.35rem 0.55rem;
+    border-radius: 5px;
+    font-size: 0.78rem;
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+}
+.tip-acc-status-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    background: rgba(0,0,0,0.35);
+    font-size: 0.78rem;
+    font-weight: 800;
+    flex-shrink: 0;
+}
+.tip-acc-deposited { background: rgba(74, 222, 128, 0.15); color: var(--profit-green); }
+.tip-acc-partial   { background: rgba(251, 191, 36, 0.15); color: #fbbf24; }
+.tip-acc-missing   { background: rgba(239, 68, 68, 0.18); color: var(--loss-red); }
+.tip-acc-died      { background: rgba(255,255,255,0.06); color: var(--text-muted); }
+.tip-acc-enemy     { background: rgba(239, 68, 68, 0.10); color: var(--loss-red); }
+.tip-pickups-section {
+    margin-top: 0.45rem;
+    padding-top: 0.45rem;
+    border-top: 1px solid rgba(255,255,255,0.08);
+}
+.tip-pickups-title {
+    font-size: 0.7rem;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-bottom: 0.25rem;
+    font-weight: 700;
+}
+.tip-pickup-row {
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    gap: 0.45rem;
+    align-items: center;
+    font-size: 0.74rem;
+    padding: 0.12rem 0;
+    color: var(--text-secondary);
+}
+.tip-pickup-time {
+    color: var(--text-muted);
+    font-variant-numeric: tabular-nums;
+    font-size: 0.72rem;
+}
+.tip-pickup-from { color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tip-pickup-guild { color: var(--text-muted); font-size: 0.7rem; }
+.tip-pickup-muted { color: var(--text-muted); font-style: italic; }
+.tip-pickup-loc { color: var(--accent); font-size: 0.7rem; white-space: nowrap; }
+.tip-pickup-more {
+    margin-top: 0.2rem;
+    font-size: 0.7rem;
+    color: var(--text-muted);
+    font-style: italic;
+}
+/* Tooltip needs more room now that pickups can have 8 rows + section headers */
+.global-tooltip { max-width: 360px; }
 
 /* "Died with" preview slots — shown after the normal loot icons for players
    who died. Greyed + red-bordered so they read as "these are the items they

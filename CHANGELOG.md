@@ -2,6 +2,16 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-04-26 — Accountability strip: prominent ✓/✗ badges + rich pickup tooltip
+
+Refinements on the morning's strip-on-header feature:
+
+- **Replaced the small corner status dots with prominent ✓/✗ badges** (top-right, 16px, white glyph on solid status color). Deposited shows a green ✓, missing shows a red ✗, partial shows a yellow ½, lost-on-death shows 💀. Missing icons also gain a soft red glow ring around the icon border so they pull the eye even on a wide card with dozens of slots. Deposited icons get a matching subtle green inset highlight.
+- **Hover tooltip enriched with pickup details.** Each slot now carries `data-tip-pickups` (URI-encoded JSON, top 8 + "+N more") and `data-tip-acc-status` (`status|inChest|looted|missing`). The global tooltip builder picks both up and renders a status banner (e.g. `✗ Missing 4 of 4` or `½ Partial 3/5 (2 missing)`) above the existing item info, then a Pickups section with one row per pickup: `HH:MM:SS · LooterName [Guild] · 📍 Zone`. Zone is shown when the Go client v1.3.0+ captured it; older events gracefully omit the line.
+- **Source thread-through.** `evsByPlayerItem` now stores `from` (= `looted_from_name`) and `fromGuild` alongside the existing `ts` and `location`, so the tooltip can show whose corpse the items came from — useful for accountability triage when a guildmate's pickups disappear (you can see if they died with the items vs picked them up before a teammate died).
+
+---
+
 ### 2026-04-26 — Accountability: status-aware icon strip on player card header
 
 The accountability player cards previously only showed item icons inside the expanded body — to see what a player picked up you had to click the card open. The regular session view (uploaded .txt or live session) shows an icon-strip preview right in the card header, summarizing pickups at a glance. Brought the same strip into accountability with status overlays per item:

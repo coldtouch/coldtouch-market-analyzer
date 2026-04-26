@@ -12395,7 +12395,12 @@ async function runAccountabilityCheck() {
         // Collect per-event timestamp + zone for missing-item tooltip (zone from Go client v1.3.0+)
         if (!evsByPlayerItem[name]) evsByPlayerItem[name] = {};
         if (!evsByPlayerItem[name][ev.item_id]) evsByPlayerItem[name][ev.item_id] = [];
-        if (evTs > 0) evsByPlayerItem[name][ev.item_id].push({ ts: evTs, location: ev.location || '' });
+        if (evTs > 0) evsByPlayerItem[name][ev.item_id].push({
+            ts: evTs,
+            location: ev.location || '',
+            from: ev.looted_from_name || '',
+            fromGuild: ev.looted_from_guild || '',
+        });
         // If this player died at some point AFTER picking this up, it's lost.
         const deaths = deathTimesByPlayer[name];
         if (deaths && evTs > 0 && deaths.some(dTs => dTs > evTs)) {
@@ -12838,6 +12843,7 @@ async function runAccountabilityCheck() {
         // accountability status overlays per item (deposited / partial / missing / died / enemy).
         // Aggregate by itemId+status so the same item lost-on-death and surviving doesn't merge.
         const stripAgg = new Map();
+        const playerEvs = evsByPlayerItem[p.name] || {};
         for (const it of p.items) {
             let status;
             if (it.lostOnDeath) status = 'died';
@@ -12852,8 +12858,18 @@ async function runAccountabilityCheck() {
             if (existing) {
                 existing.qty += it.looted;
                 existing.totalValue += valEach * it.looted;
+                if (it.inChest >= 0) existing.inChest += it.inChest;
+                if (it.missing >= 0) existing.missingQty += it.missing;
             } else {
-                stripAgg.set(key, { itemId: it.itemId, qty: it.looted, totalValue: valEach * it.looted, status });
+                stripAgg.set(key, {
+                    itemId: it.itemId,
+                    qty: it.looted,
+                    totalValue: valEach * it.looted,
+                    status,
+                    inChest: Math.max(0, it.inChest || 0),
+                    missingQty: Math.max(0, it.missing || 0),
+                    pickups: playerEvs[it.itemId] || [],
+                });
             }
         }
         const stripSorted = [...stripAgg.values()].sort((a, b) => b.totalValue - a.totalValue);
@@ -12863,8 +12879,25 @@ async function runAccountabilityCheck() {
             const qtyBadge = agg.qty > 1 ? `<span class="ll-preview-qty-badge">${agg.qty}</span>` : '';
             const iName = getFriendlyName(agg.itemId) || agg.itemId;
             const altText = `${iName} ×${agg.qty} — ${statusLabel[agg.status]}`;
-            return `<div class="ll-preview-slot ll-acc-preview-${agg.status}" data-tip-item="${esc(agg.itemId)}" data-tip-source="loot" data-tip-qty="${agg.qty}"${valAttr}>
+            // Pickup info encoded for the rich tooltip — top 8, "+N more" if longer.
+            // Compact field names (t/n/g/l) keep the data attribute small.
+            const pickupsTrimmed = (agg.pickups || []).slice(0, 8).map(e => ({
+                t: e.ts || 0, n: e.from || '', g: e.fromGuild || '', l: e.location || '',
+            }));
+            const pickupExtra = (agg.pickups || []).length - pickupsTrimmed.length;
+            const pickupsAttr = pickupsTrimmed.length > 0
+                ? ` data-tip-pickups="${esc(encodeURIComponent(JSON.stringify({ p: pickupsTrimmed, more: Math.max(0, pickupExtra) })))}"`
+                : '';
+            const accStatusAttr = ` data-tip-acc-status="${agg.status}|${agg.inChest}|${agg.qty}|${agg.missingQty}"`;
+            // Status overlay glyph: ✓ deposited, ✗ missing, ½ partial, 💀 died. Enemy = none.
+            const badgeMap = { deposited: '✓', missing: '✗', partial: '½', died: '💀', enemy: '' };
+            const badgeChar = badgeMap[agg.status] || '';
+            const statusBadge = badgeChar
+                ? `<span class="ll-acc-status-badge ll-acc-status-badge-${agg.status}" aria-hidden="true">${badgeChar}</span>`
+                : '';
+            return `<div class="ll-preview-slot ll-acc-preview-${agg.status}" data-tip-item="${esc(agg.itemId)}" data-tip-source="loot" data-tip-qty="${agg.qty}"${valAttr}${pickupsAttr}${accStatusAttr}>
                 <img src="https://render.albiononline.com/v1/item/${encodeURIComponent(agg.itemId)}.png" class="ll-preview-icon" loading="lazy" onerror="this.style.display='none'" alt="${esc(altText)}">
+                ${statusBadge}
                 ${qtyBadge}
             </div>`;
         }).join('');
@@ -16610,6 +16643,9 @@ function buildTooltipContent(target) {
         const crafter = target.dataset.tipCrafter;
         const value = target.dataset.tipValue;
         const source = target.dataset.tipSource;
+        // Accountability extras (set on .ll-acc-preview .ll-preview-slot only).
+        const accStatusRaw = target.dataset.tipAccStatus;
+        const pickupsRaw = target.dataset.tipPickups;
         const lines = [];
         lines.push(`<div class="tip-header">
             <img src="https://render.albiononline.com/v1/item/${encodeURIComponent(itemId)}.png${quality ? '?quality=' + encodeURIComponent(quality) : ''}" class="tip-icon" onerror="this.style.display='none'" alt="">
@@ -16618,9 +16654,47 @@ function buildTooltipContent(target) {
                 <div class="tip-meta">${tier ? 'T' + tier : ''}${ench && ench !== '0' ? '.' + ench : ''}${quality && quality !== '1' ? ' · ' + esc(getQualityName(parseInt(quality))) : ''}</div>
             </div>
         </div>`);
+        // Accountability status banner — pops at the top so users see deposit state first.
+        if (accStatusRaw) {
+            const [st, inChest, looted, missingQty] = accStatusRaw.split('|');
+            const labelMap = {
+                deposited: { icon: '✓', text: `Deposited ${looted}/${looted}`, cls: 'tip-acc-deposited' },
+                partial:   { icon: '½', text: `Partial ${inChest}/${looted} (${missingQty} missing)`, cls: 'tip-acc-partial' },
+                missing:   { icon: '✗', text: `Missing ${looted} of ${looted}`, cls: 'tip-acc-missing' },
+                died:      { icon: '💀', text: `Lost on death (${looted})`, cls: 'tip-acc-died' },
+                enemy:     { icon: '⚔', text: `Enemy loot (${looted})`, cls: 'tip-acc-enemy' },
+            };
+            const lab = labelMap[st];
+            if (lab) lines.push(`<div class="tip-acc-status ${lab.cls}"><span class="tip-acc-status-icon">${lab.icon}</span> ${esc(lab.text)}</div>`);
+        }
         if (value && parseInt(value) > 0) lines.push(`<div class="tip-row"><span class="tip-label">Market value</span><span class="tip-val">${parseInt(value).toLocaleString()} 💰</span></div>`);
         if (crafter) lines.push(`<div class="tip-row"><span class="tip-label">Crafted by</span><span class="tip-val">${esc(crafter)}</span></div>`);
-        else if (source === 'loot') lines.push(`<div class="tip-row muted"><span class="tip-label">Crafter</span><span class="tip-val">Unknown — looted</span></div>`);
+        else if (source === 'loot' && !accStatusRaw) lines.push(`<div class="tip-row muted"><span class="tip-label">Crafter</span><span class="tip-val">Unknown — looted</span></div>`);
+        // Pickup details — when, from whom, where. Adds the most-needed context for accountability triage.
+        if (pickupsRaw) {
+            try {
+                const decoded = JSON.parse(decodeURIComponent(pickupsRaw));
+                const arr = decoded.p || [];
+                const more = decoded.more || 0;
+                if (arr.length > 0) {
+                    const fmtTime = (ms) => ms ? new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '—';
+                    const rowsHtml = arr.map(e => {
+                        const t = esc(fmtTime(e.t));
+                        const fromTxt = e.n
+                            ? `${esc(e.n)}${e.g ? ` <span class="tip-pickup-guild">[${esc(e.g)}]</span>` : ''}`
+                            : '<span class="tip-pickup-muted">unknown source</span>';
+                        const loc = e.l ? `<span class="tip-pickup-loc">📍 ${esc(e.l)}</span>` : '';
+                        return `<div class="tip-pickup-row"><span class="tip-pickup-time">${t}</span><span class="tip-pickup-from">${fromTxt}</span>${loc}</div>`;
+                    }).join('');
+                    const moreLine = more > 0 ? `<div class="tip-pickup-more">+${more} more pickup${more !== 1 ? 's' : ''}</div>` : '';
+                    lines.push(`<div class="tip-pickups-section">
+                        <div class="tip-pickups-title">Pickups (${arr.length}${more > 0 ? '+' : ''})</div>
+                        ${rowsHtml}
+                        ${moreLine}
+                    </div>`);
+                }
+            } catch { /* malformed payload — silently skip the section */ }
+        }
         return lines.join('');
     }
     const txt = target.dataset.tip;

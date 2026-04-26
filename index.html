@@ -2300,6 +2300,15 @@
                     <div class="changelog-list">
                         <div class="changelog-entry">
                             <div class="changelog-date">April 26, 2026</div>
+                            <div class="changelog-title">🔍 Accountability strip: prominent ✓/✗ badges + rich pickup tooltip</div>
+                            <ul>
+                                <li><strong>Bigger, clearer status badges.</strong> Replaced the small corner dots with 16px ✓/✗ badges in the top-right of each icon. Deposited = green ✓, missing = red ✗ (with a soft red glow on the icon border so misses pop visually), partial = yellow ½, lost on death = 💀. Both deposited and missing now stand out at a glance — no need to expand the card.</li>
+                                <li><strong>Hover any preview icon for pickup detail.</strong> Tooltip now shows a status banner (<code>✗ Missing 4 of 4</code>, <code>½ Partial 3/5</code>, etc.) plus a Pickups list with one row per pickup: time · looter name · guild · 📍 zone. Zone shown when Go client v1.3.0+ captured it. Up to 8 pickups inline; longer histories show "+N more".</li>
+                                <li><strong>Source thread-through.</strong> Pickup events now also carry <code>looted_from_name</code> + guild, so the tooltip shows whose corpse items came from — fast triage when a guildmate's pickups disappear (died with vs picked up pre-death).</li>
+                            </ul>
+                        </div>
+                        <div class="changelog-entry">
+                            <div class="changelog-date">April 26, 2026</div>
                             <div class="changelog-title">🎨 Accountability: status-aware icon strip on player card header</div>
                             <ul>
                                 <li><strong>Pickups visible at a glance.</strong> Accountability player cards now show an icon-strip preview in the header (same pattern as the regular session view), with status overlays per item: <span style="color:var(--profit-green);">green border + dot</span> for deposited, <span style="color:#fbbf24;">yellow</span> for partial, <span style="color:var(--loss-red);">red</span> for missing, greyed for lost-on-death, faint red for enemy loot.</li>
