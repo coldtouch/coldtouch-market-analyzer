@@ -2,6 +2,23 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-04-27 — SQLITE_BUSY Tier 4: single-writer queue + 90s watchdog
+
+The April 25 `process.abort()` handler caught synchronous SQLITE_BUSY errors raised through `uncaughtException`, but it could not catch the actual failure mode that took down PID 489379 today: a transaction that *silently hung* without throwing. The journal stopped at 23:54 CEST. PID stayed alive at 2.9 GB RSS for 10 hours. systemctl reported `active`. Market cache went stale. Zero FATAL log lines. The handler had nothing to fire on.
+
+**Tier 4 ships two interlocking mechanisms:**
+
+- **`withWriteLock(label, fn)`** — a single Promise-queue wrapper that serializes every batch write across both the `db` and `statsDb` connections. SQLite WAL allows concurrent readers but only ONE writer at the file level; when both connections previously called `BEGIN` concurrently, one waited up to 30 s on `busy_timeout`, and if the active tx exceeded 30 s the waiter got `SQLITE_BUSY` — that's the cascade root cause. With this queue, two writers can never both be in `BEGIN/COMMIT` simultaneously, so the contention window doesn't exist.
+- **90s per-tx watchdog** — each lock-holder is wrapped in a `setTimeout(90_000)` that calls `process.abort()` if `done()` isn't invoked. Caps any future silent wedge at 90 seconds instead of 10 hours, and unlike `uncaughtException` doesn't require a thrown error to fire.
+
+All 10 batch-write sites were wrapped: `recordSnapshots`, `flushNatsBuffer`, `computeSpreadStats.flushWrites`, `computeAnalytics.flushBulk`, `computeAnalytics` EMA stream, `compactOldData` Tier1→2 + Tier2→3, `backfillHistoricalData.batchInsert`, and both `priceRefCache` initial + incremental builds. Each site preserves its existing per-step error callback + ROLLBACK pattern from Tier 2; the wrap only adds the queue acquire + 90s watchdog around it.
+
+Telemetry: queue depth >5 logs a warning; any single write held >30 s logs a warning on a 30s heartbeat; any write held >5 s logs the elapsed time at completion. These give early-warning visibility before the watchdog fires.
+
+Today's outage recovery: SIGKILL on wedged PID 489379 (32 min CPU consumed, peaked at 10.2 GB memory before settling at 2.9 GB), `systemctl start albion-saas`. Sub-10s recovery to PID 490291.
+
+---
+
 ### 2026-04-26 — Accountability tooltip: "Verified by chest log" line
 
 When a slot represents items that the chest log corroborates as deposited (`it.verified === true`), the hover tooltip now shows a green-on-green `✓ Verified by chest log (N/M)` bar between the status banner and the Pickups section. When verification is partial (e.g. chest log shows player deposited 2/4 of a pickup), the line reads `(2/4 of pickup)` instead of `(2/4)`.

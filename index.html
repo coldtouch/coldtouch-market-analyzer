@@ -2299,6 +2299,17 @@
                     <div id="changelog-wrapper" style="max-height: 500px; overflow-y: auto; position: relative;">
                     <div class="changelog-list">
                         <div class="changelog-entry">
+                            <div class="changelog-date">April 27, 2026</div>
+                            <div class="changelog-title">🛡️ SQLITE_BUSY Tier 4: single-writer queue + 90s watchdog</div>
+                            <ul>
+                                <li><strong>Catches the silent-wedge failure mode.</strong> The April 25 <code>process.abort()</code> handler caught synchronous SQLITE_BUSY thrown via <code>uncaughtException</code> — but today's outage was a transaction that <em>silently hung</em> for 10 hours with no FATAL line, no exception, no abort. The handler had nothing to fire on. The 90s per-tx watchdog catches exactly this case.</li>
+                                <li><strong>Single-writer queue.</strong> All 10 batch-write sites (recordSnapshots, NATS flush, spread-stats, analytics bulk + EMA, compaction tier1→2 + tier2→3, backfill, priceRefCache init + incremental) now go through <code>withWriteLock(label, fn)</code> — a JS-side Promise queue that ensures only one writer holds <code>BEGIN</code> at any moment, regardless of which connection (db vs statsDb). SQLite WAL allows concurrent readers but only ONE writer at the file level — the previous cross-connection contention is now structurally impossible.</li>
+                                <li><strong>Watchdog.</strong> Each lock-holder is wrapped in <code>setTimeout(90_000)</code>. If <code>done()</code> isn't called in 90s the process aborts for clean systemd restart. Caps any future silent wedge at 90s instead of 10 hours.</li>
+                                <li><strong>Telemetry.</strong> Queue depth >5 logs a warning. Any single write held >30s logs a warning every 30s. Any write held >5s logs the elapsed time on completion. Early warning before the watchdog fires.</li>
+                                <li><strong>Today's outage:</strong> SIGKILL on PID 489379 (32 min CPU consumed, peaked at 10.2 GB memory before settling at 2.9 GB), <code>systemctl start</code>. Sub-10s recovery to PID 490291. Tier 4 ships immediately to prevent recurrence.</li>
+                            </ul>
+                        </div>
+                        <div class="changelog-entry">
                             <div class="changelog-date">April 26, 2026</div>
                             <div class="changelog-title">🛡️ Accountability tooltip: "Verified by chest log" line</div>
                             <ul>
