@@ -12834,6 +12834,41 @@ async function runAccountabilityCheck() {
             return s + (pe ? pe.price * it.looted : 0);
         }, 0);
 
+        // Header icon strip — mirror the regular session view's preview strip but with
+        // accountability status overlays per item (deposited / partial / missing / died / enemy).
+        // Aggregate by itemId+status so the same item lost-on-death and surviving doesn't merge.
+        const stripAgg = new Map();
+        for (const it of p.items) {
+            let status;
+            if (it.lostOnDeath) status = 'died';
+            else if (it.inChest === -1) status = 'enemy';
+            else if (it.missing === 0) status = 'deposited';
+            else if (it.inChest > 0) status = 'partial';
+            else status = 'missing';
+            const key = `${it.itemId}|${status}`;
+            const pe = priceMap[it.itemId];
+            const valEach = pe?.price > 0 ? pe.price : 0;
+            const existing = stripAgg.get(key);
+            if (existing) {
+                existing.qty += it.looted;
+                existing.totalValue += valEach * it.looted;
+            } else {
+                stripAgg.set(key, { itemId: it.itemId, qty: it.looted, totalValue: valEach * it.looted, status });
+            }
+        }
+        const stripSorted = [...stripAgg.values()].sort((a, b) => b.totalValue - a.totalValue);
+        const statusLabel = { deposited: 'Deposited', partial: 'Partial', missing: 'Missing', died: 'Lost on death', enemy: 'Enemy loot' };
+        const accStripHtml = stripSorted.map(agg => {
+            const valAttr = agg.totalValue > 0 ? ` data-tip-value="${Math.floor(agg.totalValue)}"` : '';
+            const qtyBadge = agg.qty > 1 ? `<span class="ll-preview-qty-badge">${agg.qty}</span>` : '';
+            const iName = getFriendlyName(agg.itemId) || agg.itemId;
+            const altText = `${iName} ×${agg.qty} — ${statusLabel[agg.status]}`;
+            return `<div class="ll-preview-slot ll-acc-preview-${agg.status}" data-tip-item="${esc(agg.itemId)}" data-tip-source="loot" data-tip-qty="${agg.qty}"${valAttr}>
+                <img src="https://render.albiononline.com/v1/item/${encodeURIComponent(agg.itemId)}.png" class="ll-preview-icon" loading="lazy" onerror="this.style.display='none'" alt="${esc(altText)}">
+                ${qtyBadge}
+            </div>`;
+        }).join('');
+
         const enemyBorder = p.isEnemy ? 'border-left: 3px solid var(--loss-red); opacity: 0.7;' : '';
         const roleTag = p.isEnemy
             ? '<span style="font-size:0.6rem; padding:0.1rem 0.35rem; background:rgba(239,68,68,0.2); color:var(--loss-red); border-radius:8px; margin-left:0.3rem;">Enemy Loot</span>'
@@ -12847,6 +12882,7 @@ async function runAccountabilityCheck() {
                     <span class="ll-player-name">${esc(p.name)}</span>${deathTag}${roleTag}
                     ${p.guild ? `<span class="ll-player-guild">[${esc(p.guild)}]</span>` : ''}
                 </div>
+                <div class="ll-item-preview ll-acc-preview">${accStripHtml}</div>
                 <div class="ll-player-stats">
                     ${p.isEnemy ? `<div class="ll-player-stat">
                         <span class="ll-stat-label">Looted From</span>

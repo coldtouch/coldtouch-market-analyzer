@@ -2,6 +2,22 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-04-26 — Accountability: status-aware icon strip on player card header
+
+The accountability player cards previously only showed item icons inside the expanded body — to see what a player picked up you had to click the card open. The regular session view (uploaded .txt or live session) shows an icon-strip preview right in the card header, summarizing pickups at a glance. Brought the same strip into accountability with status overlays per item:
+
+- **Green border + ●** — fully deposited
+- **Yellow border + ●** — partially deposited
+- **Red border + ●** — missing
+- **Greyed + dim** — lost on death (mirrors the existing `.ll-preview-died` pattern)
+- **Faint red border** — enemy loot (no deposit math)
+
+Icons are aggregated by `itemId + status` (so the same item lost-on-death and surviving stay separated visually) and sorted by total silver value descending — most-valuable hits lead. Hover a slot to get the existing rich tooltip (item name, tier, market value, crafter — the global tooltip system already handled `data-tip-item`). Status corner-dot uses the same colors as the per-row status dots in the expanded card body, so the in-header preview matches the in-row legend exactly.
+
+Verified end-to-end against a real shared session (`loot-events-2026-04-25_22-28-25` with 290 events, 15 player cards, mixed deposit states) — all five status classes render correctly and re-aggregate when the friendly-guild perspective is flipped.
+
+---
+
 ### 2026-04-26 — Loot Logger: friendly-guild perspective override
 
 Accountability auto-detected the "primary guild" by picking the guild with the most captured items. When the user's own guild was in the minority of events (e.g. running a small-roster fight near a larger enemy guild), auto-detect picked the wrong side as friendly and the whole accountability math flipped — your guildmates got tagged as enemies and the enemy's deposits were treated as your own.

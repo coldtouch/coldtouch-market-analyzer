@@ -2300,6 +2300,15 @@
                     <div class="changelog-list">
                         <div class="changelog-entry">
                             <div class="changelog-date">April 26, 2026</div>
+                            <div class="changelog-title">🎨 Accountability: status-aware icon strip on player card header</div>
+                            <ul>
+                                <li><strong>Pickups visible at a glance.</strong> Accountability player cards now show an icon-strip preview in the header (same pattern as the regular session view), with status overlays per item: <span style="color:var(--profit-green);">green border + dot</span> for deposited, <span style="color:#fbbf24;">yellow</span> for partial, <span style="color:var(--loss-red);">red</span> for missing, greyed for lost-on-death, faint red for enemy loot.</li>
+                                <li><strong>Aggregated by itemId + status</strong> so the same item lost-on-death and surviving stay separated visually. Sorted by total silver value descending — most-valuable hits lead. Hover any slot for the rich item tooltip (name, tier, market value, crafter).</li>
+                                <li><strong>Re-aggregates on perspective flip</strong> — switching the Friendly guild dropdown causes the strips to recompute, so a guildmate flipped to "enemy" perspective immediately shows their items as enemy-loot rather than deposited/missing.</li>
+                            </ul>
+                        </div>
+                        <div class="changelog-entry">
+                            <div class="changelog-date">April 26, 2026</div>
                             <div class="changelog-title">🛡️ Loot Logger: friendly-guild perspective override</div>
                             <ul>
                                 <li><strong>Auto-detect was guessing wrong</strong> when your guild was in the minority of captured events — guildmates got tagged as enemies and the enemy's deposits were credited to your side. Common in small-roster fights near a larger enemy guild.</li>

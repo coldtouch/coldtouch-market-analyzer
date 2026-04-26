@@ -6728,6 +6728,54 @@ footer {
     max-width: 100%;
 }
 
+/* Accountability header preview — same .ll-preview-slot base, but with status
+   overlays per item so the header strip surfaces deposited/missing at a glance.
+   Mirrors the regular session view's icon strip; differentiation is via border
+   color + a subtle status dot in the corner. */
+.ll-acc-preview-deposited .ll-preview-icon {
+    border-color: rgba(74, 222, 128, 0.55) !important;
+    box-shadow: inset 0 0 0 1px rgba(74, 222, 128, 0.18);
+}
+.ll-acc-preview-partial .ll-preview-icon {
+    border-color: rgba(251, 191, 36, 0.6) !important;
+    box-shadow: inset 0 0 0 1px rgba(251, 191, 36, 0.22);
+}
+.ll-acc-preview-missing .ll-preview-icon {
+    border-color: rgba(239, 68, 68, 0.7) !important;
+    box-shadow: inset 0 0 0 1px rgba(239, 68, 68, 0.28), 0 0 0 1px rgba(239, 68, 68, 0.12);
+}
+.ll-acc-preview-died {
+    opacity: 0.55;
+    filter: grayscale(55%);
+    transition: opacity 0.12s, filter 0.12s;
+}
+.ll-acc-preview-died .ll-preview-icon {
+    border-color: rgba(239, 68, 68, 0.55) !important;
+    box-shadow: inset 0 0 0 1px rgba(239, 68, 68, 0.22);
+}
+.ll-acc-preview-died:hover { opacity: 1; filter: grayscale(0); }
+.ll-acc-preview-enemy .ll-preview-icon {
+    border-color: rgba(239, 68, 68, 0.45) !important;
+}
+/* Tiny status dot in the corner of each icon — reads at a glance even when the
+   border color blends with the dark theme. */
+.ll-acc-preview-deposited::before,
+.ll-acc-preview-partial::before,
+.ll-acc-preview-missing::before {
+    content: '';
+    position: absolute;
+    top: -2px;
+    left: -2px;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    z-index: 2;
+    box-shadow: 0 0 0 1px rgba(0,0,0,0.4);
+}
+.ll-acc-preview-deposited::before { background: var(--profit-green); }
+.ll-acc-preview-partial::before   { background: #fbbf24; }
+.ll-acc-preview-missing::before   { background: var(--loss-red); }
+
 /* "Died with" preview slots — shown after the normal loot icons for players
    who died. Greyed + red-bordered so they read as "these are the items they
    lost". Full opacity on hover so the icon stays recognizable. The divider
