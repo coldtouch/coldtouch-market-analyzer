@@ -2300,6 +2300,18 @@
                     <div class="changelog-list">
                         <div class="changelog-entry">
                             <div class="changelog-date">April 27, 2026</div>
+                            <div class="changelog-title">🌍 Go client v1.3.1: in-session zone tracking finally works</div>
+                            <ul>
+                                <li><strong>Root cause for 290 empty-location events identified.</strong> Not the OpJoin field — but the fact that <code>opChangeCluster</code> (the in-session zone-transition opcode) was never handled at all. OpJoin only fires on initial connect, so every walk between zones during a session was silent. Loot/death events captured after that first connect carried whatever location was set at startup (often empty if the client started mid-session).</li>
+                                <li><strong>New <code>opChangeCluster</code> handler.</strong> Reads destination zone from param 0 — verified end-to-end on a 4-transition walk test (hideout → 3312 → 3348 → 3312 → hideout). Each transition correctly updated player location.</li>
+                                <li><strong>OpJoin field reverted to its original index.</strong> Earlier today I incorrectly switched it based on misread diag data; the 3-zone test proved the original location field was right all along, just compounded with the missing opChangeCluster handler made it look broken.</li>
+                                <li><strong>Net effect:</strong> the <code>📍 Zone</code> tooltip on accountability pages will finally populate correctly for ZvZ scenarios. Loot pickups, death locations, and per-event zone tagging now reflect the actual current zone — not a stale connect-time value.</li>
+                                <li><strong>5-second invulnerability bubble note:</strong> death events practically never fired during the 4-second post-fix OpJoin re-sync window anyway, so the original race wasn't corrupting death-zone data in practice. Loot pickups during that window were the realistic risk, now fixed.</li>
+                                <li><strong><a href="https://github.com/coldtouch/albiondata-client/releases/tag/v1.3.1" target="_blank">Released as Go client v1.3.1</a></strong> — auto-built by GitHub Actions on tag push.</li>
+                            </ul>
+                        </div>
+                        <div class="changelog-entry">
+                            <div class="changelog-date">April 27, 2026</div>
                             <div class="changelog-title">📍 Zone field discovered + device-auth rate limit raised</div>
                             <ul>
                                 <li><strong>Zone identifier finally captured.</strong> The April 2026 game opcode shift moved the zone field from OpJoin param 8 → param 67. Identified via the diagnostic binary's <code>[ZONE-DIAG]</code> dump (189 param entries across multiple joins). Format: <code>@HIDEOUT@&lt;id&gt;@&lt;UUID&gt;</code> for hideouts, plain UUID for open-world zones. Fix shipped in the Go client; the long-broken <code>Updating player location to ...</code> log line now fires with real data.</li>

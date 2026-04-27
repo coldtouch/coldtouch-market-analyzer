@@ -2,6 +2,23 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-04-27 — Go client v1.3.1: in-session zone tracking via opChangeCluster
+
+**Root cause confirmed.** The reason the entire 290-event production session had empty `Location` on every loot/death event wasn't the OpJoin field — it was that **opChangeCluster (=35, on-wire 41 after April 2026 +6 shift) was never handled at all.** OpJoin only fires on initial connect; every in-session zone transition went silent. So loot/death events fired in subsequent zones still carried the connect-time location (which was usually empty because the user started the client mid-session, after the OpJoin had already passed).
+
+**Two fixes in v1.3.1:**
+
+- **New `operation_change_cluster.go` handler.** Reads destination from mapstructure index `"0"`. Verified across a hideout → 3312 → 3348 → 3312 → hideout walk-out test: 4 transitions, 3 distinct destination values, all captured correctly. Wired into both raw and shifted branches of `decodeResponse`.
+- **OpJoin reverted to `mapstructure:"8"`.** I temporarily switched to `"67"` earlier today based on a misread of the diag data (had confused the player's home/hideout reference at param 67 with their actual location). The 3-zone walk-out test conclusively showed param 8 matches the actual current zone every time, while param 67 stayed pinned to `@HIDEOUT@3312@<UUID>` regardless of where the player was.
+
+**Combined effect:** both handlers now agree on the current zone for every transition. `[ChangeCluster]` and the subsequent OpJoin re-sync log lines now show identical values (no more 4-second clobbering window). LootEvent.Location and DeathEvent.Location will populate correctly for in-session transitions, which means the website's 📍 Zone tooltip on accountability pages will finally render for real ZvZ scenarios.
+
+**Note on impact mitigation:** The existing 5-second post-zone-change invulnerability bubble means death events practically never fire during the 4-second OpJoin clobber window — so the OpJoin race condition was never going to corrupt death zones in practice. Loot pickups in that window were the realistic risk, now fixed.
+
+**Released:** [albiondata-client v1.3.1](https://github.com/coldtouch/albiondata-client/releases/tag/v1.3.1) cut via `git tag v1.3.1 && git push --tags`. GitHub Actions release workflow auto-triggers cross-platform builds.
+
+---
+
 ### 2026-04-27 — Device-auth rate limit raised + zone field discovered
 
 **Rate limit bumped 3 → 10 requests per 15 min per IP** on `/api/device/code`. The previous cap was too tight: a user retrying device-auth during normal setup, or troubleshooting a broken auth flow, would burn through 3 attempts in seconds and then be locked out. The Go client previously masked this as a misleading "authorization timed out" — fix landed in the companion Go client commit (server now returns the same JSON shape, but the client surfaces the rate-limit message verbatim instead of timing out on zero-value polling).
