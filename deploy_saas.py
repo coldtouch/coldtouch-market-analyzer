@@ -1189,6 +1189,29 @@ function resolveCanonicalItemId(numericId, fallbackString) {
   return fallbackString;
 }
 
+// === CANONICAL WEIGHTMAP (parallel to CANONICAL_ITEMMAP) ===
+// Same anti-stale-client logic applied to per-item weight in kg. Sources from
+// /opt/albion-saas/weightmap.json — same shipping pattern as itemmap.
+let CANONICAL_WEIGHTMAP = {};
+try {
+  const raw = fs.readFileSync('/opt/albion-saas/weightmap.json', 'utf8');
+  CANONICAL_WEIGHTMAP = JSON.parse(raw);
+  console.log(`[Weightmap] Loaded ${Object.keys(CANONICAL_WEIGHTMAP).length} canonical weight mappings from weightmap.json`);
+} catch (e) {
+  console.warn(`[Weightmap] Failed to load /opt/albion-saas/weightmap.json: ${e.message}. Re-resolution disabled — uploads will use client-supplied weights as-is.`);
+}
+
+// Resolve weight from numericID via canonical map, falling back to client value
+// when numericID is missing/unmapped. Returns a finite number; 0 is a valid
+// "weight unknown" fallback.
+function resolveCanonicalWeight(numericId, fallbackWeight) {
+  const n = parseInt(numericId, 10);
+  if (!Number.isFinite(n) || n <= 0) return Number.isFinite(fallbackWeight) ? fallbackWeight : 0;
+  const w = CANONICAL_WEIGHTMAP[String(n)];
+  if (typeof w === 'number' && Number.isFinite(w) && w >= 0) return w;
+  return Number.isFinite(fallbackWeight) ? fallbackWeight : 0;
+}
+
 // Global request timeout + double-response guard.
 // When a handler runs long, the timeout fires a 503 early. The ORIGINAL handler
 // eventually completes and calls res.json(), hitting ERR_HTTP_HEADERS_SENT
@@ -4048,16 +4071,17 @@ wss.on('connection', (ws, req) => {
 
         // INSERT OR IGNORE — if the Go client WS reconnects and replays the same event,
         // the dedupe index drops the replay silently.
-        // Re-resolve item_id from numericId via canonical itemmap. Stale-itemmap
-        // clients send wrong item_id strings (off-by-one enchant); the numericId
-        // is authoritative because the game-protocol packet carries it directly.
+        // Re-resolve item_id AND weight from numericId via canonical maps.
+        // Stale-itemmap/weightmap clients send wrong values; the numericId is
+        // authoritative because the game-protocol packet carries it directly.
         const canonicalItemId = resolveCanonicalItemId(ev.numericId, ev.itemId || '');
+        const canonicalWeight = resolveCanonicalWeight(ev.numericId, ev.weight || 0);
         db.run(`INSERT OR IGNORE INTO loot_events (user_id, session_id, timestamp, looted_by_name, looted_by_guild, looted_by_alliance, looted_from_name, looted_from_guild, looted_from_alliance, item_id, numeric_id, quantity, weight, is_silver, location)
           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           [ws.user.id, ws.lootSessionId, ev.timestamp || Date.now(),
            ev.lootedBy.name, ev.lootedBy.guild || '', ev.lootedBy.alliance || '',
            ev.lootedFrom?.name || '', ev.lootedFrom?.guild || '', ev.lootedFrom?.alliance || '',
-           canonicalItemId, ev.numericId || 0, ev.quantity || 1, ev.weight || 0, ev.isSilver ? 1 : 0,
+           canonicalItemId, ev.numericId || 0, ev.quantity || 1, canonicalWeight, ev.isSilver ? 1 : 0,
            (ev.location || '').slice(0, 80)]);
 
         // Push to user's browser session(s) in real-time
@@ -4098,6 +4122,28 @@ wss.on('connection', (ws, req) => {
       if (msg.type === 'chest-capture' && ws.clientType === 'game-client' && ws.user) {
         const capture = msg.data;
         if (!capture || !capture.items) return;
+
+        // Re-resolve item_id and weight per item via canonical maps.
+        // Same anti-stale-client logic as the loot-event + chest-log paths:
+        // numericID from the game packet is authoritative, client's resolved
+        // strings/weights can be wrong if their itemmap/weightmap is stale.
+        let captureReResolved = 0;
+        for (const item of capture.items) {
+          if (!item || typeof item !== 'object') continue;
+          const canonicalItemId = resolveCanonicalItemId(item.numericId, item.itemId || '');
+          if (canonicalItemId !== item.itemId) {
+            item.itemId = canonicalItemId;
+            captureReResolved++;
+          }
+          // Weight: re-resolve only when numericId resolves to a known weight.
+          // Preserves client-supplied weight for items added after our last
+          // weightmap regen.
+          const canonicalWeight = resolveCanonicalWeight(item.numericId, item.weight);
+          if (canonicalWeight !== item.weight) {
+            item.weight = canonicalWeight;
+          }
+        }
+        if (captureReResolved > 0) console.log(`[ChestCapture] Re-resolved ${captureReResolved}/${capture.items.length} item_ids via canonical itemmap (user=${ws.user.username})`);
 
         // Add player info
         capture.playerName = ws.user.username;
@@ -5953,6 +5999,21 @@ require('http').createServer((req, res) => {
         print(f"Uploaded itemmap.json ({len(itemmap_bytes)} bytes via SFTP) from {itemmap_src}")
     else:
         print(f"WARNING: itemmap.json not found at {itemmap_src} — backend re-resolution will be a no-op")
+
+    # Upload weightmap.json — same treatment as itemmap.json. Powers backend
+    # re-resolution of per-item weight from numericId, fixing wrong weights from
+    # stale-weightmap clients (companion fix to itemmap re-resolution).
+    weightmap_src = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                  '..', 'albiondata-client-custom', 'weightmap.json')
+    weightmap_src = os.path.abspath(weightmap_src)
+    if os.path.isfile(weightmap_src):
+        with open(weightmap_src, 'rb') as src_f:
+            weightmap_bytes = src_f.read()
+        with sftp.file('/opt/albion-saas/weightmap.json', 'wb') as f:
+            f.write(weightmap_bytes)
+        print(f"Uploaded weightmap.json ({len(weightmap_bytes)} bytes via SFTP) from {weightmap_src}")
+    else:
+        print(f"WARNING: weightmap.json not found at {weightmap_src} — backend weight re-resolution will be a no-op")
 
     sftp.close()
     print(f"Uploaded backend.js ({len(backend_js)} bytes via SFTP)")
