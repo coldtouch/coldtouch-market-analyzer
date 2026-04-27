@@ -2300,6 +2300,16 @@
                     <div class="changelog-list">
                         <div class="changelog-entry">
                             <div class="changelog-date">April 27, 2026</div>
+                            <div class="changelog-title">🔐 Device auth fix: CORS allowlist + redirect query preservation</div>
+                            <ul>
+                                <li><strong>"Network error" on Authorize is fixed.</strong> CORS was hardcoded to allow only <code>https://coldtouch.github.io</code>, so any browser running on <code>https://albionaitool.xyz</code> got its auth response blocked by the browser's CORS check. Allowlist now includes both production origins; same-origin / curl requests still pass through.</li>
+                                <li><strong>Redirect now preserves <code>?device=</code> query string.</strong> Visiting <code>https://albionaitool.xyz/?device=ABC-DEF</code> previously redirected to the GitHub Pages root WITHOUT the device parameter, so the auth modal never opened. Fixed.</li>
+                                <li><strong>Go client console output cleaned up.</strong> The auth URL was printed inside a 46-char box but the URL is ~68 chars long — users only saw the truncated <code>https://coldtouch.github.io/coldtouch-mar</code> prefix and couldn't copy the full link. URL now prints on its own line outside the box, fully visible. Misleading "enter code" step removed (the code is already embedded in the URL — no manual entry on the site).</li>
+                                <li><strong>Zone-test exe rebuilt</strong> with the new console output. Available at <code>D:\Coding\albiondata-client-custom\albiondata-client-zone-test.exe</code>.</li>
+                            </ul>
+                        </div>
+                        <div class="changelog-entry">
+                            <div class="changelog-date">April 27, 2026</div>
                             <div class="changelog-title">🛡️ SQLITE_BUSY Tier 4: single-writer queue + 90s watchdog</div>
                             <ul>
                                 <li><strong>Catches the silent-wedge failure mode.</strong> The April 25 <code>process.abort()</code> handler caught synchronous SQLITE_BUSY thrown via <code>uncaughtException</code> — but today's outage was a transaction that <em>silently hung</em> for 10 hours with no FATAL line, no exception, no abort. The handler had nothing to fire on. The 90s per-tx watchdog catches exactly this case.</li>

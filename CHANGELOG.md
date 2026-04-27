@@ -2,6 +2,20 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-04-27 — Device auth fix: CORS allowlist + redirect query preservation
+
+Device-authorization flow from the Go client was broken for any user on `albionaitool.xyz`. Clicking "Authorize" surfaced a generic "Network error" with no actionable info.
+
+**Three bugs converged:**
+
+- **CORS hardcoded to GitHub Pages only.** [deploy_saas.py:1130](deploy_saas.py:1130) set `cors({ origin: 'https://coldtouch.github.io', ... })`, so any browser origin other than the GitHub Pages mirror got `Access-Control-Allow-Origin: https://coldtouch.github.io` regardless of the real origin. Browser blocked the response, frontend's `catch` reported "Network error." Fix: `ALLOWED_ORIGINS` array gated by an `origin: (origin, cb) => …` callback. Both `coldtouch.github.io` and `albionaitool.xyz` now allowed; same-origin / curl requests (no `Origin` header) pass through.
+- **Root redirect stripped query string.** [deploy_saas.py:1273](deploy_saas.py:1273) did `res.redirect('https://coldtouch.github.io/coldtouch-market-analyzer/')` — a flat string, no `req.url`. Visiting `https://albionaitool.xyz/?device=ABC-DEF` redirected to the GitHub Pages root WITHOUT the `?device=` query param, so the auth modal never opened. Fix: extract `?…` from `req.url` and append to the redirect target.
+- **Go client console box truncated the auth URL.** [device_auth.go:60](D:/Coding/albiondata-client-custom/client/device_auth.go:60) printed the URL with `%-40s` formatting inside a 46-char box, but the verification URL is ~68 chars (including `?device=ABC-DEF`). Users saw `https://coldtouch.github.io/coldtouch-mar` truncated and couldn't copy the full link. Fix: print the URL on its own line *outside* the box, alongside the code as informational only (the code is already embedded in the URL — no manual entry on the site).
+
+After deploy: confirmed via curl that `Origin: albionaitool.xyz` echoes back as `Access-Control-Allow-Origin: albionaitool.xyz`, `Origin: coldtouch.github.io` echoes back as itself (no regression), and `?device=TEST123` is preserved through the redirect to `https://coldtouch.github.io/coldtouch-market-analyzer/?device=TEST123`. Zone-test exe rebuilt with the cleaner console output.
+
+---
+
 ### 2026-04-27 — SQLITE_BUSY Tier 4: single-writer queue + 90s watchdog
 
 The April 25 `process.abort()` handler caught synchronous SQLITE_BUSY errors raised through `uncaughtException`, but it could not catch the actual failure mode that took down PID 489379 today: a transaction that *silently hung* without throwing. The journal stopped at 23:54 CEST. PID stayed alive at 2.9 GB RSS for 10 hours. systemctl reported `active`. Market cache went stale. Zero FATAL log lines. The handler had nothing to fire on.

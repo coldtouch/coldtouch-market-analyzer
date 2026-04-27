@@ -1127,7 +1127,18 @@ client.on('disconnect', () => console.warn('[Discord] Client disconnected'));
 // === EXPRESS APP ===
 const app = express();
 app.set('trust proxy', 1); // SEC-M2: real client IP behind nginx for rate limiters
-app.use(cors({ origin: 'https://coldtouch.github.io', credentials: true }));
+// Allow both the GitHub Pages mirror and the custom-domain frontend.
+// Device-auth flow + any browser running on albionaitool.xyz needs this — without it,
+// the auth response is CORS-blocked and the frontend surfaces the failure as "Network error".
+const ALLOWED_ORIGINS = ['https://coldtouch.github.io', 'https://albionaitool.xyz'];
+app.use(cors({
+  origin: (origin, cb) => {
+    if (!origin) return cb(null, true); // curl, server-to-server, same-origin
+    if (ALLOWED_ORIGINS.includes(origin)) return cb(null, true);
+    return cb(new Error('Not allowed by CORS'));
+  },
+  credentials: true
+}));
 // Security headers: HSTS, X-Content-Type-Options, X-Frame-Options, etc.
 // contentSecurityPolicy disabled — this is a JSON API, not an HTML server.
 app.use(helmet({ contentSecurityPolicy: false }));
@@ -1269,8 +1280,13 @@ function resolveUser(req, res, next) {
 }
 app.use('/api/', resolveUser);
 
-// Redirect root to GitHub Pages frontend
-app.get('/', (req, res) => res.redirect('https://coldtouch.github.io/coldtouch-market-analyzer/'));
+// Redirect root to GitHub Pages frontend, preserving query string so device-auth
+// links like https://albionaitool.xyz/?device=ABC-DEF carry the device code through.
+app.get('/', (req, res) => {
+  const qIdx = req.url.indexOf('?');
+  const qs = qIdx >= 0 ? req.url.substring(qIdx) : '';
+  res.redirect('https://coldtouch.github.io/coldtouch-market-analyzer/' + qs);
+});
 
 // Health check for monitoring
 // === NEWS / STATUS BANNER ===
