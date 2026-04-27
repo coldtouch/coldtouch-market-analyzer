@@ -2,6 +2,23 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-04-28 — Go client v1.3.4: ZvZ perf + NATS connection leak fix
+
+Two zero-behavior-change improvements to the Go client, validated against a real PvP session before tagging.
+
+**ZvZ perf (commit `79c5c4e`)** — five small low-risk edits on the per-packet/per-event hot path that fires hardest during PvP:
+- Hoisted the mapstructure decode hook + `reflect.TypeOf` calls from per-call closures inside `decodeParams` to package-level. Previously reallocated the closure value + recreated the reflect types on EVERY decoded event — at 50–200 events/sec during ZvZ that's a meaningful GC source.
+- Reuse the `uint8→string` param map via `sync.Pool` instead of `make(map[string]interface{})` per call. This was the dominant per-event allocation source. Cleared between uses with the Go 1.21+ `clear()` builtin.
+- Cache the source IPv4 as a `uint32` on the listener. The game server IP is set on session join and effectively never changes — short-circuits `SetServerFromIP` (the `.String()` allocation + albionstate mutex grab) on >99.9% of packets.
+- Drop four `log.Tracef`/`log.Trace` calls that fired per packet. Their format-string args (`.String()`, `GetAODataServerID`, `GetAODataIngestBaseURL`) evaluated even when trace logging was disabled, so each packet paid two extra mutex grabs on albionstate for no operational value.
+- Replace the per-unreliable-packet `make([]byte, n) + copy` with a slice reslice. Same semantics — drops 4-byte header — without an alloc. Position updates and other unreliable traffic fire constantly during PvP.
+
+**NATS connection leak fix (commit `b81cf6b`)** — `sendMsgToPublic*/Private*Uploaders` rebuilt their entire uploader chain on every dispatched message via `createUploaders()`, which calls `newNATSUploader` (`nats.Connect`, never closed) and/or `newHTTPUploaderPow` (fresh `http.Transport`, no keep-alive). Real costs: NATS path leaked one TCP connection per dispatched message (during market scraping that's hundreds of leaked goroutines/connections per second until process restart); POW path created a fresh `http.Transport` per call defeating HTTP keep-alive so every upload paid a TLS handshake. Fix: `uploaderCache` (`map[string][]uploader`) keyed by resolved target URL string with a small `RWMutex` + double-check pattern so `createUploaders` runs at most once per unique target string across the worker pool. The Public list's placeholder resolves to at most one URL per game-server region the user touches in a session, so the cache stays bounded (typically 1–4 keys).
+
+**Recommended upgrade for any guild member running v1.3.x.** Public release at https://github.com/coldtouch/albiondata-client/releases/tag/v1.3.4.
+
+---
+
 ### 2026-04-27 — Item-id mismatch: backend authoritative re-resolution + .txt 11th column
 
 User reported wrong enchant levels appearing on the website (e.g. their Master's Knight Armor .3 displayed as .4). Root cause traced to a stale `itemmap.json` shipped with the upstream Go client they were running (April 11 build): the April 13 game patch shifted ~75% of item IDs by exactly one position, but their itemmap was never regenerated. Their client's `resolveItemName(3506)` returned `T6_ARMOR_PLATE_SET2@4` instead of `@3`, and that wrong string got uploaded via .txt-file upload (no numericId in the format → backend trusted the string).

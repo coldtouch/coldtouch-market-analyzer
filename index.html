@@ -2299,6 +2299,24 @@
                     <div id="changelog-wrapper" style="max-height: 500px; overflow-y: auto; position: relative;">
                     <div class="changelog-list">
                         <div class="changelog-entry">
+                            <div class="changelog-date">April 28, 2026</div>
+                            <div class="changelog-title">⚡ Go client v1.3.4 — ZvZ perf + NATS connection leak fix</div>
+                            <ul>
+                                <li><strong>Five small low-risk edits on the per-packet/per-event hot path</strong> that fires hardest during PvP:
+                                    <ul>
+                                        <li>Hoisted the mapstructure decode hook + <code>reflect.TypeOf</code> calls from per-call closures to package-level (was reallocating per decoded event at 50–200/sec during ZvZ)</li>
+                                        <li>Reuse the <code>uint8→string</code> param map via <code>sync.Pool</code> instead of <code>make(map[string]interface{})</code> per call — the dominant per-event allocation source</li>
+                                        <li>Cache source IPv4 as <code>uint32</code> on the listener — game server IP never moves mid-session, so skip the per-packet <code>.String()</code> alloc + albionstate mutex grab on >99.9% of packets</li>
+                                        <li>Drop four <code>log.Tracef</code>/<code>log.Trace</code> calls that fired per packet — args evaluated even with trace logging off</li>
+                                        <li>Reslice the unreliable-packet header drop instead of <code>make+copy</code> — same semantics, no alloc</li>
+                                    </ul>
+                                </li>
+                                <li><strong>NATS connection leak fix</strong> — the dispatcher rebuilt the entire uploader chain (including a brand-new <code>nats.Connect</code>) for EVERY dispatched message, leaking a TCP connection per message in the NATS path and defeating HTTP keep-alive in the POW path. Now reuses per-target uploaders via a small <code>RWMutex</code>-guarded map keyed by the resolved URL string (typically 1–4 keys per session).</li>
+                                <li><strong>Validated against a real PvP session before tagging</strong> — no regressions, no freezes during the run. Recommended upgrade for any guild member running v1.3.x.</li>
+                                <li>Installer: <a href="https://github.com/coldtouch/albiondata-client/releases/tag/v1.3.4" target="_blank">github.com/coldtouch/albiondata-client/releases/tag/v1.3.4</a></li>
+                            </ul>
+                        </div>
+                        <div class="changelog-entry">
                             <div class="changelog-date">April 27, 2026</div>
                             <div class="changelog-title">🛡️ Item-ID mismatch fixed: backend now authoritative</div>
                             <ul>
