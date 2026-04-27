@@ -2300,7 +2300,25 @@
                     <div class="changelog-list">
                         <div class="changelog-entry">
                             <div class="changelog-date">April 27, 2026</div>
-                            <div class="changelog-title">🛑 Zone-name lookup shelved (auto-derived labels were misleading)</div>
+                            <div class="changelog-title">🗺️ Real zone names — found in <code>cluster/world.xml</code>!</div>
+                            <ul>
+                                <li><strong>The names were in the bin dumps all along</strong> — just in a file we hadn't checked. <code>cluster/world.xml</code> (13 MB) has every cluster's <code>displayname</code> attribute alongside the <code>id</code> we already had. 1423 entries covering every numeric zone ID + named special clusters.</li>
+                                <li><strong>User's actual zones from today's testing now resolve correctly:</strong>
+                                    <ul>
+                                        <li><code>3312</code> → <strong>Battlebrae Plain</strong> (T5 Highland Outland)</li>
+                                        <li><code>3348</code> → <strong>Battlebrae Grassland</strong> (T7 Highland Outland)</li>
+                                        <li><code>@HIDEOUT@3312@&lt;UUID&gt;</code> → <strong>Hideout in Battlebrae Plain</strong></li>
+                                        <li><code>2000</code> → <strong>Bridgewatch</strong>, <code>0000</code> → <strong>Thetford</strong>, <code>1000</code> → <strong>Lymhurst</strong>, <code>3004</code> → <strong>Martlock</strong>, <code>4000</code> → <strong>Fort Sterling</strong>, <code>3003</code> → <strong>Caerleon</strong>, <code>5000</code> → <strong>Brecilien</strong></li>
+                                    </ul>
+                                </li>
+                                <li><strong>All 4 display sites light up automatically</strong> — death tooltips, missing-item hover tooltip, rich pickup-detail tooltip, player-card "died with" preview tooltip. They already called <code>formatZone()</code> — just had to swap the pass-through stub for the lookup logic.</li>
+                                <li><strong>Verified end-to-end in browser preview</strong>: 16 test cases (royal cities, user's zones, hideouts, unknown numeric fallbacks, named clusters, edge cases) — all green, no console errors.</li>
+                                <li><strong>Future-proof:</strong> regenerate <code>zonemap.js</code> via <code>tmp_check/generate_zonemap.py</code> whenever ao-bin-dumps publishes new clusters (expansions, new outland zones).</li>
+                            </ul>
+                        </div>
+                        <div class="changelog-entry">
+                            <div class="changelog-date">April 27, 2026</div>
+                            <div class="changelog-title">🛑 Zone-name lookup shelved (auto-derived labels were misleading) (RESOLVED)</div>
                             <ul>
                                 <li><strong>Auto-derived labels removed.</strong> The "T5 Highland Keeper Outland Q5"–style descriptions generated from cluster filenames turned out to confuse more than help — players don't recognize them as zone names. Display reverts to raw cluster IDs (<code>3312</code>, <code>@HIDEOUT@3312@…</code>) which is at least unambiguous, until we source real names like "Bridgewatch" or "Holy Lake".</li>
                                 <li><strong>Infrastructure preserved.</strong> The 474-entry <code>zonemap.js</code> + <code>formatZone()</code> helper + display-site wiring all stay in place. <code>formatZone()</code> is currently a pass-through; swapping it back to the lookup body is one edit when we have real names.</li>

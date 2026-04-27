@@ -2,7 +2,41 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
-### 2026-04-27 — Zone-name lookup SHELVED pending real names
+### 2026-04-27 — Zone names UNSHELVED — found in ao-bin-dumps/cluster/world.xml
+
+**The names were in the bin dumps all along — just in a file we hadn't checked.** Research agent firing turned up `cluster/world.xml` (13MB) which has every cluster element with a `displayname` attribute alongside the `id` we already had. 1423 entries, every numeric zone ID + every named special cluster.
+
+**My earlier hand-curated KNOWN_NAMES guesses were ALL wrong.** Real mapping (verified by grep against world.xml):
+
+| ID | Real name | What I'd guessed |
+|---|---|---|
+| 0007 | Thetford Market | Bridgewatch ❌ |
+| 1002 | Lymhurst Market | Lymhurst ❌ |
+| 2002 | (other) | Martlock ❌ |
+| 3008 | (other) | Fort Sterling ❌ |
+| 4002 | (other) | Thetford ❌ |
+| 3013 | (other) | Brecilien ❌ |
+
+The actual royal cities live at 0000 / 1000 / 2000 / 3003 / 3004 / 4000 / 5000. Good thing we shelved before going wider with bad data.
+
+**User's actual ZvZ zones from today's testing now resolve correctly:**
+- `3312` → "Battlebrae Plain" (T5 Highland Outland)
+- `3348` → "Battlebrae Grassland" (T7 Highland Outland)
+- `@HIDEOUT@3312@<UUID>` → "Hideout in Battlebrae Plain"
+
+**Implementation:**
+- `tmp_check/generate_zonemap.py` rewritten to parse `world.xml` via regex, extracting every `(id, displayname)` pair. Skips entries with empty/filename-shaped displaynames (none in current dump).
+- `zonemap.js` regenerated: 1423 entries, ~52 KB.
+- `formatZone()` re-enabled with the lookup logic. Bonus: named clusters like "ARENA-01" also resolve now (→ "Arena1") because they have their own world.xml entries.
+- All 4 display sites (death tooltips, missing-item tooltip, rich pickup tooltip) light up automatically — they already called formatZone().
+
+**Verified in browser preview:** 16 test cases (royal cities, user's actual zones, hideouts with known/unknown parents, unknown numerics, named clusters, edge cases) — all green, no console errors.
+
+**Other research agents stopped** — once we found the answer locally, the GitHub repo hunt and packet-opcode investigation became redundant.
+
+---
+
+### 2026-04-27 — Zone-name lookup SHELVED pending real names (RESOLVED — see entry above)
 
 The zonemap feature shipped a few hours ago auto-derived labels from the cluster filenames in `ao-bin-dumps/cluster/` (e.g. `3312_WRL_HL_AUTO_T5_KPR_OUT_Q5.cluster.xml` → `"T5 Highland Keeper Outland Q5"`). User feedback: those derived labels are MORE confusing than the raw IDs. Players don't recognize them as zone identifiers at all and they actively mislead. Better to show raw `"3312"` until we have real human-readable names like `"Bridgewatch"` or `"Holy Lake"`.
 

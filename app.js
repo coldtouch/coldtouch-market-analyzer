@@ -354,21 +354,41 @@ function esc(str) {
     return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 }
 
-// SHELVED 2026-04-27: zone-name lookup is on hold until we source real
-// human-readable names. Auto-derived labels from ao-bin-dumps cluster
-// filenames (e.g. "T5 Highland Keeper Outland Q5") were tested and judged
-// MORE confusing than the raw ID — users don't recognize them as zones at
-// all and they actively mislead. Until we have real names (Bridgewatch,
-// Holy Lake, etc.) sourced from the community, an official API, or
-// reverse-engineered packets, formatZone() is a pass-through.
+// Map a raw Albion zone identifier to its in-game display name.
+// Source: ao-bin-dumps/cluster/world.xml — `displayname` attribute on every
+// cluster element. The bin dumps DO ship the user-facing names — they just
+// live in cluster/world.xml not in the per-cluster geometry files we'd
+// originally checked. window.ZONE_MAP carries 1423 entries (numeric zone
+// IDs + named special clusters) and is rebuilt by tmp_check/generate_zonemap.py.
 //
-// Re-enabling: when window.ZONE_MAP carries real zone names, swap the
-// pass-through body below for the lookup logic preserved in git history
-// (commit 9f248dc). Display sites — death tooltips, missing-item tooltip,
-// rich pickup-detail tooltip — already call formatZone() so they pick up
-// the change without further wiring.
+// Examples (all verified):
+//   "3312"                                   → "Battlebrae Plain"
+//   "3348"                                   → "Battlebrae Grassland"
+//   "2000"                                   → "Bridgewatch"
+//   "5000"                                   → "Brecilien"
+//   "@HIDEOUT@3312@<UUID>"                   → "Hideout in Battlebrae Plain"
+//   "@HIDEOUT@<unknown>@<UUID>"              → "Hideout (zone <id>)"  fallback
+//   "99999" (unmapped numeric)               → "Zone 99999"           fallback
+//   "" / null                                → ""
+//   anything else (named clusters)           → returned verbatim
 function formatZone(raw) {
     if (!raw) return '';
+    const map = (typeof window !== 'undefined' && window.ZONE_MAP) || {};
+    // Hideout: @HIDEOUT@<parentClusterId>@<UUID>
+    if (typeof raw === 'string' && raw.startsWith('@HIDEOUT@')) {
+        const parts = raw.split('@');
+        const parentId = parts[2] || '';
+        const parentName = map[parentId];
+        if (parentName) return `Hideout in ${parentName}`;
+        if (parentId) return `Hideout (zone ${parentId})`;
+        return 'Hideout';
+    }
+    // Direct lookup — covers numeric IDs and named clusters that have an
+    // entry in world.xml (e.g. "ISLAND-GUILD-..." has its own displayname).
+    if (map[raw]) return map[raw];
+    // Numeric ID with no map entry — show graceful fallback.
+    if (/^\d+$/.test(String(raw))) return `Zone ${raw}`;
+    // Other identifier shapes (ARENA-, BLACKBANK-, etc.) — pass through.
     return String(raw);
 }
 
