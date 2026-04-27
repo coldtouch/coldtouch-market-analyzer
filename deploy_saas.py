@@ -1691,7 +1691,10 @@ app.post('/api/auth/exchange', (req, res) => {
 const deviceCodes = {}; // { userCode: { deviceCode, userId, username, captureToken, expiresAt, authorized } }
 
 // SEC-H3: per-IP rate limit on device code creation: 3 per 15 min
-const deviceCodeLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 3, message: { error: 'Too many device code requests. Try again later.' } });
+// 10 per 15 min per IP (was 3) — 3 was too tight when users retry during setup
+// or when troubleshooting a failed authorization. Still bounded enough to prevent
+// abuse since the device codes themselves are 1-time-use and 10-min-expiry.
+const deviceCodeLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 10, message: { error: 'Too many device code requests. Try again in 15 minutes.' } });
 
 // Step 1: Client requests a device code
 app.post('/api/device/code', deviceCodeLimiter, (req, res) => {

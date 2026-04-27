@@ -2300,6 +2300,15 @@
                     <div class="changelog-list">
                         <div class="changelog-entry">
                             <div class="changelog-date">April 27, 2026</div>
+                            <div class="changelog-title">📍 Zone field discovered + device-auth rate limit raised</div>
+                            <ul>
+                                <li><strong>Zone identifier finally captured.</strong> The April 2026 game opcode shift moved the zone field from OpJoin param 8 → param 67. Identified via the diagnostic binary's <code>[ZONE-DIAG]</code> dump (189 param entries across multiple joins). Format: <code>@HIDEOUT@&lt;id&gt;@&lt;UUID&gt;</code> for hideouts, plain UUID for open-world zones. Fix shipped in the Go client; the long-broken <code>Updating player location to ...</code> log line now fires with real data.</li>
+                                <li><strong>Downstream effect:</strong> WS-uploaded <code>LootEvent.Location</code> and <code>DeathEvent.Location</code> will populate for new captures, which means the <code>📍 Zone</code> tooltip on accountability missing-item hovers and death cards will render correctly going forward.</li>
+                                <li><strong>Device-auth rate limit raised 3 → 10/15min per IP.</strong> The 3-request cap was too tight when users retry during setup or troubleshoot a broken auth flow; combined with the Go client's silent error-swallowing this looked like a "timed out" failure with no explanation. Both server-side limit and client-side error surfacing fixed.</li>
+                            </ul>
+                        </div>
+                        <div class="changelog-entry">
+                            <div class="changelog-date">April 27, 2026</div>
                             <div class="changelog-title">🔐 Device auth fix: CORS allowlist + redirect query preservation</div>
                             <ul>
                                 <li><strong>"Network error" on Authorize is fixed.</strong> CORS was hardcoded to allow only <code>https://coldtouch.github.io</code>, so any browser running on <code>https://albionaitool.xyz</code> got its auth response blocked by the browser's CORS check. Allowlist now includes both production origins; same-origin / curl requests still pass through.</li>

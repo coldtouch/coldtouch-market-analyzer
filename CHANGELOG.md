@@ -2,6 +2,14 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-04-27 — Device-auth rate limit raised + zone field discovered
+
+**Rate limit bumped 3 → 10 requests per 15 min per IP** on `/api/device/code`. The previous cap was too tight: a user retrying device-auth during normal setup, or troubleshooting a broken auth flow, would burn through 3 attempts in seconds and then be locked out. The Go client previously masked this as a misleading "authorization timed out" — fix landed in the companion Go client commit (server now returns the same JSON shape, but the client surfaces the rate-limit message verbatim instead of timing out on zero-value polling).
+
+**Zone field identified.** The `[ZONE-DIAG]` diagnostic binary built yesterday captured 189 param dumps across multiple OpJoin responses today. The zone identifier is at **mapstructure index 67**, not 8. Format: `@HIDEOUT@<id>@<UUID>` for hideouts, plain UUID for open-world zones. Old index 8 now holds an unrelated numeric string that varies per join. Fix landed in `albiondata-client-custom/client/operation_join.go` (Location mapstructure 8 → 67); will tag v1.3.1 once cleaned up. Result: `Updating player location to @HIDEOUT@3312@…` finally fires with a real value, and downstream the WS-uploaded `LootEvent.Location` and `DeathEvent.Location` will start populating for new captures — which means the 📍 Zone tooltip on accountability pages will render going forward.
+
+---
+
 ### 2026-04-27 — Device auth fix: CORS allowlist + redirect query preservation
 
 Device-authorization flow from the Go client was broken for any user on `albionaitool.xyz`. Clicking "Authorize" surfaced a generic "Network error" with no actionable info.
