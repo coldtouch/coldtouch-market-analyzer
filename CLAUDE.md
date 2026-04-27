@@ -118,7 +118,32 @@
 
 ## Recent Session History
 
-### April 26 — Analytics Fix + Loot Logger Polish + Accountability UX — Latest
+### April 28 — Tier 1 PvP perf + NATS leak fix + Accountability fix shipped (v1.3.4) — Latest
+
+- **Go client v1.3.4 released** — `https://github.com/coldtouch/albiondata-client/releases/tag/v1.3.4`. Two zero-behavior-change improvements validated against a real PvP session before tagging:
+  - **ZvZ perf (`79c5c4e`)** — five small hot-path edits in `client/listener.go` + `client/decode.go`: hoisted the mapstructure decode hook + `reflect.TypeOf` from per-call closure to package-level; reuse the `uint8→string` param map via `sync.Pool` + `clear()` instead of `make()` per event; cache source IPv4 as `uint32` to skip per-packet `SetServerFromIP`; drop four per-packet `log.Tracef` calls; reslice unreliable-packet header instead of make+copy.
+  - **NATS connection leak fix (`b81cf6b`)** — `dispatcher.go` rebuilt the entire uploader chain on EVERY dispatched message via `createUploaders()`, leaking a NATS TCP connection per message + defeating HTTP keep-alive on POW path. Now reuses per-target uploaders via a small `RWMutex`-guarded map keyed by resolved URL string.
+- **Local Tier 1 test binary** built and validated through tonight's PvP session — no freezes, no regressions. User confirmed "client was ok, ship it."
+- **Accountability missing+verified contradiction fixed (`ff51f75`)** — user reported LaboringWolf's `T4_SHOES_LEATHER_ROYAL@3` showing BOTH ✗ missing AND ✓ verified by chest log on the same row. Root cause: `verified` flag read per-player chest-log entries (ground truth), but `missing` math came from chest CAPTURES (snapshot, no player attribution) using a proportional-share formula. When the snapshot was partial relative to actual deposits, proportional math under-allocated to specific players. Fix: when `chestLogDeposits[name][itemId] > 0`, use that count directly as `inChest`. Proportional capture-based math becomes a fallback only for items the chest log doesn't cover. Verified against the original session — Royal Shoes 4.3 now `missing=0, verified=true, fullyVerified=true`. Trash items still correctly flag missing (no chest log row → fallback → 0 in capture → still missing).
+- **Sanity checks closed**: Loot Logger zone display flow verified intact end-to-end (Go client → backend → frontend, all 4 display sites); WS LootEvent.NumericID re-resolution verified intact (backend re-resolves at all 4 ingest paths via `resolveCanonicalItemId`).
+
+### April 27 (evening) — PvP-focused perf audit + v1.3.3 distribution prep
+
+- **v1.3.3 binaries verified live** with 8 release assets. User's install upgraded from zone-test.exe to v1.3.3 official; old `C:\Program Files\Albion Data Client\` leftover removed cleanly via uninstaller; registry + shortcuts restored.
+- **PvP-focused perf audit** of the listener → router → worker pipeline + decode.go event handlers + event_loot.go ZvZ-hot path (already had v1.2.0 wins). Identified the master allocation hotspot: `decodeParams` rebuilding the mapstructure decoder + `make(map[string]interface{})` per event at 50–200 events/sec during ZvZ.
+- **Reframed perf priorities** — original Tier A1/A2/A3 (NATS leak, log demote, chest-log bufio) was market-scanner focused. User's actual concern was PvP/ZvZ. Pivoted to Tier 1 PvP perf (shipped same evening) and kept NATS leak as a separate fix because it IS a real bug regardless of when it fires.
+
+### April 27 (morning) — Itemmap canonical re-resolution + zonemap real names + 3 Go client releases
+
+- **Item-id mismatch root cause** found: user's `D:\Albion Data Client\itemmap.json` was the April 11 build; April 13 game patch shifted ~75% of item IDs by exactly one. Wrong strings (e.g. T6.3 → T6.4) had been uploaded for weeks via .txt and stored as-is.
+- **Backend authoritative re-resolution** shipped — `deploy_saas.py` loads canonical `itemmap.json` + `weightmap.json` at startup, applies `resolveCanonicalItemId(numericId, fallback)` + `resolveCanonicalWeight(numericId, fallback)` at 4 ingest paths (WS loot, WS chest capture, WS chest log batch, TXT upload).
+- **`.txt` format extended with optional 11th column = `numeric_id`**. Backwards-compatible — old 10-col files still parse (numericId=0 → no re-resolution).
+- **Zonemap real names** found in `cluster/world.xml` displayname attribute — 1423 entries. Earlier auto-derived labels ("T5 Highland Keeper Outland Q5") were rejected by user as misleading; real names like "Battlebrae Plain", "Bridgewatch", "Thetford" now display correctly.
+- **In-session zone tracking** via opChangeCluster handler (Go client v1.3.1) — verified by 3-zone walk-out test; OpJoin Location at param 8 confirmed.
+- **Removed Windows auto-startup from installer** — old `schtasks /Create /SC ONLOGON` line removed; v1.3.3 installer also auto-removes legacy task on upgrade.
+- **3 Go client releases cut**: v1.3.1 (zone tracking + device auth fix), v1.3.2 (col 11 + installer no auto-startup), v1.3.3 (auto-cleanup of legacy task).
+
+### April 26 — Analytics Fix + Loot Logger Polish + Accountability UX
 
 - **Analytics 7d query integer overflow fixed:** `CAST(min_sell - max_buy AS REAL)` inside the `SUM(…²)` variance term promotes the multiplication to double-precision float so it no longer overflows SQLite's 64-bit int range. Commit 099d3c2.
 - **Loot logger tooltip dedup:** Two singleton tooltip systems (`data-tip` global + `data-tip-html` rich-tip) were both firing on `.ll-timeline-bar` hover, stacking at the same screen coords. Global handler now skips elements with `data-tip-html` — those are owned by the dedicated rich-tip handler.
@@ -335,6 +360,24 @@
 - [x] 5 scheduled cloud routines created (daily health + 4 weekly audits, 07:00 Jerusalem)
 - [x] Zone-test diagnostic binary built (`albiondata-client-zone-test.exe`) — NOT YET RUN IN-GAME
 
+### Done (April 27)
+- [x] Device auth + redirect — CORS allowlist, root redirect preserves `?device=` query, rate limit 3→10/15min
+- [x] In-session zone tracking — `opChangeCluster` handler (Go client v1.3.1), OpJoin Location param 8 verified by 3-zone walk-out
+- [x] Tier S perf wins (e5ea731) — `evInventoryPutItem` decode short-circuit, `IsValidLocation` regex hoisted, `dumpJoinParams` gated on Debug
+- [x] Zonemap real names — 1423 entries from `cluster/world.xml` displayname attribute (replaced auto-derived labels which user rejected as misleading)
+- [x] Backend canonical itemmap + weightmap re-resolution — 4 ingest paths (WS loot, WS chest capture, WS chest log batch, TXT upload)
+- [x] `.txt` format extended with optional col 11 = numericId (backwards-compatible)
+- [x] Removed Windows auto-startup from installer — v1.3.3 installer also auto-removes legacy task
+- [x] Go client v1.3.1 / v1.3.2 / v1.3.3 cut
+
+### Done (April 28)
+- [x] **Tier 1 PvP perf shipped** in Go client v1.3.4 (`79c5c4e`) — 5 hot-path edits: hoisted decode hook + reflect.TypeOf to package-level, `sync.Pool` for stringMap, IPv4 cache on listener, dropped 4 per-packet Tracef, reslice unreliable packets
+- [x] **NATS connection leak fixed** in v1.3.4 (`b81cf6b`) — `getOrCreateUploaders()` with double-check locking; uploader chain reused per target instead of rebuilt per message
+- [x] **Go client v1.3.4 released** + GitHub Actions binaries live + Discord message drafted for guild distribution
+- [x] **Loot Logger zone display flow verified** intact end-to-end (Go client → backend → frontend, all 4 display sites; "regression" reports were old pre-v1.3.0 sessions correctly showing no 📍)
+- [x] **WS LootEvent.NumericID re-resolution verified** intact at all 4 backend ingest paths
+- [x] **Accountability missing+verified contradiction fixed** (`ff51f75`) — chest log per-player attribution now overrides proportional capture-based math; capture math is fallback only for items not in selected chest logs
+
 ### Pending
 - [x] **SQLITE_BUSY root cause fix** — DONE 2026-04-24. Tiers 1+2+3+5 shipped: `uncaughtException` exits on SQLite state-corruption errors for clean systemd restart; all 7 batch-write sites now wrap BEGIN→prepare→run→finalize→COMMIT in explicit error-callback + ROLLBACK; `recordSnapshots` batches 5000→500, `computeSpreadStats` 500→100; RSS watchdog exits at 8 GB to prevent 11 GB OOM scenarios. `analyticsRunning` + `dbBusy` now reset in the handler too.
 - [x] **SQLITE_BUSY Tier 1 amendment (`process.abort()`)** — DONE 2026-04-25. Yesterday's `setTimeout(() => process.exit(1), 500)` exit didn't actually exit (43-min wedge today, recovered via SIGKILL + `systemctl start`). Replaced with `process.abort()` (synchronous SIGABRT — no event-loop tick or async cleanup required). Also skip `flushNatsBuffer()` in the SQLite-fatal path (its `db.serialize() + BEGIN` on the locked connection was the second wedge step). `_aborting` re-entrancy guard added. Same `abort()` switch in the RSS watchdog.
@@ -344,17 +387,20 @@
   - Go client v1.3.0 sends `location` (zone) on every `LootEvent` and `DeathEvent` via `state.GetCurrentZone()`.
   - Backend: added `location TEXT DEFAULT ''` column to `loot_events` (ALTER is idempotent for existing DBs), updated 3 INSERTs (WS loot, WS death, merge-sessions copy) and the accountability-share SELECT to carry location end-to-end.
   - Frontend: `evsByPlayerItem[name][itemId]` now stores `{ts, location}` objects; tooltip renders each pickup as `At: HH:MM:SS · 📍 Zone` (zone omitted if blank, so old pre-v1.3 events still render cleanly).
-- [ ] **Craft Runs — Tab Scan linking UI** — frontend flow to link a chest capture to an active run (backend endpoint exists at `POST /api/craft-runs/:id/scan`)
-- [ ] **Craft Runs — Portfolio integration** — completed runs appear in Portfolio Tracker with full cost basis
-- [ ] **Craft Runs — Refining Planner** — auto-suggest city from material type, batch calculator (backend `/api/refine/optimal-city` exists)
-- [ ] **Loot Logger Viewer UX** — better layout, sorting, filtering, player search, total value estimates
-- [x] **Loot Logger — session timeline tooltip overlap** — DONE 2026-04-26. Two singleton tooltip systems both fired on `.ll-timeline-bar` hover (rich-tip via `data-tip-html` + global tooltip via `data-tip`), stacking at the same screen coords. Global handler now skips elements that have `data-tip-html` — those are owned by the dedicated rich-tip handler. Verified via synthetic-element test: dual-attr bars render only the rich tooltip, plain `data-tip`-only elements still get the global one.
-- [x] **Loot Logger — Guild perspective selector** — DONE 2026-04-26. New "Friendly guild" dropdown in the accountability action-bar lists every guild seen in the session (sorted by item count, auto-pick marked `(auto)`). Picking a different guild flips `primaryGuild`, clears `primaryAlliance` (guild-only matching), and reruns `runAccountabilityCheck` so `isGuildMember`, primary-guild banner, deaths section, and friendly/enemy tagging all update. Persisted per-session in `localStorage` (`acc-guild-override-<sessionId>`); reset button + picking the auto-detected guild both drop the override.
-- [ ] **Loot Logger — verify death-zone display still works** — 2026-04-23 we shipped the missing-item hover tooltip showing time/looter/guild/📍 zone (Go client v1.3.0 sends `location` on every LootEvent + DeathEvent; backend stores `location TEXT`; frontend reads `evsByPlayerItem[name][itemId].location`). User reports it may have regressed — open a recent uploaded session in the loot logger, hover a missing item, and confirm the 📍 Zone line renders. If broken, check whether (a) Go client is still emitting location, (b) backend is still persisting it through to the response, (c) frontend is still reading the `.location` field on the new event-object shape.
-- [ ] **Device Auth end-to-end test**
+- [x] **Craft Runs — Tab Scan linking UI** — DONE. `app.js:18541` calls `/api/craft-runs/${runId}/scan` from the run-detail UI.
+- [x] **Craft Runs — Portfolio integration** — DONE 2026-04-23. `portfolio-craft-runs` element + collapsible table with cost/revenue/net P&L/margin lives in Portfolio Tracker.
+- [ ] **Craft Runs — Refining Planner** — backend `/api/refine/optimal-city` exists, but no dedicated planner UI tab found (the existing `refining-lab` tab is something else). Auto-suggest city from material type + batch calculator UI is still TODO.
+- [ ] **Loot Logger Viewer UX** — better layout, sorting, filtering, player search, total value estimates. Subjective scope; some search/filter exists but room for polish.
+- [x] **Loot Logger — session timeline tooltip overlap** — DONE 2026-04-26.
+- [x] **Loot Logger — Guild perspective selector** — DONE 2026-04-26.
+- [x] **Loot Logger — verify death-zone display** — DONE 2026-04-28. End-to-end flow verified intact (Go client emits `Location: state.GetCurrentZone()` on every LootEvent + DeathEvent; backend stores via INSERT; frontend renders `📍 ${formatZone(e.location)}` conditionally on truthy location). The "regression" report was a pre-v1.3.0 session correctly showing no 📍 because location was added in v1.3.0 and old events have empty `location` defaults.
+- [x] **ReadMail opcode handler** — DONE end-to-end. Go client `client/operation_read_mail.go` decodes mail + `SendSaleNotification()` relays to VPS; backend WS handler at `deploy_saas.py:4214` + REST `/api/sale-notifications` at `:2296`; frontend fetches at `app.js:8685`.
+- [x] **Accountability missing+verified contradiction fix** — DONE 2026-04-28 (`ff51f75`).
+- [ ] **Device Auth full end-to-end test** — partial coverage today via test client falling into auth flow due to bad config; proper guildmate flow not yet exercised
 - [ ] **Test chest capture on guild island**
-- [ ] **ReadMail opcode** → auto-match sold items to tracked loot tabs
+- [ ] **Multi-file CROSS-USER loot log merging** — current `/api/loot-session/consolidate` only handles within-user fragment merging; the cross-user use case (uploading N .txt files from different guildmates with timestamp+item+player dedup, unified accountability) is still TODO
 - [ ] **Negative item ID cosmetic names** — identify -56, -59, -62, -63, -64, -65, -68, -71, -121 from in-game bank
+- [ ] **Trade tracker WIP — commit decision** — `client/event_player_trade.go`, `client/trade_tracker.go`, `decode.go` trade routing, `albiondata-client.go` `CloseTradeLogger` calls have been sitting uncommitted in the working tree for ~3 weeks. Decision needed: verify in-game trade end-to-end and ship as v1.3.5, or delete the WIP entirely.
 
 ### In-Game Testing Required
 - [ ] **Device Auth end-to-end test** — device code flow from Go client to browser approval
@@ -366,16 +412,12 @@
 - [ ] **Nearby Castle Chest rarity + Outpost scout feature** — when a user running our client opens the in-game world map, capture what castle chests (and their rarity/color tier — e.g. green/blue/purple/gold) and outposts are near them. Surface this on the website as a live scouting overlay so guilds can prioritize targets. Requires: (a) packet research — does the map-open handshake emit chest rarity + outpost state, or is it only a static map render? Check for new opcodes fired on map open (likely `EvMapInfo` / `EvOutpostUpdate` / a castle-objective event); (b) if the data isn't in the map handshake, check whether periodic objective broadcasts carry rarity/ownership; (c) Go client handler + VPS relay; (d) website tab for the live scouting board. Blocked on in-game packet capture / Wireshark verification first.
 
 ### Short Term
-- [ ] **ReadMail opcode handler** — capture sale mail notifications, auto-match to tracked loot tabs
-- [ ] **Go client GitHub Releases** — automated builds via GitHub Actions
-- [ ] **Multi-file loot log merging** — allow users to upload multiple .txt loot log files (from different guild members running the client) and merge/cross-reference them into a single unified session. Use case: player A dies mid-fight and stops capturing, player B picks up the rest. Needs: deduplication by timestamp+item+player (same event captured by two clients), unified timeline view, accountability check across the merged dataset. Improves accuracy since no single client captures everything if the operator dies.
+- [x] **ReadMail opcode handler** — DONE (full pipeline shipped — see Pending section)
+- [x] **Go client GitHub Releases automation** — DONE (workflow shipped earlier; v1.3.4 cut by Actions on 2026-04-27)
+- [ ] **Multi-file CROSS-USER loot log merging** — see Pending. Allow uploading multiple .txt files from different guild members and merge them into a single accountability check. Use case: player A dies mid-fight and stops capturing, player B picks up the rest. Needs: dedup by timestamp+item+player (same event captured by two clients), unified timeline view, accountability check across the merged dataset. The current `/api/loot-session/consolidate` only handles within-user fragment merging — cross-user is the gap.
 
-### Major New Feature — Loot Logger Viewer
-- [ ] **Go client:** Port EvOtherGrabbedLoot (275), EvNewCharacter (29), EvCharacterStats (143), OpInventoryMoveItem (29)
-- [ ] **Website tab:** Upload .txt files OR live data. Per-player breakdown with market values.
-- [ ] **Loot Accountability Check:** Cross-reference loot log vs chest deposit → who picked up items that weren't deposited
-- [ ] **Source repo:** https://github.com/coldtouch/ao-loot-logger (GPL-3.0, local: D:\Coding\ao-loot-logger\)
-- [ ] **Txt format:** `timestamp_utc;looted_by__alliance;looted_by__guild;looted_by__name;item_id;item_name;quantity;looted_from__alliance;looted_from__guild;looted_from__name`
+### Loot Logger Viewer — DONE (Major Feature, shipped April 9-28)
+End-to-end pipeline live since April 9, with continuous polish through April 28. Go client emits loot events (EvOtherGrabbedLoot 275, EvNewCharacter 29, EvCharacterStats 143) → VPS WS relay + local `.txt` writer (with col 11 = numericId since v1.3.2) → website `/loot-logger` tab supports both `.txt` upload and live-session view → per-player accountability check cross-references pickups against chest captures + chest log batches with verified-by-chest-log badges, missing-item tooltips with zone (📍) + looter (since v1.3.0), 3-category death section (Friendly / Enemy / Other), guild perspective selector, accountability share links with chest-log snapshots. Source fork: https://github.com/coldtouch/ao-loot-logger (GPL-3.0, local: D:\Coding\ao-loot-logger\).
 
 ## Learned Patterns & Observations
 > Accumulated knowledge from working sessions. Add new observations here.
