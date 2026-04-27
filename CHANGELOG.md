@@ -2,7 +2,22 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
-### 2026-04-27 — Zone-name lookup: raw cluster IDs → readable labels
+### 2026-04-27 — Zone-name lookup SHELVED pending real names
+
+The zonemap feature shipped a few hours ago auto-derived labels from the cluster filenames in `ao-bin-dumps/cluster/` (e.g. `3312_WRL_HL_AUTO_T5_KPR_OUT_Q5.cluster.xml` → `"T5 Highland Keeper Outland Q5"`). User feedback: those derived labels are MORE confusing than the raw IDs. Players don't recognize them as zone identifiers at all and they actively mislead. Better to show raw `"3312"` until we have real human-readable names like `"Bridgewatch"` or `"Holy Lake"`.
+
+**`formatZone()` is now a pass-through.** Returns the raw input verbatim. Display sites (death tooltips, missing-item tooltip, rich pickup tooltip) keep calling it so re-enabling later is one swap. The full lookup logic + 474-entry zonemap.js are preserved in git (commit `9f248dc`) for the moment we have real names to plug in.
+
+**Active research streams** (3 parallel agents firing now):
+1. Community zone-name lists on GitHub / Albion data community repos
+2. Deeper search of ao-bin-dumps for any name dictionary we missed
+3. Packet/protocol investigation — opcodes like `evClusterInfoUpdate`, `opGetClusterMapInfo` may carry display names
+
+When real names land, we update `KNOWN_NAMES` in `tmp_check/generate_zonemap.py` (or replace the whole map source), regenerate `zonemap.js`, and unshelf `formatZone()` by swapping the pass-through body for the lookup logic.
+
+---
+
+### 2026-04-27 — Zone-name lookup: raw cluster IDs → readable labels (SUPERSEDED — see shelving entry above)
 
 The Go client v1.3.1 ships current zone identifiers like `3312` and `3348` for open-world zones (numeric cluster IDs from the game's wire protocol) and `@HIDEOUT@<parentId>@<UUID>` for hideouts. Both are unambiguous but unreadable — nobody recognizes "zone 3312".
 

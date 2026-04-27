@@ -354,32 +354,22 @@ function esc(str) {
     return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 }
 
-// Map a raw Albion zone identifier to a human-readable label.
-//   "3312"                                   → "T5 Highland Keeper Outland Q5"
-//   "0007"                                   → "Bridgewatch"  (hand-curated city)
-//   "@HIDEOUT@3312@<UUID>"                   → "Hideout in T5 Highland Keeper Outland Q5"
-//   ""                                       → ""
-//   anything else (city portal IDs, etc.)    → returned verbatim
-// Lookup data lives in window.ZONE_MAP (zonemap.js — auto-generated from
-// ao-bin-dumps/cluster filenames). Loaded before app.js via index.html.
+// SHELVED 2026-04-27: zone-name lookup is on hold until we source real
+// human-readable names. Auto-derived labels from ao-bin-dumps cluster
+// filenames (e.g. "T5 Highland Keeper Outland Q5") were tested and judged
+// MORE confusing than the raw ID — users don't recognize them as zones at
+// all and they actively mislead. Until we have real names (Bridgewatch,
+// Holy Lake, etc.) sourced from the community, an official API, or
+// reverse-engineered packets, formatZone() is a pass-through.
+//
+// Re-enabling: when window.ZONE_MAP carries real zone names, swap the
+// pass-through body below for the lookup logic preserved in git history
+// (commit 9f248dc). Display sites — death tooltips, missing-item tooltip,
+// rich pickup-detail tooltip — already call formatZone() so they pick up
+// the change without further wiring.
 function formatZone(raw) {
     if (!raw) return '';
-    const map = (typeof window !== 'undefined' && window.ZONE_MAP) || {};
-    // Hideout: @HIDEOUT@<parentClusterId>@<UUID>
-    if (raw.startsWith && raw.startsWith('@HIDEOUT@')) {
-        const parts = raw.split('@');
-        const parentId = parts[2] || '';
-        const parentName = map[parentId];
-        if (parentName) return `Hideout in ${parentName}`;
-        if (parentId) return `Hideout (zone ${parentId})`;
-        return 'Hideout';
-    }
-    // Plain numeric cluster ID
-    if (/^\d+$/.test(raw)) {
-        return map[raw] || `Zone ${raw}`;
-    }
-    // Other identifier (e.g. ARENA-, BLACKBANK-, named clusters) — pass through.
-    return raw;
+    return String(raw);
 }
 
 // Toast notification system — replaces alert()/confirm()

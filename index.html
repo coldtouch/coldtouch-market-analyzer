@@ -2300,7 +2300,16 @@
                     <div class="changelog-list">
                         <div class="changelog-entry">
                             <div class="changelog-date">April 27, 2026</div>
-                            <div class="changelog-title">🗺️ Zone-name lookup: 3312 → "T5 Highland Keeper Outland Q5"</div>
+                            <div class="changelog-title">🛑 Zone-name lookup shelved (auto-derived labels were misleading)</div>
+                            <ul>
+                                <li><strong>Auto-derived labels removed.</strong> The "T5 Highland Keeper Outland Q5"–style descriptions generated from cluster filenames turned out to confuse more than help — players don't recognize them as zone names. Display reverts to raw cluster IDs (<code>3312</code>, <code>@HIDEOUT@3312@…</code>) which is at least unambiguous, until we source real names like "Bridgewatch" or "Holy Lake".</li>
+                                <li><strong>Infrastructure preserved.</strong> The 474-entry <code>zonemap.js</code> + <code>formatZone()</code> helper + display-site wiring all stay in place. <code>formatZone()</code> is currently a pass-through; swapping it back to the lookup body is one edit when we have real names.</li>
+                                <li><strong>Research underway:</strong> agents firing now to find community-maintained zone-name lists on GitHub, deeper-search ao-bin-dumps for anything missed, and investigate whether unhandled packet opcodes carry the display name (most promising lead: <code>evClusterInfoUpdate</code>, <code>opGetClusterMapInfo</code>).</li>
+                            </ul>
+                        </div>
+                        <div class="changelog-entry">
+                            <div class="changelog-date">April 27, 2026</div>
+                            <div class="changelog-title">🗺️ Zone-name lookup: 3312 → "T5 Highland Keeper Outland Q5" (SUPERSEDED)</div>
                             <ul>
                                 <li><strong>Raw cluster IDs now display as readable labels.</strong> The Go client v1.3.1 emits zone identifiers like <code>3312</code> for open-world zones and <code>@HIDEOUT@3312@&lt;UUID&gt;</code> for hideouts — unambiguous but unreadable. The new <code>formatZone()</code> helper looks them up against a 474-entry zone map auto-generated from the ao-bin-dumps cluster filenames.</li>
                                 <li><strong>What you'll see:</strong>
