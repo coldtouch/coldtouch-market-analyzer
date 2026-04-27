@@ -10,6 +10,7 @@ const APP_SHELL = [
     './app.js',
     './style.css',
     './db.js',
+    './zonemap.js',
     './items.json',
     './itemmap.json',
     './manifest.json'

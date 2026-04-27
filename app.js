@@ -354,6 +354,34 @@ function esc(str) {
     return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 }
 
+// Map a raw Albion zone identifier to a human-readable label.
+//   "3312"                                   → "T5 Highland Keeper Outland Q5"
+//   "0007"                                   → "Bridgewatch"  (hand-curated city)
+//   "@HIDEOUT@3312@<UUID>"                   → "Hideout in T5 Highland Keeper Outland Q5"
+//   ""                                       → ""
+//   anything else (city portal IDs, etc.)    → returned verbatim
+// Lookup data lives in window.ZONE_MAP (zonemap.js — auto-generated from
+// ao-bin-dumps/cluster filenames). Loaded before app.js via index.html.
+function formatZone(raw) {
+    if (!raw) return '';
+    const map = (typeof window !== 'undefined' && window.ZONE_MAP) || {};
+    // Hideout: @HIDEOUT@<parentClusterId>@<UUID>
+    if (raw.startsWith && raw.startsWith('@HIDEOUT@')) {
+        const parts = raw.split('@');
+        const parentId = parts[2] || '';
+        const parentName = map[parentId];
+        if (parentName) return `Hideout in ${parentName}`;
+        if (parentId) return `Hideout (zone ${parentId})`;
+        return 'Hideout';
+    }
+    // Plain numeric cluster ID
+    if (/^\d+$/.test(raw)) {
+        return map[raw] || `Zone ${raw}`;
+    }
+    // Other identifier (e.g. ARENA-, BLACKBANK-, named clusters) — pass through.
+    return raw;
+}
+
 // Toast notification system — replaces alert()/confirm()
 const _activeToasts = [];
 const MAX_VISIBLE_TOASTS = 5;
@@ -11320,7 +11348,7 @@ function _llRenderFiltered() {
             const deathCount = diedWith.deaths.length;
             const latest = diedWith.deaths.reduce((a, b) => (a.ts > b.ts ? a : b), diedWith.deaths[0]);
             const whenStr = latest && latest.ts ? new Date(latest.ts).toLocaleTimeString() : 'unknown time';
-            const whereStr = latest && latest.location ? ` in ${latest.location}` : '';
+            const whereStr = latest && latest.location ? ` in ${formatZone(latest.location)}` : '';
             const killerStr = latest && latest.killer ? ` — killed by ${latest.killer}` : '';
             const lootedByStr = latest && latest.lootedBy && latest.lootedBy.length > 0
                 ? ` — looted by ${latest.lootedBy.slice(0, 3).map(l => `${l.name}${l.items ? ` (${l.items} items)` : ''}`).join(', ')}${latest.lootedBy.length > 3 ? ` +${latest.lootedBy.length - 3} more` : ''}`
@@ -11444,7 +11472,7 @@ function _llRenderFiltered() {
             const deathCount = diedWith.deaths.length;
             const latest = diedWith.deaths.reduce((a, b) => (a.ts > b.ts ? a : b), diedWith.deaths[0]);
             const whenStr = latest && latest.ts ? new Date(latest.ts).toLocaleTimeString() : 'unknown time';
-            const whereStr = latest && latest.location ? ` in ${latest.location}` : '';
+            const whereStr = latest && latest.location ? ` in ${formatZone(latest.location)}` : '';
             const killerStr = latest && latest.killer ? ` — killed by ${latest.killer}` : '';
             const inferredNote = latest && latest.inferred ? ' <span style="color:var(--text-muted); font-weight:400;" title="Death reconstructed from loot evidence — no __DEATH__ row in upload">(inferred)</span>' : '';
             const countPrefix = deathCount > 1 ? `Died ${deathCount}× — last at ${whenStr}` : `Died at ${whenStr}`;
@@ -12816,7 +12844,7 @@ async function runAccountabilityCheck() {
                     const guildPart = p.guild ? ` [${esc(p.guild)}]` : '';
                     const lines = evs.map(e => {
                         const t = esc(new Date(e.ts).toLocaleTimeString());
-                        const loc = e.location ? ` · <span style="color:var(--accent);font-size:0.68rem;">📍 ${esc(e.location)}</span>` : '';
+                        const loc = e.location ? ` · <span style="color:var(--accent);font-size:0.68rem;">📍 ${esc(formatZone(e.location))}</span>` : '';
                         return `<span style="color:var(--text-muted)">At: ${t}${loc}</span>`;
                     });
                     return `<span class="ll-missing-tooltip"><strong>Picked up by:</strong> ${esc(p.name)}${guildPart}<br>${lines.join('<br>')}</span>`;
@@ -16705,7 +16733,7 @@ function buildTooltipContent(target) {
                         const fromTxt = e.n
                             ? `${esc(e.n)}${e.g ? ` <span class="tip-pickup-guild">[${esc(e.g)}]</span>` : ''}`
                             : '<span class="tip-pickup-muted">unknown source</span>';
-                        const loc = e.l ? `<span class="tip-pickup-loc">📍 ${esc(e.l)}</span>` : '';
+                        const loc = e.l ? `<span class="tip-pickup-loc">📍 ${esc(formatZone(e.l))}</span>` : '';
                         return `<div class="tip-pickup-row"><span class="tip-pickup-time">${t}</span><span class="tip-pickup-from">${fromTxt}</span>${loc}</div>`;
                     }).join('');
                     const moreLine = more > 0 ? `<div class="tip-pickup-more">+${more} more pickup${more !== 1 ? 's' : ''}</div>` : '';

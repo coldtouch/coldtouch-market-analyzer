@@ -2,6 +2,31 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-04-27 — Zone-name lookup: raw cluster IDs → readable labels
+
+The Go client v1.3.1 ships current zone identifiers like `3312` and `3348` for open-world zones (numeric cluster IDs from the game's wire protocol) and `@HIDEOUT@<parentId>@<UUID>` for hideouts. Both are unambiguous but unreadable — nobody recognizes "zone 3312".
+
+**New `zonemap.js`** (474 entries, ~20 KB, auto-generated from `ao-bin-dumps/cluster/*.cluster.xml` filenames). The cluster filename pattern encodes everything we need: `3312_WRL_HL_AUTO_T5_KPR_OUT_Q5.cluster.xml` parses into `{tier:5, biome:Highland, faction:Keeper, region:Outland, quadrant:Q5}` → label `"T5 Highland Keeper Outland Q5"`. Auto-derivation covers the entire open-world map without any hand-curation, and a small KNOWN_NAMES override in the generator handles the 7 royal cities + Brecilien (whose generic filenames don't carry their famous names).
+
+**New `formatZone(raw)` helper** in app.js handles all three identifier shapes:
+- `"3312"` → `"T5 Highland Keeper Outland Q5"`
+- `"@HIDEOUT@3312@<UUID>"` → `"Hideout in T5 Highland Keeper Outland Q5"`
+- `"@HIDEOUT@<unknown>@<UUID>"` → `"Hideout (zone <id>)"` fallback
+- `"0007"` → `"Bridgewatch"` (curated)
+- `"99999"` (unknown numeric) → `"Zone 99999"` fallback
+- `""` → `""`
+- `"ARENA-01"` (other formats) → passed through verbatim
+
+**Wired into 4 display sites** that previously showed raw IDs to users:
+1. Player-card "died with" preview tooltip (death context summary)
+2. Death section header tooltip ("Died at 02:05 in <zone>")
+3. Missing-item hover tooltip (`📍 <zone>` line)
+4. Rich pickup-detail tooltip (`📍 <zone>` per-pickup line)
+
+Verified in browser preview: 474 entries loaded, all 10 test cases pass, no console errors. Generator script (`tmp_check/generate_zonemap.py`) is rerunnable when ao-bin-dumps updates ship new clusters.
+
+---
+
 ### 2026-04-27 — Go client v1.3.1: in-session zone tracking via opChangeCluster
 
 **Root cause confirmed.** The reason the entire 290-event production session had empty `Location` on every loot/death event wasn't the OpJoin field — it was that **opChangeCluster (=35, on-wire 41 after April 2026 +6 shift) was never handled at all.** OpJoin only fires on initial connect; every in-session zone transition went silent. So loot/death events fired in subsequent zones still carried the connect-time location (which was usually empty because the user started the client mid-session, after the OpJoin had already passed).

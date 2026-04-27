@@ -2300,6 +2300,23 @@
                     <div class="changelog-list">
                         <div class="changelog-entry">
                             <div class="changelog-date">April 27, 2026</div>
+                            <div class="changelog-title">🗺️ Zone-name lookup: 3312 → "T5 Highland Keeper Outland Q5"</div>
+                            <ul>
+                                <li><strong>Raw cluster IDs now display as readable labels.</strong> The Go client v1.3.1 emits zone identifiers like <code>3312</code> for open-world zones and <code>@HIDEOUT@3312@&lt;UUID&gt;</code> for hideouts — unambiguous but unreadable. The new <code>formatZone()</code> helper looks them up against a 474-entry zone map auto-generated from the ao-bin-dumps cluster filenames.</li>
+                                <li><strong>What you'll see:</strong>
+                                    <ul>
+                                        <li><code>3312</code> → <code>T5 Highland Keeper Outland Q5</code></li>
+                                        <li><code>3348</code> → <code>T7 Highland Undead Outland Q5</code></li>
+                                        <li><code>@HIDEOUT@3312@&lt;UUID&gt;</code> → <code>Hideout in T5 Highland Keeper Outland Q5</code></li>
+                                        <li><code>0007</code> → <code>Bridgewatch</code> (curated city name)</li>
+                                    </ul>
+                                </li>
+                                <li><strong>Wired into 4 display sites:</strong> player-card "died with" preview tooltip, death section header tooltip, missing-item hover tooltip (📍 line), and the rich pickup-detail tooltip (📍 per-pickup).</li>
+                                <li><strong>Future-proof:</strong> the <code>tmp_check/generate_zonemap.py</code> script regenerates the map whenever ao-bin-dumps publishes new cluster files (new zones, expansion releases). 7 royal cities + Brecilien are hand-curated; everything else auto-derives from the filename pattern (tier, biome, faction, region, quadrant).</li>
+                            </ul>
+                        </div>
+                        <div class="changelog-entry">
+                            <div class="changelog-date">April 27, 2026</div>
                             <div class="changelog-title">🌍 Go client v1.3.1: in-session zone tracking finally works</div>
                             <ul>
                                 <li><strong>Root cause for 290 empty-location events identified.</strong> Not the OpJoin field — but the fact that <code>opChangeCluster</code> (the in-session zone-transition opcode) was never handled at all. OpJoin only fires on initial connect, so every walk between zones during a session was silent. Loot/death events captured after that first connect carried whatever location was set at startup (often empty if the client started mid-session).</li>
@@ -4462,6 +4479,7 @@
     </div>
 
     <script src="db.js"></script>
+    <script src="zonemap.js"></script>
     <script src="app.js"></script>
     <script>if('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js', {updateViaCache: 'none'}).catch(()=>{});</script><!-- FE-H3 -->
 </body>
