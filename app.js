@@ -11626,14 +11626,19 @@ function _llRenderFiltered() {
     }
 }
 
-// Parse loot lines from text content
+// Parse loot lines from text content.
+// Format (10 base columns, semicolon-delimited):
+//   timestamp;by_alliance;by_guild;by_name;item_id;item_name;qty;from_alliance;from_guild;from_name
+// Optional 11th column (added 2026-04-27): numeric_id — lets the backend re-resolve
+// item_id from its canonical itemmap when the writing client had a stale itemmap
+// (off-by-one item-id bug). Files without the 11th column still parse fine.
 function parseLootLines(text) {
     const allLines = text.split('\n').map(l => l.trim()).filter(l => l && !l.startsWith('timestamp'));
     const events = [];
     for (const line of allLines) {
         const parts = line.split(';');
         if (parts.length < 10) continue;
-        const [ts, byAlliance, byGuild, byName, itemId, , qty, fromAlliance, fromGuild, fromName] = parts;
+        const [ts, byAlliance, byGuild, byName, itemId, , qty, fromAlliance, fromGuild, fromName, numericId] = parts;
         events.push({
             timestamp: new Date(ts).getTime() || Date.now(),
             looted_by_name: byName || '',
@@ -11643,6 +11648,7 @@ function parseLootLines(text) {
             looted_from_guild: fromGuild || '',
             looted_from_alliance: fromAlliance || '',
             item_id: itemId || '',
+            numeric_id: numericId !== undefined ? (parseInt(numericId) || 0) : 0,
             quantity: parseInt(qty) || 1,
             weight: 0
         });

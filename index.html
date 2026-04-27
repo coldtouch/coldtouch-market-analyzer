@@ -2300,6 +2300,23 @@
                     <div class="changelog-list">
                         <div class="changelog-entry">
                             <div class="changelog-date">April 27, 2026</div>
+                            <div class="changelog-title">🛡️ Item-ID mismatch fixed: backend now authoritative</div>
+                            <ul>
+                                <li><strong>The bug:</strong> a stale <code>itemmap.json</code> in an older Go client (April 11 build) was producing wrong enchant levels (e.g. T6.3 Knight Armor showing as T6.4) because the April 13 game patch shifted ~75% of item IDs by exactly one position. Wrong strings got uploaded via .txt and the backend stored them as-is.</li>
+                                <li><strong>The fix:</strong> backend now loads <code>itemmap.json</code> at startup and re-resolves every uploaded item from the raw <code>numericId</code> using the canonical map. Stale-client uploads get normalized to the correct itemId on ingest. WS loot events, WS chest-log batches, and TXT uploads (when col 11 = numericId is present) all benefit.</li>
+                                <li><strong>Backwards-compatible:</strong> old 10-column .txt files still parse — numericId defaults to 0, backend skips re-resolution and uses the client's string. New uploads from updated Go clients get the full re-resolution treatment.</li>
+                                <li><strong>Phase 2 (DB backfill of historical wrong data)</strong> is intentionally NOT run yet — most affected rows came from .txt uploads where numeric_id was never captured, so we can't re-resolve them. Going forward, all new uploads are clean.</li>
+                            </ul>
+                        </div>
+                        <div class="changelog-entry">
+                            <div class="changelog-date">April 27, 2026</div>
+                            <div class="changelog-title">🚫 Removed Windows auto-startup from installer</div>
+                            <ul>
+                                <li>The NSIS installer was registering a scheduled task that ran the client at every Windows login. Removed by user request — explicit control over when the client runs is preferred. Existing installs need a one-shot cleanup: <code>schtasks /Delete /TN "Albion Data Client" /F</code> (run as admin).</li>
+                            </ul>
+                        </div>
+                        <div class="changelog-entry">
+                            <div class="changelog-date">April 27, 2026</div>
                             <div class="changelog-title">🗺️ Real zone names — found in <code>cluster/world.xml</code>!</div>
                             <ul>
                                 <li><strong>The names were in the bin dumps all along</strong> — just in a file we hadn't checked. <code>cluster/world.xml</code> (13 MB) has every cluster's <code>displayname</code> attribute alongside the <code>id</code> we already had. 1423 entries covering every numeric zone ID + named special clusters.</li>

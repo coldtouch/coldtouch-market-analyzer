@@ -1149,6 +1149,46 @@ app.use(helmet({ contentSecurityPolicy: false }));
 // Individual endpoints still enforce their own size caps (e.g. captures_json ≤ 500 KB).
 app.use(express.json({ limit: '5mb' }));
 
+// === CANONICAL ITEMMAP (SERVER-SIDE RE-RESOLUTION) ===
+//
+// Loaded from /opt/albion-saas/itemmap.json — the same itemmap.json shipped with
+// our Go client, deployed alongside backend.js. Maps numericID → string item ID.
+//
+// PURPOSE: Older Go clients ship stale itemmap.json files (every game patch can
+// shift item IDs by ±1, especially for enchanted variants — a real bug observed
+// 2026-04-27). When such a client uploads loot/chest data, its locally-resolved
+// item_id strings are wrong by exactly the same shift. To prevent this from
+// polluting our DB, every WS loot event, WS chest log batch entry, and TXT-uploaded
+// loot row gets its item_id RE-RESOLVED here from the numericID using the canonical
+// (always up-to-date) map. The client's string is kept as fallback only when the
+// numericID is missing or doesn't resolve.
+let CANONICAL_ITEMMAP = {};
+let CANONICAL_ITEMMAP_LOADED_AT = 0;
+try {
+  const raw = fs.readFileSync('/opt/albion-saas/itemmap.json', 'utf8');
+  CANONICAL_ITEMMAP = JSON.parse(raw);
+  CANONICAL_ITEMMAP_LOADED_AT = Date.now();
+  console.log(`[Itemmap] Loaded ${Object.keys(CANONICAL_ITEMMAP).length} canonical mappings from itemmap.json`);
+} catch (e) {
+  console.warn(`[Itemmap] Failed to load /opt/albion-saas/itemmap.json: ${e.message}. Re-resolution disabled — uploads will use client-supplied item_ids as-is.`);
+}
+
+// Resolve a (possibly wrong) client-supplied item_id to the canonical string,
+// using the numericID as the source of truth. Returns the canonical string when:
+//   - numericID is a positive integer
+//   - numericID exists in CANONICAL_ITEMMAP
+//   - The canonical string is non-empty
+// Otherwise returns the client's fallback string unchanged so we don't lose data
+// on items the canonical map doesn't cover (e.g. items added by a game patch
+// after our last itemmap regen).
+function resolveCanonicalItemId(numericId, fallbackString) {
+  const n = parseInt(numericId, 10);
+  if (!Number.isFinite(n) || n <= 0) return fallbackString;
+  const canonical = CANONICAL_ITEMMAP[String(n)];
+  if (canonical && typeof canonical === 'string' && canonical.length > 0) return canonical;
+  return fallbackString;
+}
+
 // Global request timeout + double-response guard.
 // When a handler runs long, the timeout fires a 503 early. The ORIGINAL handler
 // eventually completes and calls res.json(), hitting ERR_HTTP_HEADERS_SENT
@@ -2654,19 +2694,33 @@ app.post('/api/loot-upload', requireAuth, (req, res) => {
     const stmt = db.prepare(`INSERT OR IGNORE INTO loot_events (user_id, session_id, timestamp, looted_by_name, looted_by_guild, looted_by_alliance, looted_from_name, looted_from_guild, looted_from_alliance, item_id, numeric_id, quantity, weight, is_silver)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0)`);
     let count = 0;
+    let reResolved = 0;
     for (const line of lines) {
-      // Format: timestamp_utc;looted_by__alliance;looted_by__guild;looted_by__name;item_id;item_name;quantity;looted_from__alliance;looted_from__guild;looted_from__name
+      // Format (10 base columns):
+      //   timestamp_utc;by_alliance;by_guild;by_name;item_id;item_name;quantity;
+      //   from_alliance;from_guild;from_name
+      // Optional 11th column added 2026-04-27: numeric_id — lets the backend
+      // re-resolve item_id via CANONICAL_ITEMMAP, fixing uploads from clients
+      // with stale itemmap.json. Files without col 11 still parse (numericId=0).
       const parts = line.split(';');
       if (parts.length < 10) continue;
-      const [ts, byAlliance, byGuild, byName, itemId, itemName, qty, fromAlliance, fromGuild, fromName] = parts;
+      const [ts, byAlliance, byGuild, byName, itemId, itemName, qty, fromAlliance, fromGuild, fromName, numericIdRaw] = parts;
       const timestamp = new Date(ts).getTime() || Date.now();
       // Sanitize user-supplied strings: strip control chars, limit length
       const san = s => (s || '').replace(/[\x00-\x1f\x7f]/g, '').replace(/[<>"'&]/g, '').slice(0, 64); // SEC-H4: strip HTML chars
-      stmt.run(req.user.id, sessionId, timestamp, san(byName), san(byGuild), san(byAlliance), san(fromName), san(fromGuild), san(fromAlliance), san(itemId).slice(0, 100), 0, parseInt(qty) || 1);
+      const numericId = parseInt(numericIdRaw, 10) || 0;
+      const sanitizedItemId = san(itemId).slice(0, 100);
+      // Re-resolve via canonical itemmap when numericId is present and valid.
+      // Falls back to the client's string when numericId is 0 or unknown — preserves
+      // legacy 10-column TXT uploads that pre-date this column.
+      const canonicalItemId = resolveCanonicalItemId(numericId, sanitizedItemId);
+      if (canonicalItemId !== sanitizedItemId) reResolved++;
+      stmt.run(req.user.id, sessionId, timestamp, san(byName), san(byGuild), san(byAlliance), san(fromName), san(fromGuild), san(fromAlliance), canonicalItemId, numericId, parseInt(qty) || 1);
       count++;
     }
     stmt.finalize();
-    res.json({ success: true, sessionId, eventsImported: count });
+    if (reResolved > 0) console.log(`[LootUpload] Re-resolved ${reResolved}/${count} item_ids via canonical itemmap (user=${req.user.username})`);
+    res.json({ success: true, sessionId, eventsImported: count, reResolved });
   };
 
   if (requestedSessionId && typeof requestedSessionId === 'string' && /^[a-zA-Z0-9_-]{8,80}$/.test(requestedSessionId)) {
@@ -3994,12 +4048,16 @@ wss.on('connection', (ws, req) => {
 
         // INSERT OR IGNORE — if the Go client WS reconnects and replays the same event,
         // the dedupe index drops the replay silently.
+        // Re-resolve item_id from numericId via canonical itemmap. Stale-itemmap
+        // clients send wrong item_id strings (off-by-one enchant); the numericId
+        // is authoritative because the game-protocol packet carries it directly.
+        const canonicalItemId = resolveCanonicalItemId(ev.numericId, ev.itemId || '');
         db.run(`INSERT OR IGNORE INTO loot_events (user_id, session_id, timestamp, looted_by_name, looted_by_guild, looted_by_alliance, looted_from_name, looted_from_guild, looted_from_alliance, item_id, numeric_id, quantity, weight, is_silver, location)
           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           [ws.user.id, ws.lootSessionId, ev.timestamp || Date.now(),
            ev.lootedBy.name, ev.lootedBy.guild || '', ev.lootedBy.alliance || '',
            ev.lootedFrom?.name || '', ev.lootedFrom?.guild || '', ev.lootedFrom?.alliance || '',
-           ev.itemId || '', ev.numericId || 0, ev.quantity || 1, ev.weight || 0, ev.isSilver ? 1 : 0,
+           canonicalItemId, ev.numericId || 0, ev.quantity || 1, ev.weight || 0, ev.isSilver ? 1 : 0,
            (ev.location || '').slice(0, 80)]);
 
         // Push to user's browser session(s) in real-time
@@ -4073,6 +4131,20 @@ wss.on('connection', (ws, req) => {
           console.warn(`[ChestLog] Rejecting oversized batch (${batch.entries.length} entries) from ${ws.user.username}`);
           return;
         }
+
+        // Re-resolve item_id from numericId via canonical itemmap. Same fix as the
+        // loot-event ingest above — protects against stale-itemmap clients sending
+        // wrong item_id strings while the numericID-from-packet is correct.
+        let chestReResolved = 0;
+        for (const entry of batch.entries) {
+          if (!entry || typeof entry !== 'object') continue;
+          const canonicalItemId = resolveCanonicalItemId(entry.numericId, entry.itemId || '');
+          if (canonicalItemId !== entry.itemId) {
+            entry.itemId = canonicalItemId;
+            chestReResolved++;
+          }
+        }
+        if (chestReResolved > 0) console.log(`[ChestLog] Re-resolved ${chestReResolved}/${batch.entries.length} item_ids via canonical itemmap (user=${ws.user.username})`);
 
         batch.playerName = ws.user.username;
         batch.userId = ws.user.id;
@@ -5864,6 +5936,24 @@ require('http').createServer((req, res) => {
     sftp = ssh.open_sftp()
     with sftp.file('/opt/albion-saas/backend.js', 'w') as f:
         f.write(backend_js)
+
+    # Upload itemmap.json — used by backend's CANONICAL_ITEMMAP for server-side
+    # re-resolution of stale-client item_ids. Kept in sync with the Go client's
+    # itemmap so the two sides always agree on what numericID → string ID. Regen
+    # by copying from D:\Coding\albiondata-client-custom\itemmap.json (which is
+    # itself regenerated from ao-bin-dumps after each game patch).
+    itemmap_src = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                '..', 'albiondata-client-custom', 'itemmap.json')
+    itemmap_src = os.path.abspath(itemmap_src)
+    if os.path.isfile(itemmap_src):
+        with open(itemmap_src, 'rb') as src_f:
+            itemmap_bytes = src_f.read()
+        with sftp.file('/opt/albion-saas/itemmap.json', 'wb') as f:
+            f.write(itemmap_bytes)
+        print(f"Uploaded itemmap.json ({len(itemmap_bytes)} bytes via SFTP) from {itemmap_src}")
+    else:
+        print(f"WARNING: itemmap.json not found at {itemmap_src} — backend re-resolution will be a no-op")
+
     sftp.close()
     print(f"Uploaded backend.js ({len(backend_js)} bytes via SFTP)")
 

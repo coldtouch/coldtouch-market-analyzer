@@ -2,6 +2,31 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-04-27 — Item-id mismatch: backend authoritative re-resolution + .txt 11th column
+
+User reported wrong enchant levels appearing on the website (e.g. their Master's Knight Armor .3 displayed as .4). Root cause traced to a stale `itemmap.json` shipped with the upstream Go client they were running (April 11 build): the April 13 game patch shifted ~75% of item IDs by exactly one position, but their itemmap was never regenerated. Their client's `resolveItemName(3506)` returned `T6_ARMOR_PLATE_SET2@4` instead of `@3`, and that wrong string got uploaded via .txt-file upload (no numericId in the format → backend trusted the string).
+
+**Three-layer fix shipped:**
+
+1. **Backend authoritative re-resolution.** `deploy_saas.py` now loads `itemmap.json` at startup into `CANONICAL_ITEMMAP` and applies `resolveCanonicalItemId(numericId, fallback)` at every ingest point:
+   - `/api/loot-upload` (TXT path) — reads optional 11th column for numericId
+   - WS `loot-event` ingest — uses the `numericId` already in the payload
+   - WS `chest-log-batch` ingest — re-resolves each entry's itemId
+   - Falls back to the client's string when numericId is missing or unmapped (preserves legacy 10-col TXT files + items added after our last itemmap regen)
+   - Logs `[LootUpload] Re-resolved N/M item_ids` per upload so we can monitor the bug's prevalence
+
+2. **`.txt` format extended with optional 11th column = `numeric_id`.** Go client `event_loot.go` writer now appends `;<numeric_id>`. Death-row sentinel writer also extended (numeric_id=0) so column counts stay consistent. Frontend `parseLootLines` reads the new column when present. **Fully backwards-compatible** — old 10-col files still parse (numericId defaults to 0 → no re-resolution → client's string used as-is).
+
+3. **`itemmap.json` shipped to VPS via deploy_saas.py SFTP block.** Added `/opt/albion-saas/itemmap.json` upload alongside backend.js. Regenerate the file by copying from `D:\Coding\albiondata-client-custom\itemmap.json` (which is itself regenerated from ao-bin-dumps after each game patch).
+
+**Net effect:** future loot/chest data uploaded by ANY client (current, stale, or future) is normalized to our canonical mapping. Wrong-enchant pollution stops at the front door. Phase 2 (DB backfill of historical wrong data) is a separate one-shot script — not run yet because most affected rows came from .txt uploads where numeric_id=0 and can't be re-resolved.
+
+### 2026-04-27 — Removed Windows auto-startup from installer
+
+The NSIS installer (`pkg/nsis/albiondata-client.nsi`) was registering a scheduled task with `/SC ONLOGON /RL HIGHEST` that auto-launched the client at every Windows login. User report: this is unwanted — explicit control over when the client runs is preferred (privacy, predictable session captures, no packet-capture overhead during non-game time). Removed the `Exec 'schtasks /Create ...'` line. The uninstaller's matching `schtasks /Delete` is kept so existing installations get cleaned up on uninstall. Existing installs need a one-shot manual cleanup (run as admin): `schtasks /Delete /TN "Albion Data Client" /F`.
+
+---
+
 ### 2026-04-27 — Zone names UNSHELVED — found in ao-bin-dumps/cluster/world.xml
 
 **The names were in the bin dumps all along — just in a file we hadn't checked.** Research agent firing turned up `cluster/world.xml` (13MB) which has every cluster element with a `displayname` attribute alongside the `id` we already had. 1423 entries, every numeric zone ID + every named special cluster.
