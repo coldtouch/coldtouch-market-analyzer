@@ -2,6 +2,22 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-04-28 — Accountability check: chest log priority over proportional capture math
+
+User reported a contradictory state on a real session: LaboringWolf's row showed `T4_SHOES_LEATHER_ROYAL@3` as **both** ✗ missing AND ✓ verified by chest log. Both flags were operating from independent data sources that could disagree.
+
+**Root cause** — the accountability calculation had two unrelated sources for "did this player deposit this item":
+1. The **`verified` flag** read from `chestLogDeposits[name][itemId]` — built from chest log batch entries which DO carry `playerName`. Per-player ground truth.
+2. The **`missing` calculation** computed `share = (effectiveQty / totalForItem) * depositedForItem` from `deposited[itemId]`, which was built from **chest CAPTURES** (point-in-time snapshots of the chest contents). The capture has no player attribution at all — it's just an itemId-count map.
+
+Worked example for the bug: 5 effective pickups of T4 Royal Shoes by guild members (one of them LaboringWolf), but the capture snapshot showed only 2 in the chest. The proportional math gave LaboringWolf `share = (1/5) × 2 = 0.4 → round = 0 → missing = 1`. Meanwhile the chest log had a row `playerName: LaboringWolf, T4_SHOES_LEATHER_ROYAL@3, qty 1` proving he actually deposited it.
+
+**Fix:** when `chestLogDeposits[name][itemId] > 0` we now use that count directly as `inChest`, capped at `effectiveQty`. The proportional capture-based math becomes the **fallback** only for items the chest log doesn't cover (no batch selected, or that item not in the selected batches). The chest log is per-player ground truth; the capture is a partial snapshot — we now consult them in that order.
+
+Single-row impact, surgical: 6 lines added, 5 deleted in `app.js` `runAccountabilityCheck`. Trash items still correctly flag as missing (chest log doesn't contain them → proportional fallback → 0 in capture → still missing). Items that previously verified-and-missed simultaneously now verify-and-don't-miss.
+
+---
+
 ### 2026-04-28 — Go client v1.3.4: ZvZ perf + NATS connection leak fix
 
 Two zero-behavior-change improvements to the Go client, validated against a real PvP session before tagging.

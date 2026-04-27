@@ -2300,6 +2300,16 @@
                     <div class="changelog-list">
                         <div class="changelog-entry">
                             <div class="changelog-date">April 28, 2026</div>
+                            <div class="changelog-title">🛡️ Accountability check: chest log overrides proportional capture math</div>
+                            <ul>
+                                <li><strong>The bug:</strong> a player's row could show <strong>both</strong> ✗ missing AND ✓ verified by chest log on the same item — contradictory and confusing. Reported on a real session for LaboringWolf's <code>T4_SHOES_LEATHER_ROYAL@3</code>.</li>
+                                <li><strong>Why:</strong> the two flags were computed from independent sources. The ✓ verified flag read per-player rows from the chest log batches (ground truth, every entry has <code>playerName</code>). The ✗ missing math came from chest <strong>captures</strong> (a snapshot of items in the chest at the moment you opened it) and used a proportional-share formula across all guild members. If a guild member deposited an item AFTER the snapshot, or the snapshot only covered some items, the proportional math could allocate "missing" to a player who actually deposited correctly.</li>
+                                <li><strong>The fix:</strong> when the chest log has a deposit row for <code>(player, item)</code>, use that count directly as their deposited qty. The proportional capture-based math is now a <em>fallback</em> for items the chest log doesn't cover (no batch selected, or item not present in the selected batches). Chest log is ground truth; capture is partial.</li>
+                                <li><strong>Verified against the actual LaboringWolf session</strong>: the contradiction is gone (now <code>missing=0, verified=true, fullyVerified=true</code>); all spot-checked items still behave correctly (trash still missing — no chest log row, falls back to proportional, capture has 0 → correctly still flagged).</li>
+                            </ul>
+                        </div>
+                        <div class="changelog-entry">
+                            <div class="changelog-date">April 28, 2026</div>
                             <div class="changelog-title">⚡ Go client v1.3.4 — ZvZ perf + NATS connection leak fix</div>
                             <ul>
                                 <li><strong>Five small low-risk edits on the per-packet/per-event hot path</strong> that fires hardest during PvP:

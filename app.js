@@ -12517,19 +12517,32 @@ async function runAccountabilityCheck() {
             totalLooted += effectiveQty;
 
             if (isGuildMember && effectiveQty > 0) {
-                // Proportional share: player's looted / total looted * deposited
-                const totalForItem = totalLootedPerItem[itemId] || 0;
-                const depositedForItem = deposited[itemId] || 0;
-                const share = totalForItem > 0 ? (effectiveQty / totalForItem) * depositedForItem : 0;
-                const inChest = Math.min(effectiveQty, Math.round(share));
-                const missing = effectiveQty - inChest;
-                totalDeposited += inChest;
                 // Chest-log verification: if this player has a deposit record for this item
                 // in the selected chest logs, mark the row as ✓ verified — the icon gets a
                 // green ring + tooltip explaining the evidence.
                 const verifiedQty = chestLogDeposits[name] ? (chestLogDeposits[name][itemId] || 0) : 0;
                 const verified = verifiedQty > 0;
                 const fullyVerified = verifiedQty >= effectiveQty;
+
+                // Deposit attribution — chest log is ground truth (per-player rows). The
+                // chest CAPTURE is just a point-in-time snapshot of what was in the chest
+                // when the user opened it; deposits made after the snapshot, or items
+                // withdrawn/redeposited, can leave the capture out of sync. When we have
+                // an authoritative chest-log row for this (player, item), use that count
+                // directly. Only fall back to the proportional capture-based share when
+                // the chest log doesn't cover this item — eliminates the case where a row
+                // showed BOTH ✗ missing and ✓ verified simultaneously.
+                let inChest;
+                if (verifiedQty > 0) {
+                    inChest = Math.min(effectiveQty, verifiedQty);
+                } else {
+                    const totalForItem = totalLootedPerItem[itemId] || 0;
+                    const depositedForItem = deposited[itemId] || 0;
+                    const share = totalForItem > 0 ? (effectiveQty / totalForItem) * depositedForItem : 0;
+                    inChest = Math.min(effectiveQty, Math.round(share));
+                }
+                const missing = effectiveQty - inChest;
+                totalDeposited += inChest;
                 itemResults.push({
                     itemId, looted: effectiveQty, inChest, missing,
                     verified, verifiedQty, fullyVerified,
