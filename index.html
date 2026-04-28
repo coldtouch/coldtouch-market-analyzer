@@ -385,6 +385,10 @@
                 </div>
             </div>
             <!-- Standalone tabs -->
+            <button class="nav-tab" data-tab="syphon">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"></path></svg>
+                Syphon Check
+            </button>
             <button class="nav-tab" data-tab="alerts">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path><path d="M13.73 21a2 2 0 0 1-3.46 0"></path></svg>
                 Alerts
@@ -2037,6 +2041,11 @@
                     <h2 class="about-heading">Features</h2>
                     <div class="features-grid">
                         <div class="feature-card">
+                            <div class="feature-icon">🔋</div>
+                            <h3>Guild Syphon Check</h3>
+                            <p>Paste your in-game Siphoned Energy log and instantly flag any guildmate who withdrew more than they deposited. Per-player totals, date range, and a one-click Discord summary you can drop in your officer channel. Pure client-side — no log uploads, no auth.</p>
+                        </div>
+                        <div class="feature-card">
                             <div class="feature-icon">📊</div>
                             <h3>Market Browser</h3>
                             <p>Browse all items in the Albion Online marketplace. Filter by tier, enchantment, category, and quality. See real-time prices across all cities with freshness indicators.</p>
@@ -2292,6 +2301,15 @@
                     <h2 class="about-heading">Changelog</h2>
                     <div id="changelog-wrapper" style="max-height: 500px; overflow-y: auto; position: relative;">
                     <div class="changelog-list">
+                        <div class="changelog-entry">
+                            <div class="changelog-date">April 28, 2026</div>
+                            <div class="changelog-title">🔋 Guild Syphon Check tab</div>
+                            <ul>
+                                <li>New tab for guild officers — paste the in-game <strong>Siphoned Energy</strong> log directly from the clipboard, and the page parses every transaction, aggregates per-player totals, and flags anyone who withdrew more than they deposited.</li>
+                                <li>Output: a summary card row (date range, transactions, players, totals), a red <strong>Owe syphon</strong> table sorted by deficit, a collapsible "everyone else" section, and a <strong>Discord-ready summary</strong> you can copy with one click and drop in your officer channel.</li>
+                                <li>Pure client-side — no log uploads, no backend, no authentication. Last paste persists in localStorage so a refresh doesn't lose work. Min-deficit filter to ignore trivial -10 entries.</li>
+                            </ul>
+                        </div>
                         <div class="changelog-entry">
                             <div class="changelog-date">April 28, 2026</div>
                             <div class="changelog-title">🛡️ Accountability check: chest log overrides proportional capture math</div>
@@ -3809,6 +3827,48 @@
                         <div class="step-num">5</div>
                         <div class="step-body"><strong>Open any chest in-game</strong> to verify — the Loot Buyer tab should update instantly.</div>
                     </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ====== TAB: GUILD SYPHON CHECK ====== -->
+        <section class="tab-pane hidden" id="pane-syphon">
+            <div class="controls-panel">
+                <div style="flex:1;">
+                    <h2 style="color:var(--accent); margin:0 0 0.25rem; font-size:1.2rem;">🔋 Guild Syphon Check</h2>
+                    <p style="color:var(--text-secondary); margin:0; font-size:0.82rem;">Paste the in-game Siphoned Energy log. Players who withdrew more than they deposited get flagged. Generates a Discord-ready summary you can copy.</p>
+                </div>
+                <button id="syphon-clear-btn" class="btn-secondary" style="white-space:nowrap;" title="Clear log + results">🗑️ Clear</button>
+            </div>
+
+            <div style="margin-top:1rem; display:flex; flex-direction:column; gap:0.75rem;">
+                <textarea id="syphon-log-input" rows="8" placeholder='Paste lines like:&#10;"2026-04-28 17:37:11"&#9;"PlayerName"&#9;"Deposit"&#9;"200"&#10;"2026-04-28 17:35:23"&#9;"OtherPlayer"&#9;"Withdrawal"&#9;"-10"&#10;...&#10;(Tip: in-game, click "Copy to Clipboard" on the syphon log, then paste here.)' style="width:100%; padding:0.75rem; font-family:'Consolas',monospace; font-size:0.78rem; background:var(--bg-input); color:var(--text-primary); border:1px solid var(--border); border-radius:8px; resize:vertical; min-height:140px;"></textarea>
+                <div style="display:flex; gap:0.5rem; flex-wrap:wrap; align-items:center;">
+                    <button id="syphon-run-btn" class="btn-primary" style="white-space:nowrap;">🔍 Run Check</button>
+                    <label style="display:flex; align-items:center; gap:0.4rem; color:var(--text-secondary); font-size:0.85rem;">
+                        Min deficit to flag:
+                        <input id="syphon-min-deficit" type="number" min="0" step="10" value="0" style="width:90px; padding:0.35rem 0.5rem; background:var(--bg-input); color:var(--text-primary); border:1px solid var(--border); border-radius:6px;" />
+                    </label>
+                    <span id="syphon-parse-status" style="color:var(--text-muted); font-size:0.78rem; margin-left:auto;"></span>
+                </div>
+            </div>
+
+            <div id="syphon-results" style="display:none; margin-top:1.25rem;">
+                <div id="syphon-summary" style="display:flex; gap:0.75rem; flex-wrap:wrap; margin-bottom:1rem;"></div>
+
+                <div id="syphon-offenders-wrap"></div>
+
+                <details style="margin-top:1rem;">
+                    <summary style="cursor:pointer; color:var(--text-secondary); padding:0.5rem; user-select:none;">▸ Everyone (deposits ≥ withdrawals)</summary>
+                    <div id="syphon-clean-wrap" style="margin-top:0.5rem;"></div>
+                </details>
+
+                <div id="syphon-share" style="margin-top:1.5rem; padding:1rem; background:var(--bg-card); border:1px solid var(--border); border-radius:8px;">
+                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.5rem; gap:0.5rem; flex-wrap:wrap;">
+                        <strong style="color:var(--accent);">Discord-ready summary</strong>
+                        <button id="syphon-copy-btn" class="btn-primary" style="white-space:nowrap;">📋 Copy to clipboard</button>
+                    </div>
+                    <pre id="syphon-share-preview" style="white-space:pre-wrap; word-break:break-word; font-family:'Consolas',monospace; font-size:0.78rem; color:var(--text-primary); background:var(--bg-input); padding:0.75rem; border-radius:6px; max-height:400px; overflow-y:auto; margin:0;"></pre>
                 </div>
             </div>
         </section>

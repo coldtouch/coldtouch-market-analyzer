@@ -2,6 +2,10 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-04-28 — Guild Syphon Check tab
+
+New self-service feature for guild officers. Paste your in-game **Siphoned Energy log** into a textarea, click **Run Check**, and the page parses the TSV (date / player / reason / amount), aggregates per-player totals, and flags everyone who withdrew more than they deposited. Output: a summary card row (date range, transactions, players, totals), a red **Owe syphon** table sorted by deficit, a collapsible **clean** section, and a Discord-ready pre-formatted summary (one click to copy). Pure client-side — no backend, no auth, no packet capture. Persists last paste in localStorage so a refresh doesn't lose work. Min-deficit filter for ignoring trivial -10 entries. Works for any guild's syphon log out of the box. Source: `app.js` (`parseSyphonLog`, `renderSyphonResults`, `buildSyphonDiscordMessage`), `index.html` `pane-syphon`, CSS `.syphon-table`/`.syphon-card`.
+
 ### 2026-04-28 — Stop-the-bleeding sweep: 14 fixes from production audit
 
 After a deep production audit identified the cause of declining users — multiple invisible regressions accumulating over weeks — this batch ships the targeted fixes. **Headline finding**: the public site has been showing a 15-day-old red banner saying "Radiant Wilds update broke most data tools" to every visitor since 2026-04-13, linking to v0.6.3 (a Go client release we no longer ship). Every new visitor read this as a current outage and bounced. Combined with [other findings documented separately](https://github.com/coldtouch/coldtouch-market-analyzer): 36+ hours of cumulative downtime over 5 SQLITE_BUSY incidents this month, Live Flips silent for 16 days from a NATS port typo (4222 vs 24222), CORS hardcoded to coldtouch.github.io blocking auth on the primary albionaitool.xyz domain for 27 days, junk-listing pollution in `price_analytics` showing T6_RUNE at 21M silver and T4_BAG at 1.9M, and `transport-routes` historical mode 30s timeouts.

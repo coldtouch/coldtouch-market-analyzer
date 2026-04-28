@@ -868,6 +868,7 @@ function initTabs() {
             if (currentTab === 'portfolio') { if (typeof renderPortfolio === 'function') renderPortfolio(); }
             if (currentTab === 'craft-runs') initCraftRunsTab();
             if (currentTab === 'routine-reports') { if (typeof initRoutineReportsTab === 'function') initRoutineReportsTab(); }
+            if (currentTab === 'syphon') { if (typeof _syphonInitTab === 'function') _syphonInitTab(); }
             // BENCHED: if (currentTab === 'mounts') { if (typeof renderMountsDatabase === 'function') renderMountsDatabase(); }
             // Tab name is 'farming' in data-tab, NOT 'farm' — this guard never fired before this fix.
             if (currentTab === 'farming') { if (typeof renderFarmBreed === 'function') renderFarmBreed(); }
@@ -884,6 +885,7 @@ function initTabs() {
                 'loot-buyer': 'Loot Buyer', 'loot-logger': 'Loot Logger',
                 farming: 'Farm & Breed', alerts: 'Alerts', community: 'Community',
                 profile: 'Profile', about: 'About', 'routine-reports': 'Routine Reports',
+                syphon: 'Guild Syphon Check',
             };
             const tabLabel = TAB_TITLES[currentTab];
             if (tabLabel) document.title = `${tabLabel} \u2014 Coldtouch Market Analyzer`;
@@ -894,7 +896,7 @@ function initTabs() {
             history.replaceState(null, '', url);
 
             // UX-2: update browser tab title
-            const _TAB_TITLES = { browser:'Market Browser', arbitrage:'Market Flipping', bmflipper:'BM Flipper', compare:'City Comparison', toptraded:'Top Traded', itempower:'Item Power', favorites:'Favorites', crafting:'Crafting Profits', 'craft-top-n':'Top-N Ranker', 'refining-lab':'Refining Lab', journals:'Journals', rrr:'Return Rate Calc', repair:'Repair Cost', transport:'Transport Routes', 'live-flips':'Live Flips', portfolio:'Portfolio Tracker', 'craft-runs':'Craft Runs', 'loot-buyer':'Loot Buyer', 'loot-logger':'Loot Logger', farming:'Farm Calculator', alerts:'Alerts', about:'About', community:'Community', profile:'Profile', 'routine-reports':'Routine Reports' };
+            const _TAB_TITLES = { browser:'Market Browser', arbitrage:'Market Flipping', bmflipper:'BM Flipper', compare:'City Comparison', toptraded:'Top Traded', itempower:'Item Power', favorites:'Favorites', crafting:'Crafting Profits', 'craft-top-n':'Top-N Ranker', 'refining-lab':'Refining Lab', journals:'Journals', rrr:'Return Rate Calc', repair:'Repair Cost', transport:'Transport Routes', 'live-flips':'Live Flips', portfolio:'Portfolio Tracker', 'craft-runs':'Craft Runs', 'loot-buyer':'Loot Buyer', 'loot-logger':'Loot Logger', farming:'Farm Calculator', alerts:'Alerts', about:'About', community:'Community', profile:'Profile', 'routine-reports':'Routine Reports', syphon:'Syphon Check' };
             document.title = (_TAB_TITLES[currentTab] ? _TAB_TITLES[currentTab] + ' — ' : '') + 'Albion Market Analyzer';
 
             // Close dropdown after selection
@@ -5072,6 +5074,307 @@ async function toggleRoutineReport(id) {
     } catch (e) {
         body.innerHTML = `<p style="color:var(--danger);">Network error: ${esc(e.message || String(e))}</p>`;
     }
+}
+
+// ============================================================
+// GUILD SYPHON CHECK
+// ============================================================
+// Parses an in-game guild Syphoned Energy log (paste from clipboard) and
+// flags players whose withdrawals exceed deposits. Pure client-side — no
+// backend, no packet reading required. Persists last paste/run in
+// localStorage so the user doesn't lose work on refresh.
+
+const SYPHON_LS_KEY = 'syphon-last-input';
+
+function parseSyphonLog(text) {
+    if (!text || typeof text !== 'string') {
+        return { rows: [], totalDeposits: 0, totalWithdrawals: 0, txnCount: 0, playerCount: 0, dateMin: null, dateMax: null, unparsed: 0 };
+    }
+    const lines = text.split(/\r?\n/);
+    const players = new Map(); // name -> {deposited, withdrew, count, firstTxn, lastTxn, lastBigWithdrawal}
+    let totalDeposits = 0, totalWithdrawals = 0, txnCount = 0;
+    let dateMin = null, dateMax = null;
+    let unparsed = 0;
+
+    // Match lines like: "DATE"\t"PLAYER"\t"REASON"\t"AMOUNT"
+    // Allow either tabs or runs of whitespace as separators (some pastes lose tabs).
+    const re = /^"([^"]+)"\s*"([^"]+)"\s*"([^"]+)"\s*"(-?\d+)"\s*$/;
+
+    for (const raw of lines) {
+        const line = raw.trim();
+        if (!line) continue;
+        // Skip header
+        if (/^"Date"/i.test(line)) continue;
+
+        const m = line.match(re);
+        if (!m) {
+            unparsed++;
+            continue;
+        }
+        const [, date, player, reason, amountStr] = m;
+        const amount = parseInt(amountStr, 10);
+        if (!Number.isFinite(amount)) {
+            unparsed++;
+            continue;
+        }
+
+        if (!players.has(player)) {
+            players.set(player, {
+                deposited: 0,
+                withdrew: 0,
+                count: 0,
+                firstTxn: date,
+                lastTxn: date,
+                biggestWithdrawal: 0,
+                biggestWithdrawalDate: ''
+            });
+        }
+        const p = players.get(player);
+        p.count++;
+        if (amount > 0) {
+            p.deposited += amount;
+            totalDeposits += amount;
+        } else {
+            p.withdrew += amount; // already negative
+            totalWithdrawals += amount;
+            if (amount < p.biggestWithdrawal) {
+                p.biggestWithdrawal = amount;
+                p.biggestWithdrawalDate = date;
+            }
+        }
+        if (date < p.firstTxn) p.firstTxn = date;
+        if (date > p.lastTxn) p.lastTxn = date;
+        if (!dateMin || date < dateMin) dateMin = date;
+        if (!dateMax || date > dateMax) dateMax = date;
+        txnCount++;
+    }
+
+    const rows = Array.from(players.entries()).map(([name, p]) => ({
+        name,
+        deposited: p.deposited,
+        withdrew: p.withdrew, // signed (negative)
+        net: p.deposited + p.withdrew, // signed; negative = owes
+        count: p.count,
+        firstTxn: p.firstTxn,
+        lastTxn: p.lastTxn,
+        biggestWithdrawal: p.biggestWithdrawal,
+        biggestWithdrawalDate: p.biggestWithdrawalDate,
+    }));
+
+    return {
+        rows,
+        totalDeposits,
+        totalWithdrawals,
+        netTotal: totalDeposits + totalWithdrawals,
+        txnCount,
+        playerCount: players.size,
+        dateMin, dateMax,
+        unparsed,
+    };
+}
+
+function _syphonFmtNum(n) {
+    return Math.round(n).toLocaleString();
+}
+
+function _syphonInitTab() {
+    const runBtn = document.getElementById('syphon-run-btn');
+    const clearBtn = document.getElementById('syphon-clear-btn');
+    const copyBtn = document.getElementById('syphon-copy-btn');
+    const minInput = document.getElementById('syphon-min-deficit');
+    const input = document.getElementById('syphon-log-input');
+
+    if (!input) return; // tab not in DOM
+
+    // Restore last paste
+    if (!input._restored) {
+        input._restored = true;
+        try {
+            const saved = localStorage.getItem(SYPHON_LS_KEY);
+            if (saved && !input.value) input.value = saved;
+        } catch (e) {}
+    }
+
+    if (runBtn && !runBtn._wired) {
+        runBtn._wired = true;
+        runBtn.addEventListener('click', runSyphonCheck);
+    }
+    if (clearBtn && !clearBtn._wired) {
+        clearBtn._wired = true;
+        clearBtn.addEventListener('click', () => {
+            if (input) input.value = '';
+            try { localStorage.removeItem(SYPHON_LS_KEY); } catch (e) {}
+            const results = document.getElementById('syphon-results');
+            if (results) results.style.display = 'none';
+            const status = document.getElementById('syphon-parse-status');
+            if (status) status.textContent = '';
+        });
+    }
+    if (copyBtn && !copyBtn._wired) {
+        copyBtn._wired = true;
+        copyBtn.addEventListener('click', () => {
+            const pre = document.getElementById('syphon-share-preview');
+            if (!pre || !pre.textContent) return;
+            navigator.clipboard.writeText(pre.textContent).then(
+                () => showToast('Discord summary copied to clipboard.', 'success'),
+                () => showToast('Copy failed — select the text manually.', 'error')
+            );
+        });
+    }
+    if (minInput && !minInput._wired) {
+        minInput._wired = true;
+        minInput.addEventListener('change', () => {
+            // Re-render if we already have results
+            if (window._syphonLastData) renderSyphonResults(window._syphonLastData);
+        });
+    }
+}
+
+function runSyphonCheck() {
+    const input = document.getElementById('syphon-log-input');
+    const status = document.getElementById('syphon-parse-status');
+    if (!input) return;
+    const text = input.value || '';
+    if (!text.trim()) {
+        showToast('Paste your guild Syphoned Energy log first.', 'error');
+        return;
+    }
+    try { localStorage.setItem(SYPHON_LS_KEY, text); } catch (e) {}
+
+    const data = parseSyphonLog(text);
+    window._syphonLastData = data;
+
+    if (data.txnCount === 0) {
+        if (status) status.textContent = `No transactions parsed${data.unparsed ? ` (${data.unparsed} unparseable lines)` : ''}.`;
+        showToast('No transactions parsed — check the log format.', 'error');
+        return;
+    }
+    if (status) status.textContent = `Parsed ${data.txnCount.toLocaleString()} transactions across ${data.playerCount} players` + (data.unparsed ? ` (${data.unparsed} skipped)` : '');
+
+    renderSyphonResults(data);
+}
+
+function renderSyphonResults(data) {
+    const wrap = document.getElementById('syphon-results');
+    if (!wrap) return;
+    wrap.style.display = '';
+
+    const minDeficitEl = document.getElementById('syphon-min-deficit');
+    const minDeficit = Math.max(0, parseInt(minDeficitEl ? minDeficitEl.value : '0', 10) || 0);
+
+    // Summary cards
+    const summary = document.getElementById('syphon-summary');
+    if (summary) {
+        const dateRange = data.dateMin && data.dateMax ? `${data.dateMin.slice(0,10)} → ${data.dateMax.slice(0,10)}` : '—';
+        summary.innerHTML = `
+            <div class="syphon-card"><div class="syphon-card-label">Date range</div><div class="syphon-card-value">${esc(dateRange)}</div></div>
+            <div class="syphon-card"><div class="syphon-card-label">Transactions</div><div class="syphon-card-value">${data.txnCount.toLocaleString()}</div></div>
+            <div class="syphon-card"><div class="syphon-card-label">Players</div><div class="syphon-card-value">${data.playerCount}</div></div>
+            <div class="syphon-card"><div class="syphon-card-label">Total deposits</div><div class="syphon-card-value" style="color:var(--success);">+${_syphonFmtNum(data.totalDeposits)}</div></div>
+            <div class="syphon-card"><div class="syphon-card-label">Total withdrawals</div><div class="syphon-card-value" style="color:var(--danger);">${_syphonFmtNum(data.totalWithdrawals)}</div></div>
+            <div class="syphon-card"><div class="syphon-card-label">Net</div><div class="syphon-card-value" style="color:${data.netTotal >= 0 ? 'var(--success)' : 'var(--danger)'};">${data.netTotal >= 0 ? '+' : ''}${_syphonFmtNum(data.netTotal)}</div></div>
+        `;
+    }
+
+    // Sort offenders: most negative first
+    const offenders = data.rows
+        .filter(r => r.net < 0 && Math.abs(r.net) >= minDeficit)
+        .sort((a, b) => a.net - b.net);
+
+    const clean = data.rows
+        .filter(r => r.net >= 0 || (r.net < 0 && Math.abs(r.net) < minDeficit))
+        .sort((a, b) => b.net - a.net);
+
+    // Offenders table
+    const offWrap = document.getElementById('syphon-offenders-wrap');
+    if (offWrap) {
+        if (offenders.length === 0) {
+            offWrap.innerHTML = `<div style="padding:1rem; background:var(--bg-card); border:1px solid var(--border); border-radius:8px; color:var(--success); text-align:center;">✓ No players owe syphon energy${minDeficit > 0 ? ` (min deficit ${minDeficit})` : ''}.</div>`;
+        } else {
+            offWrap.innerHTML = `
+                <h3 style="color:var(--danger); margin:0 0 0.5rem;">🔴 Owe syphon (${offenders.length}${minDeficit > 0 ? `, min ${minDeficit}` : ''})</h3>
+                <div style="overflow-x:auto;"><table class="syphon-table">
+                    <thead><tr>
+                        <th>Player</th>
+                        <th>Deposited</th>
+                        <th>Withdrew</th>
+                        <th>Net (owes)</th>
+                        <th>Txns</th>
+                        <th>First → Last</th>
+                    </tr></thead>
+                    <tbody>${offenders.map(r => `
+                        <tr>
+                            <td><strong>${esc(r.name)}</strong></td>
+                            <td style="color:var(--success);">+${_syphonFmtNum(r.deposited)}</td>
+                            <td style="color:var(--danger);">${_syphonFmtNum(r.withdrew)}</td>
+                            <td style="color:var(--danger); font-weight:bold;">${_syphonFmtNum(r.net)}</td>
+                            <td>${r.count}</td>
+                            <td style="color:var(--text-muted); font-size:0.78rem;">${esc(r.firstTxn.slice(5,16))} → ${esc(r.lastTxn.slice(5,16))}</td>
+                        </tr>
+                    `).join('')}</tbody>
+                </table></div>
+            `;
+        }
+    }
+
+    // Clean (positive or zero) table
+    const cleanWrap = document.getElementById('syphon-clean-wrap');
+    if (cleanWrap) {
+        if (clean.length === 0) {
+            cleanWrap.innerHTML = '<div style="color:var(--text-muted); padding:0.5rem;">(none)</div>';
+        } else {
+            cleanWrap.innerHTML = `
+                <div style="overflow-x:auto;"><table class="syphon-table">
+                    <thead><tr><th>Player</th><th>Deposited</th><th>Withdrew</th><th>Net</th><th>Txns</th></tr></thead>
+                    <tbody>${clean.map(r => `
+                        <tr>
+                            <td>${esc(r.name)}</td>
+                            <td style="color:var(--success);">+${_syphonFmtNum(r.deposited)}</td>
+                            <td style="color:var(--text-muted);">${_syphonFmtNum(r.withdrew)}</td>
+                            <td style="color:${r.net > 0 ? 'var(--success)' : 'var(--text-muted)'};">${r.net >= 0 ? '+' : ''}${_syphonFmtNum(r.net)}</td>
+                            <td>${r.count}</td>
+                        </tr>
+                    `).join('')}</tbody>
+                </table></div>
+            `;
+        }
+    }
+
+    // Discord summary
+    const sharePre = document.getElementById('syphon-share-preview');
+    if (sharePre) {
+        sharePre.textContent = buildSyphonDiscordMessage(data, offenders);
+    }
+}
+
+function buildSyphonDiscordMessage(data, offenders) {
+    const dateRange = data.dateMin && data.dateMax
+        ? `${data.dateMin.slice(0,10)} → ${data.dateMax.slice(0,10)}`
+        : '—';
+    const lines = [];
+    lines.push('**🔋 Guild Syphon Check**');
+    lines.push(`Range: \`${dateRange}\` · ${data.txnCount.toLocaleString()} txns · ${data.playerCount} players`);
+    lines.push(`Deposits: **+${_syphonFmtNum(data.totalDeposits)}** · Withdrawals: **${_syphonFmtNum(data.totalWithdrawals)}** · Net: **${data.netTotal >= 0 ? '+' : ''}${_syphonFmtNum(data.netTotal)}**`);
+    lines.push('');
+
+    if (offenders.length === 0) {
+        lines.push('✅ **All clear** — no players withdrew more than they deposited.');
+    } else {
+        lines.push(`🔴 **${offenders.length} player${offenders.length === 1 ? '' : 's'} owe${offenders.length === 1 ? 's' : ''} syphon energy:**`);
+        // Cap at 30 to keep message under Discord's 2000 char limit comfortably
+        const SHOW = 30;
+        const visible = offenders.slice(0, SHOW);
+        for (const r of visible) {
+            lines.push(`• \`${r.name}\` — owes **${_syphonFmtNum(Math.abs(r.net))}** (deposited +${_syphonFmtNum(r.deposited)}, withdrew ${_syphonFmtNum(r.withdrew)})`);
+        }
+        if (offenders.length > SHOW) {
+            const remaining = offenders.length - SHOW;
+            const remainingDeficit = offenders.slice(SHOW).reduce((sum, r) => sum + Math.abs(r.net), 0);
+            lines.push(`• … and ${remaining} more (combined deficit: ${_syphonFmtNum(remainingDeficit)})`);
+        }
+    }
+
+    return lines.join('\n');
 }
 
 // ============================================================

@@ -7727,3 +7727,59 @@ footer {
     .cr-progress-label { font-size: 0.62rem; }
 }
 
+/* === GUILD SYPHON CHECK === */
+.syphon-card {
+    flex: 1;
+    min-width: 130px;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 0.65rem 0.85rem;
+}
+.syphon-card-label {
+    color: var(--text-muted);
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    margin-bottom: 0.25rem;
+}
+.syphon-card-value {
+    color: var(--text-primary);
+    font-size: 1rem;
+    font-weight: 600;
+    font-family: 'Consolas', monospace;
+}
+
+.syphon-table {
+    width: 100%;
+    border-collapse: collapse;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+    font-size: 0.85rem;
+}
+.syphon-table th {
+    padding: 0.5rem 0.7rem;
+    text-align: left;
+    color: var(--text-secondary);
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    border-bottom: 1px solid var(--border);
+    white-space: nowrap;
+}
+.syphon-table td {
+    padding: 0.5rem 0.7rem;
+    border-bottom: 1px solid rgba(255,255,255,0.04);
+    white-space: nowrap;
+    font-family: 'Consolas', monospace;
+}
+.syphon-table tbody tr:hover td { background: rgba(255,255,255,0.03); }
+.syphon-table td:first-child, .syphon-table th:first-child { font-family: inherit; }
+
+@media (max-width: 768px) {
+    .syphon-card { min-width: 45%; }
+    .syphon-table th, .syphon-table td { font-size: 0.75rem; padding: 0.4rem 0.5rem; }
+}
+
