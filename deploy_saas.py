@@ -621,6 +621,18 @@ let _writeQueue = Promise.resolve();
 let _writeDepth = 0;
 const _writeActive = new Map(); // label -> startTs
 
+// 2026-04-28: per-label watchdog timeout. Default 90s (catches silent wedges
+// fast), but the EMA streaming pass (`analytics-ema`) and analytics bulk
+// write are legitimately long jobs that walk millions of price_averages rows
+// and can take >90s on a busy DB. Aborting them means analytics never
+// completes — the root cause of the Apr 26-28 26+ hour analytics staleness.
+// Bump those two specifically to 5 minutes; everything else stays at 90s.
+const WATCHDOG_TIMEOUT_MS = {
+  'analytics-ema': 5 * 60 * 1000,
+  'analytics-bulk': 5 * 60 * 1000,
+};
+const WATCHDOG_DEFAULT_MS = 90 * 1000;
+
 function withWriteLock(label, fn) {
   _writeDepth++;
   if (_writeDepth > 5) {
@@ -630,11 +642,12 @@ function withWriteLock(label, fn) {
     const startTs = Date.now();
     _writeActive.set(label, startTs);
     let settled = false;
+    const timeout = WATCHDOG_TIMEOUT_MS[label] || WATCHDOG_DEFAULT_MS;
     const watchdog = setTimeout(() => {
       if (settled) return;
-      console.error(`[WriteLock-WATCHDOG] '${label}' exceeded 90s — silent wedge detected. Aborting for clean systemd restart.`);
+      console.error(`[WriteLock-WATCHDOG] '${label}' exceeded ${timeout/1000}s — silent wedge detected. Aborting for clean systemd restart.`);
       process.abort();
-    }, 90_000);
+    }, timeout);
     const done = (err) => {
       if (settled) return;
       settled = true;
@@ -1353,12 +1366,22 @@ app.get('/', (req, res) => {
 
 // Health check for monitoring
 // === NEWS / STATUS BANNER ===
-// Stored in DB so it persists across restarts and can be updated without redeploying
+// Stored in DB so it persists across restarts and can be updated without redeploying.
+// 2026-04-28: auto-suppress banners older than 7 days. The previous "Radiant Wilds update
+// broke most data tools" banner from 2026-04-13 was still active 15 days later, telling
+// every new visitor the site was broken. Auto-staling means an outdated banner can never
+// poison the front page longer than a week.
+const NEWS_BANNER_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 app.get('/api/news', (req, res) => {
   readDb.get(`SELECT value FROM meta_config WHERE key = 'news_banner'`, (err, row) => {
     if (err || !row) return res.json({ active: false });
     try {
-      res.json(JSON.parse(row.value));
+      const banner = JSON.parse(row.value);
+      if (banner && banner.active && banner.updatedAt && (Date.now() - banner.updatedAt) > NEWS_BANNER_MAX_AGE_MS) {
+        // Stale — silently render as inactive. Admin can reset via POST /api/news.
+        return res.json({ active: false, _staled: true, _staleDays: Math.floor((Date.now() - banner.updatedAt) / 86400000) });
+      }
+      res.json(banner);
     } catch { res.json({ active: false }); }
   });
 });
@@ -1385,6 +1408,47 @@ app.post('/api/news', requireAuth, (req, res) => {
 // Full diagnostics available at /api/admin/health (auth + admin required).
 app.get('/health', (req, res) => res.json({ status: 'ok' }));
 app.get('/healthz', (req, res) => res.json({ status: 'ok' }));
+
+// 2026-04-28: public observability endpoint — no secrets, just job freshness +
+// queue depth so external monitors (UptimeRobot, etc.) can detect silent wedges
+// without needing admin auth. Catches the analytics-stale + market-cache-empty
+// patterns that were previously invisible to anyone outside the maintainer's
+// SSH window.
+app.get('/api/health/internal', (req, res) => {
+  const now = Date.now();
+  const writeActiveLabels = Array.from(_writeActive.entries()).map(([label, startTs]) => ({ label, ageMs: now - startTs }));
+  res.json({
+    status: 'ok',
+    now,
+    marketCache: {
+      available: !!cachedGzipBuffer,
+      timestampMs: cacheTimestamp || null,
+      ageMs: cacheTimestamp ? now - new Date(cacheTimestamp).getTime() : null,
+      entries: cacheItemCount || 0,
+      scanning: scanInProgress || false,
+    },
+    analytics: {
+      running: analyticsRunning,
+      lastStartMs: analyticsStartTime || 0,
+      ageSinceLastStartMs: analyticsStartTime ? now - analyticsStartTime : null,
+    },
+    spreadStats: {
+      running: statsRunning,
+      lastStartMs: statsStartTime || 0,
+      ageSinceLastStartMs: statsStartTime ? now - statsStartTime : null,
+    },
+    writeQueue: {
+      depth: _writeDepth,
+      active: writeActiveLabels,
+    },
+    aodp: {
+      consecutiveFailures: _aodpConsecutiveFailures,
+      degraded: aodpDegraded(),
+    },
+    wsClients: wsClients ? wsClients.size : 0,
+    dbBusy,
+  });
+});
 
 app.get('/api/admin/health', requireAuth, (req, res) => {
   if (req.user.id !== ADMIN_DISCORD_ID) return res.status(403).json({ error: 'Admin only' });
@@ -2209,6 +2273,9 @@ app.post('/api/batch-prices', batchPricesLimiter, (req, res) => {
   // Accept either:
   //   { itemIds: ['T4_BAG', ...] }                  (legacy — assumes quality 1)
   //   { items: [{ itemId: 'T4_BAG', quality: 3 }] } (preferred — per-item quality)
+  // Optional: { cities: ['Caerleon', 'Bridgewatch', ...] } restricts result to
+  // those cities. 2026-04-28: this param was previously documented in the
+  // frontend but silently dropped — now honored as a city allowlist.
   const body = req.body || {};
   let pairs = [];
   if (Array.isArray(body.items) && body.items.length > 0) {
@@ -2218,6 +2285,14 @@ app.post('/api/batch-prices', batchPricesLimiter, (req, res) => {
   }
   if (pairs.length === 0 || pairs.length > 500) {
     return res.status(400).json({ error: 'items[] or itemIds[] required (1-500).' });
+  }
+
+  // Optional city allowlist
+  let cityAllowlist = null;
+  if (Array.isArray(body.cities) && body.cities.length > 0) {
+    const validCity = (c) => typeof c === 'string' && c.length <= 32 && CITY_NAMES[c];
+    const cleanCities = body.cities.filter(validCity).slice(0, 16);
+    if (cleanCities.length > 0) cityAllowlist = new Set(cleanCities);
   }
 
   const itemIdRegex = /^[A-Za-z0-9_@.]+$/;
@@ -2244,6 +2319,7 @@ app.post('/api/batch-prices', batchPricesLimiter, (req, res) => {
       // Index: item_id + '_' + quality → { price, city, source }
       const result = {};
       for (const row of (rows || [])) {
+        if (cityAllowlist && !cityAllowlist.has(row.city)) continue; // honor cities filter
         const key = row.item_id + '_' + (row.quality || 1);
         const price = Math.round(row.price_avg);
         const existing = result[key];
@@ -2259,6 +2335,7 @@ app.post('/api/batch-prices', batchPricesLimiter, (req, res) => {
         const data = alertMarketDb[p.itemId] && alertMarketDb[p.itemId][p.quality];
         if (data) {
           for (const [city, cd] of Object.entries(data)) {
+            if (cityAllowlist && !cityAllowlist.has(city)) continue; // honor cities filter
             if (cd.sellMin > 0) {
               if (!result[key] || cd.sellMin < result[key].price) {
                 result[key] = { price: cd.sellMin, city, source: 'live', itemId: p.itemId, quality: p.quality };
@@ -3379,7 +3456,11 @@ app.get('/api/transport-routes-live', transportLiveLimiter, (req, res) => {
   // aren't filtered out — they dominate bulk-cargo trips by total trip profit, not per-unit.
   // Frontend already sorts by est_trip_profit; ROI cap (150%) still catches outliers.
   const minProfit = parseInt(req.query.min_profit) || 1;
-  const maxAge = parseInt(req.query.max_age) || 120;
+  // 2026-04-28: tightened default 120 → 30 min. Audit found buy_age averages
+  // 555 minutes with the 120m cap, telling users 9-hour-old data is "real-time
+  // NATS data". 30m default cuts the freshness lie and forces stale items off
+  // the live feed. Power users can override via ?max_age= up to 240.
+  const maxAge = Math.min(parseInt(req.query.max_age) || 30, 240);
   const limit = Math.min(parseInt(req.query.limit) || 200, 500);
   const excludeCities = (req.query.exclude || '').split(',').filter(Boolean);
   // Per-user premium tax: accept `premium=0` to opt-out; default premium.
@@ -4349,7 +4430,13 @@ async function broadcastFlip(flip) {
     } else {
       try {
         const valid = await validateFlipPrices(flip.itemId, flip.quality, flip.buyCity, flip.sellCity, flip.buyPrice, flip.sellPrice);
-        if (!valid) return;
+        if (valid === false) return;
+        // 2026-04-28: validateFlipPrices can now return 'unverified' when AODP returns
+        // a partial snapshot (one side missing). Previously these were silently dropped,
+        // which is the root cause of the multi-week Live Flips silence even when NATS
+        // had real arbitrage flowing through. Pass through unverified — the frontend
+        // already handles flip.unverified rendering for the AODP-degraded path.
+        if (valid === 'unverified') flip.unverified = true;
       } catch(e) { console.warn('[broadcastFlip] Validation error, dropping flip:', e.message); return; }
     }
   } finally {
@@ -4402,10 +4489,13 @@ async function validateFlipPrices(id, q, buyCity, sellCity, expectedBuyPrice, ex
         if (entry.buy_price_max > liveSellPrice) liveSellPrice = entry.buy_price_max;
       }
     }
-    // Listing is gone
+    // 2026-04-28: AODP returns 0 for one side frequently on thin order books, even when
+    // the other side has fresh data. Returning false here was the root cause of the
+    // multi-week silent Live Flips silence. Pass through as 'unverified' so the
+    // frontend can badge it — matches the aodpDegraded() unverified-passthrough pattern.
     if (liveBuyPrice <= 0 || liveSellPrice <= 0) {
-      console.log(`[FlipValidate] ${id} q${q}: listing gone (buy=${liveBuyPrice} sell=${liveSellPrice}), skipping`);
-      return false;
+      console.log(`[FlipValidate] ${id} q${q}: AODP partial (buy=${liveBuyPrice} sell=${liveSellPrice}), passing unverified`);
+      return 'unverified';
     }
     // Price moved significantly (>15% worse)
     if (liveBuyPrice > expectedBuyPrice * 1.15) {
@@ -4875,9 +4965,27 @@ function recordSnapshots(allPrices) {
         for (; i < end; i++) {
           const entry = allPrices[i];
           if (!entry.item_id || !entry.city) continue;
-          const sell = entry.sell_price_min || 0;
-          const buy = entry.buy_price_max || 0;
+          let sell = entry.sell_price_min || 0;
+          let buy = entry.buy_price_max || 0;
           if (sell <= 0 && buy <= 0) continue;
+
+          // 2026-04-28: outlier rejection. A single typo'd listing (e.g. T6_RUNE
+          // priced at 21M silver) was poisoning sma_7d for affected items via the
+          // hourly aggregate. Reject prices >100× global ref or <0.01× global ref.
+          // Falls through if no global ref yet (cold-start).
+          const gAvg = globalPriceRef[entry.item_id + '_' + (entry.quality || 1)] || 0;
+          if (gAvg > 0) {
+            if (sell > 0 && (sell > gAvg * 100 || sell < gAvg * 0.01)) {
+              console.log(`[Snapshots] Rejecting outlier sell=${sell} for ${entry.item_id} q${entry.quality||1} ${entry.city} (gAvg=${gAvg})`);
+              sell = 0;
+            }
+            if (buy > 0 && (buy > gAvg * 100 || buy < gAvg * 0.01)) {
+              console.log(`[Snapshots] Rejecting outlier buy=${buy} for ${entry.item_id} q${entry.quality||1} ${entry.city} (gAvg=${gAvg})`);
+              buy = 0;
+            }
+            if (sell <= 0 && buy <= 0) continue; // both rejected, skip row
+          }
+
           stmt.run(entry.item_id, entry.quality || 1, entry.city, sell, buy, sell, buy, hourStart, (err) => { if (err && !batchErr) batchErr = err; });
           count++;
         }
@@ -5761,9 +5869,25 @@ function flushNatsBuffer() {
         max_buy = CASE WHEN excluded.max_buy > max_buy THEN excluded.max_buy ELSE max_buy END,
         sample_count = sample_count + 1`, (e) => { if (e && !batchErr) batchErr = e; });
     for (const e of batch) {
-      const sell = e.sell || 0;
-      const buy = e.buy || 0;
+      let sell = e.sell || 0;
+      let buy = e.buy || 0;
       if (sell <= 0 && buy <= 0) continue;
+
+      // 2026-04-28: outlier rejection — same pattern as recordSnapshots above.
+      // Single typo'd listings (e.g. T6_RUNE @ 21M silver) were poisoning sma_7d.
+      const gAvg = globalPriceRef[e.item_id + '_' + e.quality] || 0;
+      if (gAvg > 0) {
+        if (sell > 0 && (sell > gAvg * 100 || sell < gAvg * 0.01)) {
+          console.log(`[NATS] Rejecting outlier sell=${sell} for ${e.item_id} q${e.quality} ${e.city} (gAvg=${gAvg})`);
+          sell = 0;
+        }
+        if (buy > 0 && (buy > gAvg * 100 || buy < gAvg * 0.01)) {
+          console.log(`[NATS] Rejecting outlier buy=${buy} for ${e.item_id} q${e.quality} ${e.city} (gAvg=${gAvg})`);
+          buy = 0;
+        }
+        if (sell <= 0 && buy <= 0) continue;
+      }
+
       stmt.run(e.item_id, e.quality, e.city, sell, buy, sell, buy, hourStart, (err) => { if (err && !batchErr) batchErr = err; });
     }
     stmt.finalize((e) => {

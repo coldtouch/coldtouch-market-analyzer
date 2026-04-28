@@ -1384,6 +1384,13 @@ async function fetchAnalytics(itemId) {
         const res = await fetch(`${VPS_BASE}/api/analytics/${encodeURIComponent(itemId)}`);
         if (!res.ok) { analyticsCache.delete(itemId); return null; }
         const raw = await res.json();
+        // 2026-04-28: suppress trend badge when analytics computed_at is >4h old.
+        // Background analytics job has occasionally fallen behind (26+ hours observed
+        // 2026-04-26→28). A red ▼ arrow on yesterday's snapshot is worse than no badge.
+        const STALE_TREND_MS = 4 * 60 * 60 * 1000;
+        const computedAt = raw.computed_at ? new Date(raw.computed_at).getTime() :
+            (raw.cities ? Math.max(...Object.values(raw.cities).map(c => new Date(c.computed_at || 0).getTime()).filter(Boolean), 0) : 0);
+        const stale = computedAt > 0 && (Date.now() - computedAt) > STALE_TREND_MS;
         // Response is { cities: { "CityName": { price_trend, sma_7d, ... }, ... } }
         // Extract average price_trend across all cities
         let priceTrend = null;
@@ -1397,7 +1404,7 @@ async function fetchAnalytics(itemId) {
         } else if (raw.metrics && raw.metrics.price_trend !== undefined) {
             priceTrend = raw.metrics.price_trend;
         }
-        const data = { price_trend: priceTrend, _raw: raw };
+        const data = { price_trend: stale ? null : priceTrend, stale, computedAt, _raw: raw };
         analyticsCache.set(itemId, data);
         if (analyticsCache.size > ANALYTICS_CACHE_MAX) analyticsCache.delete(analyticsCache.keys().next().value);
         return data;
@@ -1417,9 +1424,14 @@ function prefetchTrendBadges(container) {
         if (seen.has(itemId)) return;
         seen.add(itemId);
         fetchAnalytics(itemId).then(data => {
-            if (!data || data === 'pending' || data.price_trend === null || data.price_trend === undefined) return;
+            if (!data || data === 'pending') return;
             container.querySelectorAll(`[data-trend-item="${CSS.escape(itemId)}"]`).forEach(badge => {
-                badge.outerHTML = getTrendBadge(data.price_trend);
+                if (data.stale) {
+                    // 2026-04-28: don't show a misleading arrow when analytics is stale.
+                    badge.outerHTML = `<span class="trend-badge trend-neutral" title="Trend data refresh delayed (analytics last computed >4h ago)">&#8212;</span>`;
+                } else if (data.price_trend !== null && data.price_trend !== undefined) {
+                    badge.outerHTML = getTrendBadge(data.price_trend);
+                }
             });
         });
     });
@@ -1999,7 +2011,7 @@ function processUpgradeFlips(data, opts = {}) {
                 // If any material price is missing we skip the flip — profit math would lie.
                 if (costInfo.totalSilver == null) continue;
                 const upgradeCost = costInfo.totalSilver;
-                const tax = sellPrice * 0.055; // Sell order tax+setup
+                const tax = sellPrice * (TAX_RATE + SETUP_FEE); // Sell-order tax+setup (premium 0.065 / non-prem 0.105)
                 const profit = sellPrice - buyPrice - upgradeCost - tax;
                 const cost = buyPrice + upgradeCost;
                 const roi = cost > 0 ? (profit / cost) * 100 : 0;
@@ -6937,10 +6949,31 @@ function initLiveFlipsTab() {
     const feed = document.getElementById('flips-feed');
     const token = localStorage.getItem('albion_auth_token');
 
-    if (!token || !discordUser) {
-        // Not logged in — show auth gate
+    // 2026-04-28: discordUser is set asynchronously after /api/me resolves
+    // (typically <500ms but can take longer on cold-cache). When the user lands
+    // on this tab during the OAuth-return flicker (?login=success), token is in
+    // localStorage but discordUser is still null — old code showed the auth gate
+    // immediately. Now: if we have a token, poll for discordUser briefly before
+    // giving up on the gate.
+    if (!token) {
         if (authGate) authGate.style.display = 'block';
         if (feed) feed.style.display = 'none';
+        return;
+    }
+    if (!discordUser) {
+        if (authGate) authGate.style.display = 'block';
+        if (feed) feed.style.display = 'none';
+        // Poll for discordUser for up to 3s, then re-init if it shows up
+        let waited = 0;
+        const poll = setInterval(() => {
+            waited += 200;
+            if (discordUser) {
+                clearInterval(poll);
+                initLiveFlipsTab();
+            } else if (waited >= 3000) {
+                clearInterval(poll);
+            }
+        }, 200);
         return;
     }
 
@@ -15686,7 +15719,7 @@ async function _renderPortfolioCraftRuns() {
         const rows = completed.map(run => {
             const cost    = run.total_cost || 0;
             const rev     = run.total_revenue || 0;
-            const taxEst  = rev * 0.055;
+            const taxEst  = rev * (TAX_RATE + SETUP_FEE); // sell-order tax+setup (premium 0.065 / non-prem 0.105)
             const net     = rev - cost - taxEst;
             const sign    = net >= 0 ? '+' : '';
             const color   = net >= 0 ? 'var(--profit-green)' : 'var(--loss-red)';
@@ -15705,7 +15738,7 @@ async function _renderPortfolioCraftRuns() {
         }).join('');
 
         const totalNet = completed.reduce((s, run) => {
-            const net = (run.total_revenue || 0) - (run.total_cost || 0) - (run.total_revenue || 0) * 0.055;
+            const net = (run.total_revenue || 0) - (run.total_cost || 0) - (run.total_revenue || 0) * (TAX_RATE + SETUP_FEE);
             return s + net;
         }, 0);
         const totalColor = totalNet >= 0 ? 'var(--profit-green)' : 'var(--loss-red)';
@@ -18149,7 +18182,7 @@ function crRunCardHTML(run) {
         hauling: '#f97316', selling: '#10b981', complete: '#22c55e'
     }[run.status] || 'var(--text-secondary)';
     const profit = (run.total_revenue || 0) - (run.total_cost || 0);
-    const taxEst = (run.total_revenue || 0) * 0.055;
+    const taxEst = (run.total_revenue || 0) * (TAX_RATE + SETUP_FEE); // sell-order tax+setup
     const net = profit - taxEst;
     const profitSign = net >= 0 ? '+' : '';
     const profitColor = net >= 0 ? 'var(--profit-green)' : 'var(--loss-red)';
@@ -18220,7 +18253,7 @@ function crRenderDetail(run, txns, scans) {
     if (!el) return;
 
     const profit = (run.total_revenue || 0) - (run.total_cost || 0);
-    const taxEst = (run.total_revenue || 0) * 0.055;
+    const taxEst = (run.total_revenue || 0) * (TAX_RATE + SETUP_FEE); // sell-order tax+setup
     const net = profit - taxEst;
     const profitSign = net >= 0 ? '+' : '';
     const profitColor = net >= 0 ? 'var(--profit-green)' : 'var(--loss-red)';

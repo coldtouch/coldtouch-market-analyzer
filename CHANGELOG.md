@@ -2,6 +2,39 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-04-28 — Stop-the-bleeding sweep: 14 fixes from production audit
+
+After a deep production audit identified the cause of declining users — multiple invisible regressions accumulating over weeks — this batch ships the targeted fixes. **Headline finding**: the public site has been showing a 15-day-old red banner saying "Radiant Wilds update broke most data tools" to every visitor since 2026-04-13, linking to v0.6.3 (a Go client release we no longer ship). Every new visitor read this as a current outage and bounced. Combined with [other findings documented separately](https://github.com/coldtouch/coldtouch-market-analyzer): 36+ hours of cumulative downtime over 5 SQLITE_BUSY incidents this month, Live Flips silent for 16 days from a NATS port typo (4222 vs 24222), CORS hardcoded to coldtouch.github.io blocking auth on the primary albionaitool.xyz domain for 27 days, junk-listing pollution in `price_analytics` showing T6_RUNE at 21M silver and T4_BAG at 1.9M, and `transport-routes` historical mode 30s timeouts.
+
+**Backend (`deploy_saas.py`):**
+- **News banner auto-stale after 7 days.** The `/api/news` GET endpoint now checks `updatedAt` and silently returns `{active: false}` for any banner older than a week. The April 13 "everything is broken" banner can never poison the front page longer than 7 days again, even if no one updates it.
+- **Outlier rejection in price ingestion.** Both `recordSnapshots` and `flushNatsBuffer` now reject any sell or buy price >100× or <0.01× the global price reference for that item. A single typo'd 21M-silver T6 rune listing was poisoning `sma_7d` for affected items.
+- **Live Flips silent-drop fix.** `validateFlipPrices` now returns `'unverified'` (not `false`) when AODP returns "listing gone" on one side of a flip — AODP's snapshot frequently lags NATS by minutes on thin order books, so the previous always-drop behavior silenced legitimate flips. `broadcastFlip` now sets `flip.unverified = true` when validation returns the new sentinel; the frontend already badged unverified flips for the AODP-degraded path so the UX is free.
+- **Analytics-ema watchdog 90s → 5min.** The `withWriteLock` watchdog from Tier 4 was too aggressive for the legitimately long EMA streaming pass. Per-label timeouts now: `analytics-ema` and `analytics-bulk` get 5 minutes; everything else stays at 90s. This was the root cause of the 26+ hour analytics staleness on April 26-28 — every cycle, the EMA pass tripped the 90s watchdog → process.abort() → systemd restart → 35-min wait → repeat → no analytics rows ever written.
+- **Public `/api/health/internal` endpoint.** Returns market cache freshness, analytics + spreadStats run state, write-queue depth + active locks, AODP failure counter, WS client count. Catches silent wedges externally without needing admin auth — UptimeRobot, Better Uptime, etc. can monitor for `analytics.ageSinceLastStartMs > 90 minutes`.
+- **transport-routes-live freshness 120 → 30 min default.** Audit found `buy_age` averages of 555 minutes (9 hours) under the 120m cap, while the frontend labelled it "real-time NATS data". 30m default makes "real-time" actually mean real-time. Power users can override `?max_age=` up to 240.
+- **`/api/batch-prices` honors `cities` param.** Was previously documented in frontend calls but silently dropped. Now filters the result to the city allowlist, with a 16-city cap.
+
+**Frontend (`app.js`):**
+- **Live Flips auth-gate race fix.** `discordUser` is set asynchronously after `/api/me` resolves. New users landing on this tab during the OAuth-return flicker (`?login=success&code=…`) saw the "Login required" gate even though their token was already in localStorage. Now polls for `discordUser` for up to 3s before showing the gate, then re-renders.
+- **Trend badge suppression on stale analytics.** `fetchAnalytics()` checks `computed_at` against a 4-hour staleness threshold; stale data renders as `—` with a "Trend data refresh delayed" tooltip instead of a misleading red ▼. Prevents users acting on yesterday's wrong arrow.
+- **5 stale `0.055` literals replaced with `(TAX_RATE + SETUP_FEE)`.** Lines 2002 (BM Flipper upgrade-cost), 15689 + 15708 (Craft Runs Portfolio table + total net), and the `crRunCardHTML` inner-card variants. Was undertaxing Craft Runs net P&L by ~15% (4% premium tax + 2.5% setup = 6.5%, not the historical 5.5%).
+- **Removed Mounts Database + Community Builds feature cards from About page.** Both tabs were BENCHED in code, but the About page still advertised them — credibility hit when users went looking for them. CLAUDE.md updated to reflect real shipped tab count (22, not 24).
+
+**Service worker (`sw.js`):**
+- **Added `itemweights.json` to APP_SHELL.** 411KB hit on every fresh install was previously not cached. CACHE_NAME bumped v82 → v83.
+
+**Go client (`albiondata-client-custom`):**
+- **Negative item ID 1-character fix** in `client/event_container_items.go:296` — changed `if slotID == 0` to `if slotID <= 0`. Negative slot IDs in `evAttachItemContainer.SlotMap` are sentinels for reserved/locked slots (tab dividers, premium-locked, hideout-bound), not items in the itemmap. Verified against ao-bin-dumps + 4 community Albion clients (Triky313, MaximMadsen, ao-loot-logger, broadwell-shipping). Resolves the `UNKNOWN_-56`, `UNKNOWN_-59`, ..., `UNKNOWN_-121` chain in Loot Buyer captures. Will ship as v1.3.5 once tagged.
+
+**Documented but NOT shipped this batch (require user action):**
+- DELETE polluted price_analytics rows (`DELETE FROM price_analytics WHERE metric IN ('sma_7d','vwap_7d') AND value > 50000000`) — needs SSH.
+- Update active news banner via SSH or admin UI POST. (The auto-stale fix means even if you do nothing, the bad banner expires by April 20 + 7 = today, but a fresh value would be cleaner.)
+- Pre-aggregate `volume_cache` table to fix `transport-routes` 503s — bigger refactor, deferred. Hidden Historical mode in UI in the meantime if it's hurting users.
+- Cloud routine `persist_session: true` toggles via RemoteTrigger — applied separately.
+
+---
+
 ### 2026-04-28 — Accountability check: chest log priority over proportional capture math
 
 User reported a contradictory state on a real session: LaboringWolf's row showed `T4_SHOES_LEATHER_ROYAL@3` as **both** ✗ missing AND ✓ verified by chest log. Both flags were operating from independent data sources that could disagree.

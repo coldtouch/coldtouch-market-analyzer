@@ -67,7 +67,9 @@
 | `meta_config` | Key-value config store |
 | `device_authorizations` | OAuth Device Flow state |
 
-## Key Features (24 Tabs)
+## Key Features (22 Tabs)
+
+> **Note 2026-04-28**: Mounts Database + Community Builds tabs were BENCHED earlier (commented out in app.js). Their feature cards were also removed from the About-page advertising on this date. Real shipped tab count = 22, not the previously-claimed 24.
 
 ### Market Group
 - **Market Browser** — browse 11k+ items, search/filter, per-city prices
