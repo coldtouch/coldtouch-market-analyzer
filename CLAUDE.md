@@ -120,7 +120,18 @@
 
 ## Recent Session History
 
-### April 28 (afternoon) — Routine Reports infrastructure + 12 cloud routines wired — Latest
+### April 28 (evening) — Watchdog tuning + analytics cleanup + v1.3.5 tag — Latest
+
+- **18:00 UTC backup-collision incident diagnosed and fixed.** The daily `sqlite3 .backup` cron at 18:00 UTC holds a shared lock on `database.sqlite` (11.2GB) for ~30 min. Today's run collided with the 12:23 UTC deploy's restart cycle — `priceRefCache-init` queued behind the backup, hit the 90s Tier 4 watchdog, aborted, systemd restarted, repeated for 18 cycles across ~30 min. **Site was wedged 18:03–18:32 UTC.** Self-healed when the backup completed.
+- **Fix shipped (commit `e83adbd`):** extended the per-label `WATCHDOG_TIMEOUT_MS` map to give `priceRefCache-init` and `priceRefCache-incr` 30 min (vs the 90s default + the 5-min cap previously set for `analytics-ema`/`-bulk`). Service can now ride out a backup window cleanly. Deployed at `20260428-164027`. Verified: 0 restarts since redeploy at 18:40:42 UTC.
+- **DB-target correction:** the real production DB is `/opt/albion-saas/database.sqlite` (11.2GB). The `stats.db` / `albion.db` / `market.db` files are 0-byte legacy artifacts. Earlier "stats.db" references in CLAUDE.md/audit notes were misdirected.
+- **#1 polluted analytics cleanup executed against the correct DB.** 2,071 rows deleted from `price_analytics` where `metric IN (sma_7d, vwap_7d, ema_7d) AND value > 50_000_000`. Worst offenders were @4 weapons at 666–850M silver (T8_2H_BOW_CRYSTAL@4 Lymhurst at 850M, T8_FARM_MAMMOTH_BABY at 800M, etc.). Verified count=0 after delete. T6_RUNE Black Market `sma_7d` now reads 152 silver (real value).
+- **60 suspiciously-low rows** (sma/vwap < 10 silver) flagged but NOT deleted — likely vendor-price contamination, separate decision.
+- **Outlier rejection live in production:** observed log lines like `[Snapshots] Rejecting outlier buy=124740 for T8_SHOES_LEATHER_AVALON@4 (gAvg=16,899,997)` — the new ingestion-time filter from earlier today's commit `0ad0385` is actively catching bad prices.
+- **Go client v1.3.5 tagged + pushed.** `git tag -a v1.3.5` against existing commit `b54756e` (1-char fix: `slotID == 0` → `slotID <= 0` to skip negative-sentinel slot IDs in chest captures, resolves `UNKNOWN_-56/-59/-62/-63/-64/-65/-68/-71/-121` chain in Loot Buyer). GitHub Actions building binaries.
+- **WAL state:** 735MB on disk. Stable but worth checkpointing on next 6h cycle.
+
+### April 28 (afternoon) — Routine Reports infrastructure + 12 cloud routines wired
 
 - **Backend: routine_reports table + endpoints shipped** in `deploy_saas.py` and deployed to VPS. New `ROUTINE_REPORT_SECRET` env var (32-byte hex) gates `POST /api/routine-report`; `GET /api/routine-reports` accepts the same secret OR an admin JWT. New `routineReportLimiter` (30/min). Tested end-to-end with curl: insert returns id=1, GET list + GET single both work, bad secret returns 401.
 - **Frontend: admin Routine Reports tab** in `index.html` + `app.js`. Hidden by default, shown only when `discordUser.id === ADMIN_DISCORD_ID` after `/api/me` callback. Lists reports with slug + summary + length, click-to-expand renders full markdown in a scrollable `<pre>`. Slug filter dropdown. SW cache bumped v83 → v85 (deploy script auto-bump).
@@ -410,7 +421,18 @@
 - [ ] **Test chest capture on guild island**
 - [ ] **Multi-file CROSS-USER loot log merging** — current `/api/loot-session/consolidate` only handles within-user fragment merging; the cross-user use case (uploading N .txt files from different guildmates with timestamp+item+player dedup, unified accountability) is still TODO
 - [ ] **Negative item ID cosmetic names** — identify -56, -59, -62, -63, -64, -65, -68, -71, -121 from in-game bank
-- [ ] **Trade tracker WIP — commit decision** — `client/event_player_trade.go`, `client/trade_tracker.go`, `decode.go` trade routing, `albiondata-client.go` `CloseTradeLogger` calls have been sitting uncommitted in the working tree for ~3 weeks. Decision needed: verify in-game trade end-to-end and ship as v1.3.5, or delete the WIP entirely.
+- [ ] **Trade tracker WIP — pick up after PvP/CTA content (paused 2026-04-28)** — Code state:
+  - 3 untracked files in `D:\Coding\albiondata-client-custom\`: `client/event_player_trade.go` (177 lines, raw dump logger), `client/trade_tracker.go` (269 lines, typed state machine), `client/zone_debug.go` (separate, zone-test work)
+  - 2 modified tracked files: `albiondata-client.go` (+2 lines, `CloseTradeLogger` calls), `client/decode.go` (+32/-3 lines, opcode 174-181 routing)
+  - Wire format reverse-engineered Apr 25-26 (3 controlled trades, +2 opcode shift confirmed): 176=invitation, 179=update, 178/180=end, 181=accept-change. Slot 1 items at param[8], slot 2 at param[18].
+  - Build instruction: `export PATH="$PATH:/c/Go/bin" && cd /d/Coding/albiondata-client-custom && go build -o albiondata-client-trade-test.exe .`
+  - **Stage A — verification (5 min in-game):** Run trade-test binary, do one trade, check `albiondata-client.log` for `[Trade] completed tradeID=… partner=… local_gave=[…] local_received=[…]` lines. Confirm items/qty/partner/guild match.
+  - **Known issue: nickname missing on initiator-side trades.** Opcode 176 only fires on receiver/bystander client. When YOU initiate, partner shows `(unknown)`. Mitigation plan documented in `2026-04-26-trade-recon-session.tmp` line 136: cross-reference `param[3]` (partner char session ID) with the existing `evNewCharacter` (29) proximity tracker. Need one debug capture to find which 179 param holds partner char ID — current 179 spec doesn't include it.
+  - **Decision branches:**
+    - (A) Ship as-is in v1.3.6 with `(unknown)` for initiator-side trades. ~2h to wire WS relay + VPS table + frontend.
+    - (B) Solve nickname first: 1 debug session + ~30min code + verification → then ship.
+    - (C) Delete WIP entirely. The chest-log-overrides-proportional-math fix (`ff51f75`) shipped 2026-04-28 already resolved most of the missing+verified contradictions that motivated this work.
+  - **All context preserved**: code in working tree (untracked files survive indefinitely), reasoning in `2026-04-26-trade-recon-session.tmp` (full reverse-engineering session), test logs in `D:\Coding\albiondata-client-custom\logs\trade-debug-*.log`.
 
 ### In-Game Testing Required
 - [ ] **Device Auth end-to-end test** — device code flow from Go client to browser approval
