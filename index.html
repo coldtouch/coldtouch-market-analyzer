@@ -3856,10 +3856,35 @@
             <div id="syphon-results" style="display:none; margin-top:1.25rem;">
                 <div id="syphon-summary" style="display:flex; gap:0.75rem; flex-wrap:wrap; margin-bottom:1rem;"></div>
 
+                <div style="display:flex; gap:0.5rem; flex-wrap:wrap; align-items:center; margin-bottom:0.75rem; padding:0.6rem 0.75rem; background:var(--bg-card); border:1px solid var(--border); border-radius:8px;">
+                    <label style="display:flex; align-items:center; gap:0.4rem; flex:1; min-width:200px; color:var(--text-secondary); font-size:0.85rem;">
+                        🔎
+                        <input id="syphon-player-search" type="text" placeholder="Search player name (case-insensitive)…" style="flex:1; padding:0.4rem 0.6rem; background:var(--bg-input); color:var(--text-primary); border:1px solid var(--border); border-radius:6px; font-size:0.85rem;" />
+                    </label>
+                    <label style="display:flex; align-items:center; gap:0.4rem; color:var(--text-secondary); font-size:0.85rem;">
+                        Sort:
+                        <select id="syphon-sort-select" class="control-select" style="padding:0.35rem 0.5rem; background:var(--bg-input); color:var(--text-primary); border:1px solid var(--border); border-radius:6px;">
+                            <option value="net-asc">Most owed first (default)</option>
+                            <option value="net-desc">Most deposited first</option>
+                            <option value="name-asc">Name (A → Z)</option>
+                            <option value="name-desc">Name (Z → A)</option>
+                            <option value="count-desc">Most transactions</option>
+                            <option value="withdrew-asc">Biggest withdrawer</option>
+                            <option value="deposited-desc">Biggest depositor</option>
+                            <option value="last-desc">Most recently active</option>
+                        </select>
+                    </label>
+                    <label style="display:flex; align-items:center; gap:0.4rem; color:var(--text-secondary); font-size:0.85rem;" title="Hide players with fewer than this many transactions (filters one-offs).">
+                        Min txns:
+                        <input id="syphon-min-txns" type="number" min="0" step="1" value="0" style="width:70px; padding:0.35rem 0.5rem; background:var(--bg-input); color:var(--text-primary); border:1px solid var(--border); border-radius:6px;" />
+                    </label>
+                    <span id="syphon-filter-status" style="color:var(--text-muted); font-size:0.78rem; margin-left:auto;"></span>
+                </div>
+
                 <div id="syphon-offenders-wrap"></div>
 
-                <details style="margin-top:1rem;">
-                    <summary style="cursor:pointer; color:var(--text-secondary); padding:0.5rem; user-select:none;">▸ Everyone (deposits ≥ withdrawals)</summary>
+                <details id="syphon-clean-details" style="margin-top:1rem;">
+                    <summary style="cursor:pointer; color:var(--text-secondary); padding:0.5rem; user-select:none;" id="syphon-clean-summary">▸ Everyone (deposits ≥ withdrawals)</summary>
                     <div id="syphon-clean-wrap" style="margin-top:0.5rem;"></div>
                 </details>
 

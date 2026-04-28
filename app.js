@@ -5228,6 +5228,32 @@ function _syphonInitTab() {
             if (window._syphonLastData) renderSyphonResults(window._syphonLastData);
         });
     }
+
+    // Search + sort + min-txns controls (re-render on change)
+    const search = document.getElementById('syphon-player-search');
+    const sortSel = document.getElementById('syphon-sort-select');
+    const minTxns = document.getElementById('syphon-min-txns');
+    const reRender = () => { if (window._syphonLastData) renderSyphonResults(window._syphonLastData); };
+    if (search && !search._wired) {
+        search._wired = true;
+        let _t;
+        search.addEventListener('input', () => {
+            clearTimeout(_t);
+            _t = setTimeout(reRender, 120); // debounce typing
+        });
+        // Esc clears
+        search.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') { search.value = ''; reRender(); }
+        });
+    }
+    if (sortSel && !sortSel._wired) {
+        sortSel._wired = true;
+        sortSel.addEventListener('change', reRender);
+    }
+    if (minTxns && !minTxns._wired) {
+        minTxns._wired = true;
+        minTxns.addEventListener('change', reRender);
+    }
 }
 
 function runSyphonCheck() {
@@ -5254,6 +5280,34 @@ function runSyphonCheck() {
     renderSyphonResults(data);
 }
 
+function _syphonHighlight(name, q) {
+    if (!q) return esc(name);
+    const lcName = name.toLowerCase();
+    const lcQ = q.toLowerCase();
+    const idx = lcName.indexOf(lcQ);
+    if (idx < 0) return esc(name);
+    return esc(name.slice(0, idx)) +
+        '<mark style="background:var(--accent); color:#000; padding:0 2px; border-radius:2px;">' +
+        esc(name.slice(idx, idx + q.length)) + '</mark>' +
+        esc(name.slice(idx + q.length));
+}
+
+function _syphonApplySort(rows, sortKey) {
+    const arr = rows.slice();
+    switch (sortKey) {
+        case 'net-asc':       arr.sort((a, b) => a.net - b.net); break;            // most owed first (offenders ordering default)
+        case 'net-desc':      arr.sort((a, b) => b.net - a.net); break;            // most deposited first
+        case 'name-asc':      arr.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' })); break;
+        case 'name-desc':     arr.sort((a, b) => b.name.localeCompare(a.name, undefined, { sensitivity: 'base' })); break;
+        case 'count-desc':    arr.sort((a, b) => b.count - a.count); break;
+        case 'withdrew-asc':  arr.sort((a, b) => a.withdrew - b.withdrew); break;  // most negative withdraw first
+        case 'deposited-desc':arr.sort((a, b) => b.deposited - a.deposited); break;
+        case 'last-desc':     arr.sort((a, b) => (b.lastTxn || '').localeCompare(a.lastTxn || '')); break;
+        default:              arr.sort((a, b) => a.net - b.net);
+    }
+    return arr;
+}
+
 function renderSyphonResults(data) {
     const wrap = document.getElementById('syphon-results');
     if (!wrap) return;
@@ -5261,6 +5315,16 @@ function renderSyphonResults(data) {
 
     const minDeficitEl = document.getElementById('syphon-min-deficit');
     const minDeficit = Math.max(0, parseInt(minDeficitEl ? minDeficitEl.value : '0', 10) || 0);
+
+    const searchEl = document.getElementById('syphon-player-search');
+    const search = (searchEl ? searchEl.value : '').trim();
+    const searchLC = search.toLowerCase();
+
+    const sortEl = document.getElementById('syphon-sort-select');
+    const sortKey = sortEl ? sortEl.value : 'net-asc';
+
+    const minTxnsEl = document.getElementById('syphon-min-txns');
+    const minTxns = Math.max(0, parseInt(minTxnsEl ? minTxnsEl.value : '0', 10) || 0);
 
     // Summary cards
     const summary = document.getElementById('syphon-summary');
@@ -5276,23 +5340,63 @@ function renderSyphonResults(data) {
         `;
     }
 
-    // Sort offenders: most negative first
-    const offenders = data.rows
-        .filter(r => r.net < 0 && Math.abs(r.net) >= minDeficit)
-        .sort((a, b) => a.net - b.net);
+    // Filter helper
+    const matchesSearch = (r) => !searchLC || r.name.toLowerCase().includes(searchLC);
+    const matchesMinTxns = (r) => r.count >= minTxns;
 
-    const clean = data.rows
-        .filter(r => r.net >= 0 || (r.net < 0 && Math.abs(r.net) < minDeficit))
-        .sort((a, b) => b.net - a.net);
+    // Owe-syphon (offenders) — net is negative AND deficit >= min, plus search/min-txns filters
+    let offenders = data.rows
+        .filter(r => r.net < 0 && Math.abs(r.net) >= minDeficit && matchesSearch(r) && matchesMinTxns(r));
+    offenders = _syphonApplySort(offenders, sortKey);
+
+    // Clean section — non-offenders OR offenders below min-deficit
+    let clean = data.rows
+        .filter(r => (r.net >= 0 || (r.net < 0 && Math.abs(r.net) < minDeficit)) && matchesSearch(r) && matchesMinTxns(r));
+    clean = _syphonApplySort(clean, sortKey === 'net-asc' ? 'net-desc' : sortKey);
+
+    // Filter status banner: how many shown vs total
+    const totalRows = data.rows.length;
+    const totalShown = offenders.length + clean.length;
+    const filterStatus = document.getElementById('syphon-filter-status');
+    if (filterStatus) {
+        const bits = [];
+        if (search) bits.push(`search: "${esc(search)}"`);
+        if (minTxns > 0) bits.push(`min ${minTxns} txns`);
+        if (minDeficit > 0) bits.push(`min deficit ${minDeficit}`);
+        if (bits.length) {
+            filterStatus.textContent = `Showing ${totalShown} / ${totalRows} players (${bits.join(', ')})`;
+        } else {
+            filterStatus.textContent = `${totalRows} players`;
+        }
+    }
+
+    // Auto-expand the clean section when a search has matches there but
+    // 0 matches in offenders, OR when an active search would otherwise hide
+    // the player the user is looking for.
+    const cleanDetails = document.getElementById('syphon-clean-details');
+    if (cleanDetails) {
+        if (search && clean.length > 0) {
+            cleanDetails.open = true;
+        }
+        const cleanSummary = document.getElementById('syphon-clean-summary');
+        if (cleanSummary) {
+            cleanSummary.textContent = `▸ Everyone (deposits ≥ withdrawals) — ${clean.length}` + (search ? ` matching "${search}"` : ' players');
+        }
+    }
 
     // Offenders table
     const offWrap = document.getElementById('syphon-offenders-wrap');
     if (offWrap) {
         if (offenders.length === 0) {
-            offWrap.innerHTML = `<div style="padding:1rem; background:var(--bg-card); border:1px solid var(--border); border-radius:8px; color:var(--success); text-align:center;">✓ No players owe syphon energy${minDeficit > 0 ? ` (min deficit ${minDeficit})` : ''}.</div>`;
+            const reason = search ? ` matching "${esc(search)}"` : (minDeficit > 0 ? ` (min deficit ${minDeficit})` : '');
+            offWrap.innerHTML = `<div style="padding:1rem; background:var(--bg-card); border:1px solid var(--border); border-radius:8px; color:var(--success); text-align:center;">✓ No players owe syphon energy${reason}.</div>`;
         } else {
+            const headerSuffix = [];
+            if (search) headerSuffix.push(`matching "${esc(search)}"`);
+            if (minDeficit > 0) headerSuffix.push(`min deficit ${minDeficit}`);
+            const suffixText = headerSuffix.length ? `, ${headerSuffix.join(', ')}` : '';
             offWrap.innerHTML = `
-                <h3 style="color:var(--danger); margin:0 0 0.5rem;">🔴 Owe syphon (${offenders.length}${minDeficit > 0 ? `, min ${minDeficit}` : ''})</h3>
+                <h3 style="color:var(--danger); margin:0 0 0.5rem;">🔴 Owe syphon (${offenders.length}${suffixText})</h3>
                 <div style="overflow-x:auto;"><table class="syphon-table">
                     <thead><tr>
                         <th>Player</th>
@@ -5304,7 +5408,7 @@ function renderSyphonResults(data) {
                     </tr></thead>
                     <tbody>${offenders.map(r => `
                         <tr>
-                            <td><strong>${esc(r.name)}</strong></td>
+                            <td><strong>${_syphonHighlight(r.name, search)}</strong></td>
                             <td style="color:var(--success);">+${_syphonFmtNum(r.deposited)}</td>
                             <td style="color:var(--danger);">${_syphonFmtNum(r.withdrew)}</td>
                             <td style="color:var(--danger); font-weight:bold;">${_syphonFmtNum(r.net)}</td>
@@ -5321,18 +5425,19 @@ function renderSyphonResults(data) {
     const cleanWrap = document.getElementById('syphon-clean-wrap');
     if (cleanWrap) {
         if (clean.length === 0) {
-            cleanWrap.innerHTML = '<div style="color:var(--text-muted); padding:0.5rem;">(none)</div>';
+            cleanWrap.innerHTML = `<div style="color:var(--text-muted); padding:0.5rem;">${search ? `(no clean players match "${esc(search)}")` : '(none)'}</div>`;
         } else {
             cleanWrap.innerHTML = `
                 <div style="overflow-x:auto;"><table class="syphon-table">
-                    <thead><tr><th>Player</th><th>Deposited</th><th>Withdrew</th><th>Net</th><th>Txns</th></tr></thead>
+                    <thead><tr><th>Player</th><th>Deposited</th><th>Withdrew</th><th>Net</th><th>Txns</th><th>First → Last</th></tr></thead>
                     <tbody>${clean.map(r => `
                         <tr>
-                            <td>${esc(r.name)}</td>
+                            <td>${_syphonHighlight(r.name, search)}</td>
                             <td style="color:var(--success);">+${_syphonFmtNum(r.deposited)}</td>
                             <td style="color:var(--text-muted);">${_syphonFmtNum(r.withdrew)}</td>
                             <td style="color:${r.net > 0 ? 'var(--success)' : 'var(--text-muted)'};">${r.net >= 0 ? '+' : ''}${_syphonFmtNum(r.net)}</td>
                             <td>${r.count}</td>
+                            <td style="color:var(--text-muted); font-size:0.78rem;">${esc(r.firstTxn.slice(5,16))} → ${esc(r.lastTxn.slice(5,16))}</td>
                         </tr>
                     `).join('')}</tbody>
                 </table></div>
@@ -5340,10 +5445,16 @@ function renderSyphonResults(data) {
         }
     }
 
-    // Discord summary
+    // Discord summary — note: offenders list passed here is already filtered by search.
+    // For the Discord export we want the FULL offender list (ignoring the search filter)
+    // so users always get the complete deficit report regardless of which player they're
+    // currently inspecting. min-deficit + min-txns DO apply (they're explicit filters).
+    const fullOffenders = data.rows
+        .filter(r => r.net < 0 && Math.abs(r.net) >= minDeficit && r.count >= minTxns)
+        .sort((a, b) => a.net - b.net);
     const sharePre = document.getElementById('syphon-share-preview');
     if (sharePre) {
-        sharePre.textContent = buildSyphonDiscordMessage(data, offenders);
+        sharePre.textContent = buildSyphonDiscordMessage(data, fullOffenders);
     }
 }
 
@@ -5351,30 +5462,57 @@ function buildSyphonDiscordMessage(data, offenders) {
     const dateRange = data.dateMin && data.dateMax
         ? `${data.dateMin.slice(0,10)} → ${data.dateMax.slice(0,10)}`
         : '—';
-    const lines = [];
-    lines.push('**🔋 Guild Syphon Check**');
-    lines.push(`Range: \`${dateRange}\` · ${data.txnCount.toLocaleString()} txns · ${data.playerCount} players`);
-    lines.push(`Deposits: **+${_syphonFmtNum(data.totalDeposits)}** · Withdrawals: **${_syphonFmtNum(data.totalWithdrawals)}** · Net: **${data.netTotal >= 0 ? '+' : ''}${_syphonFmtNum(data.netTotal)}**`);
-    lines.push('');
+
+    const headerBlock = [
+        '**🔋 Guild Syphon Check**',
+        `Range: \`${dateRange}\` · ${data.txnCount.toLocaleString()} txns · ${data.playerCount} players`,
+        `Deposits: **+${_syphonFmtNum(data.totalDeposits)}** · Withdrawals: **${_syphonFmtNum(data.totalWithdrawals)}** · Net: **${data.netTotal >= 0 ? '+' : ''}${_syphonFmtNum(data.netTotal)}**`,
+        ''
+    ];
 
     if (offenders.length === 0) {
-        lines.push('✅ **All clear** — no players withdrew more than they deposited.');
-    } else {
-        lines.push(`🔴 **${offenders.length} player${offenders.length === 1 ? '' : 's'} owe${offenders.length === 1 ? 's' : ''} syphon energy:**`);
-        // Cap at 30 to keep message under Discord's 2000 char limit comfortably
-        const SHOW = 30;
-        const visible = offenders.slice(0, SHOW);
-        for (const r of visible) {
-            lines.push(`• \`${r.name}\` — owes **${_syphonFmtNum(Math.abs(r.net))}** (deposited +${_syphonFmtNum(r.deposited)}, withdrew ${_syphonFmtNum(r.withdrew)})`);
-        }
-        if (offenders.length > SHOW) {
-            const remaining = offenders.length - SHOW;
-            const remainingDeficit = offenders.slice(SHOW).reduce((sum, r) => sum + Math.abs(r.net), 0);
-            lines.push(`• … and ${remaining} more (combined deficit: ${_syphonFmtNum(remainingDeficit)})`);
-        }
+        return [...headerBlock, '✅ **All clear** — no players withdrew more than they deposited.'].join('\n');
     }
 
-    return lines.join('\n');
+    const introLine = `🔴 **${offenders.length} player${offenders.length === 1 ? '' : 's'} owe${offenders.length === 1 ? 's' : ''} syphon energy:**`;
+    const offenderLines = offenders.map(r =>
+        `• \`${r.name}\` — owes **${_syphonFmtNum(Math.abs(r.net))}** (deposited +${_syphonFmtNum(r.deposited)}, withdrew ${_syphonFmtNum(r.withdrew)})`
+    );
+
+    // Try one-shot first — covers the common case of <20 offenders.
+    const oneShot = [...headerBlock, introLine, ...offenderLines].join('\n');
+    const DISCORD_LIMIT = 1900; // 2000-char hard limit, keep 100-char headroom for safety
+    if (oneShot.length <= DISCORD_LIMIT) return oneShot;
+
+    // Multi-part split: every offender is shown — split into chunks that each
+    // fit under Discord's per-message limit. Part 1 carries the full header;
+    // parts 2+ carry a short continuation tag. Visible separator tells the
+    // user where to break the paste into multiple Discord messages.
+    const continuationHeader = (idx, total) => `**🔋 Syphon Check — continued (${idx + 1}/${total})**`;
+    const SEPARATOR = '\n\n━━━ paste the section below as a SEPARATE Discord message ━━━\n\n';
+
+    const partLines = [[]];
+    let currentLen = [...headerBlock, introLine].join('\n').length + 1;
+
+    for (const line of offenderLines) {
+        const projected = currentLen + line.length + 1;
+        if (projected > DISCORD_LIMIT && partLines[partLines.length - 1].length > 0) {
+            partLines.push([]);
+            // Reset length budget to the continuation-header size for the new part.
+            currentLen = continuationHeader(partLines.length - 1, partLines.length).length + 1;
+        }
+        partLines[partLines.length - 1].push(line);
+        currentLen += line.length + 1;
+    }
+
+    const totalParts = partLines.length;
+    const parts = partLines.map((lines, idx) => {
+        if (idx === 0) {
+            return [...headerBlock, introLine, ...lines].join('\n');
+        }
+        return [continuationHeader(idx, totalParts), ...lines].join('\n');
+    });
+    return parts.join(SEPARATOR);
 }
 
 // ============================================================
