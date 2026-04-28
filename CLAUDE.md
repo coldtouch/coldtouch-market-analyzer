@@ -120,7 +120,15 @@
 
 ## Recent Session History
 
-### April 28 — Tier 1 PvP perf + NATS leak fix + Accountability fix shipped (v1.3.4) — Latest
+### April 28 (afternoon) — Routine Reports infrastructure + 12 cloud routines wired — Latest
+
+- **Backend: routine_reports table + endpoints shipped** in `deploy_saas.py` and deployed to VPS. New `ROUTINE_REPORT_SECRET` env var (32-byte hex) gates `POST /api/routine-report`; `GET /api/routine-reports` accepts the same secret OR an admin JWT. New `routineReportLimiter` (30/min). Tested end-to-end with curl: insert returns id=1, GET list + GET single both work, bad secret returns 401.
+- **Frontend: admin Routine Reports tab** in `index.html` + `app.js`. Hidden by default, shown only when `discordUser.id === ADMIN_DISCORD_ID` after `/api/me` callback. Lists reports with slug + summary + length, click-to-expand renders full markdown in a scrollable `<pre>`. Slug filter dropdown. SW cache bumped v83 → v85 (deploy script auto-bump).
+- **Cloud routines recreated**: 5 existing routines disabled + recreated with the curl POST tail to the new endpoint (Daily Health Sweep, Weekly TODO Audit, Weekly Security Spot Check, Weekly Improvement Suggestions, Weekly Code Quality Sweep). 5 new daily routines created (Daily Live Flips Heartbeat, Daily VPS Resources Snapshot, Daily NATS Connection State, Daily User-Impact Canary, Daily Polluted Analytics Watch). Total active: 10 (6 daily + 4 weekly), all firing at staggered times 04:00–05:15 UTC.
+- **`persist_session: true` is silently ignored by the RemoteTrigger API** at both create and update time — confirmed across the v2 trigger creations. Routines visibility now depends entirely on the report POST → `routine_reports` table → admin tab pipeline.
+- **Commit `7ea8244`** ships everything; backend deployed via `python deploy_saas.py`.
+
+### April 28 (morning) — Tier 1 PvP perf + NATS leak fix + Accountability fix shipped (v1.3.4)
 
 - **Go client v1.3.4 released** — `https://github.com/coldtouch/albiondata-client/releases/tag/v1.3.4`. Two zero-behavior-change improvements validated against a real PvP session before tagging:
   - **ZvZ perf (`79c5c4e`)** — five small hot-path edits in `client/listener.go` + `client/decode.go`: hoisted the mapstructure decode hook + `reflect.TypeOf` from per-call closure to package-level; reuse the `uint8→string` param map via `sync.Pool` + `clear()` instead of `make()` per event; cache source IPv4 as `uint32` to skip per-packet `SetServerFromIP`; drop four per-packet `log.Tracef` calls; reslice unreliable-packet header instead of make+copy.
