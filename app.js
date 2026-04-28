@@ -5445,20 +5445,27 @@ function renderSyphonResults(data) {
         }
     }
 
-    // Discord summary — note: offenders list passed here is already filtered by search.
-    // For the Discord export we want the FULL offender list (ignoring the search filter)
-    // so users always get the complete deficit report regardless of which player they're
-    // currently inspecting. min-deficit + min-txns DO apply (they're explicit filters).
+    // Discord summary — search is intentionally NOT applied here so the export
+    // always shows the complete report regardless of which player is being
+    // inspected on-screen. min-deficit + min-txns DO apply (they're explicit
+    // filters that affect what counts as an offender).
     const fullOffenders = data.rows
         .filter(r => r.net < 0 && Math.abs(r.net) >= minDeficit && r.count >= minTxns)
         .sort((a, b) => a.net - b.net);
+    // Good standing = strictly positive net (people with credit to use). Players
+    // with net 0 (broke even) are omitted from both sections — neither owe nor
+    // have credit available.
+    const fullGoodStanding = data.rows
+        .filter(r => r.net > 0 && r.count >= minTxns)
+        .sort((a, b) => b.net - a.net); // highest credit first
     const sharePre = document.getElementById('syphon-share-preview');
     if (sharePre) {
-        sharePre.textContent = buildSyphonDiscordMessage(data, fullOffenders);
+        sharePre.textContent = buildSyphonDiscordMessage(data, fullOffenders, fullGoodStanding);
     }
 }
 
-function buildSyphonDiscordMessage(data, offenders) {
+function buildSyphonDiscordMessage(data, offenders, goodStanding) {
+    goodStanding = goodStanding || [];
     const dateRange = data.dateMin && data.dateMax
         ? `${data.dateMin.slice(0,10)} → ${data.dateMax.slice(0,10)}`
         : '—';
@@ -5467,52 +5474,89 @@ function buildSyphonDiscordMessage(data, offenders) {
         '**🔋 Guild Syphon Check**',
         `Range: \`${dateRange}\` · ${data.txnCount.toLocaleString()} txns · ${data.playerCount} players`,
         `Deposits: **+${_syphonFmtNum(data.totalDeposits)}** · Withdrawals: **${_syphonFmtNum(data.totalWithdrawals)}** · Net: **${data.netTotal >= 0 ? '+' : ''}${_syphonFmtNum(data.netTotal)}**`,
-        ''
     ];
 
-    if (offenders.length === 0) {
-        return [...headerBlock, '✅ **All clear** — no players withdrew more than they deposited.'].join('\n');
+    // Build the section list. Order: red (offenders) first, green (good standing) second.
+    const sections = [];
+    if (offenders.length > 0) {
+        sections.push({
+            title: `🔴 **${offenders.length} player${offenders.length === 1 ? '' : 's'} owe${offenders.length === 1 ? 's' : ''} syphon energy:**`,
+            continuationTitle: '🔴 **(continued — players who owe)**',
+            lines: offenders.map(r =>
+                `• \`${r.name}\` — owes **${_syphonFmtNum(Math.abs(r.net))}** (deposited +${_syphonFmtNum(r.deposited)}, withdrew ${_syphonFmtNum(r.withdrew)})`
+            )
+        });
+    }
+    if (goodStanding.length > 0) {
+        sections.push({
+            title: `🟢 **${goodStanding.length} player${goodStanding.length === 1 ? '' : 's'} in good standing — credit available:**`,
+            continuationTitle: '🟢 **(continued — good standing)**',
+            lines: goodStanding.map(r =>
+                `• \`${r.name}\` — has **${_syphonFmtNum(r.net)}** left (deposited +${_syphonFmtNum(r.deposited)}, withdrew ${_syphonFmtNum(r.withdrew)})`
+            )
+        });
     }
 
-    const introLine = `🔴 **${offenders.length} player${offenders.length === 1 ? '' : 's'} owe${offenders.length === 1 ? 's' : ''} syphon energy:**`;
-    const offenderLines = offenders.map(r =>
-        `• \`${r.name}\` — owes **${_syphonFmtNum(Math.abs(r.net))}** (deposited +${_syphonFmtNum(r.deposited)}, withdrew ${_syphonFmtNum(r.withdrew)})`
-    );
+    if (sections.length === 0) {
+        return [...headerBlock, '', '✅ **All clear** — no transactions match the current filters.'].join('\n');
+    }
 
-    // Try one-shot first — covers the common case of <20 offenders.
-    const oneShot = [...headerBlock, introLine, ...offenderLines].join('\n');
-    const DISCORD_LIMIT = 1900; // 2000-char hard limit, keep 100-char headroom for safety
+    // Try one-shot first — covers small guilds where everything fits in 2000 chars.
+    const oneShotPieces = [...headerBlock];
+    for (const s of sections) {
+        oneShotPieces.push('');
+        oneShotPieces.push(s.title);
+        oneShotPieces.push(...s.lines);
+    }
+    const oneShot = oneShotPieces.join('\n');
+    const DISCORD_LIMIT = 1900; // 2000-char hard limit, 100-char headroom
+
     if (oneShot.length <= DISCORD_LIMIT) return oneShot;
 
-    // Multi-part split: every offender is shown — split into chunks that each
-    // fit under Discord's per-message limit. Part 1 carries the full header;
-    // parts 2+ carry a short continuation tag. Visible separator tells the
-    // user where to break the paste into multiple Discord messages.
-    const continuationHeader = (idx, total) => `**🔋 Syphon Check — continued (${idx + 1}/${total})**`;
+    // Multi-part split. Greedy line-by-line. Section titles get re-emitted as
+    // "(continued — X)" if a section spans multiple chunks.
     const SEPARATOR = '\n\n━━━ paste the section below as a SEPARATE Discord message ━━━\n\n';
+    const chunks = [];
+    let currentChunk = headerBlock.slice();
+    let currentLen = currentChunk.join('\n').length;
 
-    const partLines = [[]];
-    let currentLen = [...headerBlock, introLine].join('\n').length + 1;
+    const flushChunk = (newChunkOpener) => {
+        chunks.push(currentChunk);
+        currentChunk = ['**🔋 Syphon Check — continued**'];
+        if (newChunkOpener) currentChunk.push(newChunkOpener);
+        currentLen = currentChunk.join('\n').length;
+    };
 
-    for (const line of offenderLines) {
-        const projected = currentLen + line.length + 1;
-        if (projected > DISCORD_LIMIT && partLines[partLines.length - 1].length > 0) {
-            partLines.push([]);
-            // Reset length budget to the continuation-header size for the new part.
-            currentLen = continuationHeader(partLines.length - 1, partLines.length).length + 1;
+    for (const section of sections) {
+        // Try to add a blank line + section title to the current chunk
+        const titleCost = 2 + section.title.length; // newline + empty line + newline + title
+        if (currentLen + titleCost > DISCORD_LIMIT && currentChunk.length > headerBlock.length) {
+            flushChunk(section.continuationTitle);
+        } else {
+            currentChunk.push('');
+            currentChunk.push(section.title);
+            currentLen += titleCost;
         }
-        partLines[partLines.length - 1].push(line);
-        currentLen += line.length + 1;
+
+        for (const line of section.lines) {
+            const lineCost = line.length + 1;
+            if (currentLen + lineCost > DISCORD_LIMIT) {
+                flushChunk(section.continuationTitle);
+            }
+            currentChunk.push(line);
+            currentLen += lineCost;
+        }
     }
+    chunks.push(currentChunk);
 
-    const totalParts = partLines.length;
-    const parts = partLines.map((lines, idx) => {
-        if (idx === 0) {
-            return [...headerBlock, introLine, ...lines].join('\n');
-        }
-        return [continuationHeader(idx, totalParts), ...lines].join('\n');
-    });
-    return parts.join(SEPARATOR);
+    // Number the parts in their continuation header.
+    const totalParts = chunks.length;
+    return chunks.map((chunk, idx) => {
+        if (idx === 0) return chunk.join('\n');
+        // Replace the placeholder continuation header with a numbered one.
+        const numbered = `**🔋 Syphon Check — continued (${idx + 1}/${totalParts})**`;
+        return [numbered, ...chunk.slice(1)].join('\n');
+    }).join(SEPARATOR);
 }
 
 // ============================================================
