@@ -120,7 +120,19 @@
 
 ## Recent Session History
 
-### April 28 (evening) — Watchdog tuning + analytics cleanup + v1.3.5 tag — Latest
+### April 28 (night) — Guild Syphon Check feature shipped — Latest
+
+- **New `Syphon Check` tab** in the website nav next to Alerts (commits `229c876`, `7b3c8f6`, `11d0439`). Pure client-side feature for guild officers — paste the in-game Siphoned Energy log, the page parses TSV (date / player / reason / amount), aggregates per-player totals, and surfaces:
+  - **Summary cards** (date range, txn count, player count, total deposits / withdrawals / net)
+  - **Red 🔴 Owe Syphon** table — players with negative net, sorted by deficit
+  - **Green 🟢 Everyone Else** collapsible section — players with zero or positive net
+  - **Discord-ready summary** with both 🔴 owe + 🟢 good-standing sections (matching user's "show standing of players with how much they have left to use" request). Auto-splits into multiple messages when over Discord's 2000-char limit, with visible `━━━ paste below as separate Discord message ━━━` markers and `(continued — players who owe)` / `(continued — good standing)` markers when sections span chunks.
+  - **Search + filter bar**: live player-name search (case-insensitive substring match, 120ms debounce, Esc to clear), highlights matched substring in yellow `<mark>`; auto-expands the green "Everyone else" section when search matches there. Sort dropdown (most owed / most deposited / A-Z / Z-A / most txns / biggest withdrawer / biggest depositor / most recently active). Min-txns filter to drop one-off players. "Showing X / Y players" status text.
+- **localStorage persistence** of last-pasted log so refresh doesn't lose work (key: `syphon-last-input`).
+- **Verified Sonnino case**: user reported "Sonnino missing from results" — investigation showed his net is +231 silver (deposited 474, withdrew 243 across 34 txns), so he was correctly classified as good-standing and hidden in the collapsed section. Fix: search-then-auto-expand UX change addresses the find-a-specific-player workflow.
+- **Files:** `index.html` (`pane-syphon` + nav button), `app.js` (`parseSyphonLog`, `renderSyphonResults`, `buildSyphonDiscordMessage`, `_syphonHighlight`, `_syphonApplySort`, `_syphonInitTab`, `runSyphonCheck`), `style.css` (`.syphon-card` / `.syphon-table`), `sw.js` (CACHE_NAME v86 → v90), `CHANGELOG.md` + About-tab feature card + changelog list. No backend, no auth, no packet capture.
+
+### April 28 (evening) — Watchdog tuning + analytics cleanup + v1.3.5 tag
 
 - **18:00 UTC backup-collision incident diagnosed and fixed.** The daily `sqlite3 .backup` cron at 18:00 UTC holds a shared lock on `database.sqlite` (11.2GB) for ~30 min. Today's run collided with the 12:23 UTC deploy's restart cycle — `priceRefCache-init` queued behind the backup, hit the 90s Tier 4 watchdog, aborted, systemd restarted, repeated for 18 cycles across ~30 min. **Site was wedged 18:03–18:32 UTC.** Self-healed when the backup completed.
 - **Fix shipped (commit `e83adbd`):** extended the per-label `WATCHDOG_TIMEOUT_MS` map to give `priceRefCache-init` and `priceRefCache-incr` 30 min (vs the 90s default + the 5-min cap previously set for `analytics-ema`/`-bulk`). Service can now ride out a backup window cleanly. Deployed at `20260428-164027`. Verified: 0 restarts since redeploy at 18:40:42 UTC.
