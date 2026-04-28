@@ -172,6 +172,9 @@ const SERVER_STARTED_AT = new Date().toISOString();
 const GAME_SERVER = process.env.GAME_SERVER || 'europe';
 // SEC-M3: admin identity via env var (falls back to owner's Discord ID)
 const ADMIN_DISCORD_ID = process.env.ADMIN_DISCORD_ID || '325634482524782592';
+// Shared secret for cloud routines posting reports to /api/routine-report.
+// Empty string disables the endpoint entirely (POST returns 401).
+const ROUTINE_REPORT_SECRET = process.env.ROUTINE_REPORT_SECRET || '';
 const API_BASE = `https://${GAME_SERVER}.albion-online-data.com/api/v2/stats/prices`;
 const CHARTS_BASE = `https://${GAME_SERVER}.albion-online-data.com/api/v2/stats/charts`;
 const HISTORY_BASE = `https://${GAME_SERVER}.albion-online-data.com/api/v2/stats/history`;
@@ -540,6 +543,19 @@ db.serialize(() => {
     created_at INTEGER DEFAULT (strftime('%s','now'))
   )`);
   db.run(`CREATE INDEX IF NOT EXISTS idx_audit_created ON audit_log(created_at)`);
+
+  // === ROUTINE REPORTS ===
+  // Cloud routines (RemoteTrigger schedules) POST their markdown reports here on completion.
+  // Surfaced to the user via the admin Routine Reports tab; readable by Claude via curl + shared secret.
+  db.run(`CREATE TABLE IF NOT EXISTS routine_reports (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    slug TEXT NOT NULL,
+    summary TEXT,
+    content_md TEXT NOT NULL,
+    created_at INTEGER DEFAULT (strftime('%s','now'))
+  )`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_rr_slug_created ON routine_reports(slug, created_at)`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_rr_created ON routine_reports(created_at)`);
 
   // === CRAFT RUNS ===
   db.run(`CREATE TABLE IF NOT EXISTS craft_runs (
@@ -1252,6 +1268,7 @@ app.use('/api/', apiLimiter);
 const batchPricesLimiter = rateLimit({ windowMs: 60 * 1000, max: 10, standardHeaders: true, legacyHeaders: false, message: { error: 'Too many batch-price requests. Slow down.' } });
 // SEC-H1: tight limit on the O(n²) transport-routes-live endpoint (5 req/min per IP)
 const transportLiveLimiter = rateLimit({ windowMs: 60 * 1000, max: 5, standardHeaders: true, legacyHeaders: false, message: { error: 'Too many transport-routes requests. Slow down.' } });
+const routineReportLimiter = rateLimit({ windowMs: 60 * 1000, max: 30, standardHeaders: true, legacyHeaders: false, message: { error: 'Too many routine reports. Slow down.' } });
 let _transportLiveCache = null; // { ts, params, routes } — 30s cache to avoid repeated O(n²) builds
 let _transportLiveCacheTs = 0;
 
@@ -1471,6 +1488,78 @@ app.get('/api/admin/health', requireAuth, (req, res) => {
     version: SERVER_VERSION,
     startedAt: SERVER_STARTED_AT
   });
+});
+
+// === ROUTINE REPORTS ===
+// Auth helper: shared X-Routine-Secret OR admin JWT (so cron can POST + admin tab can GET)
+function authRoutineReportRead(req, res, next) {
+  const headerSecret = req.headers['x-routine-secret'];
+  if (ROUTINE_REPORT_SECRET && headerSecret === ROUTINE_REPORT_SECRET) return next();
+  if (req.user && req.user.id === ADMIN_DISCORD_ID) return next();
+  return res.status(401).json({ error: 'Unauthorized' });
+}
+
+app.post('/api/routine-report', routineReportLimiter, (req, res) => {
+  const headerSecret = req.headers['x-routine-secret'];
+  if (!ROUTINE_REPORT_SECRET || headerSecret !== ROUTINE_REPORT_SECRET) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  const slug = String(req.body && req.body.slug || '').trim().slice(0, 64);
+  const summary = String(req.body && req.body.summary || '').trim().slice(0, 500);
+  const content_md = String(req.body && req.body.content_md || '').trim().slice(0, 100000);
+  if (!slug || !content_md) return res.status(400).json({ error: 'slug + content_md required' });
+  if (!/^[a-z0-9_-]+$/.test(slug)) return res.status(400).json({ error: 'slug must match [a-z0-9_-]+' });
+  db.run(
+    `INSERT INTO routine_reports (slug, summary, content_md) VALUES (?, ?, ?)`,
+    [slug, summary, content_md],
+    function (err) {
+      if (err) {
+        console.error('[RoutineReport] insert failed:', err.message);
+        return res.status(500).json({ error: 'Insert failed' });
+      }
+      res.json({ ok: true, id: this.lastID });
+    }
+  );
+});
+
+app.get('/api/routine-reports', authRoutineReportRead, (req, res) => {
+  const slug = req.query.slug ? String(req.query.slug).trim().slice(0, 64) : null;
+  const since = req.query.since ? parseInt(req.query.since, 10) : null;
+  const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 50, 1), 200);
+  const conditions = [];
+  const params = [];
+  if (slug) { conditions.push('slug = ?'); params.push(slug); }
+  if (since && !isNaN(since)) { conditions.push('created_at >= ?'); params.push(since); }
+  const where = conditions.length ? ' WHERE ' + conditions.join(' AND ') : '';
+  params.push(limit);
+  readDb.all(
+    `SELECT id, slug, summary, created_at, length(content_md) AS content_len FROM routine_reports${where} ORDER BY created_at DESC LIMIT ?`,
+    params,
+    (err, rows) => {
+      if (err) {
+        console.error('[RoutineReport] list query failed:', err.message);
+        return res.status(500).json({ error: 'Query failed' });
+      }
+      res.json({ reports: rows || [] });
+    }
+  );
+});
+
+app.get('/api/routine-reports/:id', authRoutineReportRead, (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  if (!id || isNaN(id)) return res.status(400).json({ error: 'invalid id' });
+  readDb.get(
+    `SELECT id, slug, summary, content_md, created_at FROM routine_reports WHERE id = ?`,
+    [id],
+    (err, row) => {
+      if (err) {
+        console.error('[RoutineReport] get query failed:', err.message);
+        return res.status(500).json({ error: 'Query failed' });
+      }
+      if (!row) return res.status(404).json({ error: 'Not found' });
+      res.json(row);
+    }
+  );
 });
 
 app.get('/api/me', (req, res) => {
@@ -6154,6 +6243,7 @@ require('http').createServer((req, res) => {
     import datetime
     server_version = datetime.datetime.utcnow().strftime('%Y%m%d-%H%M%S')
     admin_discord_id = os.environ.get('ADMIN_DISCORD_ID', '325634482524782592')
+    routine_report_secret = os.environ.get('ROUTINE_REPORT_SECRET', '')
     env_content = f"""DOMAIN={domain}
 DISCORD_CLIENT_ID={CLIENT_ID}
 DISCORD_CLIENT_SECRET={CLIENT_SECRET}
@@ -6163,6 +6253,7 @@ SESSION_SECRET={session_secret}
 GAME_SERVER={game_server}
 SERVER_VERSION={server_version}
 ADMIN_DISCORD_ID={admin_discord_id}
+ROUTINE_REPORT_SECRET={routine_report_secret}
 SMTP_HOST={smtp_host}
 SMTP_PORT={smtp_port}
 SMTP_USER={smtp_user}

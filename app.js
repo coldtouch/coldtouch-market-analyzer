@@ -867,6 +867,7 @@ function initTabs() {
             if (currentTab === 'community') { if (typeof loadLeaderboard === 'function') loadLeaderboard(); }
             if (currentTab === 'portfolio') { if (typeof renderPortfolio === 'function') renderPortfolio(); }
             if (currentTab === 'craft-runs') initCraftRunsTab();
+            if (currentTab === 'routine-reports') { if (typeof initRoutineReportsTab === 'function') initRoutineReportsTab(); }
             // BENCHED: if (currentTab === 'mounts') { if (typeof renderMountsDatabase === 'function') renderMountsDatabase(); }
             // Tab name is 'farming' in data-tab, NOT 'farm' — this guard never fired before this fix.
             if (currentTab === 'farming') { if (typeof renderFarmBreed === 'function') renderFarmBreed(); }
@@ -882,7 +883,7 @@ function initTabs() {
                 portfolio: 'Portfolio Tracker', 'craft-runs': 'Craft Runs',
                 'loot-buyer': 'Loot Buyer', 'loot-logger': 'Loot Logger',
                 farming: 'Farm & Breed', alerts: 'Alerts', community: 'Community',
-                profile: 'Profile', about: 'About',
+                profile: 'Profile', about: 'About', 'routine-reports': 'Routine Reports',
             };
             const tabLabel = TAB_TITLES[currentTab];
             if (tabLabel) document.title = `${tabLabel} \u2014 Coldtouch Market Analyzer`;
@@ -893,7 +894,7 @@ function initTabs() {
             history.replaceState(null, '', url);
 
             // UX-2: update browser tab title
-            const _TAB_TITLES = { browser:'Market Browser', arbitrage:'Market Flipping', bmflipper:'BM Flipper', compare:'City Comparison', toptraded:'Top Traded', itempower:'Item Power', favorites:'Favorites', crafting:'Crafting Profits', 'craft-top-n':'Top-N Ranker', 'refining-lab':'Refining Lab', journals:'Journals', rrr:'Return Rate Calc', repair:'Repair Cost', transport:'Transport Routes', 'live-flips':'Live Flips', portfolio:'Portfolio Tracker', 'craft-runs':'Craft Runs', 'loot-buyer':'Loot Buyer', 'loot-logger':'Loot Logger', farming:'Farm Calculator', alerts:'Alerts', about:'About', community:'Community', profile:'Profile' };
+            const _TAB_TITLES = { browser:'Market Browser', arbitrage:'Market Flipping', bmflipper:'BM Flipper', compare:'City Comparison', toptraded:'Top Traded', itempower:'Item Power', favorites:'Favorites', crafting:'Crafting Profits', 'craft-top-n':'Top-N Ranker', 'refining-lab':'Refining Lab', journals:'Journals', rrr:'Return Rate Calc', repair:'Repair Cost', transport:'Transport Routes', 'live-flips':'Live Flips', portfolio:'Portfolio Tracker', 'craft-runs':'Craft Runs', 'loot-buyer':'Loot Buyer', 'loot-logger':'Loot Logger', farming:'Farm Calculator', alerts:'Alerts', about:'About', community:'Community', profile:'Profile', 'routine-reports':'Routine Reports' };
             document.title = (_TAB_TITLES[currentTab] ? _TAB_TITLES[currentTab] + ' — ' : '') + 'Albion Market Analyzer';
 
             // Close dropdown after selection
@@ -4937,6 +4938,143 @@ async function deleteAlert(channelId) {
 }
 
 // ============================================================
+// ROUTINE REPORTS (admin-only tab)
+// ============================================================
+const ROUTINE_SLUG_LABELS = {
+    'daily-health': 'Daily Health Sweep',
+    'weekly-todo-audit': 'Weekly TODO + CHANGELOG Audit',
+    'weekly-security': 'Weekly Security Spot Check',
+    'weekly-improvements': 'Weekly Improvement Suggestions',
+    'weekly-quality': 'Weekly Code Quality Sweep',
+    'daily-flips-heartbeat': 'Daily Live Flips Heartbeat',
+    'daily-vps-resources': 'Daily VPS Resources',
+    'daily-nats-state': 'Daily NATS State',
+    'daily-canary': 'Daily User-Impact Canary',
+    'daily-error-rate': 'Daily Error Rate',
+    'daily-job-freshness': 'Daily Job Freshness',
+    'daily-discord-heartbeat': 'Daily Discord Heartbeat',
+};
+
+let _rrLoadInFlight = false;
+
+async function initRoutineReportsTab() {
+    const refreshBtn = document.getElementById('rr-refresh-btn');
+    const slugFilter = document.getElementById('rr-slug-filter');
+    if (refreshBtn && !refreshBtn._wired) {
+        refreshBtn._wired = true;
+        refreshBtn.addEventListener('click', () => loadRoutineReports());
+    }
+    if (slugFilter && !slugFilter._wired) {
+        slugFilter._wired = true;
+        slugFilter.addEventListener('change', () => loadRoutineReports());
+    }
+    await loadRoutineReports();
+}
+
+async function loadRoutineReports() {
+    if (_rrLoadInFlight) return;
+    _rrLoadInFlight = true;
+    const list = document.getElementById('rr-list');
+    const slugFilter = document.getElementById('rr-slug-filter');
+    const slug = slugFilter && slugFilter.value ? slugFilter.value : '';
+    if (!list) { _rrLoadInFlight = false; return; }
+    list.innerHTML = '<p style="color:var(--text-muted);text-align:center;padding:2rem;">Loading…</p>';
+    try {
+        const url = `${VPS_BASE}/api/routine-reports?limit=100${slug ? `&slug=${encodeURIComponent(slug)}` : ''}`;
+        const res = await fetch(url, { headers: authHeaders() });
+        if (!res.ok) {
+            list.innerHTML = `<p style="color:var(--danger);text-align:center;padding:2rem;">Failed to load reports (HTTP ${res.status}).</p>`;
+            return;
+        }
+        const data = await res.json();
+        const reports = (data && data.reports) || [];
+        if (reports.length === 0) {
+            list.innerHTML = '<p style="color:var(--text-muted);text-align:center;padding:2rem;">No reports yet. Routines will populate this when they next run.</p>';
+            _rrPopulateSlugFilter([]);
+            return;
+        }
+        _rrPopulateSlugFilter(reports);
+        renderRoutineReports(reports);
+    } catch (e) {
+        list.innerHTML = `<p style="color:var(--danger);text-align:center;padding:2rem;">Network error: ${esc(e.message || String(e))}</p>`;
+    } finally {
+        _rrLoadInFlight = false;
+    }
+}
+
+function _rrPopulateSlugFilter(reports) {
+    const sel = document.getElementById('rr-slug-filter');
+    if (!sel) return;
+    const current = sel.value;
+    const slugs = Array.from(new Set(reports.map(r => r.slug))).sort();
+    const known = Object.keys(ROUTINE_SLUG_LABELS);
+    const all = Array.from(new Set([...known, ...slugs]));
+    sel.innerHTML = '<option value="">All routines</option>' +
+        all.map(s => `<option value="${esc(s)}"${s === current ? ' selected' : ''}>${esc(ROUTINE_SLUG_LABELS[s] || s)}</option>`).join('');
+}
+
+function renderRoutineReports(reports) {
+    const list = document.getElementById('rr-list');
+    if (!list) return;
+    const html = reports.map(r => {
+        const date = new Date((r.created_at || 0) * 1000);
+        const dateStr = isNaN(date.getTime()) ? '—' : date.toLocaleString();
+        const label = ROUTINE_SLUG_LABELS[r.slug] || r.slug;
+        const summary = r.summary ? esc(r.summary) : '<span style="color:var(--text-muted);font-style:italic;">No summary</span>';
+        return `
+            <div class="rr-row" data-rr-id="${r.id}" style="background:var(--bg-card);border:1px solid var(--border);border-radius:8px;padding:0.75rem 1rem;cursor:pointer;transition:background 0.15s;">
+                <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:1rem;flex-wrap:wrap;">
+                    <div style="flex:1;min-width:0;">
+                        <div style="display:flex;align-items:center;gap:0.5rem;flex-wrap:wrap;">
+                            <strong style="color:var(--accent);">${esc(label)}</strong>
+                            <span style="color:var(--text-muted);font-size:0.78rem;">${esc(dateStr)}</span>
+                            <span style="color:var(--text-muted);font-size:0.72rem;">· ${(r.content_len || 0).toLocaleString()} chars</span>
+                        </div>
+                        <div style="color:var(--text-secondary);font-size:0.85rem;margin-top:0.25rem;">${summary}</div>
+                    </div>
+                    <button class="btn-small" onclick="event.stopPropagation();toggleRoutineReport(${r.id})">Expand</button>
+                </div>
+                <div class="rr-body" id="rr-body-${r.id}" style="display:none;margin-top:0.75rem;padding-top:0.75rem;border-top:1px solid var(--border);"></div>
+            </div>
+        `;
+    }).join('');
+    list.innerHTML = html;
+    list.querySelectorAll('.rr-row').forEach(row => {
+        row.addEventListener('click', () => {
+            const id = parseInt(row.dataset.rrId, 10);
+            if (id) toggleRoutineReport(id);
+        });
+    });
+}
+
+async function toggleRoutineReport(id) {
+    const body = document.getElementById(`rr-body-${id}`);
+    if (!body) return;
+    if (body.style.display !== 'none' && body.dataset.loaded === '1') {
+        body.style.display = 'none';
+        return;
+    }
+    if (body.dataset.loaded === '1') {
+        body.style.display = 'block';
+        return;
+    }
+    body.style.display = 'block';
+    body.innerHTML = '<p style="color:var(--text-muted);">Loading…</p>';
+    try {
+        const res = await fetch(`${VPS_BASE}/api/routine-reports/${id}`, { headers: authHeaders() });
+        if (!res.ok) {
+            body.innerHTML = `<p style="color:var(--danger);">Failed to load (HTTP ${res.status}).</p>`;
+            return;
+        }
+        const r = await res.json();
+        body.innerHTML = `<pre style="white-space:pre-wrap;word-break:break-word;font-family:'Consolas',monospace;font-size:0.78rem;color:var(--text-primary);background:var(--bg-input);padding:0.75rem;border-radius:6px;max-height:600px;overflow-y:auto;">${esc(r.content_md || '')}</pre>`;
+        body.dataset.loaded = '1';
+    } catch (e) {
+        body.innerHTML = `<p style="color:var(--danger);">Network error: ${esc(e.message || String(e))}</p>`;
+    }
+}
+
+// ============================================================
 // BLACK MARKET FLIPPER
 // ============================================================
 let bmSearchExactId = null;
@@ -5958,6 +6096,11 @@ async function checkDiscordAuth() {
 
             const profileTab = document.getElementById('nav-profile-tab');
             if (profileTab) profileTab.style.display = '';
+
+            if (discordUser && discordUser.id === '325634482524782592') {
+                const rrTab = document.getElementById('nav-routine-reports-tab');
+                if (rrTab) rrTab.style.display = '';
+            }
 
             window._userData = data;
 
