@@ -638,14 +638,25 @@ let _writeDepth = 0;
 const _writeActive = new Map(); // label -> startTs
 
 // 2026-04-28: per-label watchdog timeout. Default 90s (catches silent wedges
-// fast), but the EMA streaming pass (`analytics-ema`) and analytics bulk
-// write are legitimately long jobs that walk millions of price_averages rows
-// and can take >90s on a busy DB. Aborting them means analytics never
-// completes — the root cause of the Apr 26-28 26+ hour analytics staleness.
-// Bump those two specifically to 5 minutes; everything else stays at 90s.
+// fast), but several legitimately long writers need higher caps.
+//
+// - analytics-ema / analytics-bulk: walk millions of price_averages rows
+//   and can take >90s on a busy DB. Aborting them means analytics never
+//   completes — root cause of the Apr 26-28 26+ hour analytics staleness.
+//
+// - priceRefCache-init / priceRefCache-incr: build the in-memory price
+//   reference cache from the last 6h of price_averages. The 18:00 UTC
+//   sqlite3 .backup cron holds a shared lock on database.sqlite for
+//   ~30 min on the 11 GB DB. Concurrent writers (priceRefCache builds)
+//   queue behind the backup, hit the 90s default, and abort — root cause
+//   of the Apr 28 18:03–18:32 UTC restart-loop incident (~30 min wedge,
+//   18 abort/restart cycles). 30 min cap is plenty to ride out a backup
+//   window cleanly while still catching genuine wedges.
 const WATCHDOG_TIMEOUT_MS = {
   'analytics-ema': 5 * 60 * 1000,
   'analytics-bulk': 5 * 60 * 1000,
+  'priceRefCache-init': 30 * 60 * 1000,
+  'priceRefCache-incr': 30 * 60 * 1000,
 };
 const WATCHDOG_DEFAULT_MS = 90 * 1000;
 
