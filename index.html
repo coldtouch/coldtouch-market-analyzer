@@ -2302,6 +2302,15 @@
                     <div id="changelog-wrapper" style="max-height: 500px; overflow-y: auto; position: relative;">
                     <div class="changelog-list">
                         <div class="changelog-entry">
+                            <div class="changelog-date">April 29, 2026</div>
+                            <div class="changelog-title">⚙️ Stability fix — site no longer cycles every ~17 minutes</div>
+                            <ul>
+                                <li>Service had been restarting roughly every 17 minutes (63 times in 22 hours) due to a misclassification in yesterday's stability work. <code>SQLITE_BUSY</code> — a normal, transient lock-contention error — was being treated as database corruption and triggering an immediate process abort. Each restart began a fresh cache rebuild under the same load, hit BUSY again, aborted again. Self-perpetuating loop.</li>
+                                <li>Fix: <code>SQLITE_BUSY</code> and <code>SQLITE_LOCKED</code> are no longer fatal. They log loudly and let SQLite's built-in busy_timeout retry. Real corruption (<code>SQLITE_CORRUPT</code>, <code>SQLITE_IOERR</code>, <code>SQLITE_MISUSE</code>) still aborts as designed, and the per-transaction 90s watchdog still catches genuine wedges.</li>
+                                <li>Verified post-deploy through a queue-depth-3954 contention burst (the exact load that caused 8 FATAL aborts in the prior 6 hours) — it drained cleanly without restart. Service has been stable since 18:25 UTC.</li>
+                            </ul>
+                        </div>
+                        <div class="changelog-entry">
                             <div class="changelog-date">April 28, 2026</div>
                             <div class="changelog-title">🔋 Guild Syphon Check tab</div>
                             <ul>

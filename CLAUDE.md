@@ -120,7 +120,20 @@
 
 ## Recent Session History
 
-### April 28 (night) — Guild Syphon Check feature shipped — Latest
+### April 29 (afternoon) — SQLITE_BUSY restart-loop fix (commit `a82492e`) — Latest
+
+- **63 restarts in 22 hours diagnosed and fixed.** Returning from yesterday's session, the VPS service had cycled `NRestarts` from 0 → 63 between 18:40 UTC (Apr 28) and 16:59 UTC (Apr 29). Eight FATAL aborts in the most recent 6 hours alone.
+- **Root cause:** yesterday's Tier 4 work classified `SQLITE_BUSY` and `SQLITE_LOCKED` as fatal in `_isSqliteFatal()`, calling `process.abort()` on every occurrence with the message `"SQLite state is corrupt — aborting for clean systemd restart"`. **BUSY/LOCKED are not corruption** — they're transient lock contention. The pattern: `spreadStats-flush` holds the JS write-lock for 30-45s on `statsDb`, NATS price events queue up to depth 3000-4000 behind it, ONE async `stmt.run` callback hits BUSY at the SQLite level (cross-connection contention between `db` and `statsDb` against the same file), bubbles to `uncaughtException`, `_handleFatal` aborts. systemd restarts → fresh `priceRefCache-init` runs under same load → queue rebuilds → abort again. Self-perpetuating.
+- **Fix shipped (`a82492e`):** removed `SQLITE_BUSY` and `SQLITE_LOCKED` from `_isSqliteFatal`. They now log as `[BUSY] ${kind}: ${msg} — non-fatal, resetting flags` and let node-sqlite3's busy_timeout do its retry job. `SQLITE_CORRUPT`, `SQLITE_IOERR`, `SQLITE_MISUSE` remain fatal as designed. Flag resets (`scanInProgress`, `statsRunning`, `analyticsRunning`, `dbBusy`) still happen so a noisy BUSY doesn't leave a flag stuck.
+- **Per-tx 90s watchdog still active.** The Tier 4 watchdog from Apr 27 (catches genuine wedges with no error thrown) is unchanged — only the over-aggressive abort-on-BUSY policy was relaxed. Real wedges still abort.
+- **Verified post-deploy** (server version `20260429-162456`, deployed 18:25 UTC):
+  - 23 minutes uptime, **0 restarts** through one full spreadStats-flush cycle.
+  - Peak queue depth **3954** during the cycle — same load that caused 8 FATAL aborts in the prior 6 hours — drained cleanly to 0 in ~3 min. spreadStats wrote 471,568 rows. Zero FATAL aborts.
+  - Memory peak 394 MB (vs 525-617 MB pre-deploy under the abort-rebuild churn). priceRefCache-incr held lock 20.5s (vs 33-60s pre-deploy when restart churn was constantly rebuilding cache from scratch).
+- **Routine reports collateral damage.** This morning's 6 daily routines (04:00–05:15 UTC) all fired (`updated_at` timestamps confirm) but **none POSTed reports** to the table — the only rows in `routine_reports` are id=1 (yesterday's smoke test) and id=2 (today's resume-session smoke test). Investigation showed zero POST attempts in the VPS journal during the routine window, and queue-depth bursts of 4019 at 03:46, 4010+ at 04:25, etc. — i.e. the VPS was actively in the FATAL-abort cycle when agents tried to POST. Their `try/except urllib.request.urlopen` swallowed connection errors silently (and we can't see agent stdout because `persist_session: true` is silently ignored by the RemoteTrigger API). Tomorrow's 04:00 UTC cycle is the test — with the wedge fixed, POSTs should succeed.
+- **Files:** `deploy_saas.py` (one ~30-line change to `_handleFatal` + `_isSqliteFatal` at lines 6131–6155, plus updated comment block), `sw.js` (cache bump v90 → v91 via deploy auto-bump). Single commit `a82492e`.
+
+### April 28 (night) — Guild Syphon Check feature shipped
 
 - **New `Syphon Check` tab** in the website nav next to Alerts (commits `229c876`, `7b3c8f6`, `11d0439`). Pure client-side feature for guild officers — paste the in-game Siphoned Energy log, the page parses TSV (date / player / reason / amount), aggregates per-player totals, and surfaces:
   - **Summary cards** (date range, txn count, player count, total deposits / withdrawals / net)

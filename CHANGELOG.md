@@ -2,6 +2,24 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-04-29 — SQLITE_BUSY restart-loop fix (commit `a82492e`)
+
+After yesterday's evening session ended with `NRestarts=0`, the service had cycled to `NRestarts=63` over the following 22 hours — averaging ~3 restarts per hour. Eight FATAL aborts in the last 6 hours alone, all with the message `"SQLite state is corrupt — aborting for clean systemd restart"`.
+
+**Root cause:** the `_isSqliteFatal()` classifier from yesterday's Tier 4 work treated `SQLITE_BUSY` and `SQLITE_LOCKED` as corruption indicators. They aren't — they're transient lock-contention errors. The trigger pattern: `spreadStats-flush` (hourly aggregation on `statsDb`) holds the JS write-lock for 30-45s, NATS price events queue up to 3000-4000 entries behind it, ONE async `stmt.run` callback hits `SQLITE_BUSY` at the SQLite level (cross-connection contention between `db` and `statsDb` writing to the same file, since they don't share node-sqlite3's queue), bubbles up to `uncaughtException`, `_handleFatal` aborts. systemd restarts → fresh `priceRefCache-init` rebuilds under the same load → queue rebuilds → BUSY again → abort again. Self-perpetuating.
+
+**Fix:** `SQLITE_BUSY` and `SQLITE_LOCKED` removed from the fatal set. They now log as `[BUSY] ... non-fatal, resetting flags` and let node-sqlite3's `busy_timeout` (30s on each connection) do its retry job. `SQLITE_CORRUPT`, `SQLITE_IOERR`, `SQLITE_MISUSE` remain fatal as designed. Flag resets (`scanInProgress`, `statsRunning`, `analyticsRunning`, `dbBusy`) still happen so a noisy BUSY doesn't leave a flag stuck. The per-tx 90s watchdog from the original Tier 4 work is unchanged — it still catches genuine wedges (silent hangs that don't throw any error).
+
+**Verification post-deploy** (server version `20260429-162456`, deployed 18:25 UTC):
+- 23 minutes uptime, **0 restarts** through the first full spreadStats-flush + NATS catch-up cycle.
+- Peak queue depth **3954** during that cycle — same load that caused 8 FATAL aborts in the prior 6 hours — drained cleanly to 0 in ~3 minutes. spreadStats wrote 471,568 rows and finished without erroring.
+- Memory peak 394 MB (vs 525-617 MB pre-deploy under the abort-rebuild churn). priceRefCache-incr held the lock 20.5s (vs 33-60s pre-deploy when restart loops were constantly rebuilding cache from scratch).
+- Old code's last FATAL was at 18:17:18 UTC, three minutes before the deploy that replaced it.
+
+**Side effect — explains missing morning routine reports.** This morning's 6 daily cloud routines (04:00–05:15 UTC) all fired but landed zero rows in `routine_reports`. The VPS was actively in the FATAL-abort cycle during that window (queue-depth bursts of 4019 at 03:46, 4010+ at 04:25, etc.), so agent POSTs hit connection errors that the silent `try/except urllib.request.urlopen` swallowed. With the wedge fixed, tomorrow's 04:00 UTC cycle is the verification — reports should land.
+
+**Files:** `deploy_saas.py` (one ~30-line change to `_isSqliteFatal` and `_handleFatal` at lines 6131–6155, plus updated comment block), `sw.js` (cache bump v90 → v91 via deploy auto-bump). Single commit.
+
 ### 2026-04-28 — Guild Syphon Check tab
 
 New self-service feature for guild officers. Paste your in-game **Siphoned Energy log** into a textarea, click **Run Check**, and the page parses the TSV (date / player / reason / amount), aggregates per-player totals, and flags everyone who withdrew more than they deposited. Output: a summary card row (date range, transactions, players, totals), a red **Owe syphon** table sorted by deficit, a collapsible **clean** section, and a Discord-ready pre-formatted summary (one click to copy). Pure client-side — no backend, no auth, no packet capture. Persists last paste in localStorage so a refresh doesn't lose work. Min-deficit filter for ignoring trivial -10 entries. Works for any guild's syphon log out of the box. Source: `app.js` (`parseSyphonLog`, `renderSyphonResults`, `buildSyphonDiscordMessage`), `index.html` `pane-syphon`, CSS `.syphon-table`/`.syphon-card`.
