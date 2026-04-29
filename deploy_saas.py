@@ -6128,23 +6128,40 @@ let natsConnection = null;
 //
 // For unrelated bugs (TypeError, etc.) we keep the old flag-reset behavior so
 // a generic regression doesn't take the site down — those are recoverable.
+//
+// 2026-04-29: SQLITE_BUSY + SQLITE_LOCKED REMOVED from fatal set. They are
+// transient lock-contention errors, NOT corruption. Yesterday's policy of
+// aborting on BUSY caused 63 restarts in 22h (spreadStats-flush hold + nats
+// queue depth 3000-4000 → one async stmt.run callback hit BUSY → bubbled to
+// uncaughtException → abort → restart → busy again). The per-tx 90s watchdog
+// added in Tier 4 still catches genuine wedges. Real corruption (CORRUPT,
+// IOERR, MISUSE) remains fatal as designed. Flag resets stay so a noisy BUSY
+// doesn't leave scanInProgress / statsRunning stuck.
 const _isSqliteFatal = (err) => {
   if (!err) return false;
   const msg = (err.message || String(err)).toUpperCase();
-  return msg.includes('SQLITE_BUSY') || msg.includes('SQLITE_LOCKED') ||
-         msg.includes('SQLITE_CORRUPT') || msg.includes('SQLITE_IOERR') ||
+  return msg.includes('SQLITE_CORRUPT') || msg.includes('SQLITE_IOERR') ||
          msg.includes('SQLITE_MISUSE');
 };
 let _aborting = false;
 const _handleFatal = (kind, err) => {
   const msg = err && (err.message || err.stack) || String(err);
-  console.error(`[FATAL] ${kind}:`, msg);
+  const upper = (msg || '').toUpperCase();
+  const isBusy = upper.includes('SQLITE_BUSY') || upper.includes('SQLITE_LOCKED');
+  if (isBusy) {
+    // Transient lock contention — log loudly but do NOT abort. busy_timeout +
+    // node-sqlite3's internal queue will retry. Reset flags so a stuck
+    // scanInProgress doesn't block the next cycle.
+    console.warn(`[BUSY] ${kind}: ${msg} — non-fatal, resetting flags`);
+  } else {
+    console.error(`[FATAL] ${kind}:`, msg);
+  }
   scanInProgress = false;
   statsRunning = false;
   analyticsRunning = false;
   dbBusy = false;
   if (_isSqliteFatal(err)) {
-    if (_aborting) return; // a second SQLITE_BUSY can fire while we're aborting
+    if (_aborting) return;
     _aborting = true;
     console.error('[FATAL] SQLite state is corrupt — aborting for clean systemd restart');
     process.abort();
