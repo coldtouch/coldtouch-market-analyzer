@@ -2,6 +2,27 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-04-30 — Reverted `flushNatsBuffer` chunking after site-hang incident (commit `9593084`)
+
+The chunking change (`2fe624b`, ~90 min after `_activeDone` shipped) was reverted today after causing a full site hang. Process stayed `active running` per systemd but the Node event loop wedged — last log entry 27 min before observation, HTTP requests timing out both externally and on localhost. Required `kill -9` (systemd's SIGTERM stuck in `stop-sigterm` for >90s).
+
+**Suspected interaction:** under heavy spreadStats-flush load, the writeLock queue depth spiked to 4275. After spreadStats finished, the queue drained nats-flush chunks. At 16:56:05 a BUSY uncaughtException fired and the `_activeDone` release path released the active chunk. Released-task orphans (pending `db.run` callbacks) continued firing on `db`'s internal queue. Subsequent BUSY uncaughtExceptions from those orphans likely released *innocent* fresh tasks via `_activeDone`, since `_activeDone` always points at whoever currently holds the lock — not whoever caused the BUSY. Cascade: each release leaves more orphans, more BUSYs, more wrong releases. Eventually node-sqlite3's worker threads got saturated processing thousands of orphan BEGIN/COMMIT/ROLLBACK ops, the JS event loop blocked on libuv, Express stopped responding.
+
+The chunking change made this dramatically worse by inflating the number of pending withWriteLock tasks (8+ chunks per 30s NATS interval vs 1 task pre-chunking). Pre-chunking, queue depth maxed at ~50; post-chunking, 1000+ pending tasks was normal — multiplying the cascade surface.
+
+**Action:** reverted `2fe624b`. Kept the `_activeDone` release fix from `1c8917d` (stable in 90 min of solo observation — 1 abort, no hangs). Site back up immediately on revert deploy `20260430-153018`.
+
+**Known regression vs. the chunking attempt:** occasional `nats-flush` silent wedges will return (~3 per 14h pre-fix). `_activeDone` only helps the *BUSY-uncaughtException* wedge case (spreadStats), not the *genuine no-error wedge* case (nats-flush legitimately holding 90s+ under contention).
+
+**Lesson learned about `_activeDone`:** it has a structural flaw — it has no way to identify which task an async error belongs to, so any BUSY uncaughtException AFTER the original wedger has been released will release the next innocent holder. The fix has been "stable enough" because the cadence of BUSYs is low enough that the wedge causer is usually still the holder when its BUSY fires. The chunking change broke that assumption by inflating the fast-rotating queue.
+
+**Real perma-fix options (TODO):**
+- (a) Detach orphan-prone tasks: don't share withWriteLock between spreadStats's many small batches and nats-flush's single big task — separate queues so an orphan from one can't release the other.
+- (b) Track per-task timestamps in `_activeDone` and only release if active task is older than e.g. 30s (a fresh task can't be released by an old orphan's BUSY).
+- (c) Abandon `_activeDone` entirely and accept the 90s watchdog aborts as the cleaner failure mode (~50 restarts/17h is annoying but not service-impacting between restarts).
+
+**Files:** `deploy_saas.py` — `flushNatsBuffer()` reverted to single-batch BEGIN/COMMIT, sw.js cache bumped.
+
 ### 2026-04-30 — SQLITE_BUSY restart loop, round 2: writeLock release on uncaughtException
 
 Yesterday's fix (`a82492e`) reclassified `SQLITE_BUSY` as non-fatal in `_handleFatal`. It stopped the direct `process.abort()` path but the service still cycled to `NRestarts=50` overnight (~17.5h) with the same churn cadence — the abort just moved to a different trigger.

@@ -120,7 +120,16 @@
 
 ## Recent Session History
 
-### April 30 (afternoon) — SQLITE_BUSY restart loop, round 2 — writeLock release on uncaughtException — Latest
+### April 30 (late afternoon) — chunking REVERTED after site-hang incident — Latest
+
+- **Site fully hung ~70 min after the chunking deploy.** Process stayed `active running` per systemd but the Node event loop wedged — 27 min of no logs, HTTP requests timing out both externally and on localhost (5–10s). Required `kill -9` to clear (systemd's SIGTERM stuck in `stop-sigterm` for >90s).
+- **Root cause hypothesis: `_activeDone` cascade amplified by chunking.** `_activeDone` always points at whoever currently holds the lock, not whoever caused the BUSY. Under heavy load, a BUSY from a released task's orphan operations fires LATER, when an innocent fresh task is now the active holder — `_activeDone` releases that innocent task. Released task's orphans fire more BUSYs. Cascade. Chunking inflated this by multiplying pending writeLock tasks 50× (queue depth normally ~50, post-chunking 1000+ pending).
+- **Reverted commit `2fe624b` via `git revert`** — kept the `_activeDone` release fix from `1c8917d` (which had been solo-stable in earlier observation: 1 abort in 90 min, no hangs). Site back up on revert deploy `20260430-153018`.
+- **Known regression accepted:** occasional `nats-flush` silent wedges will return (~3 per 14h pre-chunking). The `_activeDone` fix only addresses the BUSY-uncaughtException case (spreadStats wedge), not the genuine-no-error wedge case (nats-flush legitimately holding 90s+).
+- **Real perma-fix is now flagged TODO** with three concrete options in CHANGELOG.md: (a) detach orphan-prone task queues so an orphan can't cross-release another task, (b) track per-task timestamp in `_activeDone` and only release if the holder is older than ~30s, (c) revert `_activeDone` entirely and accept the 90s watchdog aborts as the cleaner failure mode.
+- **Files:** `deploy_saas.py` (`flushNatsBuffer()` back to single-batch BEGIN/COMMIT), `sw.js` cache bump.
+
+### April 30 (afternoon) — SQLITE_BUSY restart loop, round 2 — writeLock release on uncaughtException
 
 - **Yesterday's fix didn't fully hold.** Returning to the VPS this afternoon: `NRestarts=50` over ~17.5h since yesterday's 18:25 UTC deploy. Roughly the same churn cadence as before yesterday's fix (63/22h). The `a82492e` patch eliminated the direct `process.abort()` on SQLITE_BUSY but the abort just moved to a different trigger.
 - **Pinpointed via journalctl correlation:** every one of today's 13 `spreadStats-flush` watchdog fires is preceded by a `[BUSY] Uncaught exception` log line at the *same timestamp*. Zero `[WriteLock] 'spreadStats-flush' held lock for ...ms` lines were emitted in 12h — which only fires for holds >5s, so individual 100-row batches always finished fast. The watchdog wasn't timing actual work, it was timing a post-uncaughtException wedge.
