@@ -2,6 +2,16 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-04-30 — SQLITE_BUSY restart loop, round 2: writeLock release on uncaughtException
+
+Yesterday's fix (`a82492e`) reclassified `SQLITE_BUSY` as non-fatal in `_handleFatal`. It stopped the direct `process.abort()` path but the service still cycled to `NRestarts=50` overnight (~17.5h) with the same churn cadence — the abort just moved to a different trigger.
+
+**Root cause (was masked by the previous fix):** when `SQLITE_BUSY` bubbles up as an `uncaughtException` (rather than into the per-statement callback chain), `_handleFatal` resets the global flags and returns — but never calls `done()` on the active `withWriteLock` holder. The lock stays held, no further writers can run, and 90s later the `WriteLock-WATCHDOG` fires and aborts. The data is unambiguous: every one of today's 13 `spreadStats-flush` watchdog fires is preceded by a `[BUSY] Uncaught exception` log line at the *same timestamp*. Zero `[WriteLock] 'spreadStats-flush' held lock for ...` lines were emitted — which only fires for >5s holds, so individual batches always finished fast. The watchdog was timing the *post-uncaughtException wedge*, not actual work.
+
+**Fix:** `withWriteLock` now tracks the currently-held task's `done()` callback in a module-level `_activeDone` ref. `_handleFatal`, when the error message contains `SQLITE_*`, force-calls `_activeDone(err)` so the queue can drain instead of wedging until the watchdog. Scoped to SQLite-related errors so a generic regression in unrelated code doesn't falsely free the lock. The watchdog itself stays in place as a last-resort safety net for genuine silent hangs.
+
+**Files:** `deploy_saas.py` — adds `let _activeDone = null` next to the writeLock state, sets/clears it inside `withWriteLock`, and adds a 6-line release block in `_handleFatal`.
+
 ### 2026-04-29 — SQLITE_BUSY restart-loop fix (commit `a82492e`)
 
 After yesterday's evening session ended with `NRestarts=0`, the service had cycled to `NRestarts=63` over the following 22 hours — averaging ~3 restarts per hour. Eight FATAL aborts in the last 6 hours alone, all with the message `"SQLite state is corrupt — aborting for clean systemd restart"`.

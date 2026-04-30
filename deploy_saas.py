@@ -636,6 +636,14 @@ db.serialize(() => {
 let _writeQueue = Promise.resolve();
 let _writeDepth = 0;
 const _writeActive = new Map(); // label -> startTs
+// 2026-04-30: track the currently-held writeLock's done() callback so
+// _handleFatal can release a wedged holder when SQLITE_BUSY bubbles up as
+// an uncaughtException (instead of into the statement callback chain).
+// Without this, a non-fatal BUSY would reset flags but leave done() never
+// called → 90s WriteLock-WATCHDOG → process.abort(). Today: 50 restarts in
+// ~17.5h with this exact pattern (every spreadStats-flush watchdog fire
+// preceded by [BUSY] Uncaught exception at the same timestamp).
+let _activeDone = null;
 
 // 2026-04-28: per-label watchdog timeout. Default 90s (catches silent wedges
 // fast), but several legitimately long writers need higher caps.
@@ -680,11 +688,13 @@ function withWriteLock(label, fn) {
       settled = true;
       clearTimeout(watchdog);
       _writeActive.delete(label);
+      if (_activeDone === done) _activeDone = null;
       _writeDepth--;
       const elapsed = Date.now() - startTs;
       if (elapsed > 5000) console.warn(`[WriteLock] '${label}' held lock for ${elapsed}ms`);
       err ? reject(err) : resolve();
     };
+    _activeDone = done;
     try { fn(done); }
     catch (syncErr) { done(syncErr); }
   }));
@@ -6148,6 +6158,7 @@ const _handleFatal = (kind, err) => {
   const msg = err && (err.message || err.stack) || String(err);
   const upper = (msg || '').toUpperCase();
   const isBusy = upper.includes('SQLITE_BUSY') || upper.includes('SQLITE_LOCKED');
+  const isSqliteRelated = upper.includes('SQLITE_');
   if (isBusy) {
     // Transient lock contention — log loudly but do NOT abort. busy_timeout +
     // node-sqlite3's internal queue will retry. Reset flags so a stuck
@@ -6160,6 +6171,19 @@ const _handleFatal = (kind, err) => {
   statsRunning = false;
   analyticsRunning = false;
   dbBusy = false;
+  // 2026-04-30: when a SQLite error bubbles to uncaughtException (instead of
+  // hitting the statement callback chain), the active writeLock holder's
+  // done() will never fire. Without this release, the 90s WATCHDOG aborts us.
+  // Pattern observed: 13 spreadStats-flush watchdog fires today, every one
+  // preceded by [BUSY] Uncaught exception at the same timestamp. Releasing
+  // here lets the queue drain instead. Scoped to SQLite-related errors so a
+  // generic regression in unrelated code doesn't falsely free the lock.
+  if (isSqliteRelated && _activeDone) {
+    const wedgedLabel = [..._writeActive.keys()][0] || 'unknown';
+    console.warn(`[WriteLock] Releasing wedged '${wedgedLabel}' on ${kind}`);
+    try { _activeDone(err); } catch {}
+    _activeDone = null;
+  }
   if (_isSqliteFatal(err)) {
     if (_aborting) return;
     _aborting = true;

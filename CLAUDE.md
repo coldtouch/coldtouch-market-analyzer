@@ -120,7 +120,15 @@
 
 ## Recent Session History
 
-### April 29 (afternoon) — SQLITE_BUSY restart-loop fix (commit `a82492e`) — Latest
+### April 30 (afternoon) — SQLITE_BUSY restart loop, round 2 — writeLock release on uncaughtException — Latest
+
+- **Yesterday's fix didn't fully hold.** Returning to the VPS this afternoon: `NRestarts=50` over ~17.5h since yesterday's 18:25 UTC deploy. Roughly the same churn cadence as before yesterday's fix (63/22h). The `a82492e` patch eliminated the direct `process.abort()` on SQLITE_BUSY but the abort just moved to a different trigger.
+- **Pinpointed via journalctl correlation:** every one of today's 13 `spreadStats-flush` watchdog fires is preceded by a `[BUSY] Uncaught exception` log line at the *same timestamp*. Zero `[WriteLock] 'spreadStats-flush' held lock for ...ms` lines were emitted in 12h — which only fires for holds >5s, so individual 100-row batches always finished fast. The watchdog wasn't timing actual work, it was timing a post-uncaughtException wedge.
+- **Root cause (masked by yesterday's fix):** when SQLITE_BUSY bubbles up as `uncaughtException` (rather than landing in the per-statement callback chain), `_handleFatal` resets `scanInProgress`/`statsRunning`/etc and returns — but never calls `done()` on the active `withWriteLock` holder. The lock stays held forever, no further writers can run, 90s later the watchdog fires. One clean ROLLBACK case at 02:26:31 today confirms: when BUSY does land in the callback, the existing code path handles it cleanly (`[SpreadStats] Batch failed, rolling back: SQLITE_BUSY` → done(err) called → next task runs → no abort).
+- **Fix:** added `let _activeDone = null` next to `_writeQueue`/`_writeActive`. `withWriteLock` sets it when a task acquires the lock, clears it when `done()` fires. `_handleFatal` checks whether the error message contains `SQLITE_*` and, if so, force-calls `_activeDone(err)` so the queue can drain instead of wedging. Scoped to SQLite-related errors specifically so a generic non-SQLite regression doesn't falsely release the lock. The 90s watchdog stays as last-resort safety net for genuine silent hangs.
+- **Files:** `deploy_saas.py` — ~10 line surgical change (1 new variable, 2 lines in `withWriteLock`, 6-line release block in `_handleFatal`).
+
+### April 29 (afternoon) — SQLITE_BUSY restart-loop fix (commit `a82492e`)
 
 - **63 restarts in 22 hours diagnosed and fixed.** Returning from yesterday's session, the VPS service had cycled `NRestarts` from 0 → 63 between 18:40 UTC (Apr 28) and 16:59 UTC (Apr 29). Eight FATAL aborts in the most recent 6 hours alone.
 - **Root cause:** yesterday's Tier 4 work classified `SQLITE_BUSY` and `SQLITE_LOCKED` as fatal in `_isSqliteFatal()`, calling `process.abort()` on every occurrence with the message `"SQLite state is corrupt — aborting for clean systemd restart"`. **BUSY/LOCKED are not corruption** — they're transient lock contention. The pattern: `spreadStats-flush` holds the JS write-lock for 30-45s on `statsDb`, NATS price events queue up to depth 3000-4000 behind it, ONE async `stmt.run` callback hits BUSY at the SQLite level (cross-connection contention between `db` and `statsDb` against the same file), bubbles to `uncaughtException`, `_handleFatal` aborts. systemd restarts → fresh `priceRefCache-init` runs under same load → queue rebuilds → abort again. Self-perpetuating.
