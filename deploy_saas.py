@@ -5947,78 +5947,114 @@ setTimeout(backfillHistoricalData, 30 * 60 * 1000);
 const natsSnapshotMap = {};  // key: "itemId_quality_city" → { sell, buy }
 const NATS_FLUSH_INTERVAL = 30 * 1000; // 30s (was 60s) — reduce buffer memory
 
+// 2026-04-30: chunked. Previous design wrapped the ENTIRE batch (could be
+// 4000+ rows under load) in a single withWriteLock('nats-flush') acquisition.
+// Under cross-connection contention with statsDb/readDb, that single hold
+// regularly crossed 90s → WriteLock-WATCHDOG → process.abort(). After today's
+// _activeDone fix released spreadStats wedges cleanly, nats-flush became the
+// remaining abort cause (~3 per 14h pre-fix, 1 in the first 90 min post-fix).
+// Splitting into 500-row chunks keeps each lock-hold under 5s, lets other
+// writers (spreadStats, priceRefCache) interleave between chunks, and removes
+// the single-task >90s hold that the watchdog was tripping on.
+const NATS_FLUSH_CHUNK_SIZE = 500;
 function flushNatsBuffer() {
   const keys = Object.keys(natsSnapshotMap);
   if (keys.length === 0 || dbBusy || statsRunning) return;
 
-  // Snapshot and clear the map
-  const batch = [];
+  // Snapshot and clear the map up front. New NATS messages arriving during
+  // this flush land in the freshly-empty map and ride the next interval.
+  const rawBatch = [];
   for (const key of keys) {
-    batch.push(natsSnapshotMap[key]);
+    rawBatch.push(natsSnapshotMap[key]);
     delete natsSnapshotMap[key];
   }
   const now = Date.now();
   const hourStart = Math.floor(now / 3600000) * 3600000;
 
-  // Tier 2 fix (2026-04-24): every step has an error callback + we track the
-  // first error in `batchErr`. When finalize() fires, all prior async writes
-  // have completed (node-sqlite3 serializes per-connection), so we can decide
-  // to COMMIT or ROLLBACK based on `batchErr`. This prevents a half-applied
-  // transaction from leaving BEGIN open on the connection.
-  // Tier 4 (2026-04-27): wrapped in withWriteLock for cross-conn serialization.
-  withWriteLock('nats-flush', (done) => {
-   db.serialize(() => {
-    let batchErr = null;
-    db.run('BEGIN TRANSACTION', (e) => { if (e) batchErr = e; });
-    const stmt = db.prepare(`INSERT INTO price_averages (item_id, quality, city, avg_sell, avg_buy, min_sell, max_buy, sample_count, period_type, period_start)
-      VALUES (?, ?, ?, ?, ?, ?, ?, 1, 'hourly', ?)
-      ON CONFLICT(item_id, quality, city, period_type, period_start) DO UPDATE SET
-        avg_sell = CASE WHEN excluded.avg_sell > 0 THEN excluded.avg_sell ELSE avg_sell END,
-        avg_buy = CASE WHEN excluded.avg_buy > 0 THEN excluded.avg_buy ELSE avg_buy END,
-        min_sell = CASE WHEN excluded.min_sell > 0 AND (min_sell = 0 OR excluded.min_sell < min_sell) THEN excluded.min_sell ELSE min_sell END,
-        max_buy = CASE WHEN excluded.max_buy > max_buy THEN excluded.max_buy ELSE max_buy END,
-        sample_count = sample_count + 1`, (e) => { if (e && !batchErr) batchErr = e; });
-    for (const e of batch) {
-      let sell = e.sell || 0;
-      let buy = e.buy || 0;
+  // Pre-filter outliers in pure JS — no lock needed for the rejection pass.
+  // 2026-04-28: rejects single typo'd listings (e.g. T6_RUNE @ 21M silver)
+  // that were poisoning sma_7d. Reused here as a pre-pass so each chunk's
+  // locked work is purely INSERT.
+  const batch = [];
+  for (const e of rawBatch) {
+    let sell = e.sell || 0;
+    let buy = e.buy || 0;
+    if (sell <= 0 && buy <= 0) continue;
+    const gAvg = globalPriceRef[e.item_id + '_' + e.quality] || 0;
+    if (gAvg > 0) {
+      if (sell > 0 && (sell > gAvg * 100 || sell < gAvg * 0.01)) {
+        console.log(`[NATS] Rejecting outlier sell=${sell} for ${e.item_id} q${e.quality} ${e.city} (gAvg=${gAvg})`);
+        sell = 0;
+      }
+      if (buy > 0 && (buy > gAvg * 100 || buy < gAvg * 0.01)) {
+        console.log(`[NATS] Rejecting outlier buy=${buy} for ${e.item_id} q${e.quality} ${e.city} (gAvg=${gAvg})`);
+        buy = 0;
+      }
       if (sell <= 0 && buy <= 0) continue;
-
-      // 2026-04-28: outlier rejection — same pattern as recordSnapshots above.
-      // Single typo'd listings (e.g. T6_RUNE @ 21M silver) were poisoning sma_7d.
-      const gAvg = globalPriceRef[e.item_id + '_' + e.quality] || 0;
-      if (gAvg > 0) {
-        if (sell > 0 && (sell > gAvg * 100 || sell < gAvg * 0.01)) {
-          console.log(`[NATS] Rejecting outlier sell=${sell} for ${e.item_id} q${e.quality} ${e.city} (gAvg=${gAvg})`);
-          sell = 0;
-        }
-        if (buy > 0 && (buy > gAvg * 100 || buy < gAvg * 0.01)) {
-          console.log(`[NATS] Rejecting outlier buy=${buy} for ${e.item_id} q${e.quality} ${e.city} (gAvg=${gAvg})`);
-          buy = 0;
-        }
-        if (sell <= 0 && buy <= 0) continue;
-      }
-
-      stmt.run(e.item_id, e.quality, e.city, sell, buy, sell, buy, hourStart, (err) => { if (err && !batchErr) batchErr = err; });
     }
-    stmt.finalize((e) => {
-      if (e && !batchErr) batchErr = e;
-      if (batchErr) {
-        console.error('[NATS] Flush failed, rolling back:', batchErr.message || batchErr);
-        db.run('ROLLBACK', () => done(batchErr));
-      } else {
-        db.run('COMMIT', (commitErr) => {
-          if (commitErr) {
-            console.error('[NATS] COMMIT failed, rolling back:', commitErr.message);
-            db.run('ROLLBACK', () => done(commitErr));
-            return;
-          }
-          done();
-          if (batch.length > 50) console.log('[NATS] Flushed ' + batch.length + ' prices into price_averages');
-        });
+    batch.push({ item_id: e.item_id, quality: e.quality, city: e.city, sell, buy });
+  }
+  if (batch.length === 0) return;
+
+  const totalChunks = Math.ceil(batch.length / NATS_FLUSH_CHUNK_SIZE);
+  let chunkIdx = 0;
+  let totalWritten = 0;
+
+  // Tier 2 fix (2026-04-24): every step has an error callback + batchErr.
+  // Tier 4 (2026-04-27): wrapped in withWriteLock for cross-conn serialization.
+  // 2026-04-30: each chunk is its own withWriteLock acquisition — see comment
+  // block above the function. Chunks run sequentially (chained through the
+  // promise from each withWriteLock), but the lock IS released between chunks
+  // so other writers can interleave.
+  function flushOneChunk() {
+    if (chunkIdx >= batch.length) {
+      if (batch.length > 50) console.log(`[NATS] Flushed ${totalWritten}/${batch.length} prices into price_averages (${totalChunks} chunks)`);
+      return;
+    }
+    const start = chunkIdx;
+    const end = Math.min(start + NATS_FLUSH_CHUNK_SIZE, batch.length);
+    chunkIdx = end;
+    const chunkNum = Math.ceil(end / NATS_FLUSH_CHUNK_SIZE);
+
+    withWriteLock('nats-flush', (done) => {
+     db.serialize(() => {
+      let batchErr = null;
+      db.run('BEGIN TRANSACTION', (e) => { if (e) batchErr = e; });
+      const stmt = db.prepare(`INSERT INTO price_averages (item_id, quality, city, avg_sell, avg_buy, min_sell, max_buy, sample_count, period_type, period_start)
+        VALUES (?, ?, ?, ?, ?, ?, ?, 1, 'hourly', ?)
+        ON CONFLICT(item_id, quality, city, period_type, period_start) DO UPDATE SET
+          avg_sell = CASE WHEN excluded.avg_sell > 0 THEN excluded.avg_sell ELSE avg_sell END,
+          avg_buy = CASE WHEN excluded.avg_buy > 0 THEN excluded.avg_buy ELSE avg_buy END,
+          min_sell = CASE WHEN excluded.min_sell > 0 AND (min_sell = 0 OR excluded.min_sell < min_sell) THEN excluded.min_sell ELSE min_sell END,
+          max_buy = CASE WHEN excluded.max_buy > max_buy THEN excluded.max_buy ELSE max_buy END,
+          sample_count = sample_count + 1`, (e) => { if (e && !batchErr) batchErr = e; });
+      for (let i = start; i < end; i++) {
+        const r = batch[i];
+        stmt.run(r.item_id, r.quality, r.city, r.sell, r.buy, r.sell, r.buy, hourStart, (err) => { if (err && !batchErr) batchErr = err; });
       }
-    });
-   });
-  }).catch(() => { /* error already logged + ROLLBACK called */ });
+      stmt.finalize((e) => {
+        if (e && !batchErr) batchErr = e;
+        if (batchErr) {
+          console.error(`[NATS] Chunk ${chunkNum}/${totalChunks} failed, rolling back:`, batchErr.message || batchErr);
+          db.run('ROLLBACK', () => done(batchErr));
+        } else {
+          db.run('COMMIT', (commitErr) => {
+            if (commitErr) {
+              console.error(`[NATS] COMMIT failed on chunk ${chunkNum}/${totalChunks}:`, commitErr.message);
+              db.run('ROLLBACK', () => done(commitErr));
+              return;
+            }
+            totalWritten += (end - start);
+            done();
+          });
+        }
+      });
+     });
+    }).catch(() => { /* error already logged + ROLLBACK called */ })
+      .then(() => { setImmediate(flushOneChunk); }); // yield, then next chunk
+  }
+
+  flushOneChunk();
 }
 
 setInterval(flushNatsBuffer, NATS_FLUSH_INTERVAL);

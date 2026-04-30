@@ -120,7 +120,16 @@
 
 ## Recent Session History
 
-### April 30 (afternoon) — SQLITE_BUSY restart loop, round 2 — writeLock release on uncaughtException — Latest
+### April 30 (late afternoon) — flushNatsBuffer chunked — Latest
+
+- **After the `_activeDone` fix verified working** (spreadStats BUSY wedge at 14:54:50 released cleanly, no abort), one separate `nats-flush` watchdog fired at 15:04:51 with no preceding BUSY. That's the genuine-wedge case the watchdog was designed for: `db.serialize(BEGIN → 4000-row batch → COMMIT)` legitimately taking 90s+ under cross-connection contention with `statsDb`/`readDb`.
+- **Fix:** `flushNatsBuffer()` rewritten to split the batch into 500-row chunks. Each chunk is its own `withWriteLock('nats-flush', …)` acquisition; chunks run sequentially via `setImmediate`-chained promises, so the JS writeLock IS released between chunks and other writers can interleave. Outlier rejection moved to a pre-pass in pure JS so each chunk's locked work is purely INSERT/COMMIT.
+- **Expected lock-hold per chunk: <5s** (vs the 90s+ holds we were seeing). Same total throughput, no more single-task wedges.
+- **Slight semantic change:** if a chunk fails, only that chunk rolls back — earlier chunks already committed. Old behavior was whole-batch rollback. Net positive for data preservation.
+- **User contract noted in CHANGELOG:** if chunking doesn't eliminate `nats-flush` aborts entirely, move to deeper structural fix (per-DB writeLocks, dedicated batch-writer worker, smaller commit cadence). 500-row chunk size is a starting point, can be tuned smaller.
+- **Files:** `deploy_saas.py` — `flushNatsBuffer()` rewrite at line 5950 (~110 lines).
+
+### April 30 (afternoon) — SQLITE_BUSY restart loop, round 2 — writeLock release on uncaughtException
 
 - **Yesterday's fix didn't fully hold.** Returning to the VPS this afternoon: `NRestarts=50` over ~17.5h since yesterday's 18:25 UTC deploy. Roughly the same churn cadence as before yesterday's fix (63/22h). The `a82492e` patch eliminated the direct `process.abort()` on SQLITE_BUSY but the abort just moved to a different trigger.
 - **Pinpointed via journalctl correlation:** every one of today's 13 `spreadStats-flush` watchdog fires is preceded by a `[BUSY] Uncaught exception` log line at the *same timestamp*. Zero `[WriteLock] 'spreadStats-flush' held lock for ...ms` lines were emitted in 12h — which only fires for holds >5s, so individual 100-row batches always finished fast. The watchdog wasn't timing actual work, it was timing a post-uncaughtException wedge.
