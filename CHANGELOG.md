@@ -2,18 +2,6 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
-### 2026-04-30 — flushNatsBuffer chunked into 500-row writeLock acquisitions
-
-After this morning's `_activeDone` fix released `spreadStats-flush` BUSY wedges cleanly, `nats-flush` became the only remaining abort cause: ~3 silent wedges per 14h pre-deploy, 1 in the first 90 min post-`_activeDone`. These were *genuine* >90s holds — no preceding `[BUSY] Uncaught exception`, just legitimate transaction contention with `statsDb`/`readDb` under load on a 4000+ row batch insert.
-
-**Fix:** `flushNatsBuffer()` now splits the batch into 500-row chunks. Each chunk is its own `withWriteLock('nats-flush', …)` acquisition; chunks run sequentially via `setImmediate`-chained promises, so the JS writeLock IS released between chunks and other writers (`spreadStats-flush`, `priceRefCache-incr`) can interleave. Outlier rejection moved to a pre-pass in pure JS so each chunk's locked work is purely INSERT/COMMIT.
-
-Lock-hold per chunk should be <5s (vs the 90s+ holds we were seeing). Same total work, no more single-task wedges. If a chunk fails, only that chunk rolls back — earlier chunks already committed instead of the whole batch being lost (slight semantic change, net positive for data preservation).
-
-**Followup contract:** if this doesn't eliminate the nats-flush abort path entirely, we move to a deeper structural fix (e.g., per-DB writeLocks, dedicated batch-writer worker, smaller commit cadence). The 500-row chunk size is a starting point — can be tuned down further if 500 still occasionally crosses the threshold.
-
-**Files:** `deploy_saas.py` — `flushNatsBuffer()` rewrite at line 5950 (~110 lines, swap from one big BEGIN/COMMIT to a recursive chunk-flusher).
-
 ### 2026-04-30 — SQLITE_BUSY restart loop, round 2: writeLock release on uncaughtException
 
 Yesterday's fix (`a82492e`) reclassified `SQLITE_BUSY` as non-fatal in `_handleFatal`. It stopped the direct `process.abort()` path but the service still cycled to `NRestarts=50` overnight (~17.5h) with the same churn cadence — the abort just moved to a different trigger.
