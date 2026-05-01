@@ -120,7 +120,20 @@
 
 ## Recent Session History
 
-### April 30 (late afternoon) — chunking REVERTED after site-hang incident — Latest
+### May 1 — SQLITE_BUSY perma-fix (research-driven) — Latest
+
+- **Three-agent review pass** (architect / TS reviewer / external research) converged on the same root causes that 3 days of patches missed:
+  - `_activeDone` releases the WRONG task (TOCTOU: points at currently-active holder, not BUSY-causer). When a prior task's orphan callback fires BUSY *late*, an innocent fresh holder gets released → BEGIN-on-uncommitted state → cascade → 8 GB RSS leak from accumulated orphans.
+  - `computeSpreadStats.flushWrites()` was unbounded — fired `withWriteLock` per 100-row batch *without awaiting*. 4,700+ tasks queued simultaneously per cycle, each holding a `batch` array in V8 heap.
+  - `priceRefCache-init`/`-incr` had bare `db.run('BEGIN')` + `stmt.finalize()` with no error callbacks — silent hang vector if either failed.
+  - All BEGINs were deferred mode → upgrade-deadlock during writes. `BEGIN IMMEDIATE` is the SQLite forum's textbook fix for WAL writer contention.
+  - No `'error'` listeners on the 3 sqlite3 Database connections → emitted errors with no listener would crash silently.
+- **Commit shipped:** producer flow control (await), queue-depth ceiling (50, with NATS/snapshot/boot-cache exempt), drop `_activeDone` + restore abort-on-any-SQLITE in `_handleFatal`, `BEGIN IMMEDIATE` at all 9 writeLock sites, `PRAGMA journal_size_limit = 67108864` on all 3 connections, fix priceRefCache-init/-incr callback chain, register error listeners with early-buffer until `_handleFatal` defined.
+- **Expected impact:** RSS plateau 600-1500 MB (vs current 400 MB → 8 GB cycle), aborts <5/day (vs 44/day), morning routine cron POSTs land cleanly.
+- **Deferred to commit 2/3:** split analytics tables to separate `analytics.sqlite` file (architect Option F), `priceRefCache` JSON persistence on disk for fast cold-boot, eventual migration to `better-sqlite3` only if needed.
+- **Kill switches in place:** every change is independently revertable. After yesterday's chunking disaster the bar is "any single change can be backed out without coupling to others."
+
+### April 30 (late afternoon) — chunking REVERTED after site-hang incident
 
 - **Site fully hung ~70 min after the chunking deploy.** Process stayed `active running` per systemd but the Node event loop wedged — 27 min of no logs, HTTP requests timing out both externally and on localhost (5–10s). Required `kill -9` to clear (systemd's SIGTERM stuck in `stop-sigterm` for >90s).
 - **Root cause hypothesis: `_activeDone` cascade amplified by chunking.** `_activeDone` always points at whoever currently holds the lock, not whoever caused the BUSY. Under heavy load, a BUSY from a released task's orphan operations fires LATER, when an innocent fresh task is now the active holder — `_activeDone` releases that innocent task. Released task's orphans fire more BUSYs. Cascade. Chunking inflated this by multiplying pending writeLock tasks 50× (queue depth normally ~50, post-chunking 1000+ pending).

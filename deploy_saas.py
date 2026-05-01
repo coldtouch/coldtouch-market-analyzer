@@ -236,6 +236,14 @@ db.run('PRAGMA busy_timeout = 30000'); // was 5000 — bumped 2026-04-21 to surv
                                         // landed mid-flush used to hit 5s timeout and
                                         // surface as [FATAL] SQLITE_BUSY in the log.
 db.run('PRAGMA wal_autocheckpoint = 1000');
+// 2026-05-01: bound WAL file size. Without this, a long-running reader (the
+// daily backup, or a stalled cycle inside computeSpreadStats) prevents WAL
+// checkpoints from truncating the file, and it grows unbounded — observed
+// at 735MB stable in our case but Loke.dev documented 20GB+ in similar
+// workloads. 64MB cap forces SQLite to do a passive checkpoint pass when
+// the WAL crosses this size, even if no checkpoint hook fires.
+// Source: https://loke.dev/blog/sqlite-checkpoint-starvation-wal-growth
+db.run('PRAGMA journal_size_limit = 67108864'); // 64 MB
 
 // Separate connection for SpreadStats + Analytics bulk reads/writes.
 // SpreadStats does a 90-second db.all() on 3M+ rows then writes 526k rows.
@@ -247,6 +255,7 @@ statsDb.run('PRAGMA synchronous = NORMAL');
 statsDb.run('PRAGMA cache_size = -16000');  // 16MB page cache (was 32MB)
 statsDb.run('PRAGMA mmap_size = 0');
 statsDb.run('PRAGMA busy_timeout = 30000'); // longer timeout — bulk writes can wait
+statsDb.run('PRAGMA journal_size_limit = 67108864'); // 64 MB — same as db
 
 // Dedicated read-only connection for user-facing endpoints (/api/me, etc.).
 // WAL mode allows concurrent readers, but node-sqlite3 serialises ALL ops
@@ -258,6 +267,21 @@ readDb.run('PRAGMA journal_mode = WAL');
 readDb.run('PRAGMA busy_timeout = 30000'); // match db/statsDb — prevents SQLITE_BUSY on concurrent analytics flush
 readDb.run('PRAGMA mmap_size = 0');
 readDb.run('PRAGMA cache_size = -8000');  // 8MB — read-only, doesn't need large cache
+readDb.run('PRAGMA journal_size_limit = 67108864'); // 64 MB — read-only but pragma is per-connection
+
+// 2026-05-01: register error listeners on each connection. node-sqlite3's
+// Database extends EventEmitter; if it ever emits an 'error' event with no
+// listener, Node throws synchronously and bypasses our process-level
+// uncaughtException handler (process exits with no log). Each handler defers
+// to a thin wrapper that delegates once _handleFatal exists later in the file.
+const _earlyDbErrors = [];
+const _earlyDbErrorHandler = (label) => (err) => {
+  if (typeof _handleFatal === 'function') _handleFatal(label, err);
+  else _earlyDbErrors.push({ label, err });
+};
+db.on('error', _earlyDbErrorHandler('db connection error'));
+statsDb.on('error', _earlyDbErrorHandler('statsDb connection error'));
+readDb.on('error', _earlyDbErrorHandler('readDb connection error'));
 
 db.serialize(() => {
   db.run(`CREATE TABLE IF NOT EXISTS users (id TEXT PRIMARY KEY, username TEXT, avatar TEXT)`);
@@ -636,14 +660,23 @@ db.serialize(() => {
 let _writeQueue = Promise.resolve();
 let _writeDepth = 0;
 const _writeActive = new Map(); // label -> startTs
-// 2026-04-30: track the currently-held writeLock's done() callback so
-// _handleFatal can release a wedged holder when SQLITE_BUSY bubbles up as
-// an uncaughtException (instead of into the statement callback chain).
-// Without this, a non-fatal BUSY would reset flags but leave done() never
-// called → 90s WriteLock-WATCHDOG → process.abort(). Today: 50 restarts in
-// ~17.5h with this exact pattern (every spreadStats-flush watchdog fire
-// preceded by [BUSY] Uncaught exception at the same timestamp).
-let _activeDone = null;
+
+// 2026-05-01: queue-depth ceiling. When the write queue gets deep, producers
+// (spreadStats / analytics / etc.) should drop the cycle rather than pile on.
+// NATS-flush is the only non-droppable producer (data loss); it bypasses the
+// ceiling via the third arg to withWriteLock.
+const WRITE_QUEUE_CEILING = 50;
+
+// 2026-04-30→05-01: `_activeDone` was added to release a wedged holder on BUSY
+// uncaughtException, but it caused a cascade — releases the WRONG task because
+// it points at "currently active", not "task that caused the BUSY". When a
+// prior task's orphan callback fires BUSY late, an innocent fresh holder gets
+// released → BEGIN-on-uncommitted state on the next task → more BUSYs → RSS
+// climb from accumulated orphan callbacks → 8 GB exit watchdog every 30 min.
+// REMOVED 2026-05-01. With producer flow control + queue ceiling, BUSY events
+// drop to <1% of frequency and any remaining wedge is caught by the per-tx
+// watchdog (process.abort, clean restart). See architect's option F + commit
+// log for `1c8917d` (which introduced this) and the chunking incident.
 
 // 2026-04-28: per-label watchdog timeout. Default 90s (catches silent wedges
 // fast), but several legitimately long writers need higher caps.
@@ -668,9 +701,25 @@ const WATCHDOG_TIMEOUT_MS = {
 };
 const WATCHDOG_DEFAULT_MS = 90 * 1000;
 
+// Set of labels that are NOT subject to the queue-depth ceiling (data loss
+// risk if dropped). Add labels here when introducing a new write path that
+// MUST run.
+const WRITE_LOCK_NEVER_DROP = new Set([
+  'nats-flush',          // dropping = lost market data
+  'recordSnapshots',     // dropping = lost market scan
+  'priceRefCache-init',  // first run after boot needs to land
+]);
+
 function withWriteLock(label, fn) {
+  // Queue-depth ceiling: shed load gracefully under contention. Producers
+  // (spreadStats, analytics, compaction) skip-this-cycle if the queue is
+  // saturated. Non-droppable labels (NATS, snapshots) always proceed.
+  if (_writeDepth >= WRITE_QUEUE_CEILING && !WRITE_LOCK_NEVER_DROP.has(label)) {
+    console.warn(`[WriteLock] Queue saturated (depth ${_writeDepth}) — dropping '${label}'`);
+    return Promise.reject(new Error(`writeQueue saturated; dropped '${label}'`));
+  }
   _writeDepth++;
-  if (_writeDepth > 5) {
+  if (_writeDepth > 10) {
     console.warn(`[WriteLock] Queue depth ${_writeDepth} (newest='${label}')`);
   }
   const next = _writeQueue.then(() => new Promise((resolve, reject) => {
@@ -688,13 +737,11 @@ function withWriteLock(label, fn) {
       settled = true;
       clearTimeout(watchdog);
       _writeActive.delete(label);
-      if (_activeDone === done) _activeDone = null;
       _writeDepth--;
       const elapsed = Date.now() - startTs;
       if (elapsed > 5000) console.warn(`[WriteLock] '${label}' held lock for ${elapsed}ms`);
       err ? reject(err) : resolve();
     };
-    _activeDone = done;
     try { fn(done); }
     catch (syncErr) { done(syncErr); }
   }));
@@ -3470,19 +3517,39 @@ function refreshPriceRefCache() {
     if (err || !rows || rows.length === 0) return;
     const now = Date.now();
     // Tier 4 (2026-04-27): wrapped in withWriteLock.
+    // 2026-05-01: added error callbacks at every step (was: bare `db.run('BEGIN')`
+    // and `stmt.finalize()` with no callback, so a failed BEGIN/finalize meant
+    // `done()` was never called and the 30-min watchdog would eventually abort.
+    // Also switched BEGIN → BEGIN IMMEDIATE — fail fast at SQLite engine level
+    // instead of letting the writer-lock upgrade happen mid-transaction.
     withWriteLock('priceRefCache-incr', (done) => {
       db.serialize(() => {
-        db.run('BEGIN');
+        let batchErr = null;
+        db.run('BEGIN IMMEDIATE', (e) => { if (e) batchErr = e; });
         const stmt = db.prepare(`INSERT OR REPLACE INTO price_ref_cache (item_id, quality, city, avg_sell, avg_vol, sample_count, updated_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?)`);
+          VALUES (?, ?, ?, ?, ?, ?, ?)`, (e) => { if (e && !batchErr) batchErr = e; });
         for (const r of rows) {
-          if (r.avg_price > 0) stmt.run(r.item_id, r.quality, r.city, Math.round(r.avg_price), Math.round(r.avg_vol || 0), r.samples, now);
+          if (r.avg_price > 0) stmt.run(r.item_id, r.quality, r.city, Math.round(r.avg_price), Math.round(r.avg_vol || 0), r.samples, now, (err) => { if (err && !batchErr) batchErr = err; });
         }
-        stmt.finalize();
-        db.run('COMMIT', () => done());
+        stmt.finalize((e) => {
+          if (e && !batchErr) batchErr = e;
+          if (batchErr) {
+            console.error('[PriceRefCache-incr] Batch failed, rolling back:', batchErr.message || batchErr);
+            db.run('ROLLBACK', () => done(batchErr));
+            return;
+          }
+          db.run('COMMIT', (commitErr) => {
+            if (commitErr) {
+              console.error('[PriceRefCache-incr] COMMIT failed:', commitErr.message);
+              db.run('ROLLBACK', () => done(commitErr));
+              return;
+            }
+            console.log(`[PriceRefCache] Updated ${rows.length} entries from last 2h`);
+            done();
+          });
+        });
       });
-    }).catch(() => {});
-    console.log(`[PriceRefCache] Updated ${rows.length} entries from last 2h`);
+    }).catch(() => { /* error already logged + ROLLBACK called */ });
   });
 }
 
@@ -3528,23 +3595,38 @@ function initPriceRefCache() {
     if (err || !rows) { console.error('[PriceRefCache] Init failed:', err?.message); return; }
     const now = Date.now();
     // Tier 4 (2026-04-27): wrapped in withWriteLock.
+    // 2026-05-01: added error callbacks at every step + BEGIN IMMEDIATE.
+    // Same fix as priceRefCache-incr above — was vulnerable to silent hang
+    // when BEGIN/finalize errored without a callback to surface it.
     withWriteLock('priceRefCache-init', (done) => {
       db.serialize(() => {
-        db.run('BEGIN');
+        let batchErr = null;
+        db.run('BEGIN IMMEDIATE', (e) => { if (e) batchErr = e; });
         const stmt = db.prepare(`INSERT OR REPLACE INTO price_ref_cache (item_id, quality, city, avg_sell, avg_vol, sample_count, updated_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?)`);
+          VALUES (?, ?, ?, ?, ?, ?, ?)`, (e) => { if (e && !batchErr) batchErr = e; });
         for (const r of rows) {
-          if (r.avg_price > 0) stmt.run(r.item_id, r.quality, r.city, Math.round(r.avg_price), Math.round(r.avg_vol || 0), r.samples, now);
+          if (r.avg_price > 0) stmt.run(r.item_id, r.quality, r.city, Math.round(r.avg_price), Math.round(r.avg_vol || 0), r.samples, now, (err) => { if (err && !batchErr) batchErr = err; });
         }
-        stmt.finalize();
-        db.run('COMMIT', () => {
-          done();
-          console.log(`[PriceRefCache] Initial build complete: ${rows.length} entries`);
-          // Now build in-memory refs from the cache
-          buildPriceReference();
+        stmt.finalize((e) => {
+          if (e && !batchErr) batchErr = e;
+          if (batchErr) {
+            console.error('[PriceRefCache-init] Batch failed, rolling back:', batchErr.message || batchErr);
+            db.run('ROLLBACK', () => done(batchErr));
+            return;
+          }
+          db.run('COMMIT', (commitErr) => {
+            if (commitErr) {
+              console.error('[PriceRefCache-init] COMMIT failed:', commitErr.message);
+              db.run('ROLLBACK', () => done(commitErr));
+              return;
+            }
+            console.log(`[PriceRefCache] Initial build complete: ${rows.length} entries`);
+            buildPriceReference();
+            done();
+          });
         });
       });
-    }).catch(() => {});
+    }).catch(() => { /* error already logged + ROLLBACK called */ });
   });
 }
 
@@ -5063,7 +5145,7 @@ function recordSnapshots(allPrices) {
     withWriteLock('recordSnapshots', (done) => {
       db.serialize(() => {
         let batchErr = null;
-        db.run('BEGIN TRANSACTION', (e) => { if (e) batchErr = e; });
+        db.run('BEGIN IMMEDIATE', (e) => { if (e) batchErr = e; });
         const stmt = db.prepare(`INSERT INTO price_averages (item_id, quality, city, avg_sell, avg_buy, min_sell, max_buy, sample_count, period_type, period_start)
           VALUES (?, ?, ?, ?, ?, ?, ?, 1, 'hourly', ?)
           ON CONFLICT(item_id, quality, city, period_type, period_start) DO UPDATE SET
@@ -5198,16 +5280,25 @@ function computeSpreadStats() {
       const WRITE_BATCH = 100;
       let writeBuf = [];
 
+      // 2026-05-01: producer flow control. Previously `flushWrites()` was
+      // fire-and-forget — `processBatch` called it then immediately continued,
+      // queueing hundreds of `withWriteLock('spreadStats-flush')` tasks
+      // simultaneously. Each pending task held its `batch` array (up to 100
+      // rows × 11 columns) plus closure refs in V8 heap. Under heavy load,
+      // queue depth observed at 4000+ → millions of buffered rows alive at
+      // once → RSS climbed past 8 GB → exit watchdog. Now `flushWrites`
+      // returns the writeLock promise and `processBatch` AWAITS it before
+      // scheduling next chunk. Bounded in-flight = bounded buffer residency.
       function flushWrites() {
-        if (writeBuf.length === 0) return;
+        if (writeBuf.length === 0) return Promise.resolve();
         const batch = writeBuf.splice(0);
-        // Use statsDb so these transactions don't queue behind main db operations.
-        // Tier 2 fix (2026-04-24): per-step error callbacks + ROLLBACK on failure.
+        statsWritten += batch.length;
+        // Tier 2 (2026-04-24): per-step error callbacks + ROLLBACK on failure.
         // Tier 4 (2026-04-27): wrapped in withWriteLock for cross-conn serialization.
-        withWriteLock('spreadStats-flush', (done) => {
+        return withWriteLock('spreadStats-flush', (done) => {
           statsDb.serialize(() => {
             let batchErr = null;
-            statsDb.run('BEGIN TRANSACTION', (e) => { if (e) batchErr = e; });
+            statsDb.run('BEGIN IMMEDIATE', (e) => { if (e) batchErr = e; });
             const stmt = statsDb.prepare(`INSERT OR REPLACE INTO spread_stats (item_id, quality, buy_city, sell_city, avg_spread, median_spread, consistency_pct, sample_count, window_days, confidence_score, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, (e) => { if (e && !batchErr) batchErr = e; });
             for (const r of batch) stmt.run(...r, (err) => { if (err && !batchErr) batchErr = err; });
             stmt.finalize((e) => {
@@ -5228,18 +5319,17 @@ function computeSpreadStats() {
             });
           });
         }).catch(() => { /* error already logged + ROLLBACK called */ });
-        statsWritten += batch.length;
       }
 
-      function processBatch(startIdx) {
-        const endIdx = Math.min(startIdx + 200, itemKeys.length);
+      async function processBatch(startIdx) {
         if (startIdx >= itemKeys.length) {
-          flushWrites();
+          await flushWrites();
           const mem2 = process.memoryUsage();
           console.log(`[SpreadStats] Done. Processed ${processed} items, wrote ${statsWritten} spread stats. RSS: ${Math.round(mem2.rss/1024/1024)}MB`);
           statsRunning = false;
           return;
         }
+        const endIdx = Math.min(startIdx + 200, itemKeys.length);
 
         for (let idx = startIdx; idx < endIdx; idx++) {
           const { item_id, quality, cities } = itemMap[itemKeys[idx]];
@@ -5285,14 +5375,26 @@ function computeSpreadStats() {
           }
           processed++;
 
-          if (writeBuf.length >= WRITE_BATCH) flushWrites();
+          // BACKPRESSURE: await before continuing inner loop. This keeps at
+          // most ONE spreadStats-flush task in flight per processBatch chunk.
+          if (writeBuf.length >= WRITE_BATCH) await flushWrites();
         }
 
-        // Yield to event loop between batches so Express can still serve requests
-        setTimeout(() => processBatch(endIdx), 50);
+        // Yield to event loop between chunks so Express can still serve requests.
+        // Wrap with .catch to prevent unhandledRejection from the recursive call
+        // (processBatch is async and the setTimeout callback doesn't await it).
+        setTimeout(() => {
+          processBatch(endIdx).catch((err) => {
+            console.error('[SpreadStats] processBatch chunk crashed:', err && err.message || err);
+            statsRunning = false;
+          });
+        }, 50);
       }
 
-      processBatch(0);
+      processBatch(0).catch((err) => {
+        console.error('[SpreadStats] processBatch crashed:', err && err.message || err);
+        statsRunning = false;
+      });
     }
   );
 }
@@ -5396,7 +5498,7 @@ function compactOldData(rawRetentionDays) {
         withWriteLock('compact-tier1to2', (done) => {
           db.serialize(() => {
             let batchErr = null;
-            db.run('BEGIN TRANSACTION', (e) => { if (e) batchErr = e; });
+            db.run('BEGIN IMMEDIATE', (e) => { if (e) batchErr = e; });
             const stmt = db.prepare(`INSERT OR IGNORE INTO price_hourly (item_id, city, quality, hour, open_price, high_price, low_price, close_price, avg_price, volume) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, (e) => { if (e && !batchErr) batchErr = e; });
             for (const r of rows) {
               stmt.run(r.item_id, r.city, r.quality, r.hour, r.open_price, r.high_price, r.low_price, r.close_price, r.avg_price, r.volume, (err) => { if (err && !batchErr) batchErr = err; });
@@ -5451,7 +5553,7 @@ function compactOldData(rawRetentionDays) {
           withWriteLock('compact-tier2to3', (done) => {
             db.serialize(() => {
               let batchErr = null;
-              db.run('BEGIN TRANSACTION', (e) => { if (e) batchErr = e; });
+              db.run('BEGIN IMMEDIATE', (e) => { if (e) batchErr = e; });
               const stmt2 = db.prepare(`INSERT OR REPLACE INTO price_averages (item_id, quality, city, avg_sell, avg_buy, min_sell, max_buy, sample_count, period_type, period_start) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'daily', ?)`, (e) => { if (e && !batchErr) batchErr = e; });
               for (const r of hrows) {
                 stmt2.run(r.item_id, r.quality, r.city, Math.round(r.avg_sell), Math.round(r.avg_buy), r.min_sell || 0, r.max_buy || 0, r.cnt, r.day_start, (err) => { if (err && !batchErr) batchErr = err; });
@@ -5666,7 +5768,7 @@ function computeAnalytics() {
             withWriteLock('analytics-bulk', (done) => {
               statsDb.serialize(() => {
                 let batchErr = null;
-                statsDb.run('BEGIN TRANSACTION', (e) => { if (e) batchErr = e; });
+                statsDb.run('BEGIN IMMEDIATE', (e) => { if (e) batchErr = e; });
                 const stmt = statsDb.prepare(`INSERT OR REPLACE INTO price_analytics (item_id, city, quality, metric, value, computed_at) VALUES (?, ?, ?, ?, ?, ?)`, (e) => { if (e && !batchErr) batchErr = e; });
                 for (const row of results) stmt.run(...row, (err) => { if (err && !batchErr) batchErr = err; });
                 stmt.finalize((e) => {
@@ -5757,7 +5859,7 @@ function computeAnalytics() {
                 withWriteLock('analytics-ema', (done) => {
                   statsDb.serialize(() => {
                     let batchErr = null;
-                    statsDb.run('BEGIN TRANSACTION', (e) => { if (e) batchErr = e; });
+                    statsDb.run('BEGIN IMMEDIATE', (e) => { if (e) batchErr = e; });
                     const stmt = statsDb.prepare(`INSERT OR REPLACE INTO price_analytics (item_id, city, quality, metric, value, computed_at) VALUES (?, ?, ?, ?, ?, ?)`, (e) => { if (e && !batchErr) batchErr = e; });
                     for (const row of emaResults) stmt.run(...row, (err) => { if (err && !batchErr) batchErr = err; });
                     stmt.finalize((e) => {
@@ -5836,7 +5938,7 @@ async function backfillHistoricalData() {
       withWriteLock('backfill-' + periodType, (done) => {
         let batchErr = null;
         db.serialize(() => {
-          db.run('BEGIN TRANSACTION', (err) => { if (err) batchErr = err; });
+          db.run('BEGIN IMMEDIATE', (err) => { if (err) batchErr = err; });
           const stmt = db.prepare(`INSERT OR IGNORE INTO price_averages (item_id, quality, city, avg_sell, avg_buy, min_sell, max_buy, sample_count, period_type, period_start) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, (e) => { if (e && !batchErr) batchErr = e; });
           for (const r of rows) {
             // Charts/History API returns transaction averages — use for both sell and buy
@@ -5969,7 +6071,7 @@ function flushNatsBuffer() {
   withWriteLock('nats-flush', (done) => {
    db.serialize(() => {
     let batchErr = null;
-    db.run('BEGIN TRANSACTION', (e) => { if (e) batchErr = e; });
+    db.run('BEGIN IMMEDIATE', (e) => { if (e) batchErr = e; });
     const stmt = db.prepare(`INSERT INTO price_averages (item_id, quality, city, avg_sell, avg_buy, min_sell, max_buy, sample_count, period_type, period_start)
       VALUES (?, ?, ?, ?, ?, ?, ?, 1, 'hourly', ?)
       ON CONFLICT(item_id, quality, city, period_type, period_start) DO UPDATE SET
@@ -6133,7 +6235,7 @@ let natsConnection = null;
 // 2026-04-25 follow-up: `setTimeout(() => process.exit(1), 500)` did NOT exit
 // (43-min wedge). Two fixes: (a) `process.abort()` instead — synchronous SIGABRT,
 // no event-loop tick required, no async cleanup hooks. (b) skip `flushNatsBuffer()`
-// in the SQLite path: it does `db.serialize(() => db.run('BEGIN TRANSACTION'))` on
+// in the SQLite path: it does `db.serialize(() => db.run('BEGIN IMMEDIATE'))` on
 // the locked connection, which is what wedged the loop in the first place.
 //
 // For unrelated bugs (TypeError, etc.) we keep the old flag-reset behavior so
@@ -6147,52 +6249,48 @@ let natsConnection = null;
 // added in Tier 4 still catches genuine wedges. Real corruption (CORRUPT,
 // IOERR, MISUSE) remains fatal as designed. Flag resets stay so a noisy BUSY
 // doesn't leave scanInProgress / statsRunning stuck.
+// 2026-05-01 perma-fix: any SQLITE_* error reaching the uncaughtException
+// handler means our transaction state is unknown — the active writeLock task
+// has thrown async, its done() will never fire, the queue is wedged. The
+// only safe recovery is process.abort() for a clean systemd restart. The
+// previous _activeDone release path (added 2026-04-30) caused a cascade:
+// orphan callbacks from a released task fired BUSY late and released
+// innocent fresh tasks → BEGIN-on-uncommitted state → 8 GB RSS climb.
+//
+// With producer flow control (computeSpreadStats now awaits flushWrites)
+// + queue-depth ceiling + BEGIN IMMEDIATE everywhere, BUSYs reaching this
+// handler should be a once-a-day event, not 268/day. Aborting on them
+// becomes the cleanest failure mode again.
 const _isSqliteFatal = (err) => {
   if (!err) return false;
   const msg = (err.message || String(err)).toUpperCase();
-  return msg.includes('SQLITE_CORRUPT') || msg.includes('SQLITE_IOERR') ||
-         msg.includes('SQLITE_MISUSE');
+  return msg.includes('SQLITE_');
 };
 let _aborting = false;
 const _handleFatal = (kind, err) => {
   const msg = err && (err.message || err.stack) || String(err);
-  const upper = (msg || '').toUpperCase();
-  const isBusy = upper.includes('SQLITE_BUSY') || upper.includes('SQLITE_LOCKED');
-  const isSqliteRelated = upper.includes('SQLITE_');
-  if (isBusy) {
-    // Transient lock contention — log loudly but do NOT abort. busy_timeout +
-    // node-sqlite3's internal queue will retry. Reset flags so a stuck
-    // scanInProgress doesn't block the next cycle.
-    console.warn(`[BUSY] ${kind}: ${msg} — non-fatal, resetting flags`);
-  } else {
-    console.error(`[FATAL] ${kind}:`, msg);
+  if (_isSqliteFatal(err)) {
+    if (_aborting) return;
+    _aborting = true;
+    console.error(`[FATAL] ${kind}: ${msg} — SQLite state unknown after async error, aborting for clean systemd restart`);
+    process.abort();
   }
+  // Non-SQLite uncaughtException (TypeError, ReferenceError, NATS connection
+  // error, etc.): log + reset flags, but don't take the site down.
+  console.error(`[FATAL] ${kind}:`, msg);
   scanInProgress = false;
   statsRunning = false;
   analyticsRunning = false;
   dbBusy = false;
-  // 2026-04-30: when a SQLite error bubbles to uncaughtException (instead of
-  // hitting the statement callback chain), the active writeLock holder's
-  // done() will never fire. Without this release, the 90s WATCHDOG aborts us.
-  // Pattern observed: 13 spreadStats-flush watchdog fires today, every one
-  // preceded by [BUSY] Uncaught exception at the same timestamp. Releasing
-  // here lets the queue drain instead. Scoped to SQLite-related errors so a
-  // generic regression in unrelated code doesn't falsely free the lock.
-  if (isSqliteRelated && _activeDone) {
-    const wedgedLabel = [..._writeActive.keys()][0] || 'unknown';
-    console.warn(`[WriteLock] Releasing wedged '${wedgedLabel}' on ${kind}`);
-    try { _activeDone(err); } catch {}
-    _activeDone = null;
-  }
-  if (_isSqliteFatal(err)) {
-    if (_aborting) return;
-    _aborting = true;
-    console.error('[FATAL] SQLite state is corrupt — aborting for clean systemd restart');
-    process.abort();
-  }
 };
 process.on('uncaughtException', (err) => _handleFatal('Uncaught exception', err));
 process.on('unhandledRejection', (reason) => _handleFatal('Unhandled rejection', reason));
+
+// Flush any DB connection errors that fired during init before _handleFatal existed.
+if (_earlyDbErrors.length > 0) {
+  const buffered = _earlyDbErrors.splice(0);
+  for (const { label, err } of buffered) _handleFatal(label, err);
+}
 
 // === GRACEFUL SHUTDOWN ===
 function shutdown(signal) {

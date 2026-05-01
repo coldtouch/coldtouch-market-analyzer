@@ -2,6 +2,51 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-05-01 — SQLITE_BUSY perma-fix: producer flow control + drop `_activeDone` + BEGIN IMMEDIATE
+
+After three days of patches and a site-hang incident, this is the structural fix. Designed against synthesised input from three review agents (architect, TS reviewer, external-research) who converged on the same root causes and recommendations.
+
+**Root causes the previous patches missed:**
+
+1. **`_activeDone` releases the wrong task.** It points at "whoever currently holds the lock," not "whoever caused the BUSY." When a prior task's orphan `stmt.run` callback fires `SQLITE_BUSY` *after* its `done()` already resolved, the next holder (innocent fresh task) is now `_activeDone`. `_handleFatal` releases that innocent task. Its body still has open `BEGIN IMMEDIATE` on the connection — the next task's `BEGIN` collides with it, more BUSYs, cascade. Each spurious release leaves orphan callbacks pending in node-sqlite3's C++ worker queue. Their backing buffers stay resident → 8 GB RSS in 30 min.
+
+2. **Producers were unbounded.** `computeSpreadStats.flushWrites()` fired `withWriteLock('spreadStats-flush', …)` per 100-row batch *without awaiting*. With ~470 k rows per cycle that's 4,700+ tasks queued simultaneously. Each holds a `batch` array closure in V8 heap. This is why the lock-depth log warning would scroll past 4,000 — by design of the producer.
+
+3. **`priceRefCache-init` and `-incr` had bare `db.run('BEGIN')` with no error callback** — if BEGIN errored, the prepared statement still ran (in autocommit), `stmt.finalize()` (also no callback) silently dropped its error, and `done()` could go uncalled. The 30-min watchdog would eventually abort with no log of the underlying cause.
+
+4. **`BEGIN TRANSACTION` (deferred mode) instead of `BEGIN IMMEDIATE`** — deferred BEGINs upgrade to writers on first write, which is when contention surfaces. IMMEDIATE acquires the writer lock at BEGIN time, failing fast if another writer holds it. The SQLite forum's most-cited explanation of WAL deadlocks calls this out as the textbook fix.
+
+5. **No `'error'` listener on `db` / `statsDb` / `readDb`.** node-sqlite3's `Database` extends `EventEmitter`. An emitted `'error'` with no listener crashes the process synchronously, bypassing our `uncaughtException` handler and producing no log.
+
+**The fix (one commit, multi-pronged):**
+
+- **Producer flow control** in `computeSpreadStats`: `flushWrites()` now returns its `withWriteLock` promise. `processBatch` is `async` and `await`s `flushWrites()` before continuing. Bounded in-flight = bounded buffer residency. Same total throughput, no queue-depth explosion.
+- **Queue-depth ceiling** (`WRITE_QUEUE_CEILING = 50`) inside `withWriteLock`. Producers other than NATS, snapshots, and priceRefCache-init are dropped if the queue is saturated (`Promise.reject(...)`). NATS / scan / boot-cache rebuild bypass the ceiling via `WRITE_LOCK_NEVER_DROP`.
+- **Drop `_activeDone` entirely.** Restore abort-on-SQLite-uncaughtException as the single safe failure mode. With producers bounded, BUSY events at this layer should be rare (<1% of pre-fix frequency), and aborting on them is cheaper than the cascade leak `_activeDone` was designed to avoid.
+- **`BEGIN TRANSACTION` → `BEGIN IMMEDIATE`** at all 9 writeLock-wrapped sites. Fail-fast at the SQLite engine level instead of upgrade-deadlocking mid-transaction.
+- **`PRAGMA journal_size_limit = 67108864` (64 MB)** on all three connections. Prevents WAL file unbounded growth when long readers (daily backup, stalled cycles) block checkpoints. Source: Loke.dev's WAL-bloat post-mortem.
+- **Fix `priceRefCache-init` / `-incr`**: error callbacks at BEGIN, prepare, run, finalize, COMMIT, and explicit ROLLBACK on error path. Was the only writeLock callsite without this pattern.
+- **`db` / `statsDb` / `readDb` `'error'` event listeners**, registered immediately after each connection is constructed, with an early-buffer to defer to `_handleFatal` once it's defined later in the file.
+
+**Expected impact:**
+- RSS plateau in the 600–1500 MB range (vs current 400 MB→8 GB cycle).
+- Watchdog/abort frequency: <5/day from 44/day.
+- Site downtime from restarts: <1 min/day from ~7 min/day.
+- Morning 04:00 UTC routine cron POSTs land cleanly.
+
+**Kill switches preserved:**
+- Producer awaits: single revert hunk in `computeSpreadStats` if it backfires.
+- Queue ceiling: revert via removing one `if` block in `withWriteLock`.
+- `_activeDone` removal: re-adding ~5 lines if a new wedge mode appears.
+- BEGIN IMMEDIATE: search-replace back to `BEGIN TRANSACTION`.
+
+**Deferred to follow-up commits:**
+- Split `price_analytics`/`spread_stats`/`price_hourly`/`price_ref_cache` into separate `analytics.sqlite` file (architect Option F, commit 2). Eliminates remaining cross-connection contention with the daily backup window. Migration ~1-2 days, reversible.
+- `priceRefCache` JSON persistence + cold-boot warmup (architect Option F, commit 3). Removes the 30-min watchdog on `priceRefCache-init` entirely.
+- Migration to `better-sqlite3` only if the above is insufficient. ~1-2 weeks, mostly mechanical, would eliminate the entire async-callback-orphan class of bug.
+
+**Files:** `deploy_saas.py` — ~150 lines net change across PRAGMAs (3 connections), `withWriteLock` (queue ceiling + label-set), `_handleFatal` (drop `_activeDone` path + abort-on-any-SQLITE), `computeSpreadStats` (`flushWrites` returns promise + `processBatch` async/await), `priceRefCache-init` and `-incr` (error callbacks + ROLLBACK), 9× BEGIN→BEGIN IMMEDIATE, error-event handlers + early buffer.
+
 ### 2026-04-30 — Reverted `flushNatsBuffer` chunking after site-hang incident (commit `9593084`)
 
 The chunking change (`2fe624b`, ~90 min after `_activeDone` shipped) was reverted today after causing a full site hang. Process stayed `active running` per systemd but the Node event loop wedged — last log entry 27 min before observation, HTTP requests timing out both externally and on localhost. Required `kill -9` (systemd's SIGTERM stuck in `stop-sigterm` for >90s).
