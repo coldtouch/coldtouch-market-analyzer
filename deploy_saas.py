@@ -5467,7 +5467,25 @@ function scheduleVacuumIfNeeded(rowsDeleted) {
 //   Tier 2: price_hourly (OHLC)    → keep 30 days
 //   Tier 3: price_averages daily   → keep forever
 // NOTE: Heavy queries now read from pre-aggregated price_ref_cache, not the raw 21M-row table.
+// 2026-05-01: guard against concurrent compactions. The setTimeout/setInterval
+// at the bottom of this file used to fire `checkDiskUsage(); compactOldData();`
+// where `checkDiskUsage` itself calls `compactOldData(3)` when DB > 10 GB (which
+// is always true with our 13 GB DB). Result: two concurrent `db.all()` calls
+// loading millions of price_averages rows into V8 heap → 9 GB RSS spike in
+// ~2 minutes → 8 GB exit watchdog → restart. Observed at 15:48:32 UTC today.
+// The flag-with-watchdog-reset is a belt-and-suspenders fix; we also restructured
+// the schedulers below to call only `checkDiskUsage(true)` which decides the
+// right retention itself, so double-firing shouldn't happen via that path.
+let compactionRunning = false;
 function compactOldData(rawRetentionDays) {
+  if (compactionRunning) {
+    console.log('[Compaction] Already running, skipping this cycle');
+    return;
+  }
+  compactionRunning = true;
+  // Fail-safe reset: even if function exits via an uncovered async path, the
+  // flag is cleared after 15 min so the next cycle isn't blocked indefinitely.
+  setTimeout(() => { compactionRunning = false; }, 15 * 60 * 1000);
   const keepRawDays = rawRetentionDays || 7;
   const now = Date.now();
   const rawCutoff    = now - keepRawDays * 24 * 60 * 60 * 1000;
@@ -5621,10 +5639,17 @@ function checkDiskUsage() {
   });
 }
 
-// Run compaction every 2 hours, first run 25 minutes after start
-// STAGGERED: SpreadStats runs at 10min+hourly, compaction at 25min+2h — they never overlap
-setTimeout(() => { checkDiskUsage(); compactOldData(); }, 25 * 60 * 1000);
-setInterval(() => { checkDiskUsage(); compactOldData(); }, 2 * 60 * 60 * 1000);
+// Run compaction every 2 hours, first run 25 minutes after start.
+// 2026-05-01: removed the redundant compactOldData() call. checkDiskUsage()
+// already triggers compactOldData with adaptive retention (3d at >10GB, 1d at
+// >20GB), and at <10GB no compaction is needed. The previous pattern fired
+// BOTH concurrently — a checkDiskUsage→compactOldData(3) and the explicit
+// compactOldData() — causing the dual-load 9 GB RSS spike at 15:48 UTC.
+setTimeout(() => { checkDiskUsage(); }, 25 * 60 * 1000);
+setInterval(() => { checkDiskUsage(); }, 2 * 60 * 60 * 1000);
+// Daily 7-day-retention compaction at small DB sizes (won't fire for us until
+// we shrink under 10 GB, but kept for the post-cleanup state).
+setInterval(() => { if (!compactionRunning) compactOldData(); }, 24 * 60 * 60 * 1000);
 
 // === ANALYTICS COMPUTATION ENGINE ===
 // Computes SMA 7d, SMA 30d, EMA 7d, VWAP 7d, price_trend, spread_volatility
