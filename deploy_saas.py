@@ -6351,11 +6351,8 @@ const _handleFatal = (kind, err) => {
 process.on('uncaughtException', (err) => _handleFatal('Uncaught exception', err));
 process.on('unhandledRejection', (reason) => _handleFatal('Unhandled rejection', reason));
 
-// Flush any DB connection errors that fired during init before _handleFatal existed.
-if (_earlyDbErrors.length > 0) {
-  const buffered = _earlyDbErrors.splice(0);
-  for (const { label, err } of buffered) _handleFatal(label, err);
-}
+// 2026-05-02 stage 3: _earlyDbErrors no longer exists — all 3 connections are
+// better-sqlite3 (sync), errors throw at the call site, no event-emitter pattern.
 
 // === GRACEFUL SHUTDOWN ===
 function shutdown(signal) {
