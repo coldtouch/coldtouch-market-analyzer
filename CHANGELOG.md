@@ -2,6 +2,44 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-05-03 — better-sqlite3 migration: drop node-sqlite3 entirely (4 stages, ~17 hours work)
+
+The structural fix the May 1 perma-fix was a band-aid for. With `better-sqlite3` (sync), the entire async-callback orphan bug class becomes structurally impossible. JS itself is the natural serialization layer — there's no event-loop interleaving, no orphan callbacks firing late, no cross-connection BUSY cascades. Built per `BETTER_SQLITE3_MIGRATION_PLAN.md` §4 stages 1-4.
+
+**Stage 1 — readDb (commit `958a147`):** Migrated the read-only connection (`/api/me`, leaderboard, public viewers, ~60 callsites). Hot-path `/api/me` prepared statement hoisted to module scope. All `readDb.get/all` callbacks converted to `try { readDb.prepare(sql).get(...params); } catch (err) {...}`. Dropped `readDb.on('error')` (better-sqlite3 has no EventEmitter). 
+
+**Stage 2 — statsDb (commit `e0b7e2b`):** Migrated the analytics/spreadStats connection. The big aggregates (5-30s sync queries) and the EMA streaming pass (was `statsDb.each`) all preserve event-loop responsiveness via chunked `stmt.iterate()` + `setImmediate` yields every 5K rows. `flushWrites` rewritten to `db.transaction().immediate()` with auto-rollback. `computeAnalytics` made async to support the chunked yields. `computeSpreadStats` write batches raised 100 → 1000 rows (sync transactions are 4-10× faster).
+
+**Stage 3 — db connection + DDL + compat shim (commits `697b63e` + `d7af1a8`):** Migrated the main writer connection. The 350-line `db.serialize` DDL block (60+ `CREATE TABLE` / `ALTER TABLE`) collapsed into flat `db.exec()` + `tryExec()` (which swallows "duplicate column" errors so re-deploys are idempotent). For the ~150 untouched HTTP/WS handler callsites, installed a thin compat shim (~100 lines) that gives `db.run/get/all/each/serialize/prepare` the node-sqlite3 callback API while routing through better-sqlite3 sync underneath. Every shim call does sync work — the async-callback orphan class is structurally impossible regardless of what the callsite syntax looks like.
+
+**Stage 4 — delete the queue infrastructure + drop sqlite3 dep (commit `05da8b8`):** With all 3 connections sync, the `withWriteLock` queue + watchdog + queue-depth ceiling + `_isSqliteFatal` abort-on-SQLite policy are obsolete. Deleted `_writeQueue` / `_writeDepth` / `_writeActive` / `WRITE_QUEUE_CEILING` / `WATCHDOG_TIMEOUT_MS` / `WRITE_LOCK_NEVER_DROP` / the 38-line `withWriteLock(label, fn)` body / the queue-health `setInterval`. Dropped `node-sqlite3` from `package.json`. Simplified `_handleFatal` (kept the non-SQLite uncaughtException catch). All 10 `withWriteLock(...)` callsites converted to direct sync `db.transaction(...).immediate(args)` with auto-rollback semantics — the manual `BEGIN IMMEDIATE → prepare → run loop → finalize → COMMIT/ROLLBACK callbacks` chain (~20 lines per site) replaced by ~5 lines per site.
+
+**Stage 5 (collapse statsDb into db) — SKIPPED.** Cosmetic only. Saves ~16 MB RSS and one file descriptor. Plan flagged as optional. Stages 1-4 deliver the full structural win.
+
+**Pre-flight verified:**
+- `npm install better-sqlite3` on VPS pulled prebuilt for Linux x64 Node 20.20.2 (no compile)
+- Local `node --check` on the embedded backend.js passes at every commit (also added a pre-deploy syntax check to `deploy_saas.py` itself — commit `719331d` — so a typo can never reach SFTP)
+- 5 deploys total (incl. one fix-up for a dangling `_earlyDbErrors` reference)
+
+**Observed at deploy time:**
+- backend.js: 305 KB → 289 KB (-16 KB net; deleted ~150 lines of queue infrastructure + ~70 lines of nested callback chains, added ~30 lines of try/catch + chunking + the compat shim)
+- RSS at idle: 3.7 GB (pre-migration accumulated baseline) → 182-243 MB (fresh process) — ~15× reduction. Will need 24h+ observation to confirm steady-state.
+- NRestarts since May 1: 94 → 0 since stage 4 deploy at 2026-05-03 03:13 UTC
+- 0 FATAL / 0 BUSY / 0 Uncaught log lines since stage 4 deploy
+- All HTTP routes responding 200 OK at <300 ms (network-bound, not server)
+- spreadStats + market scanner + NATS flush all running cleanly through stages 2-4 deploys
+
+**What stays:**
+- All schema, indexes, WAL mode, daily backup cron unchanged
+- All API contracts identical — every endpoint returns identical JSON
+- All client code (`app.js`, `index.html`, `style.css`, IndexedDB, Go client) unchanged
+- 8 GB RSS exit watchdog kept (independent of SQLite driver)
+- 2 (was 3) connections: `db` (writer) + `readDb` (reader); `statsDb` separate connection retained because stage 5 was deferred — collapsing it is a pure cleanup, no functional impact
+
+**The migration plan:** [BETTER_SQLITE3_MIGRATION_PLAN.md](BETTER_SQLITE3_MIGRATION_PLAN.md). Three subagents (architect, code-inventory, docs-lookup) ran in parallel to produce the plan; this CHANGELOG entry documents the executed result.
+
+---
+
 ### 2026-05-01 — SQLITE_BUSY perma-fix: producer flow control + drop `_activeDone` + BEGIN IMMEDIATE
 
 After three days of patches and a site-hang incident, this is the structural fix. Designed against synthesised input from three review agents (architect, TS reviewer, external-research) who converged on the same root causes and recommendations.
