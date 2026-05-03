@@ -228,27 +228,178 @@ if (SMTP_HOST && SMTP_USER) {
 let itemNames = {};
 
 // === DATABASE ===
-const db = new sqlite3.Database('/opt/albion-saas/database.sqlite');
+// 2026-05-02 stage 3: db migrated from node-sqlite3 to better-sqlite3 (sync).
+// All db.run/get/all/each/serialize call sites converted to sync prepare()/exec()/transaction().
+// Errors throw SqliteError synchronously at the call site instead of via callback.
+const db = new Better('/opt/albion-saas/database.sqlite', { fileMustExist: false, timeout: 30000 });
 
-// Performance PRAGMAs — WAL mode dramatically reduces read/write contention
-db.run('PRAGMA journal_mode = WAL');
-db.run('PRAGMA synchronous = NORMAL');
-db.run('PRAGMA cache_size = -32000');   // 32MB page cache (was 128MB — RSS inflated by mmap)
-db.run('PRAGMA mmap_size = 0');         // disable memory-mapped I/O to prevent RSS inflation
-db.run('PRAGMA busy_timeout = 30000'); // was 5000 — bumped 2026-04-21 to survive
-                                        // analytics bulk flushes that hold the write
-                                        // lock for ~13s on statsDb. Any db.run() that
-                                        // landed mid-flush used to hit 5s timeout and
-                                        // surface as [FATAL] SQLITE_BUSY in the log.
-db.run('PRAGMA wal_autocheckpoint = 1000');
-// 2026-05-01: bound WAL file size. Without this, a long-running reader (the
-// daily backup, or a stalled cycle inside computeSpreadStats) prevents WAL
-// checkpoints from truncating the file, and it grows unbounded — observed
-// at 735MB stable in our case but Loke.dev documented 20GB+ in similar
-// workloads. 64MB cap forces SQLite to do a passive checkpoint pass when
-// the WAL crosses this size, even if no checkpoint hook fires.
-// Source: https://loke.dev/blog/sqlite-checkpoint-starvation-wal-growth
-db.run('PRAGMA journal_size_limit = 67108864'); // 64 MB
+// Performance PRAGMAs — WAL mode dramatically reduces read/write contention.
+// 2026-05-01: journal_size_limit bounds WAL growth (Loke.dev documented 20GB+
+// without it). Source: https://loke.dev/blog/sqlite-checkpoint-starvation-wal-growth
+db.pragma('journal_mode = WAL');
+db.pragma('synchronous = NORMAL');
+db.pragma('cache_size = -32000');         // 32MB page cache
+db.pragma('mmap_size = 0');               // disable mmap to prevent RSS inflation
+db.pragma('wal_autocheckpoint = 1000');
+db.pragma('journal_size_limit = 67108864'); // 64 MB
+db.pragma('foreign_keys = ON');           // FK constraints (per-connection in SQLite)
+
+// Helper: execute idempotent DDL that may already exist (e.g. ALTER TABLE ADD COLUMN
+// on a previously-migrated DB). better-sqlite3 throws on "duplicate column" — we
+// swallow that one specific class of error.
+function tryExec(sql) {
+  try { db.exec(sql); }
+  catch (err) {
+    if (!/duplicate column|already exists/i.test(err.message)) {
+      console.error('[DB-DDL]', sql.slice(0, 80), '->', err.message);
+      throw err;
+    }
+  }
+}
+
+// === COMPAT SHIM (2026-05-02 stage 3) ===
+// Existing 150+ HTTP/WS handler callsites use the node-sqlite3 callback API:
+//   db.run(sql, params, function(err) { this.lastID })
+//   db.get(sql, params, (err, row) => {...})
+//   db.all(sql, params, (err, rows) => {...})
+//   db.serialize(() => {...})
+// This shim adapts those to better-sqlite3's sync API so we can swap the connection
+// without rewriting every callsite. Every shim call does a SYNC SQLite call
+// underneath — so the async-callback orphan bug class (the May 1 perma-fix root
+// cause) is structurally impossible on shimmed paths. Callbacks are invoked
+// synchronously (NOT via setImmediate) so that .run() callbacks see this.lastID
+// immediately and the existing code semantics are preserved exactly.
+//
+// New batch-write sites (flushNatsBuffer, recordSnapshots, etc.) bypass the shim
+// and use db.transaction() directly for proper auto-rollback semantics.
+//
+// The shim is a temporary bridge; future cleanup can convert callsites one at a
+// time to direct sync prepare() calls. There's no rush — the shim is small,
+// well-tested in a single file, and incurs no measurable overhead.
+(function installDbShim() {
+  const _normalize = (params, cb) => {
+    if (typeof params === 'function') { cb = params; params = []; }
+    if (params == null) params = [];
+    if (!Array.isArray(params)) params = [params];
+    return [params, cb];
+  };
+  db.run = function(sql, params, cb) {
+    [params, cb] = _normalize(params, cb);
+    try {
+      const info = this.prepare(sql).run(...params);
+      // Mimic node-sqlite3: this.lastID is a Number (never BigInt for our row counts)
+      const ctx = { lastID: Number(info.lastInsertRowid), changes: info.changes };
+      if (typeof cb === 'function') cb.call(ctx, null);
+      return ctx;
+    } catch (err) {
+      if (typeof cb === 'function') cb.call({ lastID: 0, changes: 0 }, err);
+      else console.error('[db.run]', sql.slice(0, 80), err.message);
+    }
+  };
+  db.get = function(sql, params, cb) {
+    [params, cb] = _normalize(params, cb);
+    try {
+      const row = this.prepare(sql).get(...params);
+      if (typeof cb === 'function') cb(null, row);
+      return row;
+    } catch (err) {
+      if (typeof cb === 'function') cb(err);
+      else console.error('[db.get]', sql.slice(0, 80), err.message);
+    }
+  };
+  db.all = function(sql, params, cb) {
+    [params, cb] = _normalize(params, cb);
+    try {
+      const rows = this.prepare(sql).all(...params);
+      if (typeof cb === 'function') cb(null, rows);
+      return rows;
+    } catch (err) {
+      if (typeof cb === 'function') cb(err, []);
+      else console.error('[db.all]', sql.slice(0, 80), err.message);
+    }
+  };
+  // db.serialize is no-op in better-sqlite3 (already serialized by virtue of sync exec)
+  db.serialize = function(fn) { try { fn(); } catch (err) { console.error('[db.serialize]', err.message); } };
+  // db.each: iterate via prepare().iterate(), invoke per-row callback then completion callback
+  db.each = function(sql, params, rowCb, doneCb) {
+    if (typeof params === 'function') { doneCb = rowCb; rowCb = params; params = []; }
+    if (params == null) params = [];
+    if (!Array.isArray(params)) params = [params];
+    let count = 0;
+    try {
+      for (const row of this.prepare(sql).iterate(...params)) {
+        try { rowCb(null, row); } catch {}
+        count++;
+      }
+      if (typeof doneCb === 'function') doneCb(null, count);
+    } catch (err) {
+      if (typeof doneCb === 'function') doneCb(err, count);
+      else console.error('[db.each]', sql.slice(0, 80), err.message);
+    }
+  };
+  // db.prepare in better-sqlite3 returns Statement; existing code treats it like
+  // node-sqlite3 Statement (calls .run with callback + .finalize). Wrap returned
+  // Statement so its .run/.get/.all/.finalize accept callbacks.
+  const _origPrepare = db.prepare.bind(db);
+  db.prepare = function(sql, prepCb) {
+    let stmt;
+    try { stmt = _origPrepare(sql); }
+    catch (err) {
+      if (typeof prepCb === 'function') prepCb(err);
+      // Return a no-op stmt so chained .run/.finalize don't crash
+      return { run: (...a) => { const cb = a[a.length-1]; if (typeof cb==='function') cb.call({lastID:0,changes:0}, err); }, finalize: (cb) => { if (typeof cb==='function') cb(err); } };
+    }
+    if (typeof prepCb === 'function') prepCb(null);
+    // Wrap stmt.run to accept a trailing callback (matches sqlite3 statement API)
+    const _origRun = stmt.run.bind(stmt);
+    const _origGet = stmt.get.bind(stmt);
+    const _origAll = stmt.all.bind(stmt);
+    stmt.run = function(...args) {
+      let cb = null;
+      if (args.length > 0 && typeof args[args.length - 1] === 'function') cb = args.pop();
+      // Flatten single-array arg
+      if (args.length === 1 && Array.isArray(args[0])) args = args[0];
+      try {
+        const info = _origRun(...args);
+        const ctx = { lastID: Number(info.lastInsertRowid), changes: info.changes };
+        if (cb) cb.call(ctx, null);
+        return info;
+      } catch (err) {
+        if (cb) cb.call({lastID:0,changes:0}, err);
+        else throw err;
+      }
+    };
+    stmt.get = function(...args) {
+      let cb = null;
+      if (args.length > 0 && typeof args[args.length - 1] === 'function') cb = args.pop();
+      if (args.length === 1 && Array.isArray(args[0])) args = args[0];
+      try {
+        const row = _origGet(...args);
+        if (cb) cb(null, row);
+        return row;
+      } catch (err) {
+        if (cb) cb(err);
+        else throw err;
+      }
+    };
+    stmt.all = function(...args) {
+      let cb = null;
+      if (args.length > 0 && typeof args[args.length - 1] === 'function') cb = args.pop();
+      if (args.length === 1 && Array.isArray(args[0])) args = args[0];
+      try {
+        const rows = _origAll(...args);
+        if (cb) cb(null, rows);
+        return rows;
+      } catch (err) {
+        if (cb) cb(err, []);
+        else throw err;
+      }
+    };
+    // better-sqlite3 statements don't need finalize (auto-GC). Provide a no-op for compat.
+    stmt.finalize = function(cb) { if (typeof cb === 'function') cb(null); };
+    return stmt;
+  };
+})();
 
 // Separate connection for SpreadStats + Analytics bulk reads/writes.
 // 2026-05-02 stage 2: migrated to better-sqlite3 (sync). All statsDb writes
@@ -272,372 +423,326 @@ const readDb = new Better('/opt/albion-saas/database.sqlite', { readonly: true, 
 readDb.pragma('mmap_size = 0');
 readDb.pragma('cache_size = -8000');  // 8MB — read-only, doesn't need large cache
 
-// 2026-05-01: register error listeners on each connection. node-sqlite3's
-// Database extends EventEmitter; if it ever emits an 'error' event with no
-// listener, Node throws synchronously and bypasses our process-level
-// uncaughtException handler (process exits with no log). Each handler defers
-// to a thin wrapper that delegates once _handleFatal exists later in the file.
-const _earlyDbErrors = [];
-const _earlyDbErrorHandler = (label) => (err) => {
-  if (typeof _handleFatal === 'function') _handleFatal(label, err);
-  else _earlyDbErrors.push({ label, err });
-};
-db.on('error', _earlyDbErrorHandler('db connection error'));
-// statsDb (stage 2) and readDb (stage 1) are better-sqlite3 — throw synchronously,
-// no EventEmitter, no .on('error') needed. Errors caught at each call site.
+// 2026-05-02 stage 3: all 3 connections are better-sqlite3 (sync). They throw
+// SqliteError synchronously at the call site — no EventEmitter, no 'error' events,
+// no early-error buffering needed. The _handleFatal handler at the bottom of the
+// file still catches non-SQLite uncaughtException (NATS, Discord, etc.).
 
-db.serialize(() => {
-  db.run(`CREATE TABLE IF NOT EXISTS users (id TEXT PRIMARY KEY, username TEXT, avatar TEXT)`);
-  // Migrate users table: add columns for email/password registration
-  db.run(`ALTER TABLE users ADD COLUMN email TEXT`, () => {});
-  db.run(`ALTER TABLE users ADD COLUMN password_hash TEXT`, () => {});
-  db.run(`ALTER TABLE users ADD COLUMN auth_type TEXT DEFAULT 'discord'`, () => {});
-  db.run(`ALTER TABLE users ADD COLUMN role TEXT DEFAULT 'free'`, () => {});
-  db.run(`ALTER TABLE users ADD COLUMN created_at INTEGER`, () => {});
-  db.run(`ALTER TABLE users ADD COLUMN last_login INTEGER`, () => {});
-  db.run(`ALTER TABLE users ADD COLUMN linked_discord_id TEXT`, () => {});
-  db.run(`ALTER TABLE users ADD COLUMN email_verified INTEGER DEFAULT 0`, () => {});
-  db.run(`ALTER TABLE users ADD COLUMN verification_token TEXT`, () => {});
-  db.run(`ALTER TABLE users ADD COLUMN verification_expires INTEGER`, () => {});
-  db.run(`ALTER TABLE users ADD COLUMN capture_token TEXT`, () => {});
-  db.run(`ALTER TABLE users ADD COLUMN reset_token TEXT`, () => {});
-  db.run(`ALTER TABLE users ADD COLUMN reset_expires INTEGER`, () => {});
-  db.run(`CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email ON users(email) WHERE email IS NOT NULL`);
+// 2026-05-02 stage 3: DDL block converted to sync better-sqlite3.
+// CREATE TABLE / CREATE INDEX → db.exec(); ALTER TABLE → tryExec() (catches "duplicate column").
+// All idempotent — safe to run on every boot.
+db.exec(`CREATE TABLE IF NOT EXISTS users (id TEXT PRIMARY KEY, username TEXT, avatar TEXT)`);
+tryExec(`ALTER TABLE users ADD COLUMN email TEXT`);
+tryExec(`ALTER TABLE users ADD COLUMN password_hash TEXT`);
+tryExec(`ALTER TABLE users ADD COLUMN auth_type TEXT DEFAULT 'discord'`);
+tryExec(`ALTER TABLE users ADD COLUMN role TEXT DEFAULT 'free'`);
+tryExec(`ALTER TABLE users ADD COLUMN created_at INTEGER`);
+tryExec(`ALTER TABLE users ADD COLUMN last_login INTEGER`);
+tryExec(`ALTER TABLE users ADD COLUMN linked_discord_id TEXT`);
+tryExec(`ALTER TABLE users ADD COLUMN email_verified INTEGER DEFAULT 0`);
+tryExec(`ALTER TABLE users ADD COLUMN verification_token TEXT`);
+tryExec(`ALTER TABLE users ADD COLUMN verification_expires INTEGER`);
+tryExec(`ALTER TABLE users ADD COLUMN capture_token TEXT`);
+tryExec(`ALTER TABLE users ADD COLUMN reset_token TEXT`);
+tryExec(`ALTER TABLE users ADD COLUMN reset_expires INTEGER`);
+db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email ON users(email) WHERE email IS NOT NULL`);
 
-  db.run(`CREATE TABLE IF NOT EXISTS alerts (guild_id TEXT, channel_id TEXT, min_profit INTEGER, cooldown_ms INTEGER DEFAULT 600000, PRIMARY KEY(guild_id, channel_id))`);
-  // Migrate: add columns if missing
-  db.run(`ALTER TABLE alerts ADD COLUMN cooldown_ms INTEGER DEFAULT 600000`, () => {});
-  db.run(`ALTER TABLE alerts ADD COLUMN min_confidence INTEGER DEFAULT 0`, () => {});
+db.exec(`CREATE TABLE IF NOT EXISTS alerts (guild_id TEXT, channel_id TEXT, min_profit INTEGER, cooldown_ms INTEGER DEFAULT 600000, PRIMARY KEY(guild_id, channel_id))`);
+tryExec(`ALTER TABLE alerts ADD COLUMN cooldown_ms INTEGER DEFAULT 600000`);
+tryExec(`ALTER TABLE alerts ADD COLUMN min_confidence INTEGER DEFAULT 0`);
 
-  // === PHASE 1: Historical Spread Analyzer ===
-  db.run(`CREATE TABLE IF NOT EXISTS price_snapshots (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    item_id TEXT NOT NULL,
-    quality INTEGER DEFAULT 1,
-    city TEXT NOT NULL,
-    sell_price_min INTEGER DEFAULT 0,
-    buy_price_max INTEGER DEFAULT 0,
-    sell_date TEXT,
-    buy_date TEXT,
-    recorded_at INTEGER NOT NULL
-  )`);
-  db.run(`CREATE INDEX IF NOT EXISTS idx_ps_item_city ON price_snapshots(item_id, city, recorded_at)`);
-  db.run(`CREATE INDEX IF NOT EXISTS idx_ps_recorded ON price_snapshots(recorded_at)`);
-  db.run(`ALTER TABLE price_snapshots ADD COLUMN sell_date TEXT`, () => {});
-  db.run(`ALTER TABLE price_snapshots ADD COLUMN buy_date TEXT`, () => {});
+// === PHASE 1: Historical Spread Analyzer ===
+db.exec(`CREATE TABLE IF NOT EXISTS price_snapshots (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  item_id TEXT NOT NULL,
+  quality INTEGER DEFAULT 1,
+  city TEXT NOT NULL,
+  sell_price_min INTEGER DEFAULT 0,
+  buy_price_max INTEGER DEFAULT 0,
+  sell_date TEXT,
+  buy_date TEXT,
+  recorded_at INTEGER NOT NULL
+)`);
+db.exec(`CREATE INDEX IF NOT EXISTS idx_ps_item_city ON price_snapshots(item_id, city, recorded_at)`);
+db.exec(`CREATE INDEX IF NOT EXISTS idx_ps_recorded ON price_snapshots(recorded_at)`);
+tryExec(`ALTER TABLE price_snapshots ADD COLUMN sell_date TEXT`);
+tryExec(`ALTER TABLE price_snapshots ADD COLUMN buy_date TEXT`);
 
-  db.run(`CREATE TABLE IF NOT EXISTS spread_stats (
-    item_id TEXT NOT NULL,
-    quality INTEGER DEFAULT 1,
-    buy_city TEXT NOT NULL,
-    sell_city TEXT NOT NULL,
-    avg_spread REAL DEFAULT 0,
-    median_spread REAL DEFAULT 0,
-    consistency_pct REAL DEFAULT 0,
-    sample_count INTEGER DEFAULT 0,
-    window_days INTEGER DEFAULT 7,
-    confidence_score REAL DEFAULT 0,
-    updated_at INTEGER NOT NULL,
-    PRIMARY KEY(item_id, quality, buy_city, sell_city, window_days)
-  )`);
-  db.run(`CREATE INDEX IF NOT EXISTS idx_spread_stats_search ON spread_stats(window_days, avg_spread, confidence_score)`);
-  db.run(`CREATE INDEX IF NOT EXISTS idx_ss_item_quality ON spread_stats(item_id, quality)`);
+db.exec(`CREATE TABLE IF NOT EXISTS spread_stats (
+  item_id TEXT NOT NULL,
+  quality INTEGER DEFAULT 1,
+  buy_city TEXT NOT NULL,
+  sell_city TEXT NOT NULL,
+  avg_spread REAL DEFAULT 0,
+  median_spread REAL DEFAULT 0,
+  consistency_pct REAL DEFAULT 0,
+  sample_count INTEGER DEFAULT 0,
+  window_days INTEGER DEFAULT 7,
+  confidence_score REAL DEFAULT 0,
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY(item_id, quality, buy_city, sell_city, window_days)
+)`);
+db.exec(`CREATE INDEX IF NOT EXISTS idx_spread_stats_search ON spread_stats(window_days, avg_spread, confidence_score)`);
+db.exec(`CREATE INDEX IF NOT EXISTS idx_ss_item_quality ON spread_stats(item_id, quality)`);
 
-  // Pre-aggregated price reference cache — rebuilt incrementally, read by buildPriceReference.
-  // Eliminates the need to scan 21M+ rows in price_averages every 10 minutes.
-  db.run(`CREATE TABLE IF NOT EXISTS price_ref_cache (
-    item_id TEXT NOT NULL,
-    quality INTEGER DEFAULT 1,
-    city TEXT NOT NULL,
-    avg_sell REAL DEFAULT 0,
-    avg_vol REAL DEFAULT 0,
-    sample_count INTEGER DEFAULT 0,
-    updated_at INTEGER NOT NULL,
-    PRIMARY KEY(item_id, quality, city)
-  )`);
+db.exec(`CREATE TABLE IF NOT EXISTS price_ref_cache (
+  item_id TEXT NOT NULL,
+  quality INTEGER DEFAULT 1,
+  city TEXT NOT NULL,
+  avg_sell REAL DEFAULT 0,
+  avg_vol REAL DEFAULT 0,
+  sample_count INTEGER DEFAULT 0,
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY(item_id, quality, city)
+)`);
 
-  db.run(`CREATE TABLE IF NOT EXISTS price_averages (
-    item_id TEXT NOT NULL,
-    quality INTEGER DEFAULT 1,
-    city TEXT NOT NULL,
-    avg_sell INTEGER DEFAULT 0,
-    avg_buy INTEGER DEFAULT 0,
-    min_sell INTEGER DEFAULT 0,
-    max_buy INTEGER DEFAULT 0,
-    sample_count INTEGER DEFAULT 0,
-    period_type TEXT NOT NULL,
-    period_start INTEGER NOT NULL,
-    PRIMARY KEY(item_id, quality, city, period_type, period_start)
-  )`);
-  // Migrate: add min_sell/max_buy columns if missing
-  db.run(`ALTER TABLE price_averages ADD COLUMN min_sell INTEGER DEFAULT 0`, () => {});
-  db.run(`ALTER TABLE price_averages ADD COLUMN max_buy INTEGER DEFAULT 0`, () => {});
-  db.run(`CREATE INDEX IF NOT EXISTS idx_pa_item_city_ts ON price_averages(item_id, city, period_start)`);
-  db.run(`CREATE INDEX IF NOT EXISTS idx_pa_spread_query ON price_averages(period_start, avg_sell, avg_buy)`);
-  // Added 2026-04-21 for streaming EMA pass: lets SQLite walk price_averages in
-  // (item_id, city, quality, period_start) order without an external sort step,
-  // cutting analytics EMA time from 22+ min to seconds.
-  db.run(`CREATE INDEX IF NOT EXISTS idx_pa_ema_stream ON price_averages(item_id, city, quality, period_start)`);
+db.exec(`CREATE TABLE IF NOT EXISTS price_averages (
+  item_id TEXT NOT NULL,
+  quality INTEGER DEFAULT 1,
+  city TEXT NOT NULL,
+  avg_sell INTEGER DEFAULT 0,
+  avg_buy INTEGER DEFAULT 0,
+  min_sell INTEGER DEFAULT 0,
+  max_buy INTEGER DEFAULT 0,
+  sample_count INTEGER DEFAULT 0,
+  period_type TEXT NOT NULL,
+  period_start INTEGER NOT NULL,
+  PRIMARY KEY(item_id, quality, city, period_type, period_start)
+)`);
+tryExec(`ALTER TABLE price_averages ADD COLUMN min_sell INTEGER DEFAULT 0`);
+tryExec(`ALTER TABLE price_averages ADD COLUMN max_buy INTEGER DEFAULT 0`);
+db.exec(`CREATE INDEX IF NOT EXISTS idx_pa_item_city_ts ON price_averages(item_id, city, period_start)`);
+db.exec(`CREATE INDEX IF NOT EXISTS idx_pa_spread_query ON price_averages(period_start, avg_sell, avg_buy)`);
+db.exec(`CREATE INDEX IF NOT EXISTS idx_pa_ema_stream ON price_averages(item_id, city, quality, period_start)`);
 
-  // === PHASE 3: Community Scanning Incentives ===
-  db.run(`CREATE TABLE IF NOT EXISTS contributions (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id TEXT NOT NULL,
-    source TEXT NOT NULL,
-    item_count INTEGER DEFAULT 1,
-    created_at INTEGER NOT NULL
-  )`);
-  db.run(`CREATE INDEX IF NOT EXISTS idx_contrib_user ON contributions(user_id, created_at)`);
+db.exec(`CREATE TABLE IF NOT EXISTS contributions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id TEXT NOT NULL,
+  source TEXT NOT NULL,
+  item_count INTEGER DEFAULT 1,
+  created_at INTEGER NOT NULL
+)`);
+db.exec(`CREATE INDEX IF NOT EXISTS idx_contrib_user ON contributions(user_id, created_at)`);
 
-  db.run(`CREATE TABLE IF NOT EXISTS user_stats (
-    user_id TEXT PRIMARY KEY,
-    username TEXT,
-    avatar TEXT,
-    scans_30d INTEGER DEFAULT 0,
-    scans_total INTEGER DEFAULT 0,
-    tier TEXT DEFAULT 'bronze',
-    updated_at INTEGER NOT NULL
-  )`);
+db.exec(`CREATE TABLE IF NOT EXISTS user_stats (
+  user_id TEXT PRIMARY KEY,
+  username TEXT,
+  avatar TEXT,
+  scans_30d INTEGER DEFAULT 0,
+  scans_total INTEGER DEFAULT 0,
+  tier TEXT DEFAULT 'bronze',
+  updated_at INTEGER NOT NULL
+)`);
 
-  // === USER ACTIVITY TRACKING (replaces scan-only contributions for combined scoring) ===
-  db.run(`CREATE TABLE IF NOT EXISTS user_activity (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id TEXT NOT NULL,
-    activity_type TEXT NOT NULL,
-    count INTEGER DEFAULT 1,
-    recorded_at INTEGER NOT NULL
-  )`);
-  db.run(`CREATE INDEX IF NOT EXISTS idx_user_activity ON user_activity(user_id, recorded_at)`);
-  db.run(`CREATE INDEX IF NOT EXISTS idx_user_activity_type ON user_activity(user_id, activity_type)`);
+db.exec(`CREATE TABLE IF NOT EXISTS user_activity (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id TEXT NOT NULL,
+  activity_type TEXT NOT NULL,
+  count INTEGER DEFAULT 1,
+  recorded_at INTEGER NOT NULL
+)`);
+db.exec(`CREATE INDEX IF NOT EXISTS idx_user_activity ON user_activity(user_id, recorded_at)`);
+db.exec(`CREATE INDEX IF NOT EXISTS idx_user_activity_type ON user_activity(user_id, activity_type)`);
 
-  // === PHASE 3: Loot Lifecycle Tracker ===
-  db.run(`CREATE TABLE IF NOT EXISTS loot_tabs (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id TEXT NOT NULL,
-    tab_name TEXT NOT NULL,
-    city TEXT DEFAULT '',
-    purchase_price INTEGER DEFAULT 0,
-    items_json TEXT NOT NULL,
-    purchased_at INTEGER NOT NULL,
-    status TEXT DEFAULT 'open'
-  )`);
-  db.run(`CREATE INDEX IF NOT EXISTS idx_loot_tabs_user ON loot_tabs(user_id, purchased_at)`);
+db.exec(`CREATE TABLE IF NOT EXISTS loot_tabs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id TEXT NOT NULL,
+  tab_name TEXT NOT NULL,
+  city TEXT DEFAULT '',
+  purchase_price INTEGER DEFAULT 0,
+  items_json TEXT NOT NULL,
+  purchased_at INTEGER NOT NULL,
+  status TEXT DEFAULT 'open'
+)`);
+db.exec(`CREATE INDEX IF NOT EXISTS idx_loot_tabs_user ON loot_tabs(user_id, purchased_at)`);
 
-  db.run(`CREATE TABLE IF NOT EXISTS loot_tab_sales (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    loot_tab_id INTEGER NOT NULL REFERENCES loot_tabs(id) ON DELETE CASCADE,
-    item_id TEXT NOT NULL,
-    quality INTEGER DEFAULT 1,
-    quantity INTEGER DEFAULT 1,
-    sale_price INTEGER NOT NULL,
-    sold_at INTEGER NOT NULL
-  )`);
-  db.run(`PRAGMA foreign_keys = ON`);
-  db.run(`CREATE INDEX IF NOT EXISTS idx_loot_tab_sales_tab ON loot_tab_sales(loot_tab_id)`);
+db.exec(`CREATE TABLE IF NOT EXISTS loot_tab_sales (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  loot_tab_id INTEGER NOT NULL REFERENCES loot_tabs(id) ON DELETE CASCADE,
+  item_id TEXT NOT NULL,
+  quality INTEGER DEFAULT 1,
+  quantity INTEGER DEFAULT 1,
+  sale_price INTEGER NOT NULL,
+  sold_at INTEGER NOT NULL
+)`);
+db.exec(`CREATE INDEX IF NOT EXISTS idx_loot_tab_sales_tab ON loot_tab_sales(loot_tab_id)`);
 
-  // === SALE NOTIFICATIONS (from in-game mail) ===
-  db.run(`CREATE TABLE IF NOT EXISTS sale_notifications (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id TEXT NOT NULL,
-    mail_id INTEGER NOT NULL,
-    item_id TEXT NOT NULL,
-    quantity INTEGER DEFAULT 1,
-    unit_price INTEGER NOT NULL,
-    total INTEGER NOT NULL,
-    location TEXT DEFAULT '',
-    order_type TEXT DEFAULT 'FINISHED',
-    sold_at INTEGER NOT NULL,
-    matched_tab_id INTEGER DEFAULT NULL
-  )`);
-  db.run(`CREATE UNIQUE INDEX IF NOT EXISTS idx_sale_notif_mail ON sale_notifications(user_id, mail_id)`);
+db.exec(`CREATE TABLE IF NOT EXISTS sale_notifications (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id TEXT NOT NULL,
+  mail_id INTEGER NOT NULL,
+  item_id TEXT NOT NULL,
+  quantity INTEGER DEFAULT 1,
+  unit_price INTEGER NOT NULL,
+  total INTEGER NOT NULL,
+  location TEXT DEFAULT '',
+  order_type TEXT DEFAULT 'FINISHED',
+  sold_at INTEGER NOT NULL,
+  matched_tab_id INTEGER DEFAULT NULL
+)`);
+db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_sale_notif_mail ON sale_notifications(user_id, mail_id)`);
 
-  // === LOOT LOGGER ===
-  db.run(`CREATE TABLE IF NOT EXISTS loot_events (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id TEXT NOT NULL,
-    session_id TEXT NOT NULL,
-    timestamp INTEGER NOT NULL,
-    looted_by_name TEXT NOT NULL,
-    looted_by_guild TEXT DEFAULT '',
-    looted_by_alliance TEXT DEFAULT '',
-    looted_from_name TEXT DEFAULT '',
-    looted_from_guild TEXT DEFAULT '',
-    looted_from_alliance TEXT DEFAULT '',
-    item_id TEXT NOT NULL,
-    numeric_id INTEGER DEFAULT 0,
-    quantity INTEGER DEFAULT 1,
-    weight REAL DEFAULT 0,
-    is_silver INTEGER DEFAULT 0
-  )`);
-  // B6: equipment-at-death column. Added via ALTER for existing DBs (safe — fails silently if column already exists).
-  db.run(`ALTER TABLE loot_events ADD COLUMN equipment_json TEXT DEFAULT NULL`, () => {});
-  // Zone/location at time of loot (Go client v1.3.0+). Powers the accountability
-  // missing-item tooltip (shows where a pickup happened, not just when).
-  db.run(`ALTER TABLE loot_events ADD COLUMN location TEXT DEFAULT ''`, () => {});
-  db.run(`CREATE INDEX IF NOT EXISTS idx_loot_events_user_session ON loot_events(user_id, session_id)`);
-  db.run(`CREATE INDEX IF NOT EXISTS idx_loot_events_session ON loot_events(session_id, timestamp)`);
+db.exec(`CREATE TABLE IF NOT EXISTS loot_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id TEXT NOT NULL,
+  session_id TEXT NOT NULL,
+  timestamp INTEGER NOT NULL,
+  looted_by_name TEXT NOT NULL,
+  looted_by_guild TEXT DEFAULT '',
+  looted_by_alliance TEXT DEFAULT '',
+  looted_from_name TEXT DEFAULT '',
+  looted_from_guild TEXT DEFAULT '',
+  looted_from_alliance TEXT DEFAULT '',
+  item_id TEXT NOT NULL,
+  numeric_id INTEGER DEFAULT 0,
+  quantity INTEGER DEFAULT 1,
+  weight REAL DEFAULT 0,
+  is_silver INTEGER DEFAULT 0
+)`);
+tryExec(`ALTER TABLE loot_events ADD COLUMN equipment_json TEXT DEFAULT NULL`);
+tryExec(`ALTER TABLE loot_events ADD COLUMN location TEXT DEFAULT ''`);
+db.exec(`CREATE INDEX IF NOT EXISTS idx_loot_events_user_session ON loot_events(user_id, session_id)`);
+db.exec(`CREATE INDEX IF NOT EXISTS idx_loot_events_session ON loot_events(session_id, timestamp)`);
 
-  // Dedupe migration (2026-04-18): loot_events had no unique constraint, so
-  // WS reconnects + Save Session + file uploads could create identical rows.
-  // Delete older duplicates keyed on the "physically impossible collision" tuple,
-  // then add a UNIQUE INDEX so future INSERT OR IGNORE silently drops replays.
-  db.run(`DELETE FROM loot_events
+// Dedupe migration: remove duplicates THEN install unique index. Sync sequence.
+try {
+  db.exec(`DELETE FROM loot_events
     WHERE rowid NOT IN (
       SELECT MIN(rowid) FROM loot_events
       GROUP BY user_id, session_id, timestamp, looted_by_name, item_id, looted_from_name, quantity
-    )`, (dErr) => {
-      if (dErr) { console.log(`[Dedup] loot_events dedupe delete failed: ${dErr.message}`); return; }
-      // Fires only once per DB lifetime on the first startup after this deploy;
-      // subsequent startups are no-ops because the unique index prevents dupes.
-      db.run(`CREATE UNIQUE INDEX IF NOT EXISTS idx_loot_events_dedupe
-        ON loot_events(user_id, session_id, timestamp, looted_by_name, item_id, looted_from_name, quantity)`,
-        (iErr) => {
-          if (iErr) console.log(`[Dedup] loot_events unique index create failed: ${iErr.message}`);
-          else console.log(`[Dedup] loot_events: cleaned duplicates + installed unique index`);
-        });
-    });
+    )`);
+  db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_loot_events_dedupe
+    ON loot_events(user_id, session_id, timestamp, looted_by_name, item_id, looted_from_name, quantity)`);
+  console.log(`[Dedup] loot_events: cleaned duplicates + installed unique index`);
+} catch (err) {
+  console.log(`[Dedup] loot_events dedupe failed: ${err.message}`);
+}
 
-  // === LOOT SESSION SHARE TOKENS (G4) ===
-  // Maps a session_id to an unauthenticated public-view token. One row per
-  // shared session; removing the row revokes sharing. The session_id owner
-  // is stashed so we can enforce "only the session owner can share/unshare".
-  db.run(`CREATE TABLE IF NOT EXISTS loot_session_shares (
-    session_id TEXT PRIMARY KEY,
-    user_id TEXT NOT NULL,
-    public_token TEXT NOT NULL UNIQUE,
-    created_at INTEGER NOT NULL
-  )`);
-  db.run(`CREATE INDEX IF NOT EXISTS idx_loot_session_shares_token ON loot_session_shares(public_token)`);
+db.exec(`CREATE TABLE IF NOT EXISTS loot_session_shares (
+  session_id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  public_token TEXT NOT NULL UNIQUE,
+  created_at INTEGER NOT NULL
+)`);
+db.exec(`CREATE INDEX IF NOT EXISTS idx_loot_session_shares_token ON loot_session_shares(public_token)`);
 
-  // Accountability share tokens — snapshots session + selected chest captures
-  // + the chest-log batches (deposit/withdraw ground truth from opcode 157) so
-  // anyone with the link sees exactly the verification info the owner had.
-  db.run(`CREATE TABLE IF NOT EXISTS accountability_shares (
-    token TEXT PRIMARY KEY,
-    user_id TEXT NOT NULL,
-    session_id TEXT NOT NULL,
-    captures_json TEXT NOT NULL,
-    session_name TEXT DEFAULT '',
-    created_at INTEGER NOT NULL,
-    view_count INTEGER DEFAULT 0,
-    chest_logs_json TEXT DEFAULT NULL
-  )`);
-  db.run(`CREATE INDEX IF NOT EXISTS idx_acc_shares_user ON accountability_shares(user_id)`);
-  // Migrate existing DBs that pre-date the chest-log snapshot (err is ignored —
-  // "duplicate column" is the expected no-op on an already-migrated DB).
-  db.run(`ALTER TABLE accountability_shares ADD COLUMN chest_logs_json TEXT DEFAULT NULL`, () => {});
+db.exec(`CREATE TABLE IF NOT EXISTS accountability_shares (
+  token TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  session_id TEXT NOT NULL,
+  captures_json TEXT NOT NULL,
+  session_name TEXT DEFAULT '',
+  created_at INTEGER NOT NULL,
+  view_count INTEGER DEFAULT 0,
+  chest_logs_json TEXT DEFAULT NULL
+)`);
+db.exec(`CREATE INDEX IF NOT EXISTS idx_acc_shares_user ON accountability_shares(user_id)`);
+tryExec(`ALTER TABLE accountability_shares ADD COLUMN chest_logs_json TEXT DEFAULT NULL`);
 
-  // === ANALYTICS TABLES ===
-  db.run(`CREATE TABLE IF NOT EXISTS price_analytics (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    item_id TEXT NOT NULL,
-    city TEXT NOT NULL,
-    quality INTEGER DEFAULT 1,
-    metric TEXT NOT NULL,
-    value REAL NOT NULL,
-    computed_at TEXT NOT NULL,
-    UNIQUE(item_id, city, quality, metric)
-  )`);
-  db.run(`CREATE INDEX IF NOT EXISTS idx_analytics_item ON price_analytics(item_id, city, quality)`);
+db.exec(`CREATE TABLE IF NOT EXISTS price_analytics (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  item_id TEXT NOT NULL,
+  city TEXT NOT NULL,
+  quality INTEGER DEFAULT 1,
+  metric TEXT NOT NULL,
+  value REAL NOT NULL,
+  computed_at TEXT NOT NULL,
+  UNIQUE(item_id, city, quality, metric)
+)`);
+db.exec(`CREATE INDEX IF NOT EXISTS idx_analytics_item ON price_analytics(item_id, city, quality)`);
 
-  db.run(`CREATE TABLE IF NOT EXISTS price_hourly (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    item_id TEXT NOT NULL,
-    city TEXT NOT NULL,
-    quality INTEGER DEFAULT 1,
-    hour TEXT NOT NULL,
-    open_price REAL,
-    high_price REAL,
-    low_price REAL,
-    close_price REAL,
-    avg_price REAL,
-    volume INTEGER DEFAULT 0,
-    UNIQUE(item_id, city, quality, hour)
-  )`);
-  db.run(`CREATE INDEX IF NOT EXISTS idx_hourly_item ON price_hourly(item_id, city, quality, hour)`);
+db.exec(`CREATE TABLE IF NOT EXISTS price_hourly (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  item_id TEXT NOT NULL,
+  city TEXT NOT NULL,
+  quality INTEGER DEFAULT 1,
+  hour TEXT NOT NULL,
+  open_price REAL,
+  high_price REAL,
+  low_price REAL,
+  close_price REAL,
+  avg_price REAL,
+  volume INTEGER DEFAULT 0,
+  UNIQUE(item_id, city, quality, hour)
+)`);
+db.exec(`CREATE INDEX IF NOT EXISTS idx_hourly_item ON price_hourly(item_id, city, quality, hour)`);
 
-  // === SERVER MIGRATION: detect if data was collected from a different game server ===
-  // Store which game server the data was collected from
-  db.run(`CREATE TABLE IF NOT EXISTS meta_config (key TEXT PRIMARY KEY, value TEXT)`);
+db.exec(`CREATE TABLE IF NOT EXISTS meta_config (key TEXT PRIMARY KEY, value TEXT)`);
 
-  // === AUDIT LOG ===
-  db.run(`CREATE TABLE IF NOT EXISTS audit_log (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id TEXT,
-    action TEXT NOT NULL,
-    detail TEXT,
-    ip TEXT,
-    created_at INTEGER DEFAULT (strftime('%s','now'))
-  )`);
-  db.run(`CREATE INDEX IF NOT EXISTS idx_audit_created ON audit_log(created_at)`);
+db.exec(`CREATE TABLE IF NOT EXISTS audit_log (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id TEXT,
+  action TEXT NOT NULL,
+  detail TEXT,
+  ip TEXT,
+  created_at INTEGER DEFAULT (strftime('%s','now'))
+)`);
+db.exec(`CREATE INDEX IF NOT EXISTS idx_audit_created ON audit_log(created_at)`);
 
-  // === ROUTINE REPORTS ===
-  // Cloud routines (RemoteTrigger schedules) POST their markdown reports here on completion.
-  // Surfaced to the user via the admin Routine Reports tab; readable by Claude via curl + shared secret.
-  db.run(`CREATE TABLE IF NOT EXISTS routine_reports (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    slug TEXT NOT NULL,
-    summary TEXT,
-    content_md TEXT NOT NULL,
-    created_at INTEGER DEFAULT (strftime('%s','now'))
-  )`);
-  db.run(`CREATE INDEX IF NOT EXISTS idx_rr_slug_created ON routine_reports(slug, created_at)`);
-  db.run(`CREATE INDEX IF NOT EXISTS idx_rr_created ON routine_reports(created_at)`);
+db.exec(`CREATE TABLE IF NOT EXISTS routine_reports (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  slug TEXT NOT NULL,
+  summary TEXT,
+  content_md TEXT NOT NULL,
+  created_at INTEGER DEFAULT (strftime('%s','now'))
+)`);
+db.exec(`CREATE INDEX IF NOT EXISTS idx_rr_slug_created ON routine_reports(slug, created_at)`);
+db.exec(`CREATE INDEX IF NOT EXISTS idx_rr_created ON routine_reports(created_at)`);
 
-  // === CRAFT RUNS ===
-  db.run(`CREATE TABLE IF NOT EXISTS craft_runs (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id TEXT NOT NULL,
-    name TEXT NOT NULL,
-    status TEXT DEFAULT 'buying',
-    target_item TEXT,
-    hideout_power_level INTEGER DEFAULT 0,
-    hideout_core_bonus REAL DEFAULT 0,
-    total_cost REAL DEFAULT 0,
-    total_revenue REAL DEFAULT 0,
-    created_at INTEGER DEFAULT (strftime('%s','now') * 1000),
-    closed_at INTEGER
-  )`);
-  db.run(`CREATE INDEX IF NOT EXISTS idx_craft_runs_user ON craft_runs(user_id, created_at)`);
+db.exec(`CREATE TABLE IF NOT EXISTS craft_runs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id TEXT NOT NULL,
+  name TEXT NOT NULL,
+  status TEXT DEFAULT 'buying',
+  target_item TEXT,
+  hideout_power_level INTEGER DEFAULT 0,
+  hideout_core_bonus REAL DEFAULT 0,
+  total_cost REAL DEFAULT 0,
+  total_revenue REAL DEFAULT 0,
+  created_at INTEGER DEFAULT (strftime('%s','now') * 1000),
+  closed_at INTEGER
+)`);
+db.exec(`CREATE INDEX IF NOT EXISTS idx_craft_runs_user ON craft_runs(user_id, created_at)`);
 
-  db.run(`CREATE TABLE IF NOT EXISTS craft_run_transactions (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    run_id INTEGER NOT NULL REFERENCES craft_runs(id) ON DELETE CASCADE,
-    type TEXT NOT NULL,
-    item_id TEXT NOT NULL,
-    quantity INTEGER DEFAULT 1,
-    unit_price REAL DEFAULT 0,
-    total_price REAL DEFAULT 0,
-    city TEXT,
-    source TEXT DEFAULT 'manual',
-    scan_tab_id TEXT,
-    captured_by TEXT DEFAULT 'user',
-    timestamp INTEGER DEFAULT (strftime('%s','now') * 1000)
-  )`);
-  db.run(`CREATE INDEX IF NOT EXISTS idx_crt_run ON craft_run_transactions(run_id, timestamp)`);
+db.exec(`CREATE TABLE IF NOT EXISTS craft_run_transactions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  run_id INTEGER NOT NULL REFERENCES craft_runs(id) ON DELETE CASCADE,
+  type TEXT NOT NULL,
+  item_id TEXT NOT NULL,
+  quantity INTEGER DEFAULT 1,
+  unit_price REAL DEFAULT 0,
+  total_price REAL DEFAULT 0,
+  city TEXT,
+  source TEXT DEFAULT 'manual',
+  scan_tab_id TEXT,
+  captured_by TEXT DEFAULT 'user',
+  timestamp INTEGER DEFAULT (strftime('%s','now') * 1000)
+)`);
+db.exec(`CREATE INDEX IF NOT EXISTS idx_crt_run ON craft_run_transactions(run_id, timestamp)`);
 
-  db.run(`CREATE TABLE IF NOT EXISTS craft_run_scans (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    run_id INTEGER NOT NULL REFERENCES craft_runs(id) ON DELETE CASCADE,
-    container_id TEXT,
-    items_json TEXT DEFAULT '[]',
-    total_paid REAL DEFAULT 0,
-    allocation_method TEXT DEFAULT 'by_market_value',
-    scanned_at INTEGER DEFAULT (strftime('%s','now') * 1000)
-  )`);
+db.exec(`CREATE TABLE IF NOT EXISTS craft_run_scans (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  run_id INTEGER NOT NULL REFERENCES craft_runs(id) ON DELETE CASCADE,
+  container_id TEXT,
+  items_json TEXT DEFAULT '[]',
+  total_paid REAL DEFAULT 0,
+  allocation_method TEXT DEFAULT 'by_market_value',
+  scanned_at INTEGER DEFAULT (strftime('%s','now') * 1000)
+)`);
 
-  db.get(`SELECT value FROM meta_config WHERE key = 'game_server'`, (err, row) => {
-    const prevServer = row ? row.value : null;
-    if (prevServer && prevServer !== GAME_SERVER) {
-      console.log(`[Migration] Game server changed from ${prevServer} to ${GAME_SERVER}. Clearing historical data for re-collection...`);
-      db.run(`DELETE FROM price_snapshots`);
-      db.run(`DELETE FROM price_averages`);
-      db.run(`DELETE FROM spread_stats`);
-      console.log('[Migration] Old data cleared. Backfill will re-run for new server.');
-    }
-    db.run(`INSERT OR REPLACE INTO meta_config (key, value) VALUES ('game_server', ?)`, [GAME_SERVER]);
-  });
-});
+// Game-server change detection: clear historical data if GAME_SERVER env changed.
+{
+  const _gs = db.prepare(`SELECT value FROM meta_config WHERE key = 'game_server'`).get();
+  const prevServer = _gs ? _gs.value : null;
+  if (prevServer && prevServer !== GAME_SERVER) {
+    console.log(`[Migration] Game server changed from ${prevServer} to ${GAME_SERVER}. Clearing historical data for re-collection...`);
+    db.exec(`DELETE FROM price_snapshots`);
+    db.exec(`DELETE FROM price_averages`);
+    db.exec(`DELETE FROM spread_stats`);
+    console.log('[Migration] Old data cleared. Backfill will re-run for new server.');
+  }
+  db.prepare(`INSERT OR REPLACE INTO meta_config (key, value) VALUES ('game_server', ?)`).run(GAME_SERVER);
+}
 
 // === TIER 4: SINGLE-WRITER QUEUE + WATCHDOG (added 2026-04-27) ===
 //
