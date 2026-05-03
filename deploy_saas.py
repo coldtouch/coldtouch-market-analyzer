@@ -251,16 +251,16 @@ db.run('PRAGMA wal_autocheckpoint = 1000');
 db.run('PRAGMA journal_size_limit = 67108864'); // 64 MB
 
 // Separate connection for SpreadStats + Analytics bulk reads/writes.
-// SpreadStats does a 90-second db.all() on 3M+ rows then writes 526k rows.
-// Using a separate connection prevents this from blocking the main db queue,
-// which would cause /api/me (5s timeout) to fail and break Discord login.
-const statsDb = new sqlite3.Database('/opt/albion-saas/database.sqlite');
-statsDb.run('PRAGMA journal_mode = WAL');
-statsDb.run('PRAGMA synchronous = NORMAL');
-statsDb.run('PRAGMA cache_size = -16000');  // 16MB page cache (was 32MB)
-statsDb.run('PRAGMA mmap_size = 0');
-statsDb.run('PRAGMA busy_timeout = 30000'); // longer timeout — bulk writes can wait
-statsDb.run('PRAGMA journal_size_limit = 67108864'); // 64 MB — same as db
+// 2026-05-02 stage 2: migrated to better-sqlite3 (sync). All statsDb writes
+// are still wrapped in withWriteLock for now so they serialize correctly with
+// the still-async db connection — withWriteLock goes away entirely in stage 4
+// once db is also on better-sqlite3 and the JS event loop becomes the natural
+// serialization layer.
+// journal_mode + journal_size_limit dropped — set globally by `db` (still file-level).
+const statsDb = new Better('/opt/albion-saas/database.sqlite', { fileMustExist: true, timeout: 30000 });
+statsDb.pragma('synchronous = NORMAL');
+statsDb.pragma('cache_size = -16000');  // 16MB page cache
+statsDb.pragma('mmap_size = 0');
 
 // Dedicated read-only connection for user-facing endpoints (/api/me, etc.).
 // 2026-05-02: migrated to better-sqlite3 (sync). With sync semantics, reads
@@ -283,8 +283,7 @@ const _earlyDbErrorHandler = (label) => (err) => {
   else _earlyDbErrors.push({ label, err });
 };
 db.on('error', _earlyDbErrorHandler('db connection error'));
-statsDb.on('error', _earlyDbErrorHandler('statsDb connection error'));
-// readDb is better-sqlite3 (sync) as of 2026-05-02 stage 1 — throws synchronously,
+// statsDb (stage 2) and readDb (stage 1) are better-sqlite3 — throw synchronously,
 // no EventEmitter, no .on('error') needed. Errors caught at each call site.
 
 db.serialize(() => {
@@ -3479,46 +3478,47 @@ let volumeRef = {};     // { "itemId_quality_city": avg_sample_count } — activ
 // Only scans the last 2 hours of new data — never touches the full 21M-row table.
 function refreshPriceRefCache() {
   const cutoff = Date.now() - 2 * 60 * 60 * 1000; // last 2 hours of new data
-  statsDb.all(`SELECT item_id, quality, city, AVG(avg_sell) as avg_price, AVG(sample_count) as avg_vol, COUNT(*) as samples
-    FROM price_averages WHERE period_start > ? AND avg_sell > 0
-    GROUP BY item_id, quality, city`, [cutoff], (err, rows) => {
-    if (err || !rows || rows.length === 0) return;
-    const now = Date.now();
-    // Tier 4 (2026-04-27): wrapped in withWriteLock.
-    // 2026-05-01: added error callbacks at every step (was: bare `db.run('BEGIN')`
-    // and `stmt.finalize()` with no callback, so a failed BEGIN/finalize meant
-    // `done()` was never called and the 30-min watchdog would eventually abort.
-    // Also switched BEGIN → BEGIN IMMEDIATE — fail fast at SQLite engine level
-    // instead of letting the writer-lock upgrade happen mid-transaction.
-    withWriteLock('priceRefCache-incr', (done) => {
-      db.serialize(() => {
-        let batchErr = null;
-        db.run('BEGIN IMMEDIATE', (e) => { if (e) batchErr = e; });
-        const stmt = db.prepare(`INSERT OR REPLACE INTO price_ref_cache (item_id, quality, city, avg_sell, avg_vol, sample_count, updated_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?)`, (e) => { if (e && !batchErr) batchErr = e; });
-        for (const r of rows) {
-          if (r.avg_price > 0) stmt.run(r.item_id, r.quality, r.city, Math.round(r.avg_price), Math.round(r.avg_vol || 0), r.samples, now, (err) => { if (err && !batchErr) batchErr = err; });
+  let rows;
+  try {
+    rows = statsDb.prepare(`SELECT item_id, quality, city, AVG(avg_sell) as avg_price, AVG(sample_count) as avg_vol, COUNT(*) as samples
+      FROM price_averages WHERE period_start > ? AND avg_sell > 0
+      GROUP BY item_id, quality, city`).all(cutoff);
+  } catch (err) {
+    console.error('[PriceRefCache-incr] Read failed:', err.message);
+    return;
+  }
+  if (!rows || rows.length === 0) return;
+  const now = Date.now();
+  // The WRITE side is still on the async `db` (stage 3 will convert it).
+  // Wrapped in withWriteLock until stage 4 deletes that infrastructure.
+  withWriteLock('priceRefCache-incr', (done) => {
+    db.serialize(() => {
+      let batchErr = null;
+      db.run('BEGIN IMMEDIATE', (e) => { if (e) batchErr = e; });
+      const stmt = db.prepare(`INSERT OR REPLACE INTO price_ref_cache (item_id, quality, city, avg_sell, avg_vol, sample_count, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)`, (e) => { if (e && !batchErr) batchErr = e; });
+      for (const r of rows) {
+        if (r.avg_price > 0) stmt.run(r.item_id, r.quality, r.city, Math.round(r.avg_price), Math.round(r.avg_vol || 0), r.samples, now, (err) => { if (err && !batchErr) batchErr = err; });
+      }
+      stmt.finalize((e) => {
+        if (e && !batchErr) batchErr = e;
+        if (batchErr) {
+          console.error('[PriceRefCache-incr] Batch failed, rolling back:', batchErr.message || batchErr);
+          db.run('ROLLBACK', () => done(batchErr));
+          return;
         }
-        stmt.finalize((e) => {
-          if (e && !batchErr) batchErr = e;
-          if (batchErr) {
-            console.error('[PriceRefCache-incr] Batch failed, rolling back:', batchErr.message || batchErr);
-            db.run('ROLLBACK', () => done(batchErr));
+        db.run('COMMIT', (commitErr) => {
+          if (commitErr) {
+            console.error('[PriceRefCache-incr] COMMIT failed:', commitErr.message);
+            db.run('ROLLBACK', () => done(commitErr));
             return;
           }
-          db.run('COMMIT', (commitErr) => {
-            if (commitErr) {
-              console.error('[PriceRefCache-incr] COMMIT failed:', commitErr.message);
-              db.run('ROLLBACK', () => done(commitErr));
-              return;
-            }
-            console.log(`[PriceRefCache] Updated ${rows.length} entries from last 2h`);
-            done();
-          });
+          console.log(`[PriceRefCache] Updated ${rows.length} entries from last 2h`);
+          done();
         });
       });
-    }).catch(() => { /* error already logged + ROLLBACK called */ });
-  });
+    });
+  }).catch(() => { /* error already logged + ROLLBACK called */ });
 }
 
 // Build in-memory price references from the small pre-aggregated cache table (~100k rows, not 21M).
@@ -3561,45 +3561,47 @@ function buildPriceReference() {
 function initPriceRefCache() {
   const cutoff6h = Date.now() - 6 * 60 * 60 * 1000; // Only last 6h on startup to keep memory low
   console.log('[PriceRefCache] Initial build from last 6h (incremental updates fill the rest)...');
-  statsDb.all(`SELECT item_id, quality, city, AVG(avg_sell) as avg_price, AVG(sample_count) as avg_vol, COUNT(*) as samples
-    FROM price_averages WHERE period_start > ? AND avg_sell > 0
-    GROUP BY item_id, quality, city`, [cutoff6h], (err, rows) => {
-    if (err || !rows) { console.error('[PriceRefCache] Init failed:', err?.message); return; }
-    const now = Date.now();
-    // Tier 4 (2026-04-27): wrapped in withWriteLock.
-    // 2026-05-01: added error callbacks at every step + BEGIN IMMEDIATE.
-    // Same fix as priceRefCache-incr above — was vulnerable to silent hang
-    // when BEGIN/finalize errored without a callback to surface it.
-    withWriteLock('priceRefCache-init', (done) => {
-      db.serialize(() => {
-        let batchErr = null;
-        db.run('BEGIN IMMEDIATE', (e) => { if (e) batchErr = e; });
-        const stmt = db.prepare(`INSERT OR REPLACE INTO price_ref_cache (item_id, quality, city, avg_sell, avg_vol, sample_count, updated_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?)`, (e) => { if (e && !batchErr) batchErr = e; });
-        for (const r of rows) {
-          if (r.avg_price > 0) stmt.run(r.item_id, r.quality, r.city, Math.round(r.avg_price), Math.round(r.avg_vol || 0), r.samples, now, (err) => { if (err && !batchErr) batchErr = err; });
+  let rows;
+  try {
+    rows = statsDb.prepare(`SELECT item_id, quality, city, AVG(avg_sell) as avg_price, AVG(sample_count) as avg_vol, COUNT(*) as samples
+      FROM price_averages WHERE period_start > ? AND avg_sell > 0
+      GROUP BY item_id, quality, city`).all(cutoff6h);
+  } catch (err) {
+    console.error('[PriceRefCache] Init read failed:', err.message);
+    return;
+  }
+  if (!rows) return;
+  const now = Date.now();
+  // The WRITE side is still on the async `db` (stage 3 will convert it).
+  withWriteLock('priceRefCache-init', (done) => {
+    db.serialize(() => {
+      let batchErr = null;
+      db.run('BEGIN IMMEDIATE', (e) => { if (e) batchErr = e; });
+      const stmt = db.prepare(`INSERT OR REPLACE INTO price_ref_cache (item_id, quality, city, avg_sell, avg_vol, sample_count, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)`, (e) => { if (e && !batchErr) batchErr = e; });
+      for (const r of rows) {
+        if (r.avg_price > 0) stmt.run(r.item_id, r.quality, r.city, Math.round(r.avg_price), Math.round(r.avg_vol || 0), r.samples, now, (err) => { if (err && !batchErr) batchErr = err; });
+      }
+      stmt.finalize((e) => {
+        if (e && !batchErr) batchErr = e;
+        if (batchErr) {
+          console.error('[PriceRefCache-init] Batch failed, rolling back:', batchErr.message || batchErr);
+          db.run('ROLLBACK', () => done(batchErr));
+          return;
         }
-        stmt.finalize((e) => {
-          if (e && !batchErr) batchErr = e;
-          if (batchErr) {
-            console.error('[PriceRefCache-init] Batch failed, rolling back:', batchErr.message || batchErr);
-            db.run('ROLLBACK', () => done(batchErr));
+        db.run('COMMIT', (commitErr) => {
+          if (commitErr) {
+            console.error('[PriceRefCache-init] COMMIT failed:', commitErr.message);
+            db.run('ROLLBACK', () => done(commitErr));
             return;
           }
-          db.run('COMMIT', (commitErr) => {
-            if (commitErr) {
-              console.error('[PriceRefCache-init] COMMIT failed:', commitErr.message);
-              db.run('ROLLBACK', () => done(commitErr));
-              return;
-            }
-            console.log(`[PriceRefCache] Initial build complete: ${rows.length} entries`);
-            buildPriceReference();
-            done();
-          });
+          console.log(`[PriceRefCache] Initial build complete: ${rows.length} entries`);
+          buildPriceReference();
+          done();
         });
       });
-    }).catch(() => { /* error already logged + ROLLBACK called */ });
-  });
+    });
+  }).catch(() => { /* error already logged + ROLLBACK called */ });
 }
 
 // Startup: build cache from 48h, then read into memory
@@ -5195,25 +5197,31 @@ function computeSpreadStats() {
   console.log(`[SpreadStats] Starting SQL-aggregated computation... RSS: ${Math.round(mem.rss/1024/1024)}MB Heap: ${Math.round(mem.heapUsed/1024/1024)}MB`);
 
   // Use SQL GROUP BY to aggregate per (item_id, quality, city) over the 7-day window.
-  // This produces one row per city instead of one row per hourly period, dramatically
-  // reducing the amount of data loaded into JS memory.
-  // Uses statsDb (separate connection) so this 90-second query doesn't block
-  // the main db queue — otherwise /api/me (5s timeout) would fail during SpreadStats.
-  statsDb.all(
-    `SELECT item_id, quality, city,
-      AVG(CASE WHEN min_sell > 0 THEN min_sell ELSE avg_sell END) AS avg_min_sell,
-      AVG(CASE WHEN max_buy  > 0 THEN max_buy  ELSE avg_buy  END) AS avg_max_buy,
-      COUNT(*) AS sample_count
-     FROM price_averages
-     WHERE period_start > ? AND (avg_sell > 0 OR avg_buy > 0)
-     GROUP BY item_id, quality, city`,
-    [cutoff],
-    (err, aggRows) => {
-      if (err || !aggRows || aggRows.length === 0) {
-        console.log('[SpreadStats] No data to process');
-        statsRunning = false;
-        return;
-      }
+  // 2026-05-02 stage 2: statsDb.all → statsDb.prepare().all() (sync).
+  // The aggregate is now sync — blocks the event loop for ~5-10s on the 14GB DB.
+  // This is acceptable because /api/me + /api/leaderboard are on readDb (a different
+  // sync connection), so they remain responsive even while statsDb is mid-query.
+  let aggRows;
+  try {
+    aggRows = statsDb.prepare(
+      `SELECT item_id, quality, city,
+        AVG(CASE WHEN min_sell > 0 THEN min_sell ELSE avg_sell END) AS avg_min_sell,
+        AVG(CASE WHEN max_buy  > 0 THEN max_buy  ELSE avg_buy  END) AS avg_max_buy,
+        COUNT(*) AS sample_count
+       FROM price_averages
+       WHERE period_start > ? AND (avg_sell > 0 OR avg_buy > 0)
+       GROUP BY item_id, quality, city`
+    ).all(cutoff);
+  } catch (err) {
+    console.error('[SpreadStats] Aggregate read failed:', err.message);
+    statsRunning = false;
+    return;
+  }
+  if (!aggRows || aggRows.length === 0) {
+    console.log('[SpreadStats] No data to process');
+    statsRunning = false;
+    return;
+  }
 
       console.log(`[SpreadStats] Processing ${aggRows.length} aggregated city rows...`);
 
@@ -5233,50 +5241,31 @@ function computeSpreadStats() {
       const itemKeys = Object.keys(itemMap);
       let processed = 0;
       let statsWritten = 0;
-      // Tier 3 fix (2026-04-24): 500 → 100. Shorter WAL lock windows so
-      // concurrent NATS-flush / readDb queries don't hit SQLITE_BUSY.
-      const WRITE_BATCH = 100;
+      // 2026-05-02 stage 2: write batch increased 100 → 1000 (better-sqlite3
+      // sync transactions are 4-10× faster — larger batches improve throughput).
+      const WRITE_BATCH = 1000;
       let writeBuf = [];
 
-      // 2026-05-01: producer flow control. Previously `flushWrites()` was
-      // fire-and-forget — `processBatch` called it then immediately continued,
-      // queueing hundreds of `withWriteLock('spreadStats-flush')` tasks
-      // simultaneously. Each pending task held its `batch` array (up to 100
-      // rows × 11 columns) plus closure refs in V8 heap. Under heavy load,
-      // queue depth observed at 4000+ → millions of buffered rows alive at
-      // once → RSS climbed past 8 GB → exit watchdog. Now `flushWrites`
-      // returns the writeLock promise and `processBatch` AWAITS it before
-      // scheduling next chunk. Bounded in-flight = bounded buffer residency.
+      // 2026-05-02 stage 2: sync transaction via better-sqlite3.
+      // Eliminates: BEGIN IMMEDIATE callback chain, statsDb.serialize, stmt.finalize,
+      // manual COMMIT/ROLLBACK callbacks, batchErr accumulator. Auto-rollback on throw.
+      // Still wrapped in withWriteLock so it serializes correctly with the still-async
+      // `db` connection writers (priceRefCache-incr, nats-flush, etc.) until stage 4.
+      const stmt_spreadInsert = statsDb.prepare(`INSERT OR REPLACE INTO spread_stats (item_id, quality, buy_city, sell_city, avg_spread, median_spread, consistency_pct, sample_count, window_days, confidence_score, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+      const writeSpreadBatch = statsDb.transaction((rows) => {
+        for (const r of rows) stmt_spreadInsert.run(...r);
+      });
       function flushWrites() {
         if (writeBuf.length === 0) return Promise.resolve();
         const batch = writeBuf.splice(0);
         statsWritten += batch.length;
-        // Tier 2 (2026-04-24): per-step error callbacks + ROLLBACK on failure.
-        // Tier 4 (2026-04-27): wrapped in withWriteLock for cross-conn serialization.
         return withWriteLock('spreadStats-flush', (done) => {
-          statsDb.serialize(() => {
-            let batchErr = null;
-            statsDb.run('BEGIN IMMEDIATE', (e) => { if (e) batchErr = e; });
-            const stmt = statsDb.prepare(`INSERT OR REPLACE INTO spread_stats (item_id, quality, buy_city, sell_city, avg_spread, median_spread, consistency_pct, sample_count, window_days, confidence_score, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, (e) => { if (e && !batchErr) batchErr = e; });
-            for (const r of batch) stmt.run(...r, (err) => { if (err && !batchErr) batchErr = err; });
-            stmt.finalize((e) => {
-              if (e && !batchErr) batchErr = e;
-              if (batchErr) {
-                console.error('[SpreadStats] Batch failed, rolling back:', batchErr.message || batchErr);
-                statsDb.run('ROLLBACK', () => done(batchErr));
-                return;
-              }
-              statsDb.run('COMMIT', (commitErr) => {
-                if (commitErr) {
-                  console.error('[SpreadStats] COMMIT failed, rolling back:', commitErr.message);
-                  statsDb.run('ROLLBACK', () => done(commitErr));
-                  return;
-                }
-                done();
-              });
-            });
-          });
-        }).catch(() => { /* error already logged + ROLLBACK called */ });
+          try { writeSpreadBatch.immediate(batch); done(); }
+          catch (err) {
+            console.error('[SpreadStats] Batch failed (auto-rolled-back):', err.message);
+            done(err);
+          }
+        }).catch(() => { /* error already logged */ });
       }
 
       async function processBatch(startIdx) {
@@ -5353,8 +5342,6 @@ function computeSpreadStats() {
         console.error('[SpreadStats] processBatch crashed:', err && err.message || err);
         statsRunning = false;
       });
-    }
-  );
 }
 
 // Run stats computation hourly, first run 10 minutes after start (after backfill)
@@ -5621,7 +5608,7 @@ let analyticsStartTime = 0;
 // chains that pegged one core for 12+ hours.
 let analyticsGeneration = 0;
 
-function computeAnalytics() {
+async function computeAnalytics() {
   if (analyticsRunning) {
     if (Date.now() - analyticsStartTime > 25 * 60 * 1000) {
       console.error('[Analytics] Resetting stuck flag after 25min (invalidating stale run via generation bump)');
@@ -5657,231 +5644,221 @@ function computeAnalytics() {
   console.log(`[Analytics] Starting computation (gen=${myGen})...`);
 
   // === STEP 1: Bulk SQL metrics (SMA 7d, SMA 30d, scan-weighted avg 7d, price_trend, spread_volatility) ===
-  // NOTE (2026-04-18 audit): `vwap_7d` here is scan-frequency-weighted, NOT trade-volume-weighted —
-  // `sample_count` is number of observations, not trade count. Kept the column name for backward
-  // compat with existing analytics rows. Frontend labels it "Scan-Weighted Avg" to avoid misleading.
-  // Use statsDb to avoid blocking the main db connection during heavy reads.
-  statsDb.all(
-    `SELECT item_id, city, quality,
-      AVG(CASE WHEN avg_sell > 0 THEN avg_sell ELSE NULL END) AS sma_7d,
-      AVG(CASE WHEN avg_sell > 0 THEN avg_sell * sample_count ELSE NULL END) /
-        NULLIF(AVG(CASE WHEN avg_sell > 0 THEN sample_count ELSE NULL END), 0) AS vwap_7d,
-      AVG(CASE WHEN period_start > ? AND avg_sell > 0 THEN avg_sell ELSE NULL END) AS avg_24h,
-      COUNT(CASE WHEN avg_sell > 0 THEN 1 ELSE NULL END) AS data_points_7d,
-      SUM(CASE WHEN min_sell > 0 AND max_buy > 0 THEN (min_sell - max_buy) ELSE NULL END) AS sum_spread,
-      SUM(CASE WHEN min_sell > 0 AND max_buy > 0 THEN CAST(min_sell - max_buy AS REAL) * (min_sell - max_buy) ELSE NULL END) AS sum_spread_sq,
-      COUNT(CASE WHEN min_sell > 0 AND max_buy > 0 THEN 1 ELSE NULL END) AS spread_count
-    FROM price_averages
-    WHERE period_start > ? AND (avg_sell > 0 OR avg_buy > 0)
-    GROUP BY item_id, city, quality
-    HAVING data_points_7d >= 2`,
-    [oneDayAgo, sevenDaysAgo],
-    (err, rows7d) => {
-      if (isStale()) return; // stale run aborts silently; newer run owns the flag
-      if (err) {
-        console.error('[Analytics] 7d query FAILED:', err.message || err);
-        finalize('7d-err');
-        return;
-      }
-      if (!rows7d || rows7d.length === 0) {
-        console.log('[Analytics] No 7d data yet, skipping');
-        finalize('no-data');
-        return;
-      }
-      // Build lookup for 7d results keyed by item_id|city|quality
-      const map7d = {};
-      for (const r of rows7d) {
-        map7d[r.item_id + '|' + r.city + '|' + r.quality] = r;
-      }
+  // 2026-05-02 stage 2: statsDb.all/each → sync prepare().all() + iterate() with
+  // setImmediate yields. Total event-loop block per chunk: ~50-100ms (5K rows).
+  let rows7d;
+  try {
+    rows7d = statsDb.prepare(
+      `SELECT item_id, city, quality,
+        AVG(CASE WHEN avg_sell > 0 THEN avg_sell ELSE NULL END) AS sma_7d,
+        AVG(CASE WHEN avg_sell > 0 THEN avg_sell * sample_count ELSE NULL END) /
+          NULLIF(AVG(CASE WHEN avg_sell > 0 THEN sample_count ELSE NULL END), 0) AS vwap_7d,
+        AVG(CASE WHEN period_start > ? AND avg_sell > 0 THEN avg_sell ELSE NULL END) AS avg_24h,
+        COUNT(CASE WHEN avg_sell > 0 THEN 1 ELSE NULL END) AS data_points_7d,
+        SUM(CASE WHEN min_sell > 0 AND max_buy > 0 THEN (min_sell - max_buy) ELSE NULL END) AS sum_spread,
+        SUM(CASE WHEN min_sell > 0 AND max_buy > 0 THEN CAST(min_sell - max_buy AS REAL) * (min_sell - max_buy) ELSE NULL END) AS sum_spread_sq,
+        COUNT(CASE WHEN min_sell > 0 AND max_buy > 0 THEN 1 ELSE NULL END) AS spread_count
+      FROM price_averages
+      WHERE period_start > ? AND (avg_sell > 0 OR avg_buy > 0)
+      GROUP BY item_id, city, quality
+      HAVING data_points_7d >= 2`
+    ).all(oneDayAgo, sevenDaysAgo);
+  } catch (err) {
+    console.error('[Analytics] 7d query FAILED:', err.message || err);
+    finalize('7d-err');
+    return;
+  }
+  if (isStale()) return;
+  if (!rows7d || rows7d.length === 0) {
+    console.log('[Analytics] No 7d data yet, skipping');
+    finalize('no-data');
+    return;
+  }
+  // Build lookup for 7d results keyed by item_id|city|quality
+  const map7d = {};
+  for (const r of rows7d) {
+    map7d[r.item_id + '|' + r.city + '|' + r.quality] = r;
+  }
+  rows7d.length = 0;
 
-      // SMA 30d — separate query since it spans a different time window
-      statsDb.all(
-        `SELECT item_id, city, quality,
-          AVG(CASE WHEN avg_sell > 0 THEN avg_sell ELSE NULL END) AS sma_30d
-        FROM price_averages
-        WHERE period_start > ? AND (avg_sell > 0 OR avg_buy > 0)
-        GROUP BY item_id, city, quality`,
-        [thirtyDaysAgo],
-        (err2, rows30d) => {
-          if (isStale()) return;
-          if (err2) { console.error('[Analytics] 30d query FAILED:', err2.message || err2); finalize('30d-err'); return; }
+  // SMA 30d — separate query since it spans a different time window
+  let rows30d;
+  try {
+    rows30d = statsDb.prepare(
+      `SELECT item_id, city, quality,
+        AVG(CASE WHEN avg_sell > 0 THEN avg_sell ELSE NULL END) AS sma_30d
+      FROM price_averages
+      WHERE period_start > ? AND (avg_sell > 0 OR avg_buy > 0)
+      GROUP BY item_id, city, quality`
+    ).all(thirtyDaysAgo);
+  } catch (err2) {
+    console.error('[Analytics] 30d query FAILED:', err2.message || err2);
+    finalize('30d-err');
+    return;
+  }
+  if (isStale()) return;
 
-          const map30d = {};
-          for (const r of rows30d || []) {
-            map30d[r.item_id + '|' + r.city + '|' + r.quality] = r.sma_30d;
-          }
+  const map30d = {};
+  for (const r of rows30d || []) {
+    map30d[r.item_id + '|' + r.city + '|' + r.quality] = r.sma_30d;
+  }
+  if (rows30d) rows30d.length = 0;
 
-          // === STEP 2: Write bulk metrics (all except EMA) ===
-          const bulkResults = []; // [ [item_id, city, quality, metric, value, computedAt], ... ]
-          const combos = Object.keys(map7d);
-          const comboSet = new Set(combos); // fast membership check for streaming EMA
+  // === STEP 2: Write bulk metrics (all except EMA) ===
+  const bulkResults = []; // [ [item_id, city, quality, metric, value, computedAt], ... ]
+  const combos = Object.keys(map7d);
+  const comboSet = new Set(combos); // fast membership check for streaming EMA
 
-          for (const key of combos) {
-            const r = map7d[key];
-            const [item_id, city, quality] = key.split('|');
-            const q = parseInt(quality);
+  for (const key of combos) {
+    const r = map7d[key];
+    const [item_id, city, quality] = key.split('|');
+    const q = parseInt(quality);
 
-            if (r.sma_7d > 0) bulkResults.push([item_id, city, q, 'sma_7d', r.sma_7d, computedAt]);
+    if (r.sma_7d > 0) bulkResults.push([item_id, city, q, 'sma_7d', r.sma_7d, computedAt]);
 
-            const sma30 = map30d[key];
-            if (sma30 > 0) bulkResults.push([item_id, city, q, 'sma_30d', sma30, computedAt]);
+    const sma30 = map30d[key];
+    if (sma30 > 0) bulkResults.push([item_id, city, q, 'sma_30d', sma30, computedAt]);
 
-            if (r.vwap_7d > 0) bulkResults.push([item_id, city, q, 'vwap_7d', r.vwap_7d, computedAt]);
+    if (r.vwap_7d > 0) bulkResults.push([item_id, city, q, 'vwap_7d', r.vwap_7d, computedAt]);
 
-            // Price trend: ((24h avg - sma_7d) / sma_7d) * 100
-            if (r.avg_24h > 0 && r.sma_7d > 0) {
-              const trend = ((r.avg_24h - r.sma_7d) / r.sma_7d) * 100;
-              bulkResults.push([item_id, city, q, 'price_trend', trend, computedAt]);
-            }
-
-            // Spread volatility: sqrt(sum_sq/n - (sum/n)^2)
-            if (r.spread_count >= 2) {
-              const mean = r.sum_spread / r.spread_count;
-              const variance = (r.sum_spread_sq / r.spread_count) - (mean * mean);
-              const stddev = variance > 0 ? Math.sqrt(variance) : 0;
-              bulkResults.push([item_id, city, q, 'spread_volatility', stddev, computedAt]);
-            }
-          }
-
-          // Flush bulk results in transaction.
-          // Tier 2 fix (2026-04-24): per-step error callbacks + ROLLBACK on failure.
-          // Tier 4 (2026-04-27): wrapped in withWriteLock.
-          function flushBulk(results, cb) {
-            if (results.length === 0) return cb();
-            withWriteLock('analytics-bulk', (done) => {
-              statsDb.serialize(() => {
-                let batchErr = null;
-                statsDb.run('BEGIN IMMEDIATE', (e) => { if (e) batchErr = e; });
-                const stmt = statsDb.prepare(`INSERT OR REPLACE INTO price_analytics (item_id, city, quality, metric, value, computed_at) VALUES (?, ?, ?, ?, ?, ?)`, (e) => { if (e && !batchErr) batchErr = e; });
-                for (const row of results) stmt.run(...row, (err) => { if (err && !batchErr) batchErr = err; });
-                stmt.finalize((e) => {
-                  if (e && !batchErr) batchErr = e;
-                  if (batchErr) {
-                    console.error('[Analytics] Bulk flush failed, rolling back:', batchErr.message || batchErr);
-                    statsDb.run('ROLLBACK', () => { done(batchErr); cb(batchErr); });
-                    return;
-                  }
-                  statsDb.run('COMMIT', (commitErr) => {
-                    if (commitErr) {
-                      console.error('[Analytics] Bulk COMMIT failed, rolling back:', commitErr.message);
-                      statsDb.run('ROLLBACK', () => { done(commitErr); cb(commitErr); });
-                      return;
-                    }
-                    done();
-                    cb();
-                  });
-                });
-              });
-            }).catch(() => { /* error already logged + cb called */ });
-          }
-
-          flushBulk(bulkResults, () => {
-            if (isStale()) return;
-            console.log(`[Analytics] Wrote ${bulkResults.length} bulk metrics (SMA/VWAP/trend/volatility)`);
-
-            // === STEP 3: EMA 7d — single ordered streaming pass ===
-            // Replaces the old per-batch query loop (1700 full-table scans,
-            // 22+ min runtime that exceeded the 25-min stuck threshold and
-            // caused overlapping runs). New approach: ONE query, rows stream
-            // back in (item_id, city, quality, period_start) order, EMA
-            // computed incrementally in JS. Covered by idx_pa_ema_stream.
-            const EMA_ALPHA = 0.25; // α = 2/(7+1) for a 7-period EMA
-            let curKey = null;
-            let curEma = 0;
-            let rowsInGroup = 0;
-            let rowsProcessed = 0;
-            const emaResults = []; // one entry per combo
-
-            statsDb.each(
-              `SELECT item_id, city, quality, avg_sell
-                FROM price_averages
-                WHERE period_start > ? AND avg_sell > 0
-                ORDER BY item_id, city, quality, period_start ASC`,
-              [sevenDaysAgo],
-              (errRow, row) => {
-                if (errRow || isStale()) return; // swallow per-row errors, abort if stale
-                const k = row.item_id + '|' + row.city + '|' + row.quality;
-                // Skip combos not in our 7d-eligible set (saves writing rows
-                // with data_points_7d < 2 into price_analytics)
-                if (!comboSet.has(k)) return;
-                if (k !== curKey) {
-                  // Finalize previous group
-                  if (curKey && rowsInGroup > 0) {
-                    const [ii, cc, qq] = curKey.split('|');
-                    emaResults.push([ii, cc, parseInt(qq), 'ema_7d', curEma, computedAt]);
-                  }
-                  curKey = k;
-                  curEma = row.avg_sell;
-                  rowsInGroup = 1;
-                } else {
-                  curEma = EMA_ALPHA * row.avg_sell + (1 - EMA_ALPHA) * curEma;
-                  rowsInGroup++;
-                }
-                rowsProcessed++;
-              },
-              (errDone, _rowCount) => {
-                if (isStale()) return;
-                if (errDone) {
-                  console.error('[Analytics] EMA stream FAILED:', errDone.message || errDone);
-                  finalize('ema-err');
-                  return;
-                }
-                // Flush the last group
-                if (curKey && rowsInGroup > 0) {
-                  const [ii, cc, qq] = curKey.split('|');
-                  emaResults.push([ii, cc, parseInt(qq), 'ema_7d', curEma, computedAt]);
-                }
-                if (emaResults.length === 0) {
-                  console.log(`[Analytics] EMA stream: ${rowsProcessed} rows, 0 combos written`);
-                  finalize('ema-empty');
-                  return;
-                }
-                // Single bulk flush.
-                // Tier 2 fix (2026-04-24): per-step error callbacks + ROLLBACK on failure.
-                // Tier 4 (2026-04-27): wrapped in withWriteLock.
-                withWriteLock('analytics-ema', (done) => {
-                  statsDb.serialize(() => {
-                    let batchErr = null;
-                    statsDb.run('BEGIN IMMEDIATE', (e) => { if (e) batchErr = e; });
-                    const stmt = statsDb.prepare(`INSERT OR REPLACE INTO price_analytics (item_id, city, quality, metric, value, computed_at) VALUES (?, ?, ?, ?, ?, ?)`, (e) => { if (e && !batchErr) batchErr = e; });
-                    for (const row of emaResults) stmt.run(...row, (err) => { if (err && !batchErr) batchErr = err; });
-                    stmt.finalize((e) => {
-                      if (e && !batchErr) batchErr = e;
-                      if (isStale()) { done(); return; }
-                      if (batchErr) {
-                        console.error('[Analytics] EMA batch FAILED, rolling back:', batchErr.message || batchErr);
-                        statsDb.run('ROLLBACK', () => done(batchErr));
-                        finalize('ema-batch-err');
-                        return;
-                      }
-                      statsDb.run('COMMIT', (errCommit) => {
-                        if (isStale()) { done(); return; }
-                        if (errCommit) {
-                          console.error('[Analytics] EMA commit FAILED, rolling back:', errCommit.message || errCommit);
-                          statsDb.run('ROLLBACK', () => done(errCommit));
-                          finalize('ema-commit-err');
-                          return;
-                        }
-                        done();
-                        console.log(`[Analytics] EMA stream: ${rowsProcessed} rows processed, ${emaResults.length} combos written`);
-                        finalize('ok');
-                      });
-                    });
-                  });
-                }).catch(() => { /* error already logged + finalize called */ });
-              }
-            );
-          });
-        }
-      );
+    if (r.avg_24h > 0 && r.sma_7d > 0) {
+      const trend = ((r.avg_24h - r.sma_7d) / r.sma_7d) * 100;
+      bulkResults.push([item_id, city, q, 'price_trend', trend, computedAt]);
     }
-  );
+
+    if (r.spread_count >= 2) {
+      const mean = r.sum_spread / r.spread_count;
+      const variance = (r.sum_spread_sq / r.spread_count) - (mean * mean);
+      const stddev = variance > 0 ? Math.sqrt(variance) : 0;
+      bulkResults.push([item_id, city, q, 'spread_volatility', stddev, computedAt]);
+    }
+  }
+
+  // Hoisted prepared statement + transaction (used by both flushBulk and EMA flush)
+  const stmt_aInsert = statsDb.prepare(`INSERT OR REPLACE INTO price_analytics (item_id, city, quality, metric, value, computed_at) VALUES (?, ?, ?, ?, ?, ?)`);
+  const writeAnalyticsBatch = statsDb.transaction((rows) => {
+    for (const r of rows) stmt_aInsert.run(...r);
+  });
+
+  // Flush bulk results — chunked at 5K rows with setImmediate yields between chunks
+  // so that a 200K-row write doesn't freeze the event loop for several seconds.
+  // Still wrapped in withWriteLock until stage 4 deletes that infrastructure.
+  async function flushBulk(results) {
+    if (results.length === 0) return;
+    const CHUNK = 5000;
+    for (let i = 0; i < results.length; i += CHUNK) {
+      if (isStale()) return;
+      const slice = results.slice(i, i + CHUNK);
+      await withWriteLock('analytics-bulk', (done) => {
+        try { writeAnalyticsBatch.immediate(slice); done(); }
+        catch (err) {
+          console.error('[Analytics] Bulk flush failed (auto-rolled-back):', err.message);
+          done(err);
+        }
+      }).catch(() => { /* error already logged */ });
+      await new Promise(r => setImmediate(r));
+    }
+  }
+
+  try { await flushBulk(bulkResults); }
+  catch (err) { console.error('[Analytics] flushBulk crashed:', err.message); finalize('bulk-crash'); return; }
+
+  if (isStale()) return;
+  console.log(`[Analytics] Wrote ${bulkResults.length} bulk metrics (SMA/VWAP/trend/volatility)`);
+
+  // === STEP 3: EMA 7d — single ordered streaming pass via stmt.iterate() ===
+  // Replaces the old per-batch query loop. ONE query, rows stream back in
+  // (item_id, city, quality, period_start) order, EMA computed incrementally in JS.
+  // We yield to the event loop every 5K rows so HTTP requests stay responsive.
+  const EMA_ALPHA = 0.25; // α = 2/(7+1) for a 7-period EMA
+  let curKey = null;
+  let curEma = 0;
+  let rowsInGroup = 0;
+  let rowsProcessed = 0;
+  const emaResults = [];
+
+  try {
+    const emaStmt = statsDb.prepare(
+      `SELECT item_id, city, quality, avg_sell
+        FROM price_averages
+        WHERE period_start > ? AND avg_sell > 0
+        ORDER BY item_id, city, quality, period_start ASC`
+    );
+    let chunkCount = 0;
+    for (const row of emaStmt.iterate(sevenDaysAgo)) {
+      if (isStale()) break;
+      const k = row.item_id + '|' + row.city + '|' + row.quality;
+      if (!comboSet.has(k)) continue;
+      if (k !== curKey) {
+        if (curKey && rowsInGroup > 0) {
+          const [ii, cc, qq] = curKey.split('|');
+          emaResults.push([ii, cc, parseInt(qq), 'ema_7d', curEma, computedAt]);
+        }
+        curKey = k;
+        curEma = row.avg_sell;
+        rowsInGroup = 1;
+      } else {
+        curEma = EMA_ALPHA * row.avg_sell + (1 - EMA_ALPHA) * curEma;
+        rowsInGroup++;
+      }
+      rowsProcessed++;
+      if (++chunkCount >= 5000) {
+        chunkCount = 0;
+        await new Promise(r => setImmediate(r));
+      }
+    }
+  } catch (errStream) {
+    console.error('[Analytics] EMA stream FAILED:', errStream.message || errStream);
+    finalize('ema-err');
+    return;
+  }
+  if (isStale()) return;
+  // Flush the last group
+  if (curKey && rowsInGroup > 0) {
+    const [ii, cc, qq] = curKey.split('|');
+    emaResults.push([ii, cc, parseInt(qq), 'ema_7d', curEma, computedAt]);
+  }
+  if (emaResults.length === 0) {
+    console.log(`[Analytics] EMA stream: ${rowsProcessed} rows, 0 combos written`);
+    finalize('ema-empty');
+    return;
+  }
+  // Chunked EMA flush (same shape as flushBulk).
+  try {
+    const CHUNK = 5000;
+    for (let i = 0; i < emaResults.length; i += CHUNK) {
+      if (isStale()) return;
+      const slice = emaResults.slice(i, i + CHUNK);
+      await withWriteLock('analytics-ema', (done) => {
+        try { writeAnalyticsBatch.immediate(slice); done(); }
+        catch (err) {
+          console.error('[Analytics] EMA batch FAILED (auto-rolled-back):', err.message);
+          done(err);
+        }
+      }).catch(() => { /* error already logged */ });
+      await new Promise(r => setImmediate(r));
+    }
+  } catch (errEma) {
+    console.error('[Analytics] EMA flush crashed:', errEma.message);
+    finalize('ema-crash');
+    return;
+  }
+  console.log(`[Analytics] EMA stream: ${rowsProcessed} rows processed, ${emaResults.length} combos written`);
+  finalize('ok');
 }
 
 // Run analytics every 30 minutes; first run 35 minutes after start (after spread stats)
 // STAGGERED: SpreadStats @10min, Compaction @25min, Analytics @35min
-setTimeout(computeAnalytics, 35 * 60 * 1000);
-setInterval(computeAnalytics, 30 * 60 * 1000);
+// 2026-05-02 stage 2: computeAnalytics is now async — wrap so an unhandled
+// rejection logs + resets the flag rather than escalating to _handleFatal.
+function _runAnalytics() {
+  computeAnalytics().catch((err) => {
+    console.error('[Analytics] Unhandled error:', err && err.message || err);
+    analyticsRunning = false;
+  });
+}
+setTimeout(_runAnalytics, 35 * 60 * 1000);
+setInterval(_runAnalytics, 30 * 60 * 1000);
 
 // === HISTORICAL BACKFILL (Charts + History APIs) ===
 // Runs once on start if no historical data exists
