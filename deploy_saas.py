@@ -114,6 +114,7 @@ def main():
     "express": "^4.18.2",
     "express-rate-limit": "^7.1.5",
     "sqlite3": "^5.1.7",
+    "better-sqlite3": "^12.9.0",
     "nats": "^2.19.0",
     "ws": "^8.16.0",
     "cors": "^2.8.5",
@@ -150,6 +151,10 @@ const fs = require('fs');
 const zlib = require('zlib');
 const WebSocket = require('ws');
 const sqlite3 = require('sqlite3').verbose();
+// 2026-05-02: better-sqlite3 migration in progress (see BETTER_SQLITE3_MIGRATION_PLAN.md).
+// Stage 1 migrates readDb only. Stages 2-5 will progressively convert statsDb + db,
+// then delete the sqlite3 require + withWriteLock infrastructure entirely.
+const Better = require('better-sqlite3');
 const { connect, StringCodec } = require('nats');
 const { Client, GatewayIntentBits, REST, Routes } = require('discord.js');
 const jwt = require('jsonwebtoken');
@@ -258,16 +263,14 @@ statsDb.run('PRAGMA busy_timeout = 30000'); // longer timeout — bulk writes ca
 statsDb.run('PRAGMA journal_size_limit = 67108864'); // 64 MB — same as db
 
 // Dedicated read-only connection for user-facing endpoints (/api/me, etc.).
-// WAL mode allows concurrent readers, but node-sqlite3 serialises ALL ops
-// on a single connection object — so even a fast SELECT queues behind slow
-// writes on the main db connection (e.g. market scan batch-inserts).
-// A separate connection bypasses that queue entirely.
-const readDb = new sqlite3.Database('/opt/albion-saas/database.sqlite', sqlite3.OPEN_READONLY);
-readDb.run('PRAGMA journal_mode = WAL');
-readDb.run('PRAGMA busy_timeout = 30000'); // match db/statsDb — prevents SQLITE_BUSY on concurrent analytics flush
-readDb.run('PRAGMA mmap_size = 0');
-readDb.run('PRAGMA cache_size = -8000');  // 8MB — read-only, doesn't need large cache
-readDb.run('PRAGMA journal_size_limit = 67108864'); // 64 MB — read-only but pragma is per-connection
+// 2026-05-02: migrated to better-sqlite3 (sync). With sync semantics, reads
+// throw SqliteError synchronously at the call site instead of via callback.
+// All readDb.get/.all sites converted to readDb.prepare(sql).get/all(...params).
+// journal_mode + journal_size_limit dropped — readonly connection cannot write
+// PRAGMAs (the file is already in WAL mode globally, set by the writer).
+const readDb = new Better('/opt/albion-saas/database.sqlite', { readonly: true, fileMustExist: true, timeout: 30000 });
+readDb.pragma('mmap_size = 0');
+readDb.pragma('cache_size = -8000');  // 8MB — read-only, doesn't need large cache
 
 // 2026-05-01: register error listeners on each connection. node-sqlite3's
 // Database extends EventEmitter; if it ever emits an 'error' event with no
@@ -281,7 +284,8 @@ const _earlyDbErrorHandler = (label) => (err) => {
 };
 db.on('error', _earlyDbErrorHandler('db connection error'));
 statsDb.on('error', _earlyDbErrorHandler('statsDb connection error'));
-readDb.on('error', _earlyDbErrorHandler('readDb connection error'));
+// readDb is better-sqlite3 (sync) as of 2026-05-02 stage 1 — throws synchronously,
+// no EventEmitter, no .on('error') needed. Errors caught at each call site.
 
 db.serialize(() => {
   db.run(`CREATE TABLE IF NOT EXISTS users (id TEXT PRIMARY KEY, username TEXT, avatar TEXT)`);
@@ -1458,17 +1462,18 @@ app.get('/', (req, res) => {
 // poison the front page longer than a week.
 const NEWS_BANNER_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 app.get('/api/news', (req, res) => {
-  readDb.get(`SELECT value FROM meta_config WHERE key = 'news_banner'`, (err, row) => {
-    if (err || !row) return res.json({ active: false });
-    try {
-      const banner = JSON.parse(row.value);
-      if (banner && banner.active && banner.updatedAt && (Date.now() - banner.updatedAt) > NEWS_BANNER_MAX_AGE_MS) {
-        // Stale — silently render as inactive. Admin can reset via POST /api/news.
-        return res.json({ active: false, _staled: true, _staleDays: Math.floor((Date.now() - banner.updatedAt) / 86400000) });
-      }
-      res.json(banner);
-    } catch { res.json({ active: false }); }
-  });
+  let row;
+  try { row = readDb.prepare(`SELECT value FROM meta_config WHERE key = 'news_banner'`).get(); }
+  catch (err) { return res.json({ active: false }); }
+  if (!row) return res.json({ active: false });
+  try {
+    const banner = JSON.parse(row.value);
+    if (banner && banner.active && banner.updatedAt && (Date.now() - banner.updatedAt) > NEWS_BANNER_MAX_AGE_MS) {
+      // Stale — silently render as inactive. Admin can reset via POST /api/news.
+      return res.json({ active: false, _staled: true, _staleDays: Math.floor((Date.now() - banner.updatedAt) / 86400000) });
+    }
+    res.json(banner);
+  } catch { res.json({ active: false }); }
 });
 
 // Admin-only: set the news banner (requires auth + admin check)
@@ -1600,59 +1605,57 @@ app.get('/api/routine-reports', authRoutineReportRead, (req, res) => {
   if (since && !isNaN(since)) { conditions.push('created_at >= ?'); params.push(since); }
   const where = conditions.length ? ' WHERE ' + conditions.join(' AND ') : '';
   params.push(limit);
-  readDb.all(
-    `SELECT id, slug, summary, created_at, length(content_md) AS content_len FROM routine_reports${where} ORDER BY created_at DESC LIMIT ?`,
-    params,
-    (err, rows) => {
-      if (err) {
-        console.error('[RoutineReport] list query failed:', err.message);
-        return res.status(500).json({ error: 'Query failed' });
-      }
-      res.json({ reports: rows || [] });
-    }
-  );
+  let rows;
+  try {
+    rows = readDb.prepare(
+      `SELECT id, slug, summary, created_at, length(content_md) AS content_len FROM routine_reports${where} ORDER BY created_at DESC LIMIT ?`
+    ).all(params);
+  } catch (err) {
+    console.error('[RoutineReport] list query failed:', err.message);
+    return res.status(500).json({ error: 'Query failed' });
+  }
+  res.json({ reports: rows || [] });
 });
 
 app.get('/api/routine-reports/:id', authRoutineReportRead, (req, res) => {
   const id = parseInt(req.params.id, 10);
   if (!id || isNaN(id)) return res.status(400).json({ error: 'invalid id' });
-  readDb.get(
-    `SELECT id, slug, summary, content_md, created_at FROM routine_reports WHERE id = ?`,
-    [id],
-    (err, row) => {
-      if (err) {
-        console.error('[RoutineReport] get query failed:', err.message);
-        return res.status(500).json({ error: 'Query failed' });
-      }
-      if (!row) return res.status(404).json({ error: 'Not found' });
-      res.json(row);
-    }
-  );
+  let row;
+  try { row = readDb.prepare(`SELECT id, slug, summary, content_md, created_at FROM routine_reports WHERE id = ?`).get(id); }
+  catch (err) {
+    console.error('[RoutineReport] get query failed:', err.message);
+    return res.status(500).json({ error: 'Query failed' });
+  }
+  if (!row) return res.status(404).json({ error: 'Not found' });
+  res.json(row);
 });
+
+// Hot-path prepared statement (sync better-sqlite3) — hoisted to module scope per
+// the migration plan §4.1. The single most-hit endpoint; previously the canary
+// for SQLite queue starvation (5s timeout, broke Discord login during analytics).
+const stmt_meAuthInfo = readDb.prepare(`SELECT u.auth_type, u.role, u.email, u.linked_discord_id, u.email_verified, u.created_at, s.scans_30d, s.scans_total, s.tier
+  FROM users u LEFT JOIN user_stats s ON u.id = s.user_id WHERE u.id = ?`);
 
 app.get('/api/me', (req, res) => {
   if(req.user) {
-    // Use readDb (separate connection) so this never queues behind main db writes
-    // (market scan batch-inserts, compaction, etc.) — prevents login timeouts.
-    readDb.get(`SELECT u.auth_type, u.role, u.email, u.linked_discord_id, u.email_verified, u.created_at, s.scans_30d, s.scans_total, s.tier
-      FROM users u LEFT JOIN user_stats s ON u.id = s.user_id WHERE u.id = ?`, [req.user.id], (err, row) => {
-      if (err) console.error('[/api/me] readDb error:', err.message);
-      const stats = row ? { scans_30d: row.scans_30d || 0, scans_total: row.scans_total || 0, tier: row.tier || 'bronze' } : { scans_30d: 0, scans_total: 0, tier: 'bronze' };
-      res.json({
-        loggedIn: true,
-        user: {
-          id: req.user.id,
-          username: req.user.username,
-          avatar: req.user.avatar,
-          authType: (row && row.auth_type) || 'discord',
-          role: (row && row.role) || 'free',
-          email: row && row.email ? row.email.replace(/(.{2})(.*)(@.*)/, '$1***$3') : null,
-          emailVerified: !!(row && row.email_verified),
-          hasDiscordLinked: !!(row && (row.auth_type === 'discord' || row.linked_discord_id)),
-          createdAt: row && row.created_at ? row.created_at : null
-        },
-        stats
-      });
+    let row;
+    try { row = stmt_meAuthInfo.get(req.user.id); }
+    catch (err) { console.error('[/api/me] readDb error:', err.message); /* fall through with row=undefined */ }
+    const stats = row ? { scans_30d: row.scans_30d || 0, scans_total: row.scans_total || 0, tier: row.tier || 'bronze' } : { scans_30d: 0, scans_total: 0, tier: 'bronze' };
+    res.json({
+      loggedIn: true,
+      user: {
+        id: req.user.id,
+        username: req.user.username,
+        avatar: req.user.avatar,
+        authType: (row && row.auth_type) || 'discord',
+        role: (row && row.role) || 'free',
+        email: row && row.email ? row.email.replace(/(.{2})(.*)(@.*)/, '$1***$3') : null,
+        emailVerified: !!(row && row.email_verified),
+        hasDiscordLinked: !!(row && (row.auth_type === 'discord' || row.linked_discord_id)),
+        createdAt: row && row.created_at ? row.created_at : null
+      },
+      stats
     });
   } else {
     res.json({ loggedIn: false });
@@ -1909,10 +1912,10 @@ app.get('/api/admin/audit-log', (req, res) => {
   // Admin check: site owner or expand this list as needed
   if (req.user.id !== ADMIN_DISCORD_ID) return res.status(403).json({ error: 'Admin only' });
   const limit = Math.min(parseInt(req.query.limit) || 100, 500);
-  readDb.all(`SELECT id, user_id, action, detail, ip, created_at FROM audit_log ORDER BY created_at DESC LIMIT ?`, [limit], (err, rows) => {
-    if (err) return res.status(500).json({ error: 'Database error.' });
-    res.json({ entries: rows || [] });
-  });
+  let rows;
+  try { rows = readDb.prepare(`SELECT id, user_id, action, detail, ip, created_at FROM audit_log ORDER BY created_at DESC LIMIT ?`).all(limit); }
+  catch (err) { return res.status(500).json({ error: 'Database error.' }); }
+  res.json({ entries: rows || [] });
 });
 
 app.post('/api/change-username', (req, res) => {
@@ -2047,23 +2050,23 @@ app.post('/api/device/authorize', deviceAuthLimiter, (req, res) => {
   // Reuse existing capture token if the user already has one — generating a fresh token on every
   // device authorize was kicking the user's OTHER running Go client offline (WS stale-auth).
   // Users who want rotation can call /api/generate-capture-token from Profile explicitly.
-  readDb.get(`SELECT capture_token FROM users WHERE id = ?`, [req.user.id], (qErr, row) => {
-    if (qErr) return res.status(500).json({ error: 'Failed to read token.' });
-    const existing = row && row.capture_token;
-    const captureToken = existing || require('crypto').randomBytes(24).toString('hex');
-    const persist = (next) => {
-      if (existing) return next(null);
-      db.run(`UPDATE users SET capture_token = ? WHERE id = ?`, [captureToken, req.user.id], next);
-    };
-    persist((err) => {
-      if (err) return res.status(500).json({ error: 'Failed to generate token.' });
-      entry.authorized = true;
-      entry.userId = req.user.id;
-      entry.username = req.user.username;
-      entry.captureToken = captureToken;
-      console.log(`[DeviceAuth] Code ${user_code} authorized by ${req.user.username} (token ${existing ? 'reused' : 'generated'})`);
-      res.json({ success: true, username: req.user.username });
-    });
+  let row;
+  try { row = readDb.prepare(`SELECT capture_token FROM users WHERE id = ?`).get(req.user.id); }
+  catch (qErr) { return res.status(500).json({ error: 'Failed to read token.' }); }
+  const existing = row && row.capture_token;
+  const captureToken = existing || require('crypto').randomBytes(24).toString('hex');
+  const persist = (next) => {
+    if (existing) return next(null);
+    db.run(`UPDATE users SET capture_token = ? WHERE id = ?`, [captureToken, req.user.id], next);
+  };
+  persist((err) => {
+    if (err) return res.status(500).json({ error: 'Failed to generate token.' });
+    entry.authorized = true;
+    entry.userId = req.user.id;
+    entry.username = req.user.username;
+    entry.captureToken = captureToken;
+    console.log(`[DeviceAuth] Code ${user_code} authorized by ${req.user.username} (token ${existing ? 'reused' : 'generated'})`);
+    res.json({ success: true, username: req.user.username });
   });
 });
 
@@ -2098,10 +2101,10 @@ app.post('/api/generate-capture-token', (req, res) => {
 // Get current capture token
 app.get('/api/capture-token', (req, res) => {
   if (!req.user) return res.status(401).json({ error: 'Login required.' });
-  readDb.get(`SELECT capture_token FROM users WHERE id = ?`, [req.user.id], (err, row) => {
-    if (err) return res.status(500).json({ error: 'Database error.' });
-    res.json({ token: row?.capture_token || null });
-  });
+  let row;
+  try { row = readDb.prepare(`SELECT capture_token FROM users WHERE id = ?`).get(req.user.id); }
+  catch (err) { return res.status(500).json({ error: 'Database error.' }); }
+  res.json({ token: row?.capture_token || null });
 });
 
 // Evaluate loot tab items against market data
@@ -2269,66 +2272,64 @@ app.post('/api/loot-tab/save', requireAuth, (req, res) => {
 // List user's tracked tabs with revenue summary
 app.get('/api/loot-tabs', requireAuth, (req, res) => {
   // readDb: bypasses db's serial queue (see craft-runs for why)
-  readDb.all(
-    `SELECT lt.id, lt.tab_name, lt.city, lt.purchase_price, lt.items_json, lt.purchased_at, lt.status,
-      COALESCE(SUM(ls.sale_price * ls.quantity), 0) as revenue_so_far,
-      COUNT(ls.id) as sale_records
-     FROM loot_tabs lt
-     LEFT JOIN loot_tab_sales ls ON ls.loot_tab_id = lt.id
-     WHERE lt.user_id = ?
-     GROUP BY lt.id
-     ORDER BY lt.purchased_at DESC
-     LIMIT 50`,
-    [req.user.id],
-    (err, rows) => {
-      if (err) return res.status(500).json({ error: 'An internal error occurred.' });
-      const tabs = (rows || []).map(r => {
-        let items = [];
-        try { items = JSON.parse(r.items_json); } catch(e) {}
-        const totalQty = items.reduce((s, it) => s + (parseInt(it.quantity) || 1), 0);
-        return {
-          id: r.id,
-          tabName: r.tab_name,
-          city: r.city,
-          purchasePrice: r.purchase_price,
-          purchasedAt: r.purchased_at,
-          status: r.status,
-          itemCount: items.length,
-          totalQuantity: totalQty,
-          revenueSoFar: r.revenue_so_far,
-          saleRecords: r.sale_records
-        };
-      });
-      res.json({ tabs });
-    }
-  );
+  let rows;
+  try {
+    rows = readDb.prepare(
+      `SELECT lt.id, lt.tab_name, lt.city, lt.purchase_price, lt.items_json, lt.purchased_at, lt.status,
+        COALESCE(SUM(ls.sale_price * ls.quantity), 0) as revenue_so_far,
+        COUNT(ls.id) as sale_records
+       FROM loot_tabs lt
+       LEFT JOIN loot_tab_sales ls ON ls.loot_tab_id = lt.id
+       WHERE lt.user_id = ?
+       GROUP BY lt.id
+       ORDER BY lt.purchased_at DESC
+       LIMIT 50`
+    ).all(req.user.id);
+  } catch (err) { return res.status(500).json({ error: 'An internal error occurred.' }); }
+  const tabs = (rows || []).map(r => {
+    let items = [];
+    try { items = JSON.parse(r.items_json); } catch(e) {}
+    const totalQty = items.reduce((s, it) => s + (parseInt(it.quantity) || 1), 0);
+    return {
+      id: r.id,
+      tabName: r.tab_name,
+      city: r.city,
+      purchasePrice: r.purchase_price,
+      purchasedAt: r.purchased_at,
+      status: r.status,
+      itemCount: items.length,
+      totalQuantity: totalQty,
+      revenueSoFar: r.revenue_so_far,
+      saleRecords: r.sale_records
+    };
+  });
+  res.json({ tabs });
 });
 
 // Get a single tab with full item list and sales history
 app.get('/api/loot-tab/:id', requireAuth, (req, res) => {
   const tabId = parseInt(req.params.id);
   if (!tabId) return res.status(400).json({ error: 'Invalid tab id.' });
-  readDb.get(`SELECT * FROM loot_tabs WHERE id = ? AND user_id = ?`, [tabId, req.user.id], (err, tab) => {
-    if (err) return res.status(500).json({ error: 'An internal error occurred.' });
+  let tab, sales;
+  try {
+    tab = readDb.prepare(`SELECT * FROM loot_tabs WHERE id = ? AND user_id = ?`).get(tabId, req.user.id);
     if (!tab) return res.status(404).json({ error: 'Tab not found.' });
-    let items = [];
-    try { items = JSON.parse(tab.items_json); } catch(e) {}
-    readDb.all(`SELECT * FROM loot_tab_sales WHERE loot_tab_id = ? ORDER BY sold_at DESC`, [tabId], (err2, sales) => {
-      if (err2) return res.status(500).json({ error: 'An internal error occurred.' });
-      const revenue = (sales || []).reduce((s, r) => s + r.sale_price * r.quantity, 0);
-      res.json({
-        id: tab.id,
-        tabName: tab.tab_name,
-        city: tab.city,
-        purchasePrice: tab.purchase_price,
-        purchasedAt: tab.purchased_at,
-        status: tab.status,
-        items,
-        sales: sales || [],
-        revenueSoFar: revenue,
-        netProfit: revenue - tab.purchase_price
-      });
-    });
+    sales = readDb.prepare(`SELECT * FROM loot_tab_sales WHERE loot_tab_id = ? ORDER BY sold_at DESC`).all(tabId);
+  } catch (err) { return res.status(500).json({ error: 'An internal error occurred.' }); }
+  let items = [];
+  try { items = JSON.parse(tab.items_json); } catch(e) {}
+  const revenue = (sales || []).reduce((s, r) => s + r.sale_price * r.quantity, 0);
+  res.json({
+    id: tab.id,
+    tabName: tab.tab_name,
+    city: tab.city,
+    purchasePrice: tab.purchase_price,
+    purchasedAt: tab.purchased_at,
+    status: tab.status,
+    items,
+    sales: sales || [],
+    revenueSoFar: revenue,
+    netProfit: revenue - tab.purchase_price
   });
 });
 
@@ -2460,78 +2461,77 @@ app.post('/api/batch-prices', batchPricesLimiter, (req, res) => {
 
   // Query price_averages: most recent average per (item, quality, city) in last 48h.
   const cutoff = Date.now() - 48 * 60 * 60 * 1000;
-  readDb.all(
-    `SELECT item_id, quality, city,
-            AVG(avg_sell) as price_avg,
-            MIN(min_sell) as price_min
-     FROM price_averages
-     WHERE item_id IN (${placeholders})
-       AND avg_sell > 0
-       AND period_start > ?
-     GROUP BY item_id, quality, city`,
-    [...uniqueIds, cutoff],
-    (err, rows) => {
-      if (err) return res.status(500).json({ error: 'An internal error occurred.' });
+  let rows;
+  try {
+    rows = readDb.prepare(
+      `SELECT item_id, quality, city,
+              AVG(avg_sell) as price_avg,
+              MIN(min_sell) as price_min
+       FROM price_averages
+       WHERE item_id IN (${placeholders})
+         AND avg_sell > 0
+         AND period_start > ?
+       GROUP BY item_id, quality, city`
+    ).all([...uniqueIds, cutoff]);
+  } catch (err) { return res.status(500).json({ error: 'An internal error occurred.' }); }
 
-      // Index: item_id + '_' + quality → { price, city, source }
-      const result = {};
-      for (const row of (rows || [])) {
-        if (cityAllowlist && !cityAllowlist.has(row.city)) continue; // honor cities filter
-        const key = row.item_id + '_' + (row.quality || 1);
-        const price = Math.round(row.price_avg);
-        const existing = result[key];
-        if (!existing || price < existing.price) {
-          result[key] = { price, city: row.city, source: 'avg', itemId: row.item_id, quality: row.quality };
-        }
-      }
+  // Index: item_id + '_' + quality → { price, city, source }
+  const result = {};
+  for (const row of (rows || [])) {
+    if (cityAllowlist && !cityAllowlist.has(row.city)) continue; // honor cities filter
+    const key = row.item_id + '_' + (row.quality || 1);
+    const price = Math.round(row.price_avg);
+    const existing = result[key];
+    if (!existing || price < existing.price) {
+      result[key] = { price, city: row.city, source: 'avg', itemId: row.item_id, quality: row.quality };
+    }
+  }
 
-      // Fill gaps from in-memory alertMarketDb (real-time) at the requested quality.
-      for (const p of cleanPairs) {
-        const key = p.itemId + '_' + p.quality;
-        if (result[key]) continue;
-        const data = alertMarketDb[p.itemId] && alertMarketDb[p.itemId][p.quality];
-        if (data) {
-          for (const [city, cd] of Object.entries(data)) {
-            if (cityAllowlist && !cityAllowlist.has(city)) continue; // honor cities filter
-            if (cd.sellMin > 0) {
-              if (!result[key] || cd.sellMin < result[key].price) {
-                result[key] = { price: cd.sellMin, city, source: 'live', itemId: p.itemId, quality: p.quality };
-              }
-            }
+  // Fill gaps from in-memory alertMarketDb (real-time) at the requested quality.
+  for (const p of cleanPairs) {
+    const key = p.itemId + '_' + p.quality;
+    if (result[key]) continue;
+    const data = alertMarketDb[p.itemId] && alertMarketDb[p.itemId][p.quality];
+    if (data) {
+      for (const [city, cd] of Object.entries(data)) {
+        if (cityAllowlist && !cityAllowlist.has(city)) continue; // honor cities filter
+        if (cd.sellMin > 0) {
+          if (!result[key] || cd.sellMin < result[key].price) {
+            result[key] = { price: cd.sellMin, city, source: 'live', itemId: p.itemId, quality: p.quality };
           }
         }
       }
-
-      // Last resort: globalPriceRef for that quality.
-      for (const p of cleanPairs) {
-        const key = p.itemId + '_' + p.quality;
-        if (result[key]) continue;
-        const gAvg = globalPriceRef[key] || 0;
-        if (gAvg > 0) result[key] = { price: Math.round(gAvg), city: '', source: 'global', itemId: p.itemId, quality: p.quality };
-      }
-
-      // Backward-compat shape: if client sent only itemIds (no qualities),
-      // flatten the result so keys are itemId (not itemId_quality).
-      if (!body.items) {
-        const flat = {};
-        for (const key of Object.keys(result)) {
-          const { itemId, quality, price, city, source } = result[key];
-          if (quality === 1) flat[itemId] = { price, city, source };
-        }
-        return res.json(flat);
-      }
-
-      res.json(result);
     }
-  );
+  }
+
+  // Last resort: globalPriceRef for that quality.
+  for (const p of cleanPairs) {
+    const key = p.itemId + '_' + p.quality;
+    if (result[key]) continue;
+    const gAvg = globalPriceRef[key] || 0;
+    if (gAvg > 0) result[key] = { price: Math.round(gAvg), city: '', source: 'global', itemId: p.itemId, quality: p.quality };
+  }
+
+  // Backward-compat shape: if client sent only itemIds (no qualities),
+  // flatten the result so keys are itemId (not itemId_quality).
+  if (!body.items) {
+    const flat = {};
+    for (const key of Object.keys(result)) {
+      const { itemId, quality, price, city, source } = result[key];
+      if (quality === 1) flat[itemId] = { price, city, source };
+    }
+    return res.json(flat);
+  }
+
+  res.json(result);
 });
 
 // === SALE NOTIFICATIONS API ===
 app.get('/api/sale-notifications', requireAuth, (req, res) => {
-  readDb.all(`SELECT * FROM sale_notifications WHERE user_id = ? ORDER BY sold_at DESC LIMIT 50`, [req.user.id], (err, rows) => {
-    if (err) return res.status(500).json({ error: 'An internal error occurred.' });
-    res.json(rows || []);
-  });
+  let rows;
+  try { rows = readDb.prepare(`SELECT * FROM sale_notifications WHERE user_id = ? ORDER BY sold_at DESC LIMIT 50`).all(req.user.id); }
+  catch (err) { return res.status(500).json({ error: 'An internal error occurred.' }); }
+  res.json(rows || []);
 });
 
 // === LOOT LOGGER API ===
@@ -2539,25 +2539,24 @@ app.get('/api/sale-notifications', requireAuth, (req, res) => {
 // List loot sessions for the current user (LEFT JOIN share tokens for G4 indicator)
 app.get('/api/loot-sessions', requireAuth, (req, res) => {
   // readDb — read-only aggregation that doesn't need the write connection.
-  // Previously on db; when leaderboard or spread-stats blocked db, this timed out (8s frontend AbortSignal).
-  readDb.all(`SELECT e.session_id,
-      MIN(e.timestamp) as started_at,
-      MAX(e.timestamp) as ended_at,
-      COUNT(*) as event_count,
-      COUNT(DISTINCT e.looted_by_name) as player_count,
-      ROUND(SUM(CASE WHEN e.item_id != '__DEATH__' THEN e.weight * e.quantity ELSE 0 END), 1) as total_weight,
-      SUM(CASE WHEN e.item_id = '__DEATH__' THEN 1 ELSE 0 END) as death_count,
-      s.public_token as public_token
-    FROM loot_events e
-    LEFT JOIN loot_session_shares s ON s.session_id = e.session_id AND s.user_id = e.user_id
-    WHERE e.user_id = ?
-    GROUP BY e.session_id
-    ORDER BY started_at DESC
-    LIMIT 50`,
-    [req.user.id], (err, rows) => {
-      if (err) return res.status(500).json({ error: 'An internal error occurred.' });
-      res.json({ sessions: rows || [] });
-    });
+  let rows;
+  try {
+    rows = readDb.prepare(`SELECT e.session_id,
+        MIN(e.timestamp) as started_at,
+        MAX(e.timestamp) as ended_at,
+        COUNT(*) as event_count,
+        COUNT(DISTINCT e.looted_by_name) as player_count,
+        ROUND(SUM(CASE WHEN e.item_id != '__DEATH__' THEN e.weight * e.quantity ELSE 0 END), 1) as total_weight,
+        SUM(CASE WHEN e.item_id = '__DEATH__' THEN 1 ELSE 0 END) as death_count,
+        s.public_token as public_token
+      FROM loot_events e
+      LEFT JOIN loot_session_shares s ON s.session_id = e.session_id AND s.user_id = e.user_id
+      WHERE e.user_id = ?
+      GROUP BY e.session_id
+      ORDER BY started_at DESC
+      LIMIT 50`).all(req.user.id);
+  } catch (err) { return res.status(500).json({ error: 'An internal error occurred.' }); }
+  res.json({ sessions: rows || [] });
 });
 
 // G4: Generate/refresh a share token for a session the user owns.
@@ -2635,28 +2634,26 @@ app.post('/api/accountability/share', requireAuth, (req, res) => {
 app.get('/api/accountability/public/:token', (req, res) => {
     const token = req.params.token;
     if (!token || !/^[A-Za-z0-9_-]{20,40}$/.test(token)) return res.status(400).json({ error: 'Invalid token' });
-    readDb.get(`SELECT user_id, session_id, captures_json, session_name, created_at, chest_logs_json FROM accountability_shares WHERE token = ?`, [token], (err, row) => {
-        if (err) return res.status(500).json({ error: 'An internal error occurred.' });
+    let row, events;
+    try {
+        row = readDb.prepare(`SELECT user_id, session_id, captures_json, session_name, created_at, chest_logs_json FROM accountability_shares WHERE token = ?`).get(token);
         if (!row) return res.status(404).json({ error: 'Share not found or revoked' });
         // SEC-M3: expire shares after 30 days
         if (Date.now() - row.created_at > 30 * 24 * 60 * 60 * 1000) return res.status(410).json({ error: 'Share link has expired.' });
-        readDb.all(`SELECT timestamp, looted_by_name, looted_by_guild, looted_by_alliance, looted_from_name, looted_from_guild, looted_from_alliance, item_id, numeric_id, quantity, weight, equipment_json, location FROM loot_events WHERE session_id = ? AND user_id = ? ORDER BY timestamp ASC`,
-            [row.session_id, row.user_id], (err2, events) => {
-                if (err2) return res.status(500).json({ error: 'An internal error occurred.' });
-                // Bump view counter (fire-and-forget)
-                db.run(`UPDATE accountability_shares SET view_count = view_count + 1 WHERE token = ?`, [token]);
-                let captures = [];
-                try { captures = JSON.parse(row.captures_json || '[]'); } catch {}
-                let chestLogs = [];
-                try { chestLogs = row.chest_logs_json ? JSON.parse(row.chest_logs_json) : []; } catch {}
-                res.json({
-                    sessionName: row.session_name || '',
-                    createdAt: row.created_at,
-                    events: events || [],
-                    captures,
-                    chestLogs,
-                });
-            });
+        events = readDb.prepare(`SELECT timestamp, looted_by_name, looted_by_guild, looted_by_alliance, looted_from_name, looted_from_guild, looted_from_alliance, item_id, numeric_id, quantity, weight, equipment_json, location FROM loot_events WHERE session_id = ? AND user_id = ? ORDER BY timestamp ASC`).all(row.session_id, row.user_id);
+    } catch (err) { return res.status(500).json({ error: 'An internal error occurred.' }); }
+    // Bump view counter (fire-and-forget — db is still async until stage 3)
+    db.run(`UPDATE accountability_shares SET view_count = view_count + 1 WHERE token = ?`, [token]);
+    let captures = [];
+    try { captures = JSON.parse(row.captures_json || '[]'); } catch {}
+    let chestLogs = [];
+    try { chestLogs = row.chest_logs_json ? JSON.parse(row.chest_logs_json) : []; } catch {}
+    res.json({
+        sessionName: row.session_name || '',
+        createdAt: row.created_at,
+        events: events || [],
+        captures,
+        chestLogs,
     });
 });
 
@@ -2704,29 +2701,29 @@ app.post('/api/loot-session/:sessionId/unshare', requireAuth, (req, res) => {
 
 // C4: Crafter aggregation — top crafters across all tracked tabs.
 app.get('/api/crafter-stats', requireAuth, (req, res) => {
-  readDb.all(`SELECT id, items_json FROM loot_tabs WHERE user_id = ?`, [req.user.id], (err, rows) => {
-    if (err) return res.status(500).json({ error: 'An internal error occurred.' });
-    const crafterMap = {};
-    let totalItems = 0;
-    for (const row of (rows || [])) {
-      try {
-        const items = JSON.parse(row.items_json);
-        for (const it of items) {
-          const crafter = it.crafterName || it.crafter || '';
-          if (!crafter) continue;
-          if (!crafterMap[crafter]) crafterMap[crafter] = { items: 0, tabIds: new Set() };
-          crafterMap[crafter].items += (it.quantity || 1);
-          crafterMap[crafter].tabIds.add(row.id);
-          totalItems++;
-        }
-      } catch { /* skip malformed JSON */ }
-    }
-    const crafters = Object.entries(crafterMap)
-      .map(([name, data]) => ({ name, items: data.items, tabs: data.tabIds.size }))
-      .sort((a, b) => b.items - a.items)
-      .slice(0, 20);
-    res.json({ crafters, totalCraftedItems: totalItems, totalTabs: (rows || []).length });
-  });
+  let rows;
+  try { rows = readDb.prepare(`SELECT id, items_json FROM loot_tabs WHERE user_id = ?`).all(req.user.id); }
+  catch (err) { return res.status(500).json({ error: 'An internal error occurred.' }); }
+  const crafterMap = {};
+  let totalItems = 0;
+  for (const row of (rows || [])) {
+    try {
+      const items = JSON.parse(row.items_json);
+      for (const it of items) {
+        const crafter = it.crafterName || it.crafter || '';
+        if (!crafter) continue;
+        if (!crafterMap[crafter]) crafterMap[crafter] = { items: 0, tabIds: new Set() };
+        crafterMap[crafter].items += (it.quantity || 1);
+        crafterMap[crafter].tabIds.add(row.id);
+        totalItems++;
+      }
+    } catch { /* skip malformed JSON */ }
+  }
+  const crafters = Object.entries(crafterMap)
+    .map(([name, data]) => ({ name, items: data.items, tabs: data.tabIds.size }))
+    .sort((a, b) => b.items - a.items)
+    .slice(0, 20);
+  res.json({ crafters, totalCraftedItems: totalItems, totalTabs: (rows || []).length });
 });
 
 // G1: Guild Leaderboard — aggregated stats across ALL saved sessions.
@@ -2789,28 +2786,21 @@ app.get('/api/guild-leaderboard', requireAuth, (req, res) => {
   const uid = req.user.id;
   const p1 = [uid, ...timeParams];
 
-  readDb.all(lootersSql, p1, (e1, looters) => {
-    if (e1) return res.status(500).json({ error: 'An internal error occurred.' });
-    readDb.all(killersSql, p1, (e2, killers) => {
-      if (e2) return res.status(500).json({ error: 'An internal error occurred.' });
-      readDb.all(deathsSql, p1, (e3, deaths) => {
-        if (e3) return res.status(500).json({ error: 'An internal error occurred.' });
-        readDb.all(activeSql, p1, (e4, active) => {
-          if (e4) return res.status(500).json({ error: 'An internal error occurred.' });
-          readDb.get(totalsSql, p1, (e5, totals) => {
-            if (e5) return res.status(500).json({ error: 'An internal error occurred.' });
-            res.json({
-              period,
-              totals: totals || { total_sessions: 0, total_players: 0, total_items: 0, total_deaths: 0 },
-              topLooters: looters || [],
-              topKillers: killers || [],
-              mostDeaths: deaths || [],
-              mostActive: active || []
-            });
-          });
-        });
-      });
-    });
+  let looters, killers, deaths, active, totals;
+  try {
+    looters = readDb.prepare(lootersSql).all(p1);
+    killers = readDb.prepare(killersSql).all(p1);
+    deaths  = readDb.prepare(deathsSql).all(p1);
+    active  = readDb.prepare(activeSql).all(p1);
+    totals  = readDb.prepare(totalsSql).get(p1);
+  } catch (err) { return res.status(500).json({ error: 'An internal error occurred.' }); }
+  res.json({
+    period,
+    totals: totals || { total_sessions: 0, total_players: 0, total_items: 0, total_deaths: 0 },
+    topLooters: looters || [],
+    topKillers: killers || [],
+    mostDeaths: deaths || [],
+    mostActive: active || []
   });
 });
 
@@ -2842,26 +2832,25 @@ app.post('/api/player-trends-bulk', requireAuth, (req, res) => {
     FROM loot_events
     WHERE user_id = ? AND item_id = '__DEATH__' AND looted_from_name IN (${placeholders})
     GROUP BY looted_from_name`;
-  readDb.all(sql, [req.user.id, ...cleaned], (err, rows) => {
-    if (err) return res.status(500).json({ error: 'An internal error occurred.' });
-    readDb.all(deathsSql, [req.user.id, ...cleaned], (err2, deathRows) => {
-      if (err2) return res.status(500).json({ error: 'An internal error occurred.' });
-      const trends = {};
-      for (const r of rows || []) {
-        trends[r.name] = {
-          sessionCount: r.session_count || 0,
-          itemsTotal: r.items_total || 0,
-          deaths: 0,
-          lastSeen: r.last_seen || 0
-        };
-      }
-      for (const d of deathRows || []) {
-        if (trends[d.name]) trends[d.name].deaths = d.deaths;
-        else trends[d.name] = { sessionCount: 0, itemsTotal: 0, deaths: d.deaths, lastSeen: 0 };
-      }
-      res.json({ trends });
-    });
-  });
+  let rows, deathRows;
+  try {
+    rows = readDb.prepare(sql).all([req.user.id, ...cleaned]);
+    deathRows = readDb.prepare(deathsSql).all([req.user.id, ...cleaned]);
+  } catch (err) { return res.status(500).json({ error: 'An internal error occurred.' }); }
+  const trends = {};
+  for (const r of rows || []) {
+    trends[r.name] = {
+      sessionCount: r.session_count || 0,
+      itemsTotal: r.items_total || 0,
+      deaths: 0,
+      lastSeen: r.last_seen || 0
+    };
+  }
+  for (const d of deathRows || []) {
+    if (trends[d.name]) trends[d.name].deaths = d.deaths;
+    else trends[d.name] = { sessionCount: 0, itemsTotal: 0, deaths: d.deaths, lastSeen: 0 };
+  }
+  res.json({ trends });
 });
 
 // Session merge — combine multiple sessions into one new session.
@@ -2906,30 +2895,26 @@ app.get('/api/public/loot-session/:token', (req, res) => {
   if (!token || token.length < 8 || token.length > 64) {
     return res.status(400).json({ error: 'Invalid token.' });
   }
-  readDb.get(`SELECT session_id, created_at FROM loot_session_shares WHERE public_token = ?`,
-    [token], (err, share) => {
-      if (err) return res.status(500).json({ error: 'An internal error occurred.' });
-      if (!share) return res.status(404).json({ error: 'Session not found or no longer shared.' });
-      // SEC-M3: expire shares after 30 days
-      if (Date.now() - share.created_at > 30 * 24 * 60 * 60 * 1000) return res.status(410).json({ error: 'Share link has expired.' });
-      readDb.all(`SELECT timestamp, looted_by_name, looted_by_guild, looted_by_alliance,
-        looted_from_name, looted_from_guild, looted_from_alliance, item_id, quantity, weight
-        FROM loot_events WHERE session_id = ? ORDER BY timestamp ASC LIMIT 5000`,
-        [share.session_id], (err2, rows) => {
-          if (err2) return res.status(500).json({ error: 'An internal error occurred.' });
-          res.json({ sessionId: share.session_id, sharedAt: share.created_at, events: rows || [] });
-        });
-    });
+  let share, rows;
+  try {
+    share = readDb.prepare(`SELECT session_id, created_at FROM loot_session_shares WHERE public_token = ?`).get(token);
+    if (!share) return res.status(404).json({ error: 'Session not found or no longer shared.' });
+    // SEC-M3: expire shares after 30 days
+    if (Date.now() - share.created_at > 30 * 24 * 60 * 60 * 1000) return res.status(410).json({ error: 'Share link has expired.' });
+    rows = readDb.prepare(`SELECT timestamp, looted_by_name, looted_by_guild, looted_by_alliance,
+      looted_from_name, looted_from_guild, looted_from_alliance, item_id, quantity, weight
+      FROM loot_events WHERE session_id = ? ORDER BY timestamp ASC LIMIT 5000`).all(share.session_id);
+  } catch (err) { return res.status(500).json({ error: 'An internal error occurred.' }); }
+  res.json({ sessionId: share.session_id, sharedAt: share.created_at, events: rows || [] });
 });
 
 // Get all events for a specific session
 app.get('/api/loot-session/:sessionId', requireAuth, (req, res) => {
   const sessionId = req.params.sessionId;
-  readDb.all(`SELECT * FROM loot_events WHERE session_id = ? AND user_id = ? ORDER BY timestamp ASC`,
-    [sessionId, req.user.id], (err, rows) => {
-      if (err) return res.status(500).json({ error: 'An internal error occurred.' });
-      res.json({ events: rows || [] });
-    });
+  let rows;
+  try { rows = readDb.prepare(`SELECT * FROM loot_events WHERE session_id = ? AND user_id = ? ORDER BY timestamp ASC`).all(sessionId, req.user.id); }
+  catch (err) { return res.status(500).json({ error: 'An internal error occurred.' }); }
+  res.json({ events: rows || [] });
 });
 
 // Upload a .txt loot log file (ao-loot-logger format)
@@ -2982,11 +2967,11 @@ app.post('/api/loot-upload', requireAuth, (req, res) => {
 
   if (requestedSessionId && typeof requestedSessionId === 'string' && /^[a-zA-Z0-9_-]{8,80}$/.test(requestedSessionId)) {
     // Verify the session belongs to this user before appending.
-    readDb.get('SELECT 1 FROM loot_events WHERE session_id = ? AND user_id = ? LIMIT 1', [requestedSessionId, req.user.id], (err, row) => {
-      if (err) return res.status(500).json({ error: 'An internal error occurred.' });
-      if (!row) return res.status(404).json({ error: 'Session not found or not owned by user' });
-      doInsert(requestedSessionId);
-    });
+    let row;
+    try { row = readDb.prepare('SELECT 1 FROM loot_events WHERE session_id = ? AND user_id = ? LIMIT 1').get(requestedSessionId, req.user.id); }
+    catch (err) { return res.status(500).json({ error: 'An internal error occurred.' }); }
+    if (!row) return res.status(404).json({ error: 'Session not found or not owned by user' });
+    doInsert(requestedSessionId);
     return;
   }
 
@@ -3093,10 +3078,10 @@ function requireAuth(req, res, next) {
 // This prevents any authenticated user from reading/deleting another user's alerts.
 app.get('/api/alerts', requireAuth, (req, res) => {
   const guildId = 'web-' + req.user.id;
-  readDb.all(`SELECT guild_id, channel_id, min_profit, cooldown_ms FROM alerts WHERE guild_id = ?`, [guildId], (err, rows) => {
-    if (err) return res.status(500).json({ error: 'An internal error occurred.' });
-    res.json(rows || []);
-  });
+  let rows;
+  try { rows = readDb.prepare(`SELECT guild_id, channel_id, min_profit, cooldown_ms FROM alerts WHERE guild_id = ?`).all(guildId); }
+  catch (err) { return res.status(500).json({ error: 'An internal error occurred.' }); }
+  res.json(rows || []);
 });
 
 app.post('/api/alerts', requireAuth, (req, res) => {
@@ -3271,92 +3256,83 @@ app.post('/api/activity', requireAuth, activityLimiter, (req, res) => {
   const dailyCap = ACTIVITY_DAILY_CAPS[type] || 1000;
   const uid = req.user.id;
   const dayStart = Date.now() - 24 * 3600 * 1000;
-  readDb.get(
-    `SELECT COALESCE(SUM(count),0) AS total FROM user_activity WHERE user_id = ? AND activity_type = ? AND recorded_at > ?`,
-    [uid, type, dayStart],
-    (qErr, row) => {
-      if (qErr) return res.status(500).json({ error: 'An internal error occurred.' });
-      const already = (row && row.total) || 0;
-      if (already >= dailyCap) {
-        // Soft-succeed so the frontend doesn't surface an error on every further attempt, but record nothing.
-        return res.json({ success: true, capped: true });
-      }
-      const remaining = dailyCap - already;
-      const effective = Math.min(cnt, remaining);
-      db.run(`INSERT INTO user_activity (user_id, activity_type, count, recorded_at) VALUES (?, ?, ?, ?)`,
-        [uid, type, effective, Date.now()], (err) => {
-          if (err) return res.status(500).json({ error: 'An internal error occurred.' });
-          res.json({ success: true, capped: effective < cnt });
-        });
+  let row;
+  try { row = readDb.prepare(`SELECT COALESCE(SUM(count),0) AS total FROM user_activity WHERE user_id = ? AND activity_type = ? AND recorded_at > ?`).get(uid, type, dayStart); }
+  catch (qErr) { return res.status(500).json({ error: 'An internal error occurred.' }); }
+  const already = (row && row.total) || 0;
+  if (already >= dailyCap) {
+    // Soft-succeed so the frontend doesn't surface an error on every further attempt, but record nothing.
+    return res.json({ success: true, capped: true });
+  }
+  const remaining = dailyCap - already;
+  const effective = Math.min(cnt, remaining);
+  db.run(`INSERT INTO user_activity (user_id, activity_type, count, recorded_at) VALUES (?, ?, ?, ?)`,
+    [uid, type, effective, Date.now()], (err) => {
+      if (err) return res.status(500).json({ error: 'An internal error occurred.' });
+      res.json({ success: true, capped: effective < cnt });
     });
 });
 
 app.get('/api/activity-stats', requireAuth, (req, res) => {
   const uid = req.user.id;
   const thirtyDaysAgo = Date.now() - 30 * 24 * 3600 * 1000;
-  // Profile/Community user-facing aggregate — move to readDb so it doesn't queue behind NATS writes on `db`
-  readDb.all(`SELECT activity_type, SUM(count) as total FROM user_activity WHERE user_id = ? AND recorded_at > ? GROUP BY activity_type`,
-    [uid, thirtyDaysAgo], (err, rows) => {
-      if (err) return res.status(500).json({ error: 'An internal error occurred.' });
-      const breakdown = {};
-      let combinedScore = 0;
-      for (const r of (rows || [])) {
-        breakdown[r.activity_type] = r.total;
-        combinedScore += (r.total || 0) * (ACTIVITY_WEIGHTS[r.activity_type] || 1);
-      }
-      // Also include legacy scan contributions
-      readDb.get(`SELECT COUNT(*) as cnt FROM contributions WHERE user_id = ? AND created_at > ?`, [uid, thirtyDaysAgo], (err2, scanRow) => {
-        const legacyScans = scanRow?.cnt || 0;
-        if (legacyScans > 0 && !breakdown.scan) {
-          breakdown.scan = legacyScans;
-          combinedScore += legacyScans * ACTIVITY_WEIGHTS.scan;
-        }
-        let tier = 'bronze';
-        if (combinedScore >= 1000) tier = 'diamond';
-        else if (combinedScore >= 400) tier = 'gold';
-        else if (combinedScore >= 100) tier = 'silver';
-        res.json({ breakdown, combinedScore, tier });
-      });
-    });
+  let rows, scanRow;
+  try {
+    rows = readDb.prepare(`SELECT activity_type, SUM(count) as total FROM user_activity WHERE user_id = ? AND recorded_at > ? GROUP BY activity_type`).all(uid, thirtyDaysAgo);
+    scanRow = readDb.prepare(`SELECT COUNT(*) as cnt FROM contributions WHERE user_id = ? AND created_at > ?`).get(uid, thirtyDaysAgo);
+  } catch (err) { return res.status(500).json({ error: 'An internal error occurred.' }); }
+  const breakdown = {};
+  let combinedScore = 0;
+  for (const r of (rows || [])) {
+    breakdown[r.activity_type] = r.total;
+    combinedScore += (r.total || 0) * (ACTIVITY_WEIGHTS[r.activity_type] || 1);
+  }
+  const legacyScans = scanRow?.cnt || 0;
+  if (legacyScans > 0 && !breakdown.scan) {
+    breakdown.scan = legacyScans;
+    combinedScore += legacyScans * ACTIVITY_WEIGHTS.scan;
+  }
+  let tier = 'bronze';
+  if (combinedScore >= 1000) tier = 'diamond';
+  else if (combinedScore >= 400) tier = 'gold';
+  else if (combinedScore >= 100) tier = 'silver';
+  res.json({ breakdown, combinedScore, tier });
 });
 
 app.get('/api/my-stats', requireAuth, (req, res) => {
   const userId = req.user.id;
   const thirtyDaysAgo = Date.now() - 30 * 24 * 3600 * 1000;
-  // All three reads move to readDb — Profile tab is user-facing and should never queue behind NATS writes
-  readDb.get(`SELECT scans_30d, scans_total, tier FROM user_stats WHERE user_id = ?`, [userId], (err, row) => {
-    const scanRow = row || { scans_30d: 0, scans_total: 0, tier: 'bronze' };
-    // Compute activity score + rank from combined activities (same logic as /api/activity-stats + /api/leaderboard).
-    readDb.all(`SELECT activity_type, SUM(count) as total FROM user_activity WHERE user_id = ? AND recorded_at > ? GROUP BY activity_type`, [userId, thirtyDaysAgo], (err2, actRows) => {
-      const breakdown = {};
-      let score = 0;
-      for (const r of (actRows || [])) {
-        breakdown[r.activity_type] = r.total;
-        score += (r.total || 0) * (ACTIVITY_WEIGHTS[r.activity_type] || 1);
-      }
-      // Include legacy scan contributions if no scan activity yet
-      readDb.get(`SELECT COUNT(*) as cnt FROM contributions WHERE user_id = ? AND created_at > ?`, [userId, thirtyDaysAgo], (err3, scanCntRow) => {
-        const legacyScans = scanCntRow?.cnt || 0;
-        if (legacyScans > 0 && !breakdown.scan) {
-          breakdown.scan = legacyScans;
-          score += legacyScans * ACTIVITY_WEIGHTS.scan;
-        }
-        let tier = 'bronze';
-        if (score >= 1000) tier = 'diamond';
-        else if (score >= 400) tier = 'gold';
-        else if (score >= 100) tier = 'silver';
-        // Rank across all users by combined activity score — done via the cached leaderboard.
-        const rankFromCache = (leaderboardCache || []).findIndex(u => u.user_id === userId) + 1;
-        res.json({
-          scans_30d: scanRow.scans_30d || 0,
-          scans_total: scanRow.scans_total || 0,
-          tier,
-          rank: rankFromCache > 0 ? rankFromCache : 0,
-          score,
-          breakdown,
-        });
-      });
-    });
+  let row, actRows, scanCntRow;
+  try {
+    row = readDb.prepare(`SELECT scans_30d, scans_total, tier FROM user_stats WHERE user_id = ?`).get(userId);
+    actRows = readDb.prepare(`SELECT activity_type, SUM(count) as total FROM user_activity WHERE user_id = ? AND recorded_at > ? GROUP BY activity_type`).all(userId, thirtyDaysAgo);
+    scanCntRow = readDb.prepare(`SELECT COUNT(*) as cnt FROM contributions WHERE user_id = ? AND created_at > ?`).get(userId, thirtyDaysAgo);
+  } catch (err) { /* fall through; row stays undefined → defaults below */ }
+  const scanRow = row || { scans_30d: 0, scans_total: 0, tier: 'bronze' };
+  const breakdown = {};
+  let score = 0;
+  for (const r of (actRows || [])) {
+    breakdown[r.activity_type] = r.total;
+    score += (r.total || 0) * (ACTIVITY_WEIGHTS[r.activity_type] || 1);
+  }
+  const legacyScans = scanCntRow?.cnt || 0;
+  if (legacyScans > 0 && !breakdown.scan) {
+    breakdown.scan = legacyScans;
+    score += legacyScans * ACTIVITY_WEIGHTS.scan;
+  }
+  let tier = 'bronze';
+  if (score >= 1000) tier = 'diamond';
+  else if (score >= 400) tier = 'gold';
+  else if (score >= 100) tier = 'silver';
+  // Rank across all users by combined activity score — done via the cached leaderboard.
+  const rankFromCache = (leaderboardCache || []).findIndex(u => u.user_id === userId) + 1;
+  res.json({
+    scans_30d: scanRow.scans_30d || 0,
+    scans_total: scanRow.scans_total || 0,
+    tier,
+    rank: rankFromCache > 0 ? rankFromCache : 0,
+    score,
+    breakdown,
   });
 });
 
@@ -3372,58 +3348,58 @@ app.get('/api/leaderboard', (req, res) => {
   // MUST run on readDb — otherwise it queues behind the main db connection
   // and blocks every other user-facing read (Loot Logger, Discord login, etc.).
   // Pattern from the April 9 Discord-login hotfix.
-  readDb.all(`
-    SELECT u.user_id, u.username, u.avatar,
-           SUM(CASE WHEN a.activity_type IS NOT NULL THEN a.count * COALESCE(w.weight, 1) ELSE 0 END) AS score,
-           MAX(COALESCE(u.scans_30d, 0)) AS scans_30d
-    FROM user_stats u
-    LEFT JOIN user_activity a ON a.user_id = u.user_id AND a.recorded_at > ?
-    LEFT JOIN (
-      SELECT 'scan' AS activity_type, 1 AS weight UNION ALL
-      SELECT 'loot_session', 5 UNION ALL
-      SELECT 'chest_capture', 3 UNION ALL
-      SELECT 'sale_record', 2 UNION ALL
-      SELECT 'accountability', 3 UNION ALL
-      SELECT 'transport_plan', 1 UNION ALL
-      SELECT 'craft_calc', 1
-    ) w ON w.activity_type = a.activity_type
-    GROUP BY u.user_id, u.username, u.avatar
-    HAVING score > 0 OR scans_30d > 0
-    ORDER BY score DESC, scans_30d DESC
-    LIMIT 20
-  `, [thirtyDaysAgo], (err, rows) => {
-    if (err) {
-      console.error('[Leaderboard] query failed:', err.message);
-      // Fallback: legacy scans-only ranking so the tab never shows empty. readDb for the same reason.
-      readDb.all(`SELECT user_id, username, avatar, scans_30d, tier, 0 AS score FROM user_stats WHERE scans_30d > 0 ORDER BY scans_30d DESC LIMIT 20`, [], (err2, fallback) => {
-        if (err2) return res.status(500).json({ error: 'An internal error occurred.' });
-        leaderboardCache = fallback || [];
-        leaderboardCacheTime = now;
-        res.json(leaderboardCache);
-      });
-      return;
-    }
-    // Derive tier from score (matches /api/activity-stats logic)
-    const enriched = (rows || []).map(r => {
-      // If score is 0 but user has legacy scans, fall back to scan-based score for smoother migration.
-      const effectiveScore = r.score > 0 ? r.score : (r.scans_30d || 0);
-      let tier = 'bronze';
-      if (effectiveScore >= 1000) tier = 'diamond';
-      else if (effectiveScore >= 400) tier = 'gold';
-      else if (effectiveScore >= 100) tier = 'silver';
-      return {
-        user_id: r.user_id,
-        username: r.username,
-        avatar: r.avatar,
-        score: effectiveScore,
-        scans_30d: r.scans_30d || 0,
-        tier,
-      };
-    });
-    leaderboardCache = enriched;
+  let rows;
+  try {
+    rows = readDb.prepare(`
+      SELECT u.user_id, u.username, u.avatar,
+             SUM(CASE WHEN a.activity_type IS NOT NULL THEN a.count * COALESCE(w.weight, 1) ELSE 0 END) AS score,
+             MAX(COALESCE(u.scans_30d, 0)) AS scans_30d
+      FROM user_stats u
+      LEFT JOIN user_activity a ON a.user_id = u.user_id AND a.recorded_at > ?
+      LEFT JOIN (
+        SELECT 'scan' AS activity_type, 1 AS weight UNION ALL
+        SELECT 'loot_session', 5 UNION ALL
+        SELECT 'chest_capture', 3 UNION ALL
+        SELECT 'sale_record', 2 UNION ALL
+        SELECT 'accountability', 3 UNION ALL
+        SELECT 'transport_plan', 1 UNION ALL
+        SELECT 'craft_calc', 1
+      ) w ON w.activity_type = a.activity_type
+      GROUP BY u.user_id, u.username, u.avatar
+      HAVING score > 0 OR scans_30d > 0
+      ORDER BY score DESC, scans_30d DESC
+      LIMIT 20
+    `).all(thirtyDaysAgo);
+  } catch (err) {
+    console.error('[Leaderboard] query failed:', err.message);
+    // Fallback: legacy scans-only ranking so the tab never shows empty.
+    let fallback;
+    try { fallback = readDb.prepare(`SELECT user_id, username, avatar, scans_30d, tier, 0 AS score FROM user_stats WHERE scans_30d > 0 ORDER BY scans_30d DESC LIMIT 20`).all(); }
+    catch (err2) { return res.status(500).json({ error: 'An internal error occurred.' }); }
+    leaderboardCache = fallback || [];
     leaderboardCacheTime = now;
-    res.json(leaderboardCache);
+    return res.json(leaderboardCache);
+  }
+  // Derive tier from score (matches /api/activity-stats logic)
+  const enriched = (rows || []).map(r => {
+    // If score is 0 but user has legacy scans, fall back to scan-based score for smoother migration.
+    const effectiveScore = r.score > 0 ? r.score : (r.scans_30d || 0);
+    let tier = 'bronze';
+    if (effectiveScore >= 1000) tier = 'diamond';
+    else if (effectiveScore >= 400) tier = 'gold';
+    else if (effectiveScore >= 100) tier = 'silver';
+    return {
+      user_id: r.user_id,
+      username: r.username,
+      avatar: r.avatar,
+      score: effectiveScore,
+      scans_30d: r.scans_30d || 0,
+      tier,
+    };
   });
+  leaderboardCache = enriched;
+  leaderboardCacheTime = now;
+  res.json(leaderboardCache);
 });
 
 // === SPREAD STATS API ===
@@ -3431,27 +3407,19 @@ app.get('/api/spread-stats', (req, res) => {
   const { item_id, quality } = req.query;
   if (!item_id) return res.status(400).json({ error: 'item_id required' });
   const q = parseInt(quality) || 1;
-  readDb.all(
-    `SELECT * FROM spread_stats WHERE item_id = ? AND quality = ? AND window_days = 7 ORDER BY confidence_score DESC`,
-    [item_id, q],
-    (err, rows) => {
-      if (err) return res.status(500).json({ error: 'An internal error occurred.' });
-      res.json(rows || []);
-    }
-  );
+  let rows;
+  try { rows = readDb.prepare(`SELECT * FROM spread_stats WHERE item_id = ? AND quality = ? AND window_days = 7 ORDER BY confidence_score DESC`).all(item_id, q); }
+  catch (err) { return res.status(500).json({ error: 'An internal error occurred.' }); }
+  res.json(rows || []);
 });
 
 app.get('/api/spread-stats/top', (req, res) => {
   const limit = Math.min(parseInt(req.query.limit) || 100, 200);
   const minConfidence = parseInt(req.query.min_confidence) || 0;
-  readDb.all(
-    `SELECT * FROM spread_stats WHERE window_days = 7 AND confidence_score >= ? AND avg_spread > 0 ORDER BY confidence_score DESC LIMIT ?`,
-    [minConfidence, limit],
-    (err, rows) => {
-      if (err) return res.status(500).json({ error: 'An internal error occurred.' });
-      res.json(rows || []);
-    }
-  );
+  let rows;
+  try { rows = readDb.prepare(`SELECT * FROM spread_stats WHERE window_days = 7 AND confidence_score >= ? AND avg_spread > 0 ORDER BY confidence_score DESC LIMIT ?`).all(minConfidence, limit); }
+  catch (err) { return res.status(500).json({ error: 'An internal error occurred.' }); }
+  res.json(rows || []);
 });
 
 // === TRANSPORT ROUTES API ===
@@ -3495,10 +3463,10 @@ app.get('/api/transport-routes', (req, res) => {
   `;
   params.push(limit);
 
-  readDb.all(sql, params, (err, rows) => {
-    if (err) return res.status(500).json({ error: 'An internal error occurred.' });
-    res.json(rows || []);
-  });
+  let rows;
+  try { rows = readDb.prepare(sql).all(params); }
+  catch (err) { return res.status(500).json({ error: 'An internal error occurred.' }); }
+  res.json(rows || []);
 });
 
 // === LIVE TRANSPORT ROUTES (computed from alertMarketDb + historical per-city averages) ===
@@ -3556,33 +3524,37 @@ function refreshPriceRefCache() {
 // Build in-memory price references from the small pre-aggregated cache table (~100k rows, not 21M).
 function buildPriceReference() {
   const staleThreshold = Date.now() - 2 * 24 * 60 * 60 * 1000; // ignore entries older than 2 days
-
-  readDb.all(`SELECT item_id, quality, city, avg_sell, avg_vol, sample_count
-    FROM price_ref_cache WHERE updated_at > ? AND avg_sell > 0`, [staleThreshold], (err, rows) => {
-    if (err || !rows) return;
-    const cityRef = {}, volRef = {};
-    const globalAcc = {}; // accumulator for global averages
-    for (const r of rows) {
-      if (r.sample_count >= 2 && r.avg_sell > 0) {
-        cityRef[r.item_id + '_' + r.quality + '_' + r.city] = Math.round(r.avg_sell);
-        volRef[r.item_id + '_' + r.quality + '_' + r.city] = Math.round(r.avg_vol || 0);
-        const gk = r.item_id + '_' + r.quality;
-        if (!globalAcc[gk]) globalAcc[gk] = { sum: 0, cnt: 0 };
-        globalAcc[gk].sum += r.avg_sell;
-        globalAcc[gk].cnt++;
-      }
+  let rows;
+  try {
+    rows = readDb.prepare(`SELECT item_id, quality, city, avg_sell, avg_vol, sample_count
+      FROM price_ref_cache WHERE updated_at > ? AND avg_sell > 0`).all(staleThreshold);
+  } catch (err) {
+    console.error('[PriceRef] readDb error:', err.message);
+    return;
+  }
+  if (!rows) return;
+  const cityRef = {}, volRef = {};
+  const globalAcc = {}; // accumulator for global averages
+  for (const r of rows) {
+    if (r.sample_count >= 2 && r.avg_sell > 0) {
+      cityRef[r.item_id + '_' + r.quality + '_' + r.city] = Math.round(r.avg_sell);
+      volRef[r.item_id + '_' + r.quality + '_' + r.city] = Math.round(r.avg_vol || 0);
+      const gk = r.item_id + '_' + r.quality;
+      if (!globalAcc[gk]) globalAcc[gk] = { sum: 0, cnt: 0 };
+      globalAcc[gk].sum += r.avg_sell;
+      globalAcc[gk].cnt++;
     }
-    cityPriceRef = cityRef;
-    volumeRef = volRef;
+  }
+  cityPriceRef = cityRef;
+  volumeRef = volRef;
 
-    const gRef = {};
-    for (const [gk, acc] of Object.entries(globalAcc)) {
-      if (acc.cnt >= 2) gRef[gk] = Math.round(acc.sum / acc.cnt);
-    }
-    globalPriceRef = gRef;
+  const gRef = {};
+  for (const [gk, acc] of Object.entries(globalAcc)) {
+    if (acc.cnt >= 2) gRef[gk] = Math.round(acc.sum / acc.cnt);
+  }
+  globalPriceRef = gRef;
 
-    console.log(`[PriceRef] City: ${Object.keys(cityRef).length}, Volume: ${Object.keys(volRef).length}, Global: ${Object.keys(gRef).length} (from ${rows.length} cache rows)`);
-  });
+  console.log(`[PriceRef] City: ${Object.keys(cityRef).length}, Volume: ${Object.keys(volRef).length}, Global: ${Object.keys(gRef).length} (from ${rows.length} cache rows)`);
 }
 
 // Initial full cache build on startup (one-time scan of recent data)
@@ -3818,41 +3790,38 @@ app.get('/api/price-history', (req, res) => {
   const histParams = city ? [item_id, city, quality, cutoff] : [item_id, quality, cutoff];
 
   // Chart open is a hot path — use readDb to avoid queueing behind NATS UPSERTs on `db`
-  readDb.all(histQuery, histParams, (err, histRows) => {
-    if (err) return res.status(500).json({ error: 'An internal error occurred' });
-    const history = histRows || [];
+  let histRows, ohlcRows, analyticsRows;
+  try {
+    histRows = readDb.prepare(histQuery).all(histParams);
 
     // OHLC from price_hourly (7–30 day range)
-    const sevenDaysAgo = now - 7 * 24 * 60 * 60 * 1000;
     const ohlcQuery = city
       ? `SELECT hour, open_price, high_price, low_price, close_price, avg_price, volume FROM price_hourly WHERE item_id = ? AND city = ? AND quality = ? AND hour >= ? ORDER BY hour`
       : `SELECT city, hour, open_price, high_price, low_price, close_price, avg_price, volume FROM price_hourly WHERE item_id = ? AND quality = ? AND hour >= ? ORDER BY hour`;
     const ohlcCutoff = new Date(cutoff).toISOString().slice(0, 13);
     const ohlcParams = city ? [item_id, city, quality, ohlcCutoff] : [item_id, quality, ohlcCutoff];
+    ohlcRows = readDb.prepare(ohlcQuery).all(ohlcParams);
 
-    readDb.all(ohlcQuery, ohlcParams, (errO, ohlcRows) => {
-      const ohlc = ohlcRows || [];
+    // Pre-computed analytics from price_analytics
+    const analyticsQuery = city
+      ? `SELECT metric, value, computed_at FROM price_analytics WHERE item_id = ? AND city = ? AND quality = ?`
+      : `SELECT city, metric, value, computed_at FROM price_analytics WHERE item_id = ? AND quality = ?`;
+    const analyticsParams = city ? [item_id, city, quality] : [item_id, quality];
+    analyticsRows = readDb.prepare(analyticsQuery).all(analyticsParams);
+  } catch (err) { return res.status(500).json({ error: 'An internal error occurred' }); }
 
-      // Pre-computed analytics from price_analytics
-      const analyticsQuery = city
-        ? `SELECT metric, value, computed_at FROM price_analytics WHERE item_id = ? AND city = ? AND quality = ?`
-        : `SELECT city, metric, value, computed_at FROM price_analytics WHERE item_id = ? AND quality = ?`;
-      const analyticsParams = city ? [item_id, city, quality] : [item_id, quality];
-
-      readDb.all(analyticsQuery, analyticsParams, (errA, analyticsRows) => {
-        const analytics = {};
-        for (const r of (analyticsRows || [])) {
-          if (city) {
-            analytics[r.metric] = r.value;
-          } else {
-            if (!analytics[r.city]) analytics[r.city] = {};
-            analytics[r.city][r.metric] = r.value;
-          }
-        }
-        res.json({ history, ohlc, analytics });
-      });
-    });
-  });
+  const history = histRows || [];
+  const ohlc = ohlcRows || [];
+  const analytics = {};
+  for (const r of (analyticsRows || [])) {
+    if (city) {
+      analytics[r.metric] = r.value;
+    } else {
+      if (!analytics[r.city]) analytics[r.city] = {};
+      analytics[r.city][r.metric] = r.value;
+    }
+  }
+  res.json({ history, ohlc, analytics });
 });
 
 // === ANALYTICS API ===
@@ -3868,31 +3837,31 @@ app.get('/api/analytics/:itemId', (req, res) => {
     : `SELECT city, metric, value, computed_at FROM price_analytics WHERE item_id = ? AND quality = ? ORDER BY city, metric`;
   const params = city ? [item_id, city, quality] : [item_id, quality];
 
-  readDb.all(query, params, (err, rows) => {
-    if (err) return res.status(500).json({ error: 'An internal error occurred' });
-    if (!rows || rows.length === 0) return res.json({ item_id, quality, metrics: {} });
+  let rows;
+  try { rows = readDb.prepare(query).all(params); }
+  catch (err) { return res.status(500).json({ error: 'An internal error occurred' }); }
+  if (!rows || rows.length === 0) return res.json({ item_id, quality, metrics: {} });
 
-    if (city) {
-      // Flat metrics object for a single city
-      const metrics = {};
-      let computed_at = null;
-      for (const r of rows) {
-        metrics[r.metric] = r.value;
-        computed_at = computed_at || r.computed_at;
-      }
-      res.json({ item_id, city, quality, metrics, computed_at });
-    } else {
-      // Group by city
-      const cities = {};
-      let computed_at = null;
-      for (const r of rows) {
-        if (!cities[r.city]) cities[r.city] = {};
-        cities[r.city][r.metric] = r.value;
-        computed_at = computed_at || r.computed_at;
-      }
-      res.json({ item_id, quality, cities, computed_at });
+  if (city) {
+    // Flat metrics object for a single city
+    const metrics = {};
+    let computed_at = null;
+    for (const r of rows) {
+      metrics[r.metric] = r.value;
+      computed_at = computed_at || r.computed_at;
     }
-  });
+    res.json({ item_id, city, quality, metrics, computed_at });
+  } else {
+    // Group by city
+    const cities = {};
+    let computed_at = null;
+    for (const r of rows) {
+      if (!cities[r.city]) cities[r.city] = {};
+      cities[r.city][r.metric] = r.value;
+      computed_at = computed_at || r.computed_at;
+    }
+    res.json({ item_id, quality, cities, computed_at });
+  }
 });
 
 // === ADMIN: DB STATS (JWT-protected) ===
@@ -3971,42 +3940,35 @@ app.post('/api/craft-runs', requireAuth, (req, res) => {
 
 // GET /api/craft-runs — list user's runs
 app.get('/api/craft-runs', requireAuth, (req, res) => {
-  // Use readDb: db's serial queue can stall behind long-running writes (e.g.
-  // during the analytics bulk flush). readDb is a dedicated OPEN_READONLY
-  // connection that bypasses that queue entirely.
-  readDb.all(
-    `SELECT cr.id, cr.name, cr.status, cr.target_item, cr.total_cost, cr.total_revenue,
-            cr.created_at, cr.closed_at, cr.hideout_power_level, cr.hideout_core_bonus,
-            COUNT(crt.id) as txn_count
-     FROM craft_runs cr
-     LEFT JOIN craft_run_transactions crt ON crt.run_id = cr.id
-     WHERE cr.user_id = ?
-     GROUP BY cr.id
-     ORDER BY cr.created_at DESC
-     LIMIT 100`,
-    [req.user.id],
-    (err, rows) => {
-      if (err) return res.status(500).json({ error: 'An internal error occurred.' });
-      res.json({ runs: rows || [] });
-    }
-  );
+  let rows;
+  try {
+    rows = readDb.prepare(
+      `SELECT cr.id, cr.name, cr.status, cr.target_item, cr.total_cost, cr.total_revenue,
+              cr.created_at, cr.closed_at, cr.hideout_power_level, cr.hideout_core_bonus,
+              COUNT(crt.id) as txn_count
+       FROM craft_runs cr
+       LEFT JOIN craft_run_transactions crt ON crt.run_id = cr.id
+       WHERE cr.user_id = ?
+       GROUP BY cr.id
+       ORDER BY cr.created_at DESC
+       LIMIT 100`
+    ).all(req.user.id);
+  } catch (err) { return res.status(500).json({ error: 'An internal error occurred.' }); }
+  res.json({ runs: rows || [] });
 });
 
 // GET /api/craft-runs/:id — run details + transactions + scans
 app.get('/api/craft-runs/:id', requireAuth, (req, res) => {
   const runId = parseInt(req.params.id);
   if (!runId) return res.status(400).json({ error: 'Invalid run id.' });
-  readDb.get(`SELECT * FROM craft_runs WHERE id = ? AND user_id = ?`, [runId, req.user.id], (err, run) => {
-    if (err) return res.status(500).json({ error: 'An internal error occurred.' });
+  let run, txns, scans;
+  try {
+    run = readDb.prepare(`SELECT * FROM craft_runs WHERE id = ? AND user_id = ?`).get(runId, req.user.id);
     if (!run) return res.status(404).json({ error: 'Run not found.' });
-    readDb.all(`SELECT * FROM craft_run_transactions WHERE run_id = ? ORDER BY timestamp ASC`, [runId], (err2, txns) => {
-      if (err2) return res.status(500).json({ error: 'An internal error occurred.' });
-      readDb.all(`SELECT * FROM craft_run_scans WHERE run_id = ? ORDER BY scanned_at ASC`, [runId], (err3, scans) => {
-        if (err3) return res.status(500).json({ error: 'An internal error occurred.' });
-        res.json({ run, transactions: txns || [], scans: scans || [] });
-      });
-    });
-  });
+    txns = readDb.prepare(`SELECT * FROM craft_run_transactions WHERE run_id = ? ORDER BY timestamp ASC`).all(runId);
+    scans = readDb.prepare(`SELECT * FROM craft_run_scans WHERE run_id = ? ORDER BY scanned_at ASC`).all(runId);
+  } catch (err) { return res.status(500).json({ error: 'An internal error occurred.' }); }
+  res.json({ run, transactions: txns || [], scans: scans || [] });
 });
 
 // PATCH /api/craft-runs/:id — update status / settings
@@ -4015,22 +3977,22 @@ app.patch('/api/craft-runs/:id', requireAuth, (req, res) => {
   if (!runId) return res.status(400).json({ error: 'Invalid run id.' });
   const { name, status, target_item, hideout_power_level, hideout_core_bonus } = req.body;
   if (status && !CR_VALID_STATUSES.has(status)) return res.status(400).json({ error: 'Invalid status.' });
-  readDb.get(`SELECT id FROM craft_runs WHERE id = ? AND user_id = ?`, [runId, req.user.id], (err, row) => {
-    if (err) return res.status(500).json({ error: 'An internal error occurred.' });
-    if (!row) return res.status(404).json({ error: 'Run not found.' });
-    const fields = [];
-    const vals = [];
-    if (name !== undefined)   { fields.push('name = ?');   vals.push(String(name).slice(0, 100)); }
-    if (status !== undefined) { fields.push('status = ?'); vals.push(status); if (status === 'complete') { fields.push('closed_at = ?'); vals.push(Date.now()); } }
-    if (target_item !== undefined) { fields.push('target_item = ?'); vals.push(String(target_item).slice(0, 100) || null); }
-    if (hideout_power_level !== undefined) { fields.push('hideout_power_level = ?'); vals.push(Math.min(8, Math.max(0, parseInt(hideout_power_level) || 0))); }
-    if (hideout_core_bonus !== undefined) { fields.push('hideout_core_bonus = ?'); vals.push(Math.min(30, Math.max(0, parseFloat(hideout_core_bonus) || 0))); }
-    if (!fields.length) return res.status(400).json({ error: 'Nothing to update.' });
-    vals.push(runId);
-    db.run(`UPDATE craft_runs SET ${fields.join(', ')} WHERE id = ?`, vals, (err2) => {
-      if (err2) return res.status(500).json({ error: 'An internal error occurred.' });
-      res.json({ success: true });
-    });
+  let row;
+  try { row = readDb.prepare(`SELECT id FROM craft_runs WHERE id = ? AND user_id = ?`).get(runId, req.user.id); }
+  catch (err) { return res.status(500).json({ error: 'An internal error occurred.' }); }
+  if (!row) return res.status(404).json({ error: 'Run not found.' });
+  const fields = [];
+  const vals = [];
+  if (name !== undefined)   { fields.push('name = ?');   vals.push(String(name).slice(0, 100)); }
+  if (status !== undefined) { fields.push('status = ?'); vals.push(status); if (status === 'complete') { fields.push('closed_at = ?'); vals.push(Date.now()); } }
+  if (target_item !== undefined) { fields.push('target_item = ?'); vals.push(String(target_item).slice(0, 100) || null); }
+  if (hideout_power_level !== undefined) { fields.push('hideout_power_level = ?'); vals.push(Math.min(8, Math.max(0, parseInt(hideout_power_level) || 0))); }
+  if (hideout_core_bonus !== undefined) { fields.push('hideout_core_bonus = ?'); vals.push(Math.min(30, Math.max(0, parseFloat(hideout_core_bonus) || 0))); }
+  if (!fields.length) return res.status(400).json({ error: 'Nothing to update.' });
+  vals.push(runId);
+  db.run(`UPDATE craft_runs SET ${fields.join(', ')} WHERE id = ?`, vals, (err2) => {
+    if (err2) return res.status(500).json({ error: 'An internal error occurred.' });
+    res.json({ success: true });
   });
 });
 
@@ -4038,13 +4000,13 @@ app.patch('/api/craft-runs/:id', requireAuth, (req, res) => {
 app.delete('/api/craft-runs/:id', requireAuth, (req, res) => {
   const runId = parseInt(req.params.id);
   if (!runId) return res.status(400).json({ error: 'Invalid run id.' });
-  readDb.get(`SELECT id FROM craft_runs WHERE id = ? AND user_id = ?`, [runId, req.user.id], (err, row) => {
-    if (err) return res.status(500).json({ error: 'An internal error occurred.' });
-    if (!row) return res.status(404).json({ error: 'Run not found.' });
-    db.run(`DELETE FROM craft_runs WHERE id = ?`, [runId], (err2) => {
-      if (err2) return res.status(500).json({ error: 'An internal error occurred.' });
-      res.json({ success: true });
-    });
+  let row;
+  try { row = readDb.prepare(`SELECT id FROM craft_runs WHERE id = ? AND user_id = ?`).get(runId, req.user.id); }
+  catch (err) { return res.status(500).json({ error: 'An internal error occurred.' }); }
+  if (!row) return res.status(404).json({ error: 'Run not found.' });
+  db.run(`DELETE FROM craft_runs WHERE id = ?`, [runId], (err2) => {
+    if (err2) return res.status(500).json({ error: 'An internal error occurred.' });
+    res.json({ success: true });
   });
 });
 
@@ -4060,25 +4022,25 @@ app.post('/api/craft-runs/:id/txn', requireAuth, (req, res) => {
   const totalP = qty * unitP;
   const src = ['manual','tab_scan','market_auto'].includes(source) ? source : 'manual';
 
-  readDb.get(`SELECT id FROM craft_runs WHERE id = ? AND user_id = ?`, [runId, req.user.id], (err, row) => {
-    if (err) return res.status(500).json({ error: 'An internal error occurred.' });
-    if (!row) return res.status(404).json({ error: 'Run not found.' });
-    const now = Date.now();
-    db.run(
-      `INSERT INTO craft_run_transactions (run_id, type, item_id, quantity, unit_price, total_price, city, source, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [runId, type, item_id.slice(0, 100), qty, unitP, totalP, (city || '').slice(0, 50) || null, src, now],
-      function(err2) {
-        if (err2) return res.status(500).json({ error: 'An internal error occurred.' });
-        const txnId = this.lastID;
-        // Update run totals
-        const col = CR_COST_TYPES.has(type) ? 'total_cost' : (type === 'sell' || type === 'refine_out' || type === 'craft_out' ? 'total_revenue' : null);
-        if (col) {
-          db.run(`UPDATE craft_runs SET ${col} = ${col} + ? WHERE id = ?`, [totalP, runId], () => {});
-        }
-        res.json({ success: true, id: txnId });
+  let row;
+  try { row = readDb.prepare(`SELECT id FROM craft_runs WHERE id = ? AND user_id = ?`).get(runId, req.user.id); }
+  catch (err) { return res.status(500).json({ error: 'An internal error occurred.' }); }
+  if (!row) return res.status(404).json({ error: 'Run not found.' });
+  const now = Date.now();
+  db.run(
+    `INSERT INTO craft_run_transactions (run_id, type, item_id, quantity, unit_price, total_price, city, source, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [runId, type, item_id.slice(0, 100), qty, unitP, totalP, (city || '').slice(0, 50) || null, src, now],
+    function(err2) {
+      if (err2) return res.status(500).json({ error: 'An internal error occurred.' });
+      const txnId = this.lastID;
+      // Update run totals
+      const col = CR_COST_TYPES.has(type) ? 'total_cost' : (type === 'sell' || type === 'refine_out' || type === 'craft_out' ? 'total_revenue' : null);
+      if (col) {
+        db.run(`UPDATE craft_runs SET ${col} = ${col} + ? WHERE id = ?`, [totalP, runId], () => {});
       }
-    );
-  });
+      res.json({ success: true, id: txnId });
+    }
+  );
 });
 
 // POST /api/craft-runs/:id/scan — link a tab scan, split cost across items
@@ -4093,74 +4055,69 @@ app.post('/api/craft-runs/:id/scan', requireAuth, (req, res) => {
   const paid = Math.max(0, parseFloat(total_paid) || 0);
   const method = ['by_market_value','equal_split','manual'].includes(allocation_method) ? allocation_method : 'equal_split';
 
-  readDb.get(`SELECT id FROM craft_runs WHERE id = ? AND user_id = ?`, [runId, req.user.id], (err, row) => {
-    if (err) return res.status(500).json({ error: 'An internal error occurred.' });
-    if (!row) return res.status(404).json({ error: 'Run not found.' });
-    const now = Date.now();
-    db.run(
-      `INSERT INTO craft_run_scans (run_id, container_id, items_json, total_paid, allocation_method, scanned_at) VALUES (?, ?, ?, ?, ?, ?)`,
-      [runId, (container_id || '').slice(0, 100) || null, JSON.stringify(items), paid, method, now],
-      function(err2) {
-        if (err2) return res.status(500).json({ error: 'An internal error occurred.' });
-        const scanId = this.lastID;
-        // Split cost equally across item lines (by_market_value requires client-side market data; we use equal_split as safe default)
-        const totalQty = items.reduce((s, it) => s + (parseInt(it.qty || it.quantity) || 1), 0);
-        let txnsCreated = 0;
-        let pending = items.length;
-        if (pending === 0) return res.json({ success: true, scan_id: scanId, txns_created: 0 });
-        items.forEach(it => {
-          const qty = Math.max(1, parseInt(it.qty || it.quantity) || 1);
-          const share = totalQty > 0 ? (qty / totalQty) : (1 / items.length);
-          const lineTotal = paid * share;
-          const unitP = qty > 0 ? lineTotal / qty : 0;
-          db.run(
-            `INSERT INTO craft_run_transactions (run_id, type, item_id, quantity, unit_price, total_price, source, scan_tab_id, timestamp) VALUES (?, 'buy', ?, ?, ?, ?, 'tab_scan', ?, ?)`,
-            [runId, String(it.item_id || it.itemId || 'UNKNOWN').slice(0, 100), qty, unitP, lineTotal, String(scanId), now],
-            (err3) => {
-              if (!err3) txnsCreated++;
-              if (--pending === 0) {
-                // Update run total_cost
-                db.run(`UPDATE craft_runs SET total_cost = total_cost + ? WHERE id = ?`, [paid, runId], () => {});
-                res.json({ success: true, scan_id: scanId, txns_created: txnsCreated });
-              }
+  let row;
+  try { row = readDb.prepare(`SELECT id FROM craft_runs WHERE id = ? AND user_id = ?`).get(runId, req.user.id); }
+  catch (err) { return res.status(500).json({ error: 'An internal error occurred.' }); }
+  if (!row) return res.status(404).json({ error: 'Run not found.' });
+  const now = Date.now();
+  db.run(
+    `INSERT INTO craft_run_scans (run_id, container_id, items_json, total_paid, allocation_method, scanned_at) VALUES (?, ?, ?, ?, ?, ?)`,
+    [runId, (container_id || '').slice(0, 100) || null, JSON.stringify(items), paid, method, now],
+    function(err2) {
+      if (err2) return res.status(500).json({ error: 'An internal error occurred.' });
+      const scanId = this.lastID;
+      // Split cost equally across item lines (by_market_value requires client-side market data; we use equal_split as safe default)
+      const totalQty = items.reduce((s, it) => s + (parseInt(it.qty || it.quantity) || 1), 0);
+      let txnsCreated = 0;
+      let pending = items.length;
+      if (pending === 0) return res.json({ success: true, scan_id: scanId, txns_created: 0 });
+      items.forEach(it => {
+        const qty = Math.max(1, parseInt(it.qty || it.quantity) || 1);
+        const share = totalQty > 0 ? (qty / totalQty) : (1 / items.length);
+        const lineTotal = paid * share;
+        const unitP = qty > 0 ? lineTotal / qty : 0;
+        db.run(
+          `INSERT INTO craft_run_transactions (run_id, type, item_id, quantity, unit_price, total_price, source, scan_tab_id, timestamp) VALUES (?, 'buy', ?, ?, ?, ?, 'tab_scan', ?, ?)`,
+          [runId, String(it.item_id || it.itemId || 'UNKNOWN').slice(0, 100), qty, unitP, lineTotal, String(scanId), now],
+          (err3) => {
+            if (!err3) txnsCreated++;
+            if (--pending === 0) {
+              // Update run total_cost
+              db.run(`UPDATE craft_runs SET total_cost = total_cost + ? WHERE id = ?`, [paid, runId], () => {});
+              res.json({ success: true, scan_id: scanId, txns_created: txnsCreated });
             }
-          );
-        });
-      }
-    );
-  });
+          }
+        );
+      });
+    }
+  );
 });
 
 // GET /api/craft-runs/:id/summary — P&L breakdown
 app.get('/api/craft-runs/:id/summary', requireAuth, (req, res) => {
   const runId = parseInt(req.params.id);
   if (!runId) return res.status(400).json({ error: 'Invalid run id.' });
-  readDb.get(`SELECT * FROM craft_runs WHERE id = ? AND user_id = ?`, [runId, req.user.id], (err, run) => {
-    if (err) return res.status(500).json({ error: 'An internal error occurred.' });
+  let run, rows;
+  try {
+    run = readDb.prepare(`SELECT * FROM craft_runs WHERE id = ? AND user_id = ?`).get(runId, req.user.id);
     if (!run) return res.status(404).json({ error: 'Run not found.' });
-    readDb.all(
-      `SELECT type, SUM(total_price) as total FROM craft_run_transactions WHERE run_id = ? GROUP BY type`,
-      [runId],
-      (err2, rows) => {
-        if (err2) return res.status(500).json({ error: 'An internal error occurred.' });
-        const by_type = {};
-        (rows || []).forEach(r => { by_type[r.type] = r.total; });
-        const totalCost = run.total_cost;
-        const totalRevenue = run.total_revenue;
-        const taxEst = totalRevenue * 0.055;
-        const netProfit = totalRevenue - totalCost - taxEst;
-        const marginPct = totalCost > 0 ? ((netProfit / totalCost) * 100) : 0;
-        res.json({
-          run,
-          total_cost: totalCost,
-          total_revenue: totalRevenue,
-          tax_estimate: taxEst,
-          net_profit: netProfit,
-          margin_pct: marginPct,
-          by_type
-        });
-      }
-    );
+    rows = readDb.prepare(`SELECT type, SUM(total_price) as total FROM craft_run_transactions WHERE run_id = ? GROUP BY type`).all(runId);
+  } catch (err) { return res.status(500).json({ error: 'An internal error occurred.' }); }
+  const by_type = {};
+  (rows || []).forEach(r => { by_type[r.type] = r.total; });
+  const totalCost = run.total_cost;
+  const totalRevenue = run.total_revenue;
+  const taxEst = totalRevenue * 0.055;
+  const netProfit = totalRevenue - totalCost - taxEst;
+  const marginPct = totalCost > 0 ? ((netProfit / totalCost) * 100) : 0;
+  res.json({
+    run,
+    total_cost: totalCost,
+    total_revenue: totalRevenue,
+    tax_estimate: taxEst,
+    net_profit: netProfit,
+    margin_pct: marginPct,
+    by_type
   });
 });
 
@@ -4308,28 +4265,29 @@ wss.on('connection', (ws, req) => {
 
       // Game client auth (capture token) — use readDb to avoid queue starvation behind NATS inserts
       if (msg.type === 'client-auth' && msg.token) {
-        readDb.get(`SELECT id, username FROM users WHERE capture_token = ?`, [msg.token], (err, user) => {
-          if (err || !user) {
-            wsAuthRecordFailure(ws._ip);
-            wsSafeSend(ws, { type: 'client-auth', success: false, error: 'Invalid capture token' });
-            return;
-          }
-          ws.user = { id: user.id, username: user.username };
-          ws.isAuthenticated = true;
-          ws.clientType = 'game-client';
-          // Honor client-provided sessionID (UUIDv4 from Go client >= v0.7.1) — pins ws.lootSessionId
-          // so loot events across reconnects land in the SAME session instead of fragmenting.
-          // Validate format strictly to prevent session collision or injection.
-          // Accepted shape: alphanumeric + hyphens, 8..64 chars (covers UUIDv4 = 36 chars).
-          if (typeof msg.sessionID === 'string' && /^[a-zA-Z0-9-]{8,64}$/.test(msg.sessionID)) {
-            // Namespace under user id so two users can never collide on the same session_id.
-            ws.lootSessionId = user.id + '_' + msg.sessionID;
-            console.log(`[ClientAuth] Game client authenticated for user ${user.username} (sessionID=${msg.sessionID})`);
-          } else {
-            console.log(`[ClientAuth] Game client authenticated for user ${user.username} (legacy — no sessionID)`);
-          }
-          wsSafeSend(ws, { type: 'client-auth', success: true, username: user.username });
-        });
+        let user;
+        try { user = readDb.prepare(`SELECT id, username FROM users WHERE capture_token = ?`).get(msg.token); }
+        catch (err) { user = null; }
+        if (!user) {
+          wsAuthRecordFailure(ws._ip);
+          wsSafeSend(ws, { type: 'client-auth', success: false, error: 'Invalid capture token' });
+          return;
+        }
+        ws.user = { id: user.id, username: user.username };
+        ws.isAuthenticated = true;
+        ws.clientType = 'game-client';
+        // Honor client-provided sessionID (UUIDv4 from Go client >= v0.7.1) — pins ws.lootSessionId
+        // so loot events across reconnects land in the SAME session instead of fragmenting.
+        // Validate format strictly to prevent session collision or injection.
+        // Accepted shape: alphanumeric + hyphens, 8..64 chars (covers UUIDv4 = 36 chars).
+        if (typeof msg.sessionID === 'string' && /^[a-zA-Z0-9-]{8,64}$/.test(msg.sessionID)) {
+          // Namespace under user id so two users can never collide on the same session_id.
+          ws.lootSessionId = user.id + '_' + msg.sessionID;
+          console.log(`[ClientAuth] Game client authenticated for user ${user.username} (sessionID=${msg.sessionID})`);
+        } else {
+          console.log(`[ClientAuth] Game client authenticated for user ${user.username} (legacy — no sessionID)`);
+        }
+        wsSafeSend(ws, { type: 'client-auth', success: true, username: user.username });
       }
 
       // Loot event from game client
