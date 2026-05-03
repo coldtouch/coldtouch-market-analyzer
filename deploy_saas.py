@@ -6363,6 +6363,32 @@ require('http').createServer((req, res) => {
   res.end();
 }).listen(80, () => console.log('HTTP redirect listening on 80'));
 """
+    # 2026-05-02: pre-flight syntax check. Catches typos in the embedded JS string
+    # before SFTP overwrites the working backend on the VPS. Costs ~200ms locally.
+    # Without this, a single dangling brace can take the site down for the duration
+    # of a manual revert + redeploy.
+    import tempfile, subprocess
+    tmp_js_path = None
+    try:
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.js', delete=False, encoding='utf-8') as _tmp:
+            _tmp.write(backend_js)
+            tmp_js_path = _tmp.name
+        _check = subprocess.run(['node', '--check', tmp_js_path], capture_output=True, text=True, timeout=30)
+        if _check.returncode != 0:
+            print("[deploy] backend.js syntax check FAILED — aborting before SFTP")
+            print(_check.stderr)
+            ssh.close()
+            sys.exit(1)
+        print(f"[deploy] backend.js syntax OK ({len(backend_js)} bytes)")
+    except FileNotFoundError:
+        print("[deploy] WARNING: 'node' not on PATH — skipping local syntax check (deploy continues)")
+    except subprocess.TimeoutExpired:
+        print("[deploy] WARNING: 'node --check' timed out — skipping local syntax check (deploy continues)")
+    finally:
+        if tmp_js_path and os.path.exists(tmp_js_path):
+            try: os.unlink(tmp_js_path)
+            except OSError: pass
+
     # DO-1: snapshot current backend.js so `deploy_saas.py rollback` can restore it.
     run_wait("test -f /opt/albion-saas/backend.js && cp /opt/albion-saas/backend.js /opt/albion-saas/backend.js.bak || true")
 
