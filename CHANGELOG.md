@@ -2,6 +2,26 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-05-04 (afternoon) — Hardening pass after first overnight: split transient errors, raise compaction threshold, add event-loop watchdog
+
+After the morning's emergency compaction fix held cleanly through 7 compaction cycles overnight (NRestarts=0, all 1.4M migrated rows processed without wedging), reviewed the journal and fixed the loose ends I'd flagged for next session:
+
+- **`[FATAL] Uncaught exception: socket hang up` (×2) + `Cannot read properties of null (reading 'setHeader')` (×2) overnight** — fired in pairs, ~30-65 s apart, both following AODP cache-scan timeouts. Service kept running (the handler logs and continues for non-SQLite errors), but the previous handler reset *every* job flag (`scanInProgress`/`statsRunning`/`analyticsRunning`/`dbBusy`) on any uncaughtException, so a single transient socket error blew away in-flight compaction state and let a second compaction race. **Fix in `_handleFatal`:** classify errors. Anything matching `/socket hang up|ECONNRESET|ETIMEDOUT|EPIPE|AbortError|aborted|reading ['"]setHeader['"]/|Cannot set headers after they are sent|write after end|Premature close/` is now `[NET-WARN]` (logged, no flag reset). Genuine programmer/state errors keep the original `[FATAL]` + flag-reset behavior, plus full stack traces (previously `err.message || err.stack` only logged stack if message empty — flipped to log both).
+
+- **`Cannot read properties of null (reading 'setHeader')` source identified** — the global 30s `res.setTimeout` middleware called `res.status(503).json(...)` even when the underlying socket had already been destroyed (mid-tear-down). The `setHeader on null` was Node's HTTP layer crashing inside `res.json`'s set-Content-Type path. **Fix:** check `res.destroyed`, `res.socket`, `res.socket.destroyed`, `res.socket.writableEnded` before calling `res.status().json(...)`, and wrap the call in try/catch. Also wrapped the patched `res.json`/`res.send` themselves in try/catch.
+
+- **`DB_WARN_GB` raised 10 → 15 GB** — steady-state DB after the morning cleanup is ~13 GB (mostly `price_hourly`'s 51M rows; `price_averages` itself is ~1.5 GB). With WARN at 10 GB, the 2h `checkDiskUsage` cycle triggered compaction *every cycle, forever* — 8-13 min of work per cycle, 12 cycles/day = ~120-150 min/day on routine no-op compaction. With WARN at 15 GB the daily 7-day-retention compaction handles routine cleanup; the 2h trigger only fires if growth has actually outpaced the daily run. EMERGENCY threshold (20 GB → 1d retention) unchanged.
+
+- **`monitorEventLoopDelay` watchdog added** — the missing piece from yesterday's diagnosis. Uses `node:perf_hooks` (libuv-level high-resolution timing — accurately measures sync wedges that the JS event loop itself can't observe). Sample every 30s: `>= 1000 ms` logs `[EventLoop] Max delay Xms` (slow sync query); `>= 60000 ms` triggers `process.abort()` for clean systemd restart. The May 3 wedge would have been caught here in the first 30s window vs. hours of silent unresponsiveness. The chunked compaction yields every 5K rows (~50 ms per chunk) so it stays well under 1000 ms during normal operation.
+
+**Files modified:** `deploy_saas.py` (~+60 lines), `sw.js` (auto-bumped). One deploy (server stamp `20260504-125555`), zero downtime — clean SIGTERM → restart cycle, all subsystems came back in 5 s.
+
+**Not addressed in this pass (deferred):**
+- AODP cache-scan timeout retry — current behavior is fine (per-chunk catch already in place; AODP API is just flaky). Adding retry would double load when the API is already struggling.
+- Discord webhook alert on `dbMB > 15000` or `rssMB > 2000` — needs webhook URL plumbing through env. Low priority while `[HEALTH]` is grep-able.
+- `price_hourly` retention strategy — 30d retention on 8M new rows/day = 240M-row steady state. Patched compaction handles it without wedging, but the table itself is large.
+- Daily `price_averages` retention cap (90d) — modest growth, not urgent.
+
 ### 2026-05-04 — Emergency: site outage from event-loop wedge on synchronous compaction (root-cause fix)
 
 **Symptom:** User returned from work to a hung site. Manual `systemctl restart` fixed it for ~26 minutes, then it wedged again. External HTTP timed out (15s no response). Recv-Q on port 443 = 479 pending connections that the process couldn't drain. From outside, identical to the pre-migration restart loop — but `NRestarts=0`, the process was *technically* alive.

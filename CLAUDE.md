@@ -120,7 +120,31 @@
 
 ## Recent Session History
 
-### May 3-4 (overnight) — Site-down emergency: event-loop wedge on synchronous compaction → root-cause fix — Latest
+### May 4 (afternoon) — Hardening after first clean overnight: split transient errors, raise compaction threshold, add event-loop watchdog — Latest
+
+Reviewed the journal after the May 3-4 emergency fix held clean (NRestarts=0 across 12.5h uptime, all 7 scheduled compaction cycles ran without wedging, 1.4M rows migrated). Fixed the loose ends from yesterday's TODO list.
+
+**Issues observed overnight + fixed:**
+
+1. **2× `[FATAL] socket hang up` + 2× `Cannot read properties of null (reading 'setHeader')`** — fired in pairs ~30-65 s apart, both following AODP cache-scan timeouts. Process kept running (the handler logs and continues for non-SQLite errors), BUT the previous `_handleFatal` reset *every* job flag (`scanInProgress`/`statsRunning`/`analyticsRunning`/`dbBusy`) on any uncaughtException, so a single transient socket error could blow away in-flight compaction state and let a second compaction race. **Fix:** classify errors in `_handleFatal`. Transient network errors (socket hang up, ECONNRESET, ETIMEDOUT, EPIPE, AbortError, setHeader-on-null, etc.) now log as `[NET-WARN]` and skip the flag reset. Genuine programmer errors keep `[FATAL]` + flag reset, plus FULL stack traces (the prior `err.message || err.stack` only logged stack if message empty — now logs both).
+
+2. **`Cannot read properties of null (reading 'setHeader')` source nailed down** — the global 30s `res.setTimeout` middleware called `res.status(503).json(...)` even when `res.socket` had been destroyed mid-tear-down. Node's HTTP layer threw `setHeader on null` inside `res.json`'s set-Content-Type path. **Fix:** check `res.destroyed`, `res.socket`, `res.socket.destroyed`, `res.socket.writableEnded` before sending; wrap the call in try/catch. Patched `res.json`/`res.send` also wrapped in try/catch as belt-and-suspenders.
+
+3. **Compaction firing every 2h forever** — DB steady state is ~13 GB (mostly `price_hourly`'s 51M rows). With `DB_WARN_GB=10`, `checkDiskUsage` triggered a 3d-retention compaction every 2h cycle, doing 8-13 min of work each time = ~120-150 min/day of no-op compaction. **Fix:** raised `DB_WARN_GB` to 15 GB. Daily 7-day-retention compaction now handles routine cleanup; 2h trigger only fires on actual growth regression.
+
+4. **No watchdog for non-DB sync wedges** — yesterday's diagnosis flagged this. The pre-migration `WriteLock-WATCHDOG` was per-task, only covered `withWriteLock` paths (deleted in stage 4 of migration). **Fix:** added `monitorEventLoopDelay` from `node:perf_hooks` — libuv-level high-resolution timing, accurately measures sync wedges that the JS event loop itself can't observe. Sample every 30s. WARN at 1 s (slow sync query), PANIC + `process.abort()` at 60 s (catastrophic wedge). Chunked compaction yields every 5K rows (~50 ms) so it stays well under 1 s during normal operation. The May 3 wedge would have been caught in the first 30 s window here.
+
+**Server stamp:** `20260504-125555`. Clean SIGTERM → restart cycle, all subsystems came back in 5 s. NRestarts=0 immediately post-deploy.
+
+**Verified:** `/api/leaderboard` returning 200 in 302 ms. RSS 162 MB at idle. 0 FATAL/0 BUSY/0 Uncaught since deploy.
+
+**Still TODO (deferred, not blocking):**
+- AODP cache-scan retry — not adding (would double load when API is already struggling)
+- Discord webhook alert on `dbMB > 15000` or `rssMB > 2000` — webhook plumbing TBD; `[HEALTH]` is grep-able for now
+- `price_hourly` 30d retention is structurally large (240M-row steady state at current ingest); options are (a) reduce retention, (b) skip price_hourly, (c) prune low-traffic items
+- Daily `price_averages` retention cap (90d) — modest growth, not urgent
+
+### May 3-4 (overnight) — Site-down emergency: event-loop wedge on synchronous compaction → root-cause fix
 
 User came home from work to a hung site. `systemctl restart` from his phone bought 26 min before it wedged again. From outside it looked like the pre-migration restart loop was back, but `NRestarts=0` — the process was technically alive, just unresponsive (479 requests queued in port 443's recv-q, HTTP timing out at 15+s, last journal log line 57 minutes prior).
 

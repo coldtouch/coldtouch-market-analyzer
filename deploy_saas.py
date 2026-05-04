@@ -1307,15 +1307,28 @@ function resolveCanonicalWeight(numericId, fallbackWeight) {
 // (logged as [FATAL] Uncaught exception: Cannot set headers after they are sent).
 // Patch res.json/send/status to no-op after headersSent, so late completions
 // silently drop instead of crashing out of the catch boundary.
+//
+// 2026-05-04 hardening: also defend against the case where res is mid-tear-down
+// when the timeout fires (socket destroyed, response in a half-broken state).
+// Calling res.status(503).json(...) in that state was producing the morning's
+// "Cannot read properties of null (reading 'setHeader')" pairs. Now we check
+// destroyed/socket state first and wrap the send in try/catch.
 app.use((req, res, next) => {
     const origJson = res.json.bind(res);
     const origSend = res.send.bind(res);
-    res.json = (body) => { if (res.headersSent) return res; return origJson(body); };
-    res.send = (body) => { if (res.headersSent) return res; return origSend(body); };
+    res.json = (body) => { if (res.headersSent || res.destroyed) return res; try { return origJson(body); } catch (e) { console.warn('[ResGuard] json after teardown:', e && e.message); return res; } };
+    res.send = (body) => { if (res.headersSent || res.destroyed) return res; try { return origSend(body); } catch (e) { console.warn('[ResGuard] send after teardown:', e && e.message); return res; } };
     res.setTimeout(30000, () => {
-        if (!res.headersSent) {
+        // Bail early if the response/socket is already in a bad state; trying to
+        // setHeader on a destroyed connection throws "Cannot read properties of
+        // null (reading 'setHeader')".
+        if (res.headersSent || res.destroyed) return;
+        if (!res.socket || res.socket.destroyed || res.socket.writableEnded) return;
+        try {
             console.warn('[Timeout] Request timed out:', req.method, req.url);
             res.status(503).json({ error: 'Request timed out' });
+        } catch (e) {
+            console.warn('[Timeout] Could not send 503 (socket gone):', e && e.message);
         }
     });
     next();
@@ -5545,7 +5558,17 @@ async function compactOldData(rawRetentionDays) {
 
 // === DISK SAFETY CHECK (runs alongside compaction every 2 hours) ===
 // Prevents SQLite DB from growing unbounded. Adaptive retention based on DB size.
-const DB_WARN_GB  = 10;
+//
+// 2026-05-04: WARN threshold raised 10 → 15 GB. Steady-state DB after the May 4
+// cleanup is ~13 GB (mostly price_hourly with 51M rows; price_averages itself
+// is ~1.5 GB). With WARN at 10 GB, the 2h check triggered compaction every
+// cycle forever — 8-13 min of work each time, 12 cycles/day = ~120-150 min/day
+// just on compaction. The patched chunked compaction handles it cleanly, but
+// it's wasteful and competes with other DB work. With WARN at 15 GB, the
+// daily 7-day-retention compaction handles routine cleanup, and the 2h trigger
+// only fires if growth has actually outpaced the daily run (a real regression
+// signal). EMERGENCY threshold (20 GB → 1d retention) unchanged.
+const DB_WARN_GB  = 15;
 const DB_EMERG_GB = 20;
 
 function checkDiskUsage() {
@@ -5604,6 +5627,34 @@ function emitHealthLine() {
 // First heartbeat 2 min after start (let DB connection settle), then every 10 min
 setTimeout(emitHealthLine, 2 * 60 * 1000);
 setInterval(emitHealthLine, 10 * 60 * 1000);
+
+// === EVENT-LOOP WATCHDOG (root-cause observability, 2026-05-04) ===
+// The piece that was missing yesterday: a way to detect ANY sync wedge (not
+// just the withWriteLock-tracked ones). monitorEventLoopDelay uses libuv-level
+// high-resolution timing — it accurately measures how long the loop was
+// blocked even when sync code is holding it. We sample every 30s, log a WARN
+// at 1s+ blocking (suggests a slow sync query) and emit a FATAL+exit at 60s+
+// (the May 3 wedge would have been caught here in the first cycle, vs hours
+// of silent unresponsiveness).
+const _perfHooks = require('perf_hooks');
+const _eventLoopHist = _perfHooks.monitorEventLoopDelay({ resolution: 50 });
+_eventLoopHist.enable();
+const EVENT_LOOP_WARN_MS  = 1000;     // 1s — slow sync query, log it
+const EVENT_LOOP_PANIC_MS = 60000;    // 60s — wedged, abort for systemd restart
+setInterval(() => {
+  // Take a snapshot of max recorded delay since last reset, then reset.
+  // monitorEventLoopDelay reports in nanoseconds.
+  const maxNs = _eventLoopHist.max;
+  _eventLoopHist.reset();
+  if (!maxNs || !Number.isFinite(maxNs)) return;
+  const maxMs = Math.round(maxNs / 1e6);
+  if (maxMs >= EVENT_LOOP_PANIC_MS) {
+    console.error(`[FATAL] Event loop blocked ${maxMs}ms (>${EVENT_LOOP_PANIC_MS}ms) — aborting for clean systemd restart`);
+    if (!_aborting) { _aborting = true; process.abort(); }
+  } else if (maxMs >= EVENT_LOOP_WARN_MS) {
+    console.warn(`[EventLoop] Max delay ${maxMs}ms in last 30s (compaction=${compactionRunning} stats=${typeof statsRunning !== 'undefined' && statsRunning ? 1 : 0} analytics=${typeof analyticsRunning !== 'undefined' && analyticsRunning ? 1 : 0})`);
+  }
+}, 30 * 1000);
 
 // === ANALYTICS COMPUTATION ENGINE ===
 // Computes SMA 7d, SMA 30d, EMA 7d, VWAP 7d, price_trend, spread_volatility
@@ -6184,9 +6235,47 @@ let natsConnection = null;
 // callback orphan class to defend against anymore. _handleFatal still catches
 // non-SQLite uncaughtException (NATS connection blow-up, Discord lib bug, etc.).
 let _aborting = false;
+
+// 2026-05-04: split transient network errors out of FATAL. The May 4 morning
+// journal showed pairs of "socket hang up" + "Cannot read properties of null
+// (reading 'setHeader')" firing 30-60s apart, both caught by the uncaughtException
+// handler. They were logged as [FATAL] but the process kept running fine — these
+// are byproducts of Node's HTTP/socket internals reacting to a remote disconnect
+// (typically AODP API timeout during cache scan). They don't corrupt our state.
+//
+// Worse, the previous handler reset scanInProgress/statsRunning/analyticsRunning/
+// dbBusy on every uncaughtException — so a single transient socket error would
+// blow away the in-flight compaction's flag, letting a second compaction race.
+// New behavior: classify, log appropriately, only reset flags for genuine
+// programmer errors / state-corrupting failures.
+const _TRANSIENT_NET_PATTERNS = [
+  /socket hang up/i,
+  /ECONNRESET/,
+  /ETIMEDOUT/,
+  /EPIPE/,
+  /AbortError/i,
+  /aborted/i,
+  /reading ['"]setHeader['"]/,
+  /Cannot set headers after they are sent/,
+  /write after end/i,
+  /Premature close/,
+];
+function _isTransientNetError(msg) {
+  if (!msg) return false;
+  return _TRANSIENT_NET_PATTERNS.some(re => re.test(msg));
+}
+
 const _handleFatal = (kind, err) => {
-  const msg = err && (err.message || err.stack) || String(err);
+  const msg = (err && (err.message || String(err))) || 'unknown';
+  const stack = err && err.stack;
+  if (_isTransientNetError(msg)) {
+    // Transient: log + ignore. Don't reset flags — concurrent jobs are unaffected.
+    console.warn(`[NET-WARN] ${kind} (transient):`, msg);
+    return;
+  }
+  // Genuine error: full diagnostic dump + flag reset so background jobs can recover.
   console.error(`[FATAL] ${kind}:`, msg);
+  if (stack && stack !== msg) console.error(stack);
   scanInProgress = false;
   statsRunning = false;
   analyticsRunning = false;
