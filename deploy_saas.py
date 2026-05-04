@@ -5574,7 +5574,15 @@ async function compactOldData(rawRetentionDays) {
   const keepRawDays = rawRetentionDays || 7;
   const now = Date.now();
   const rawCutoff      = now - keepRawDays * 24 * 60 * 60 * 1000;
-  const hourlyCutoffMs = now - 30 * 24 * 60 * 60 * 1000;
+  // 2026-05-04: price_hourly retention reduced 30d → 14d. At ~8M new rows/day
+  // ingest, 30d retention gives a ~240M-row steady-state table. The chunked
+  // Tier 2→3 compaction handles that load fine, but the table itself is
+  // structurally large (~5 GB on disk just for indexes). 14d cuts steady-state
+  // to ~112M rows (~50% reduction). Charts that request >14d of data fall
+  // back to daily-resolution price_averages rows for the older portion (the
+  // /api/price-history endpoint already has this fallback wired into histRows).
+  const PRICE_HOURLY_RETENTION_DAYS = 14;
+  const hourlyCutoffMs = now - PRICE_HOURLY_RETENTION_DAYS * 24 * 60 * 60 * 1000;
   const hourlyCutoffStr = new Date(hourlyCutoffMs).toISOString().slice(0, 13);
   const t0 = Date.now();
   const rssNow = () => Math.round(process.memoryUsage().rss / (1024 * 1024));

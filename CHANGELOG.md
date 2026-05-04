@@ -2,6 +2,14 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-05-04 (later, deferred backlog) — `price_hourly` retention 30 → 14 days + analytics double-fire fix
+
+After the stability arc landed, picked up two deferred backlog items:
+
+- **`price_hourly` retention reduced 30 d → 14 d.** At ~8 M new rows/day ingest, 30-day retention gives a ~240 M-row steady-state table; the chunked Tier 2→3 compaction handles that load fine, but the table itself is structurally large (~5 GB on disk just for indexes). 14-day retention cuts steady-state to ~112 M rows (-50%). User-facing impact: `/api/price-history?days>14` charts get hourly OHLC bars only for the last 14 days; older days fall back to daily resolution from `price_averages` (the line plot from `histRows` already returns daily rows for the older window, no endpoint code change needed). Default `?days=7` and the common `?days=14` views unchanged.
+
+- **Analytics scheduling double-fire fixed.** The pattern `setTimeout(_runAnalytics, 35min); setInterval(_runAnalytics, 30min)` was firing analytics at +30, +35, +60, +90… — i.e. two consecutive runs near every restart (observed today at 19:03:55 + 19:07:25). Replaced with the cleaner nested form: `setTimeout(() => { _runAnalytics(); setInterval(_runAnalytics, 30min); }, 35min)`. Now fires at +35, +65, +95, … as documented.
+
 ### 2026-05-04 (final pass) — root cause was WAL frame traversal, not just SQL ordering
 
 After all the chunking and mutex fixes landed, spreadStats *still* logged a 23.6 s EventLoop wedge at 18:27:08 — with no concurrent priceRefCache, with the 128 MB cache, with proper chunking. CLI EXPLAIN of the same query on the same chunk: 1.78 s. Production: 23 s. 13× slower.
