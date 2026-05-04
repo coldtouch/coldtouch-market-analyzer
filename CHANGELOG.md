@@ -31,6 +31,12 @@ The afternoon's `monitorEventLoopDelay` watchdog earned its keep on its very fir
 
 - **Skip the loot_events dedup DELETE on subsequent restarts.** The startup sequence ran a `DELETE FROM loot_events WHERE rowid NOT IN (SELECT MIN(rowid) ... GROUP BY 7 columns)` unconditionally on every boot, taking 5-10 s on a large table. Once the unique index `idx_loot_events_dedupe` is installed, all 4 `INSERT INTO loot_events` callsites use `INSERT OR IGNORE` so duplicates can't accumulate — the recurring DELETE is pointless. New code checks for the index in `sqlite_master` and skips the GROUP BY + DELETE when it exists. Should drop startup event-loop block from ~16 s → ~1-2 s on the next clean boot.
 
+**Follow-on tightening from the first verified cycle (deploy `20260504-150601`):**
+
+The 16:58 spreadStats run finished in 21 s (down from 90 s pre-fix) but logged a 5948 ms EventLoop max delay — one chunk's contiguous sync work (SQL aggregate + city-pair compute + flush) crossed 5 s. Added 3 yield points per chunk: after the SQL aggregate (compute starts on a fresh tick), every 1000 items in the compute loop (drains writeBuf periodically), and before flushing the chunk's tail buffer. Trade-off: small wallclock overhead (~25-30 s vs 21 s) for keeping each sync span under 5 s. PANIC threshold unchanged at 60 s.
+
+Plus added a 60 s boot-grace window to the EventLoop watchdog. The startup path has 3 contiguous sync ops (`initPriceRefCache` GROUP BY + `writePriceRefInit` transaction + `buildPriceReference` loop) that combine to 5-7 s — natural one-spike-per-restart, not a regression. Boot-window WARNs now log at INFO level with a clear `(boot grace)` marker so we still have observability without crying wolf in the journal.
+
 ### 2026-05-04 (afternoon) — Hardening pass after first overnight: split transient errors, raise compaction threshold, add event-loop watchdog
 
 After the morning's emergency compaction fix held cleanly through 7 compaction cycles overnight (NRestarts=0, all 1.4M migrated rows processed without wedging), reviewed the journal and fixed the loose ends I'd flagged for next session:
