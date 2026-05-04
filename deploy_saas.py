@@ -240,7 +240,11 @@ db.pragma('journal_mode = WAL');
 db.pragma('synchronous = NORMAL');
 db.pragma('cache_size = -32000');         // 32MB page cache
 db.pragma('mmap_size = 0');               // disable mmap to prevent RSS inflation
-db.pragma('wal_autocheckpoint = 1000');
+// 2026-05-04: lowered 1000 → 500. With heavy writers (NATS every 30s,
+// priceRefCache 87k upserts every 10min, snapshot ingest, compaction),
+// 1000-page (4MB) threshold lets WAL drift to its 64MB cap. At 500 pages
+// (~2MB) WAL stays bounded, keeping cross-connection read traversal cheap.
+db.pragma('wal_autocheckpoint = 500');
 db.pragma('journal_size_limit = 67108864'); // 64 MB
 db.pragma('foreign_keys = ON');           // FK constraints (per-connection in SQLite)
 
@@ -3567,14 +3571,16 @@ async function refreshPriceRefCache() {
       await _priceRefYield();
     }
     if (totalUpdated > 0) console.log(`[PriceRefCache] Updated ${totalUpdated} entries from last 2h`);
-    // Force a WAL checkpoint after each refresh to keep the WAL bounded.
-    // wal_autocheckpoint at 1000 pages (~4MB) doesn't keep up with the 86k+
-    // INSERT OR REPLACE rate during heavy write windows, so the WAL drifts to
-    // its 64MB journal_size_limit and starts back-pressuring readers.
+    // Force a WAL checkpoint after each refresh. Use RESTART (not PASSIVE) so
+    // any readers that hadn't yet moved past the old snapshot are signalled
+    // to start a new transaction; the next read sees a clean WAL frame index.
+    // RESTART doesn't truncate the file but resets frame count to 0, which is
+    // what matters for read perf (each cross-connection read consults the WAL
+    // frame index, so frame count = read overhead).
     try {
-      const cp = db.pragma('wal_checkpoint(PASSIVE)');
-      if (Array.isArray(cp) && cp[0] && cp[0].busy) {
-        // Reader holds the snapshot; PASSIVE couldn't truncate. Not an error.
+      const cp = db.pragma('wal_checkpoint(RESTART)');
+      if (Array.isArray(cp) && cp[0]) {
+        console.log(`[PriceRefCache] wal_checkpoint(RESTART): busy=${cp[0].busy} log=${cp[0].log} checkpointed=${cp[0].checkpointed}`);
       }
     } catch (err) {
       console.error('[PriceRefCache] wal_checkpoint failed:', err.message);
@@ -5267,6 +5273,19 @@ async function computeSpreadStats() {
 
   const mem = process.memoryUsage();
   console.log(`[SpreadStats] Starting chunked aggregation... RSS: ${Math.round(mem.rss/1024/1024)}MB Heap: ${Math.round(mem.heapUsed/1024/1024)}MB`);
+
+  // Drain WAL before the heavy aggregate. NATS flushes (every 30s) and the
+  // last priceRefCache cycle leave thousands of WAL frames; cross-connection
+  // reads then have to consult the WAL frame index for every page request,
+  // multiplying scan time by 10x+. RESTART resets the frame count to 0.
+  try {
+    const cp = db.pragma('wal_checkpoint(RESTART)');
+    if (Array.isArray(cp) && cp[0]) {
+      console.log(`[SpreadStats] pre-run wal_checkpoint(RESTART): busy=${cp[0].busy} log=${cp[0].log} checkpointed=${cp[0].checkpointed}`);
+    }
+  } catch (err) {
+    console.error('[SpreadStats] pre-run wal_checkpoint failed:', err.message);
+  }
 
   // 2026-05-04: chunked by item_id range to keep each sync block under the
   // 5s EventLoop WARN threshold. Single-shot .all() across the full table
