@@ -120,7 +120,50 @@
 
 ## Recent Session History
 
-### May 2-3 — better-sqlite3 migration: drop node-sqlite3 entirely (4 stages, ~17h work) — Latest
+### May 3-4 (overnight) — Site-down emergency: event-loop wedge on synchronous compaction → root-cause fix — Latest
+
+User came home from work to a hung site. `systemctl restart` from his phone bought 26 min before it wedged again. From outside it looked like the pre-migration restart loop was back, but `NRestarts=0` — the process was technically alive, just unresponsive (479 requests queued in port 443's recv-q, HTTP timing out at 15+s, last journal log line 57 minutes prior).
+
+**Root cause:** `compactOldData()` was loading the entire price_averages hourly result set (29,968,787 rows) into one JS array via `db.all()`, then running a single sync `db.transaction()` that called `stmt.run` for every row. Under better-sqlite3 (sync) this **blocks the JS event loop for the entire duration**. Combined with 30M old rows + 3 secondary indexes per row, the transaction grew RSS to 9.7 GB and held the event loop for hours.
+
+**Why it surfaced now:** the May 2-3 migration eliminated the BUSY abort cycle. Pre-migration, every `process.abort` cleared in-flight compactions along with the queue — the silent compaction failures were *masked* by the same restart loop we were fighting. Post-migration the aborts stopped, the silent failures stopped being papered over, and tables grew unbounded until compaction ran into a 30M-row scan it couldn't finish.
+
+**Fixes shipped (one deploy, server stamp `20260504-001522`):**
+
+1. **`compactOldData` rewrite** — async + chunked (5K rows per cycle), `await new Promise(r => setImmediate(r))` between chunks (event loop gets a tick between every batch), per-cycle INSERT-then-DELETE in their own small transactions (so `wal_autocheckpoint=1000` keeps WAL bounded), `process.memoryUsage().rss > 1.5 GB` early bail, `PRAGMA wal_checkpoint(TRUNCATE)` at the end. Tier 2→3 same pattern but paginated by `item_id` ranges.
+2. **`[HEALTH]` heartbeat** — emits every 10 min: `dbMB`, `walMB`, `rssMB`, `heapMB`, plus the `compactionRunning`/`statsRunning`/`analyticsRunning` flags. Now `journalctl -u albion-saas | grep HEALTH` is the single canonical view of "is the DB growing?". This is what would have made the pre-outage growth visible — it had been creeping up for days with no alarm.
+3. **`.catch()` handlers** — added to all fire-and-forget `compactOldData(...)` callers (the function is now async; an unhandled promise rejection would kill the process).
+
+**One-time offline cleanup (with service stopped):**
+- Bulk-copy keepers strategy (chunked DELETE was ~700 rows/sec, way too slow on 30M rows because of per-row index updates):
+  - `INSERT INTO price_averages_new SELECT * FROM old WHERE period_type='daily' OR period_start >= now-3d` → 5,929,557 keepers from 29,968,787 rows in **179 s**
+  - `DROP TABLE price_averages` → **18 min** (4.7M pages added to freelist)
+  - `RENAME` (instant) + 3 indexes → **84 s** total
+  - `VACUUM` → **20 min** (rewrote 20.4 GB → 11.7 GB compact file)
+
+**Numbers post-deploy:**
+- DB on disk: **19.7 GB → 11.7 GB**
+- `price_averages` rows: **29,968,787 → 5,929,557** (-80%)
+- WAL: **4 GB → 6 MB** (clean)
+- Process RSS: **9.7 GB → 191 MB** (-98%)
+- Disk: 87% → 36% used (also dropped 4 obsolete backups during the work — backup cron keeps last 4 and they were 14-19 GB each from the bloat era)
+- HTTP latency: timeout (15+s) → 300 ms
+- First `[HEALTH]` heartbeat at 02:17 CEST: `dbMB=11234 walMB=6 rssMB=191 heapMB=64 compaction=0 stats=0 analytics=0` ✓
+- `/api/leaderboard` returns real JSON end-to-end ✓
+- 0 FATAL / 0 BUSY / 0 Uncaught log lines since deploy
+
+**Still TODO (root-cause work flagged for next session):**
+- `price_hourly` is 51M rows. Retention is 30 days, but data accrues at ~8M rows/day → 240M-row steady state. The new chunked Tier 2→3 will handle that load without wedging, but the table itself is structurally large. Options: (a) reduce retention to 14d, (b) skip `price_hourly` entirely and roll directly from raw → daily, (c) prune low-traffic items based on `volume`.
+- `price_averages` daily rows have no retention policy — eventually they grow. At ~85K daily rows/day they're modest, but a 90-day cap is sensible.
+- Add `monitorEventLoopDelay` watchdog from `node:perf_hooks` — would catch arbitrary sync wedges, not just compaction's.
+- Add Discord webhook alert when `[HEALTH]` shows `dbMB > 15000` or `rssMB > 2000`.
+- `price_snapshots` is empty (0 rows) — confirm that's expected (it's auto-compacted at 6h) vs. an ingest-path regression.
+
+**Files modified:** `deploy_saas.py` (~+190 lines, mostly comments). One-time cleanup scripts in `tmp_check/` (kept for reference; `.gitignore`d).
+
+**Lesson:** any sync DB operation that can scan more than ~10K rows MUST yield to the event loop between chunks under better-sqlite3. The May 2-3 migration removed the worst symptom (BUSY restart loops) but didn't audit every existing query for scan size — that's the next layer of hardening.
+
+### May 2-3 — better-sqlite3 migration: drop node-sqlite3 entirely (4 stages, ~17h work)
 
 The structural fix the May 1 perma-fix was a band-aid for. The May 1 work mitigated symptoms of node-sqlite3's async-callback orphan bug class via flow control + queue ceiling + `BEGIN IMMEDIATE` + various error-callback fixes. Restart rate dropped from 44/day to 47/day-ish (NRestarts went 0 → 94 in ~36h on the May 1 deploy — i.e. ~1.7/h, exactly the documented baseline). User asked: "is this normal? what should we do?" Answer: NO. A site this small should run for weeks/months between restarts. Driver is the wrong driver for the workload.
 

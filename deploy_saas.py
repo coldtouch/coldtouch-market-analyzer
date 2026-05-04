@@ -5340,111 +5340,207 @@ function scheduleVacuumIfNeeded(rowsDeleted) {
 // The flag-with-watchdog-reset is a belt-and-suspenders fix; we also restructured
 // the schedulers below to call only `checkDiskUsage(true)` which decides the
 // right retention itself, so double-firing shouldn't happen via that path.
+// 2026-05-04 emergency rewrite: previous version did `db.all(SELECT ...)` over
+// all 30M+ old hourly rows in ONE go, plus a single sync `db.transaction()` over
+// every row. That loaded the entire result-set into V8 + ran tens of millions
+// of stmt.run calls without yielding the event loop. Result: RSS climbed to
+// 9.7GB, the process became unresponsive for hours, HTTP/WS/NATS all wedged
+// while compaction ran (Sun 2026-05-03 — site went down twice, manual restart
+// did not help because compaction kicked in again at the 25-min mark and
+// re-wedged). Triggered a 19.6GB DB / 4GB WAL state by then.
+//
+// New version is async + chunked + RSS-guarded:
+//   - SELECT a CHUNK at a time (LIMIT) and process before the next read
+//   - INSERT each chunk in its own small sync transaction (cheap commits)
+//   - DELETE the same chunk via rowid IN (...) with the same LIMIT
+//   - `await setImmediate` between chunks so HTTP/WS/NATS get event-loop time
+//   - bail early if RSS exceeds COMPACTION_RSS_LIMIT_MB (defaults to 1.5 GB)
+//   - skip the in-process auto-VACUUM: it's also sync and would re-wedge the
+//     event loop. Replaced by `wal_checkpoint(TRUNCATE)` so WAL can't grow
+//     unbounded. VACUUM is a manual / off-hours operation.
+//   - skip while analyticsRunning/statsRunning to avoid simultaneous heavy DB
 let compactionRunning = false;
-function compactOldData(rawRetentionDays) {
+const COMPACTION_CHUNK = 5000;             // rows per micro-batch
+const COMPACTION_RSS_LIMIT_MB = 1500;      // bail above this; baseline is ~250 MB
+const COMPACTION_MAX_CYCLES = 20000;       // hard ceiling on chunks per call
+
+async function compactOldData(rawRetentionDays) {
   if (compactionRunning) {
     console.log('[Compaction] Already running, skipping this cycle');
     return;
   }
+  // Avoid contending with the other heavy DB consumers.
+  if (typeof analyticsRunning !== 'undefined' && analyticsRunning) {
+    console.log('[Compaction] Skipped — analyticsRunning');
+    return;
+  }
+  if (typeof statsRunning !== 'undefined' && statsRunning) {
+    console.log('[Compaction] Skipped — statsRunning');
+    return;
+  }
   compactionRunning = true;
-  // Fail-safe reset: even if function exits via an uncovered async path, the
-  // flag is cleared after 15 min so the next cycle isn't blocked indefinitely.
-  setTimeout(() => { compactionRunning = false; }, 15 * 60 * 1000);
+  // Fail-safe reset: even if function exits unexpectedly, the flag clears after
+  // 30 min so the next cycle isn't blocked indefinitely.
+  const flagWatchdog = setTimeout(() => { compactionRunning = false; }, 30 * 60 * 1000);
+
   const keepRawDays = rawRetentionDays || 7;
   const now = Date.now();
-  const rawCutoff    = now - keepRawDays * 24 * 60 * 60 * 1000;
-  const hourlyCutoff = now - 30 * 24 * 60 * 60 * 1000;
+  const rawCutoff      = now - keepRawDays * 24 * 60 * 60 * 1000;
+  const hourlyCutoffMs = now - 30 * 24 * 60 * 60 * 1000;
+  const hourlyCutoffStr = new Date(hourlyCutoffMs).toISOString().slice(0, 13);
+  const t0 = Date.now();
+  const rssNow = () => Math.round(process.memoryUsage().rss / (1024 * 1024));
+  const yieldLoop = () => new Promise(r => setImmediate(r));
 
-  console.log(`[Compaction] Starting (raw retention: ${keepRawDays}d)...`);
+  console.log(`[Compaction] Starting (raw retention: ${keepRawDays}d, chunk: ${COMPACTION_CHUNK}, rssLimit: ${COMPACTION_RSS_LIMIT_MB}MB)...`);
 
-  // === TIER 1→2: Migrate price_averages hourly older than rawCutoff into price_hourly ===
-  db.all(
-    `SELECT item_id, quality, city,
-      strftime('%Y-%m-%dT%H', datetime(period_start/1000, 'unixepoch')) as hour,
-      avg_sell as open_price,
-      avg_sell as high_price,
-      CASE WHEN min_sell > 0 THEN min_sell ELSE avg_sell END as low_price,
-      avg_sell as close_price,
-      avg_sell as avg_price,
-      sample_count as volume
-    FROM price_averages
-    WHERE period_type = 'hourly' AND period_start < ?`,
-    [rawCutoff],
-    (err, rows) => {
-      if (err) { console.error('[Compaction] Tier1→2 error:', err.message); return; }
-      if (!rows || rows.length === 0) {
-        console.log('[Compaction] No hourly rows to migrate');
-      } else {
-        // 2026-05-02 stage 4: direct sync transaction.
-        const stmt_t1to2 = db.prepare(`INSERT OR IGNORE INTO price_hourly (item_id, city, quality, hour, open_price, high_price, low_price, close_price, avg_price, volume) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
-        const writeT1to2 = db.transaction((rows) => {
-          for (const r of rows) {
-            stmt_t1to2.run(r.item_id, r.city, r.quality, r.hour, r.open_price, r.high_price, r.low_price, r.close_price, r.avg_price, r.volume);
-          }
-        });
-        try {
-          writeT1to2.immediate(rows);
-          let deleted = 0;
-          try { deleted = db.prepare(`DELETE FROM price_averages WHERE period_type = 'hourly' AND period_start < ?`).run(rawCutoff).changes; }
-          catch (delErr) { console.error('[Compaction] Tier1→2 DELETE failed:', delErr.message); }
-          console.log(`[Compaction] Tier1→2: migrated ${rows.length} rows to price_hourly, deleted ${deleted} raw rows`);
-          scheduleVacuumIfNeeded(deleted);
-        } catch (err) {
-          console.error('[Compaction] Tier1→2 batch failed (auto-rolled-back):', err.message);
-        }
+  // === TIER 1→2: price_averages hourly < rawCutoff  →  price_hourly ===
+  // Chunk pattern: for each batch read ≤CHUNK rows that match the cutoff,
+  // INSERT them into price_hourly, then DELETE those exact rows from
+  // price_averages. Loop until SELECT returns 0 rows.
+  let migrated = 0, deleted = 0;
+  try {
+    const selT1 = db.prepare(`
+      SELECT rowid AS rid, item_id, quality, city,
+        strftime('%Y-%m-%dT%H', datetime(period_start/1000, 'unixepoch')) AS hour,
+        avg_sell AS open_price,
+        avg_sell AS high_price,
+        CASE WHEN min_sell > 0 THEN min_sell ELSE avg_sell END AS low_price,
+        avg_sell AS close_price,
+        avg_sell AS avg_price,
+        sample_count AS volume
+      FROM price_averages
+      WHERE period_type = 'hourly' AND period_start < ?
+      LIMIT ?`);
+    const insT1 = db.prepare(`INSERT OR IGNORE INTO price_hourly
+      (item_id, city, quality, hour, open_price, high_price, low_price, close_price, avg_price, volume)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+    // Build a DELETE that targets the rowids we just read. For better-sqlite3
+    // we generate a parameterised IN-list per chunk.
+    const writeChunk = db.transaction((rows) => {
+      for (const r of rows) {
+        insT1.run(r.item_id, r.city, r.quality, r.hour, r.open_price, r.high_price, r.low_price, r.close_price, r.avg_price, r.volume);
       }
+    });
 
-      // === TIER 2→3: Roll price_hourly older than 30 days into price_averages daily ===
-      // SQLite strftime comparison: convert hourlyCutoff ms to ISO hour string
-      const hourlyCutoffSec = Math.floor(hourlyCutoff / 1000);
-      const hourlyCutoffStr = new Date(hourlyCutoff).toISOString().slice(0, 13); // 'YYYY-MM-DDTHH'
-      db.all(
-        `SELECT item_id, city, quality,
-          CAST(strftime('%s', hour || ':00:00') AS INTEGER) / 86400 * 86400000 as day_start,
-          AVG(avg_price) as avg_sell,
-          AVG(avg_price) as avg_buy,
-          MIN(low_price) as min_sell,
-          MAX(high_price) as max_buy,
-          SUM(volume) as cnt
-        FROM price_hourly
-        WHERE hour < ?
-        GROUP BY item_id, city, quality, day_start`,
-        [hourlyCutoffStr],
-        (errH, hrows) => {
-          if (errH) { console.error('[Compaction] Tier2→3 error:', errH.message); return; }
-          if (!hrows || hrows.length === 0) { console.log('[Compaction] No price_hourly rows to roll into daily'); return; }
-
-          // 2026-05-02 stage 4: direct sync transaction.
-          const stmt_t2to3 = db.prepare(`INSERT OR REPLACE INTO price_averages (item_id, quality, city, avg_sell, avg_buy, min_sell, max_buy, sample_count, period_type, period_start) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'daily', ?)`);
-          const writeT2to3 = db.transaction((rows) => {
-            for (const r of rows) {
-              stmt_t2to3.run(r.item_id, r.quality, r.city, Math.round(r.avg_sell), Math.round(r.avg_buy), r.min_sell || 0, r.max_buy || 0, r.cnt, r.day_start);
-            }
-          });
-          try {
-            writeT2to3.immediate(hrows);
-            let deletedH = 0;
-            try { deletedH = db.prepare(`DELETE FROM price_hourly WHERE hour < ?`).run(hourlyCutoffStr).changes; }
-            catch (delErr) { console.error('[Compaction] Tier2→3 DELETE failed:', delErr.message); }
-            console.log(`[Compaction] Tier2→3: compacted ${hrows.length} daily rows, deleted ${deletedH} price_hourly rows`);
-            scheduleVacuumIfNeeded(deletedH);
-          } catch (err) {
-            console.error('[Compaction] Tier2→3 batch failed (auto-rolled-back):', err.message);
-          }
-        }
-      );
+    for (let cycle = 0; cycle < COMPACTION_MAX_CYCLES; cycle++) {
+      const rss = rssNow();
+      if (rss > COMPACTION_RSS_LIMIT_MB) {
+        console.warn(`[Compaction] Tier1→2 bailed: RSS ${rss}MB > ${COMPACTION_RSS_LIMIT_MB}MB at cycle ${cycle}`);
+        break;
+      }
+      const rows = selT1.all(rawCutoff, COMPACTION_CHUNK);
+      if (rows.length === 0) break;
+      writeChunk.immediate(rows);
+      // Build DELETE for these rowids
+      const placeholders = rows.map(() => '?').join(',');
+      const delStmt = db.prepare(`DELETE FROM price_averages WHERE rowid IN (${placeholders})`);
+      const info = delStmt.run(...rows.map(r => r.rid));
+      migrated += rows.length;
+      deleted  += info.changes;
+      // Yield to event loop after every chunk
+      await yieldLoop();
     }
-  );
+    if (migrated > 0) {
+      console.log(`[Compaction] Tier1→2: migrated ${migrated} rows, deleted ${deleted} raw rows`);
+    } else {
+      console.log('[Compaction] No hourly rows to migrate');
+    }
+  } catch (err) {
+    console.error('[Compaction] Tier1→2 failed:', err.message);
+  }
 
-  // Prune spread_stats rows older than 14 days
-  const fourteenDaysAgo = now - 14 * 24 * 60 * 60 * 1000;
-  db.run(`DELETE FROM spread_stats WHERE updated_at < ?`, [fourteenDaysAgo], (err) => {
-    if (!err) console.log('[Compaction] Pruned spread_stats rows older than 14 days');
-  });
+  // === TIER 2→3: price_hourly < hourlyCutoffStr  →  price_averages daily ===
+  // Chunk by item_id ranges so the GROUP BY stays bounded. We iterate in
+  // ascending item_id order, processing batches of distinct items per cycle.
+  let t23rows = 0, t23deleted = 0;
+  try {
+    // Get distinct item_ids that have rows older than the cutoff, paginated.
+    const distinctItemsStmt = db.prepare(`
+      SELECT DISTINCT item_id
+      FROM price_hourly
+      WHERE hour < ? AND item_id > ?
+      ORDER BY item_id
+      LIMIT ?`);
+    const aggStmt = db.prepare(`
+      SELECT item_id, city, quality,
+        CAST(strftime('%s', hour || ':00:00') AS INTEGER) / 86400 * 86400000 AS day_start,
+        AVG(avg_price) AS avg_sell,
+        AVG(avg_price) AS avg_buy,
+        MIN(low_price) AS min_sell,
+        MAX(high_price) AS max_buy,
+        SUM(volume) AS cnt
+      FROM price_hourly
+      WHERE item_id IN (SELECT value FROM json_each(?))
+        AND hour < ?
+      GROUP BY item_id, city, quality, day_start`);
+    const insT2 = db.prepare(`INSERT OR REPLACE INTO price_averages
+      (item_id, quality, city, avg_sell, avg_buy, min_sell, max_buy, sample_count, period_type, period_start)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'daily', ?)`);
+    const delT2 = db.prepare(`DELETE FROM price_hourly
+      WHERE item_id IN (SELECT value FROM json_each(?)) AND hour < ?`);
+    const writeT2 = db.transaction((rows) => {
+      for (const r of rows) {
+        insT2.run(r.item_id, r.quality, r.city, Math.round(r.avg_sell), Math.round(r.avg_buy), r.min_sell || 0, r.max_buy || 0, r.cnt, r.day_start);
+      }
+    });
+    const ITEM_BATCH = 200;            // process N items per cycle
+    let lastItem = '';
+    for (let cycle = 0; cycle < COMPACTION_MAX_CYCLES; cycle++) {
+      const rss = rssNow();
+      if (rss > COMPACTION_RSS_LIMIT_MB) {
+        console.warn(`[Compaction] Tier2→3 bailed: RSS ${rss}MB > ${COMPACTION_RSS_LIMIT_MB}MB at cycle ${cycle}`);
+        break;
+      }
+      const items = distinctItemsStmt.all(hourlyCutoffStr, lastItem, ITEM_BATCH);
+      if (items.length === 0) break;
+      const itemIds = items.map(r => r.item_id);
+      const itemsJson = JSON.stringify(itemIds);
+      lastItem = itemIds[itemIds.length - 1];
+      const aggRows = aggStmt.all(itemsJson, hourlyCutoffStr);
+      if (aggRows.length > 0) {
+        writeT2.immediate(aggRows);
+        const dInfo = delT2.run(itemsJson, hourlyCutoffStr);
+        t23rows    += aggRows.length;
+        t23deleted += dInfo.changes;
+      }
+      await yieldLoop();
+    }
+    if (t23rows > 0) {
+      console.log(`[Compaction] Tier2→3: compacted ${t23rows} daily rows, deleted ${t23deleted} price_hourly rows`);
+    } else {
+      console.log('[Compaction] No price_hourly rows to roll into daily');
+    }
+  } catch (err) {
+    console.error('[Compaction] Tier2→3 failed:', err.message);
+  }
 
-  // Clean up old contributions (keep 60 days)
-  const sixtyDaysAgo = now - 60 * 24 * 60 * 60 * 1000;
-  db.run(`DELETE FROM contributions WHERE created_at < ?`, [sixtyDaysAgo]);
+  // Prune spread_stats older than 14 days
+  try {
+    const fourteenDaysAgo = now - 14 * 24 * 60 * 60 * 1000;
+    const info = db.prepare(`DELETE FROM spread_stats WHERE updated_at < ?`).run(fourteenDaysAgo);
+    if (info.changes > 0) console.log(`[Compaction] Pruned ${info.changes} spread_stats rows older than 14 days`);
+  } catch (err) { console.error('[Compaction] spread_stats prune failed:', err.message); }
+
+  // Prune contributions older than 60 days
+  try {
+    const sixtyDaysAgo = now - 60 * 24 * 60 * 60 * 1000;
+    const info = db.prepare(`DELETE FROM contributions WHERE created_at < ?`).run(sixtyDaysAgo);
+    if (info.changes > 0) console.log(`[Compaction] Pruned ${info.changes} contributions rows older than 60 days`);
+  } catch (err) { console.error('[Compaction] contributions prune failed:', err.message); }
+
+  // Force WAL checkpoint to release accumulated frames. TRUNCATE shrinks the
+  // -wal file back to (near) zero. This is safe between cycles because no
+  // long-running readers should be active.
+  try {
+    const cp = db.pragma('wal_checkpoint(TRUNCATE)');
+    console.log(`[Compaction] wal_checkpoint(TRUNCATE):`, JSON.stringify(cp));
+  } catch (err) { console.error('[Compaction] checkpoint failed:', err.message); }
+
+  const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
+  console.log(`[Compaction] Complete in ${elapsed}s — migrated=${migrated} rawDeleted=${deleted} t23=${t23rows} hourlyDeleted=${t23deleted} rss=${rssNow()}MB`);
+  clearTimeout(flagWatchdog);
+  compactionRunning = false;
 }
 
 // === DISK SAFETY CHECK (runs alongside compaction every 2 hours) ===
@@ -5461,10 +5557,10 @@ function checkDiskUsage() {
 
     if (sizeGB >= DB_EMERG_GB) {
       console.error(`[DiskSafety] EMERGENCY: DB is ${sizeGB.toFixed(1)}GB (>${DB_EMERG_GB}GB). Emergency compact: 1 day raw retention`);
-      compactOldData(1);
+      compactOldData(1).catch(e => console.error('[Compaction] uncaught:', e && e.message));
     } else if (sizeGB >= DB_WARN_GB) {
       console.warn(`[DiskSafety] WARNING: DB is ${sizeGB.toFixed(1)}GB (>${DB_WARN_GB}GB). Aggressive compact: 3 day raw retention`);
-      compactOldData(3);
+      compactOldData(3).catch(e => console.error('[Compaction] uncaught:', e && e.message));
     } else {
       console.log(`[DiskSafety] DB size: ${sizeMB.toFixed(0)}MB — OK`);
     }
@@ -5481,7 +5577,33 @@ setTimeout(() => { checkDiskUsage(); }, 25 * 60 * 1000);
 setInterval(() => { checkDiskUsage(); }, 2 * 60 * 60 * 1000);
 // Daily 7-day-retention compaction at small DB sizes (won't fire for us until
 // we shrink under 10 GB, but kept for the post-cleanup state).
-setInterval(() => { if (!compactionRunning) compactOldData(); }, 24 * 60 * 60 * 1000);
+setInterval(() => { if (!compactionRunning) compactOldData().catch(e => console.error('[Compaction] uncaught:', e && e.message)); }, 24 * 60 * 60 * 1000);
+
+// === HEALTH HEARTBEAT (root-cause observability, 2026-05-04) ===
+// Without this, the May 3 outage was invisible: DB grew from ~5GB → 19GB across
+// days because compaction was silently failing and no log line announced "DB now
+// XGB". Now every 10 min we emit a single line with DB/WAL/RSS sizes so any
+// future bloat is visible immediately in `journalctl -u albion-saas | grep HEALTH`.
+function emitHealthLine() {
+  try {
+    const dbBytesRow = db.prepare('SELECT page_count * page_size AS bytes FROM pragma_page_count(), pragma_page_size()').get();
+    const dbMB = Math.round((dbBytesRow && dbBytesRow.bytes ? dbBytesRow.bytes : 0) / 1048576);
+    let walMB = 0;
+    try { walMB = Math.round(fs.statSync('/opt/albion-saas/database.sqlite-wal').size / 1048576); } catch {}
+    const m = process.memoryUsage();
+    const rssMB = Math.round(m.rss / 1048576);
+    const heapMB = Math.round(m.heapUsed / 1048576);
+    const compFlag = compactionRunning ? 1 : 0;
+    const statsFlag = (typeof statsRunning !== 'undefined' && statsRunning) ? 1 : 0;
+    const analyticsFlag = (typeof analyticsRunning !== 'undefined' && analyticsRunning) ? 1 : 0;
+    console.log(`[HEALTH] dbMB=${dbMB} walMB=${walMB} rssMB=${rssMB} heapMB=${heapMB} compaction=${compFlag} stats=${statsFlag} analytics=${analyticsFlag}`);
+  } catch (e) {
+    console.error('[HEALTH] err:', e && e.message);
+  }
+}
+// First heartbeat 2 min after start (let DB connection settle), then every 10 min
+setTimeout(emitHealthLine, 2 * 60 * 1000);
+setInterval(emitHealthLine, 10 * 60 * 1000);
 
 // === ANALYTICS COMPUTATION ENGINE ===
 // Computes SMA 7d, SMA 30d, EMA 7d, VWAP 7d, price_trend, spread_volatility

@@ -2,6 +2,65 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-05-04 — Emergency: site outage from event-loop wedge on synchronous compaction (root-cause fix)
+
+**Symptom:** User returned from work to a hung site. Manual `systemctl restart` fixed it for ~26 minutes, then it wedged again. External HTTP timed out (15s no response). Recv-Q on port 443 = 479 pending connections that the process couldn't drain. From outside, identical to the pre-migration restart loop — but `NRestarts=0`, the process was *technically* alive.
+
+**Why the May 2-3 migration didn't catch this in stress testing:** the migration eliminated the `SQLITE_BUSY` abort class (3.7 GB RSS leak from accumulated orphans → process.abort → systemd restart, repeated). What had been hidden underneath was a slow-burning growth bug: `compactOldData()` had been silently failing for some time. Pre-migration the restart loop *masked* it — every `process.abort` cleared in-flight compactions along with the queue. Post-migration the aborts stopped, so the silent failures stopped being papered-over and the underlying tables grew unbounded.
+
+**Root cause chain (fix at each layer):**
+
+1. **Event-loop wedge** — `compactOldData()` (line 5344-5448 of the pre-fix backend) did `db.all("SELECT ... FROM price_averages WHERE period_type='hourly' AND period_start < ?", ...)` to load the entire result set into one JS array, then ran a single sync `db.transaction()` doing `stmt.run` for every row. With 30M rows this loaded ~9.7 GB into RSS and held the JS event loop for hours. While compaction was running, NO HTTP / WS / NATS request could be served — the process appeared dead from outside.
+   - **Fix:** rewrote `compactOldData` as `async` with chunked `LIMIT N` SELECTs (5K rows per cycle), per-chunk INSERT-then-DELETE transactions, `await new Promise(r => setImmediate(r))` between chunks (event loop gets a tick between every batch), `process.memoryUsage().rss > 1.5 GB` early bail, and `PRAGMA wal_checkpoint(TRUNCATE)` at the end so WAL can't grow unbounded across cycles. Same chunked pattern applied to Tier 2→3 (paginated by `item_id`).
+
+2. **Why the tables grew to 30M / 51M rows** — compaction has been failing ever since the DB crossed ~5 GB, but failures emitted only a single `console.error` line that was buried under thousands of routine log lines. No alert, no DB-size threshold, no log-line that periodically said "DB is now X GB".
+   - **Fix:** added a `[HEALTH]` heartbeat that emits every 10 minutes with `dbMB`, `walMB`, `rssMB`, `heapMB`, plus the `compactionRunning`/`statsRunning`/`analyticsRunning` flags. Now `journalctl -u albion-saas | grep HEALTH` gives the entire growth history at a glance.
+
+3. **WAL bloat** — when the wedged process *did* run something, the WAL grew to 4 GB and stayed there because a single multi-billion-row DELETE transaction never commits, so SQLite's `wal_autocheckpoint=1000` can't fire.
+   - **Fix:** chunked DELETEs commit every 5K rows so autocheckpoint can keep WAL bounded. The per-cycle `wal_checkpoint(TRUNCATE)` at the end forces a hard reset.
+
+4. **No watchdog for non-`withWriteLock` event-loop wedges** — the May 1 perma-fix added a 90-second `WriteLock-WATCHDOG` per task, but `compactOldData` doesn't go through `withWriteLock` (which was deleted in stage 4 of the migration anyway). Long-running sync queries outside that path have no detection at all.
+   - **Mitigation now:** chunked compaction can't wedge for more than ~50ms per chunk. **Still TODO:** `monitorEventLoopDelay` from `node:perf_hooks` running in the main loop — would catch arbitrary sync wedges, not just compaction's. Documented for next session.
+
+**One-time DB cleanup (offline, with service stopped):**
+- Bulk-copy keepers strategy (much faster than chunked DELETE on a 30M-row indexed table — DELETE is ~700 rows/sec because of per-row index updates; bulk INSERT is ~33K rows/sec because indexes are recreated once at the end).
+  1. `CREATE TABLE price_averages_new (same schema, no indexes)`
+  2. `INSERT INTO _new SELECT * FROM old WHERE period_type='daily' OR period_start >= now-3d` — 5,929,557 keepers from 29,818,787 rows in **179 s**
+  3. `DROP TABLE price_averages` — **18 min** (4.7M pages added to freelist)
+  4. `ALTER TABLE _new RENAME TO price_averages`
+  5. Recreate 3 indexes — **84 s total**
+  6. `DELETE FROM spread_stats WHERE updated_at < now-14d` — 12,815 rows
+  7. `PRAGMA wal_checkpoint(TRUNCATE)` — instant
+  8. `VACUUM` — **20 min** (rewrote the 20.4 GB file with most pages free into an 11.7 GB compact file)
+
+**Numbers:**
+- DB on disk: 19.7 GB → 11.7 GB (-8 GB; the remainder is `price_hourly` 51M rows which weren't touched — see TODO below)
+- `price_averages` rows: 29,968,787 → 5,929,557 (-80%)
+- WAL at idle: 4 GB → 8 KB (clean)
+- Process RSS at idle: 9.7 GB → 182 MB (-98%)
+- Disk usage: 87% → 36% (after we also dropped 4 obsolete backups during the work — backup cron keeps 4 most recent and they were 14-19 GB each from the bloat era)
+- HTTP latency: timeout (15+ s) → 300 ms
+
+**Verified post-deploy (server version `20260504-001522`, MainPID=11442 at `Mon 2026-05-04 02:15:26 CEST`):**
+- `NRestarts=0`
+- 0 FATAL / 0 BUSY / 0 Uncaught log lines
+- All HTTP routes 200 OK at <300 ms (`/api/leaderboard` returned real JSON end-to-end, including the user's own Discord profile)
+- `[Cache] Loaded 11175 item IDs.` — initial market scan running cleanly
+- Itemmap + Weightmap + NATS + SMTP + Discord bot all loaded without errors
+
+**Open TODOs flagged during this work (not blocking site uptime):**
+- `price_hourly` retention is 30 days but data accumulates at ~8M rows/day, giving a ~240M-row steady state. The chunked Tier 2→3 in this patch *will* handle that load without wedging, but the table itself is structurally large. Options for next session: (a) reduce `price_hourly` retention to 14 days, (b) skip `price_hourly` entirely and roll directly from raw → daily, (c) prune low-traffic items from `price_hourly` based on `volume`.
+- `price_averages` daily rows have no retention policy — they'll grow forever as Tier 2→3 fires. At ~85K daily rows/day they're modest, but worth a 90-day-retention cap eventually.
+- Add `monitorEventLoopDelay` watchdog (see fix #4 above).
+- Add Discord webhook alert when `[HEALTH]` shows `dbMB > 15000` or `rssMB > 2000`.
+- Consider `DELETE FROM price_snapshots` retention check — table is currently empty (0 rows), confirm that's expected vs. an ingest-path bug.
+
+**Files modified:**
+- `deploy_saas.py` — `compactOldData` rewrite (~140 lines), `[HEALTH]` heartbeat (~25 lines), `.catch()` handlers on fire-and-forget compaction calls. Net +~190 lines, mostly comments documenting why each guard exists.
+- `tmp_check/bulk_copy_cleanup.py` — one-time offline DB cleanup script (kept in repo for reference; `tmp_check/` is in `.gitignore`).
+
+**Lessons:** any sync DB operation that can scan more than ~10K rows MUST yield to the event loop between chunks under better-sqlite3. The migration removed the worst symptom (BUSY restart loops) but didn't audit every existing query for "scan size" — that's the next layer of hardening.
+
 ### 2026-05-03 — better-sqlite3 migration: drop node-sqlite3 entirely (4 stages, ~17 hours work)
 
 The structural fix the May 1 perma-fix was a band-aid for. With `better-sqlite3` (sync), the entire async-callback orphan bug class becomes structurally impossible. JS itself is the natural serialization layer — there's no event-loop interleaving, no orphan callbacks firing late, no cross-connection BUSY cascades. Built per `BETTER_SQLITE3_MIGRATION_PLAN.md` §4 stages 1-4.
