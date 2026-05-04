@@ -5232,10 +5232,12 @@ async function computeSpreadStats() {
   // on the same statsDb connection; running them concurrently thrashes the page
   // cache and stretches each chunk's sync block — observed at 17:39 producing
   // a 20.9s EventLoop wedge. priceRefCache cycles run every 10 min and finish
-  // in ~30-50s, so spreadStats waiting one cycle (and re-firing on the next
-  // 60-min setInterval) is fine.
+  // in ~30-50s. Defer 90s and retry rather than skipping outright: the 60-min
+  // setInterval would otherwise collide with priceRefCache forever (LCM of
+  // 60 and 10 is 60), causing spreadStats to never run.
   if (typeof priceRefCacheRunning !== 'undefined' && priceRefCacheRunning) {
-    console.log('[SpreadStats] PriceRefCache running, skipping this cycle');
+    console.log('[SpreadStats] PriceRefCache running, deferring 90s');
+    setTimeout(_spreadStatsRunner, 90 * 1000);
     return;
   }
   statsRunning = true;
@@ -5871,7 +5873,19 @@ async function computeAnalytics() {
     }
   }
   if (dbBusy) { console.log('[Analytics] DB busy, skipping'); return; }
-  if (statsRunning) { console.log('[Analytics] SpreadStats running, skipping this cycle'); return; }
+  // 2026-05-04: defer rather than skip on concurrent heavy job — same reasoning
+  // as in computeSpreadStats. setInterval (30 min) modulo 10 min would always
+  // hit priceRefCache.
+  if (statsRunning) {
+    console.log('[Analytics] SpreadStats running, deferring 90s');
+    setTimeout(_runAnalytics, 90 * 1000);
+    return;
+  }
+  if (typeof priceRefCacheRunning !== 'undefined' && priceRefCacheRunning) {
+    console.log('[Analytics] PriceRefCache running, deferring 90s');
+    setTimeout(_runAnalytics, 90 * 1000);
+    return;
+  }
   analyticsRunning = true;
   analyticsStartTime = Date.now();
   const myGen = ++analyticsGeneration;
@@ -5895,65 +5909,92 @@ async function computeAnalytics() {
   console.log(`[Analytics] Starting computation (gen=${myGen})...`);
 
   // === STEP 1: Bulk SQL metrics (SMA 7d, SMA 30d, scan-weighted avg 7d, price_trend, spread_volatility) ===
-  // 2026-05-02 stage 2: statsDb.all/each → sync prepare().all() + iterate() with
-  // setImmediate yields. Total event-loop block per chunk: ~50-100ms (5K rows).
-  let rows7d;
+  // 2026-05-04: chunked by item_id range — same anti-pattern fix as priceRefCache
+  // and spreadStats. Single .all() over price_averages was a 5-15s sync block
+  // (full-table GROUP BY against idx_pa_ema_stream). Now 1-3s per chunk with
+  // setImmediate yields between.
+  const _analyticsYield = () => new Promise(r => setImmediate(r));
+  const aggStmt7d = statsDb.prepare(
+    `SELECT item_id, city, quality,
+      AVG(CASE WHEN avg_sell > 0 THEN avg_sell ELSE NULL END) AS sma_7d,
+      AVG(CASE WHEN avg_sell > 0 THEN avg_sell * sample_count ELSE NULL END) /
+        NULLIF(AVG(CASE WHEN avg_sell > 0 THEN sample_count ELSE NULL END), 0) AS vwap_7d,
+      AVG(CASE WHEN period_start > ? AND avg_sell > 0 THEN avg_sell ELSE NULL END) AS avg_24h,
+      COUNT(CASE WHEN avg_sell > 0 THEN 1 ELSE NULL END) AS data_points_7d,
+      SUM(CASE WHEN min_sell > 0 AND max_buy > 0 THEN (min_sell - max_buy) ELSE NULL END) AS sum_spread,
+      SUM(CASE WHEN min_sell > 0 AND max_buy > 0 THEN CAST(min_sell - max_buy AS REAL) * (min_sell - max_buy) ELSE NULL END) AS sum_spread_sq,
+      COUNT(CASE WHEN min_sell > 0 AND max_buy > 0 THEN 1 ELSE NULL END) AS spread_count
+    FROM price_averages
+    WHERE item_id >= ? AND item_id < ?
+      AND period_start > ? AND (avg_sell > 0 OR avg_buy > 0)
+    GROUP BY item_id, city, quality
+    HAVING data_points_7d >= 2`
+  );
+  const map7d = {};
+  let total7d = 0;
   try {
-    rows7d = statsDb.prepare(
-      `SELECT item_id, city, quality,
-        AVG(CASE WHEN avg_sell > 0 THEN avg_sell ELSE NULL END) AS sma_7d,
-        AVG(CASE WHEN avg_sell > 0 THEN avg_sell * sample_count ELSE NULL END) /
-          NULLIF(AVG(CASE WHEN avg_sell > 0 THEN sample_count ELSE NULL END), 0) AS vwap_7d,
-        AVG(CASE WHEN period_start > ? AND avg_sell > 0 THEN avg_sell ELSE NULL END) AS avg_24h,
-        COUNT(CASE WHEN avg_sell > 0 THEN 1 ELSE NULL END) AS data_points_7d,
-        SUM(CASE WHEN min_sell > 0 AND max_buy > 0 THEN (min_sell - max_buy) ELSE NULL END) AS sum_spread,
-        SUM(CASE WHEN min_sell > 0 AND max_buy > 0 THEN CAST(min_sell - max_buy AS REAL) * (min_sell - max_buy) ELSE NULL END) AS sum_spread_sq,
-        COUNT(CASE WHEN min_sell > 0 AND max_buy > 0 THEN 1 ELSE NULL END) AS spread_count
-      FROM price_averages
-      WHERE period_start > ? AND (avg_sell > 0 OR avg_buy > 0)
-      GROUP BY item_id, city, quality
-      HAVING data_points_7d >= 2`
-    ).all(oneDayAgo, sevenDaysAgo);
+    for (const [lo, hi] of PRICE_REF_ITEM_RANGES) {
+      let chunk;
+      try { chunk = aggStmt7d.all(oneDayAgo, lo, hi, sevenDaysAgo); }
+      catch (err) {
+        console.error(`[Analytics] 7d chunk failed for ${lo}..${hi}:`, err.message || err);
+        continue;
+      }
+      await _analyticsYield();
+      if (isStale()) return;
+      if (chunk && chunk.length > 0) {
+        for (const r of chunk) {
+          map7d[r.item_id + '|' + r.city + '|' + r.quality] = r;
+        }
+        total7d += chunk.length;
+        chunk.length = 0;
+      }
+      await _analyticsYield();
+    }
   } catch (err) {
-    console.error('[Analytics] 7d query FAILED:', err.message || err);
+    console.error('[Analytics] 7d aggregation FAILED:', err.message || err);
     finalize('7d-err');
     return;
   }
-  if (isStale()) return;
-  if (!rows7d || rows7d.length === 0) {
+  if (total7d === 0) {
     console.log('[Analytics] No 7d data yet, skipping');
     finalize('no-data');
     return;
   }
-  // Build lookup for 7d results keyed by item_id|city|quality
-  const map7d = {};
-  for (const r of rows7d) {
-    map7d[r.item_id + '|' + r.city + '|' + r.quality] = r;
-  }
-  rows7d.length = 0;
 
   // SMA 30d — separate query since it spans a different time window
-  let rows30d;
+  const aggStmt30d = statsDb.prepare(
+    `SELECT item_id, city, quality,
+      AVG(CASE WHEN avg_sell > 0 THEN avg_sell ELSE NULL END) AS sma_30d
+    FROM price_averages
+    WHERE item_id >= ? AND item_id < ?
+      AND period_start > ? AND (avg_sell > 0 OR avg_buy > 0)
+    GROUP BY item_id, city, quality`
+  );
+  const map30d = {};
   try {
-    rows30d = statsDb.prepare(
-      `SELECT item_id, city, quality,
-        AVG(CASE WHEN avg_sell > 0 THEN avg_sell ELSE NULL END) AS sma_30d
-      FROM price_averages
-      WHERE period_start > ? AND (avg_sell > 0 OR avg_buy > 0)
-      GROUP BY item_id, city, quality`
-    ).all(thirtyDaysAgo);
+    for (const [lo, hi] of PRICE_REF_ITEM_RANGES) {
+      let chunk;
+      try { chunk = aggStmt30d.all(lo, hi, thirtyDaysAgo); }
+      catch (err) {
+        console.error(`[Analytics] 30d chunk failed for ${lo}..${hi}:`, err.message || err);
+        continue;
+      }
+      await _analyticsYield();
+      if (isStale()) return;
+      if (chunk && chunk.length > 0) {
+        for (const r of chunk) {
+          map30d[r.item_id + '|' + r.city + '|' + r.quality] = r.sma_30d;
+        }
+        chunk.length = 0;
+      }
+      await _analyticsYield();
+    }
   } catch (err2) {
-    console.error('[Analytics] 30d query FAILED:', err2.message || err2);
+    console.error('[Analytics] 30d aggregation FAILED:', err2.message || err2);
     finalize('30d-err');
     return;
   }
-  if (isStale()) return;
-
-  const map30d = {};
-  for (const r of rows30d || []) {
-    map30d[r.item_id + '|' + r.city + '|' + r.quality] = r.sma_30d;
-  }
-  if (rows30d) rows30d.length = 0;
 
   // === STEP 2: Write bulk metrics (all except EMA) ===
   const bulkResults = []; // [ [item_id, city, quality, metric, value, computedAt], ... ]
