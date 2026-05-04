@@ -3486,18 +3486,26 @@ let globalPriceRef = {}; // { "itemId_quality": avgPrice } for outlier detection
 let volumeRef = {};     // { "itemId_quality_city": avg_sample_count } — activity proxy for liquidity flags
 // Incrementally update the pre-aggregated price_ref_cache from recent price_averages data.
 // Only scans the last 2 hours of new data — never touches the full 21M-row table.
-function refreshPriceRefCache() {
+// 2026-05-04: same item_id ranges used by computeSpreadStats. Both functions
+// share the same GROUP-BY-against-price_averages anti-pattern (column order
+// mismatch with idx_pa_ema_stream forces a full sort, blocking the event
+// loop). Chunking by item_id range keeps each chunk's sync work under ~2s.
+const PRICE_REF_ITEM_RANGES = [
+  ['',     'T4_'],   // pre-T4 (gathered, refined, etc.)
+  ['T4_',  'T5_'],
+  ['T5_',  'T6_'],
+  ['T6_',  'T6_M'],  // T6 split: A-L
+  ['T6_M', 'T7_'],   // T6 split: M-Z
+  ['T7_',  'T7_M'],  // T7 split: A-L
+  ['T7_M', 'T8_'],   // T7 split: M-Z
+  ['T8_',  'T8_M'],  // T8 split: A-L
+  ['T8_M', 'U'],     // T8 split: M-Z
+  ['U',    '￿'] // UNIQUE_*, ZIGGURAT_*, anything past U
+];
+const _priceRefYield = () => new Promise(r => setImmediate(r));
+
+async function refreshPriceRefCache() {
   const cutoff = Date.now() - 2 * 60 * 60 * 1000; // last 2 hours of new data
-  let rows;
-  try {
-    rows = statsDb.prepare(`SELECT item_id, quality, city, AVG(avg_sell) as avg_price, AVG(sample_count) as avg_vol, COUNT(*) as samples
-      FROM price_averages WHERE period_start > ? AND avg_sell > 0
-      GROUP BY item_id, quality, city`).all(cutoff);
-  } catch (err) {
-    console.error('[PriceRefCache-incr] Read failed:', err.message);
-    return;
-  }
-  if (!rows || rows.length === 0) return;
   const now = Date.now();
   // 2026-05-02 stage 4: direct sync transaction (auto-rollback on throw).
   const stmt_priceRefIncr = db.prepare(`INSERT OR REPLACE INTO price_ref_cache (item_id, quality, city, avg_sell, avg_vol, sample_count, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)`);
@@ -3506,12 +3514,34 @@ function refreshPriceRefCache() {
       if (r.avg_price > 0) stmt_priceRefIncr.run(r.item_id, r.quality, r.city, Math.round(r.avg_price), Math.round(r.avg_vol || 0), r.samples, now);
     }
   });
-  try { writePriceRefIncr.immediate(rows); console.log(`[PriceRefCache] Updated ${rows.length} entries from last 2h`); }
-  catch (err) { console.error('[PriceRefCache-incr] Batch failed (auto-rolled-back):', err.message); }
+  const aggStmt = statsDb.prepare(`SELECT item_id, quality, city, AVG(avg_sell) as avg_price, AVG(sample_count) as avg_vol, COUNT(*) as samples
+    FROM price_averages WHERE item_id >= ? AND item_id < ? AND period_start > ? AND avg_sell > 0
+    GROUP BY item_id, quality, city`);
+
+  let totalUpdated = 0;
+  for (const [lo, hi] of PRICE_REF_ITEM_RANGES) {
+    let rows;
+    try { rows = aggStmt.all(lo, hi, cutoff); }
+    catch (err) {
+      console.error(`[PriceRefCache-incr] Read failed for ${lo}..${hi}:`, err.message);
+      continue;
+    }
+    await _priceRefYield();
+    if (rows && rows.length > 0) {
+      try {
+        writePriceRefIncr.immediate(rows);
+        totalUpdated += rows.length;
+      } catch (err) {
+        console.error('[PriceRefCache-incr] Batch failed (auto-rolled-back):', err.message);
+      }
+    }
+    await _priceRefYield();
+  }
+  if (totalUpdated > 0) console.log(`[PriceRefCache] Updated ${totalUpdated} entries from last 2h`);
 }
 
 // Build in-memory price references from the small pre-aggregated cache table (~100k rows, not 21M).
-function buildPriceReference() {
+async function buildPriceReference() {
   const staleThreshold = Date.now() - 2 * 24 * 60 * 60 * 1000; // ignore entries older than 2 days
   let rows;
   try {
@@ -3522,9 +3552,14 @@ function buildPriceReference() {
     return;
   }
   if (!rows) return;
+  // Yield after the SELECT so the building loop starts on a fresh tick.
+  await _priceRefYield();
+
   const cityRef = {}, volRef = {};
   const globalAcc = {}; // accumulator for global averages
-  for (const r of rows) {
+  // Yield every 10k rows so the loop doesn't block the event loop on big tables.
+  for (let i = 0; i < rows.length; i++) {
+    const r = rows[i];
     if (r.sample_count >= 2 && r.avg_sell > 0) {
       cityRef[r.item_id + '_' + r.quality + '_' + r.city] = Math.round(r.avg_sell);
       volRef[r.item_id + '_' + r.quality + '_' + r.city] = Math.round(r.avg_vol || 0);
@@ -3533,6 +3568,7 @@ function buildPriceReference() {
       globalAcc[gk].sum += r.avg_sell;
       globalAcc[gk].cnt++;
     }
+    if ((i & 0x2FFF) === 0x2FFF) await _priceRefYield(); // ~every 12k rows
   }
   cityPriceRef = cityRef;
   volumeRef = volRef;
@@ -3547,19 +3583,9 @@ function buildPriceReference() {
 }
 
 // Initial full cache build on startup (one-time scan of recent data)
-function initPriceRefCache() {
+async function initPriceRefCache() {
   const cutoff6h = Date.now() - 6 * 60 * 60 * 1000; // Only last 6h on startup to keep memory low
   console.log('[PriceRefCache] Initial build from last 6h (incremental updates fill the rest)...');
-  let rows;
-  try {
-    rows = statsDb.prepare(`SELECT item_id, quality, city, AVG(avg_sell) as avg_price, AVG(sample_count) as avg_vol, COUNT(*) as samples
-      FROM price_averages WHERE period_start > ? AND avg_sell > 0
-      GROUP BY item_id, quality, city`).all(cutoff6h);
-  } catch (err) {
-    console.error('[PriceRefCache] Init read failed:', err.message);
-    return;
-  }
-  if (!rows) return;
   const now = Date.now();
   const stmt_priceRefInit = db.prepare(`INSERT OR REPLACE INTO price_ref_cache (item_id, quality, city, avg_sell, avg_vol, sample_count, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)`);
   const writePriceRefInit = db.transaction((rows) => {
@@ -3567,19 +3593,49 @@ function initPriceRefCache() {
       if (r.avg_price > 0) stmt_priceRefInit.run(r.item_id, r.quality, r.city, Math.round(r.avg_price), Math.round(r.avg_vol || 0), r.samples, now);
     }
   });
-  try {
-    writePriceRefInit.immediate(rows);
-    console.log(`[PriceRefCache] Initial build complete: ${rows.length} entries`);
-    buildPriceReference();
-  } catch (err) {
-    console.error('[PriceRefCache-init] Batch failed (auto-rolled-back):', err.message);
+  const aggStmt = statsDb.prepare(`SELECT item_id, quality, city, AVG(avg_sell) as avg_price, AVG(sample_count) as avg_vol, COUNT(*) as samples
+    FROM price_averages WHERE item_id >= ? AND item_id < ? AND period_start > ? AND avg_sell > 0
+    GROUP BY item_id, quality, city`);
+
+  let totalInit = 0;
+  for (const [lo, hi] of PRICE_REF_ITEM_RANGES) {
+    let rows;
+    try { rows = aggStmt.all(lo, hi, cutoff6h); }
+    catch (err) {
+      console.error(`[PriceRefCache] Init read failed for ${lo}..${hi}:`, err.message);
+      continue;
+    }
+    await _priceRefYield();
+    if (rows && rows.length > 0) {
+      try {
+        writePriceRefInit.immediate(rows);
+        totalInit += rows.length;
+      } catch (err) {
+        console.error('[PriceRefCache-init] Batch failed (auto-rolled-back):', err.message);
+      }
+    }
+    await _priceRefYield();
   }
+  console.log(`[PriceRefCache] Initial build complete: ${totalInit} entries`);
+  await buildPriceReference();
 }
 
-// Startup: build cache from 48h, then read into memory
-setTimeout(initPriceRefCache, 15000);
-// Every 10 min: incrementally update cache with last 2h data, then rebuild in-memory refs
-setInterval(() => { refreshPriceRefCache(); setTimeout(buildPriceReference, 5000); }, 10 * 60 * 1000);
+// Startup: build cache from 6h, then read into memory.
+// Wrap async functions in .catch() to avoid unhandledRejection.
+const _initPriceRefCacheRunner = () => initPriceRefCache().catch((err) => {
+  console.error('[PriceRefCache] Top-level crash:', err && err.message || err);
+});
+setTimeout(_initPriceRefCacheRunner, 15000);
+// Every 10 min: incrementally update cache with last 2h data, then rebuild in-memory refs.
+const _priceRefRunner = () => {
+  refreshPriceRefCache().catch((err) => {
+    console.error('[PriceRefCache-incr] Top-level crash:', err && err.message || err);
+  });
+  setTimeout(() => buildPriceReference().catch((err) => {
+    console.error('[PriceRef] Top-level crash:', err && err.message || err);
+  }), 5000);
+};
+setInterval(_priceRefRunner, 10 * 60 * 1000);
 
 app.get('/api/transport-routes-live', transportLiveLimiter, (req, res) => {
   // SEC-H1: serve cached result for 30s to avoid repeated O(n²) computation per IP
