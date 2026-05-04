@@ -2,6 +2,37 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-05-04 (later evening) — `priceRefCache` + `computeAnalytics` chunked too; mutex+defer between heavy aggregates
+
+After the spreadStats fix landed and ran clean once (17:16 cycle), the watchdog caught a **22.6 s wedge at 17:26:34** with `compaction=false stats=0 analytics=0` — none of the known-heavy jobs were running. Traced to `refreshPriceRefCache` (10-min interval) doing the **same monolithic GROUP BY anti-pattern** as spreadStats: full table scan against `idx_pa_ema_stream` with column-order mismatch on the GROUP BY, forcing a full sort.
+
+**Same chunking fix applied to three more functions:**
+
+- **`refreshPriceRefCache`** + **`initPriceRefCache`**: now async, chunked by 10 item_id ranges with `setImmediate` yields between SQL/write phases. Was 22 s monolithic; now 6-8 s total across 10 chunks.
+- **`buildPriceReference`** (in-memory map builder over ~140 k cache rows): now async, yields after the SELECT and every ~12 k iterations in the city/volume/global accumulator loop.
+- **`computeAnalytics` 7d aggregate** + **30d aggregate**: chunked by item_id range. Same anti-pattern, fires every 30-35 min.
+
+**Plus a mutex layer to prevent concurrent collisions:**
+
+After deploying the priceRefCache chunking, the next 10-min cycle (17:39) **still wedged at 20.9 s** because spreadStats ran *concurrently* — both functions querying `price_averages` on the same `statsDb` connection thrashed the SQLite page cache. Even with each chunk individually under 5 s, contention stretched single chunks to 20 s.
+
+Fix: `priceRefCacheRunning` flag.
+- `refreshPriceRefCache`/`initPriceRefCache` set it at start, clear in `finally`.
+- `computeSpreadStats`/`computeAnalytics` check it and **defer 90 s with `setTimeout` retry** rather than skipping. Skip-policy would have meant spreadStats (60 min cycle) collided with priceRefCache (10 min cycle) at every LCM=60 min hit and *never* fired again. Defer-retry waits the ~6-8 s priceRefCache run and then proceeds.
+- Similar bidirectional checks: priceRefCache also checks `statsRunning`/`analyticsRunning`; analytics checks `priceRefCacheRunning`/`statsRunning`.
+
+**Verified live:**
+- 17:55:51 — `[SpreadStats] PriceRefCache running, skipping this cycle` (early skip-only version).
+- 18:09:40 — `[SpreadStats] PriceRefCache running, deferring 90s` (defer-retry version).
+- 18:09:46 — `[PriceRefCache] Updated 86725 entries from last 2h` — full cycle in 8 s (vs 50 s pre-chunking).
+- 18:11:10 — `[SpreadStats] Starting chunked aggregation...` — retry fired exactly 90 s later as designed.
+- Zero EventLoop WARNs during the run on the new code.
+
+**Files modified:** `deploy_saas.py` (~+200 lines net across 4 commits: spreadStats chunking, priceRefCache chunking, mutex flag, analytics chunking + defer-retry).
+
+**Still TODO:**
+- `transport-routes-live` CTE (line ~3458) is the last full-table GROUP BY against `price_averages`. User-facing endpoint, rate-limited (5/min) + 30 s response cache, so much lower wedge risk than the background jobs. Worth chunking for consistency but not urgent.
+
 ### 2026-05-04 (evening) — SpreadStats wedge: chunk aggregate by item_id range so event loop stays responsive
 
 The afternoon's `monitorEventLoopDelay` watchdog earned its keep on its very first cycle. At 16:20:18 UTC the journal logged `[EventLoop] Max delay 49392ms in last 30s (compaction=false stats=1 analytics=0)` — a 49.4-second event-loop block during `computeSpreadStats`, just 10 s under the 60 s `process.abort()` threshold. Process kept running, but a single quality regression away from a restart loop.

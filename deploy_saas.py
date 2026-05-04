@@ -410,7 +410,13 @@ function tryExec(sql) {
 // journal_mode + journal_size_limit dropped — set globally by `db` (still file-level).
 const statsDb = new Better('/opt/albion-saas/database.sqlite', { fileMustExist: true, timeout: 30000 });
 statsDb.pragma('synchronous = NORMAL');
-statsDb.pragma('cache_size = -16000');  // 16MB page cache
+// 2026-05-04: bumped 16MB → 128MB. priceRefCache + spreadStats + analytics
+// each scan ~150-200k aggregate rows from price_averages. With a 16MB cache
+// each chunk evicted the previous chunk's hot pages, forcing cold disk reads
+// every chunk and stretching individual chunks from ~2s to ~15s under post-
+// write conditions (observed at 18:11:45). 128MB holds the working set
+// comfortably; cost is ~110MB of additional RSS only when actively scanning.
+statsDb.pragma('cache_size = -128000');  // 128MB page cache
 statsDb.pragma('mmap_size = 0');
 
 // Dedicated read-only connection for user-facing endpoints (/api/me, etc.).
@@ -3561,6 +3567,18 @@ async function refreshPriceRefCache() {
       await _priceRefYield();
     }
     if (totalUpdated > 0) console.log(`[PriceRefCache] Updated ${totalUpdated} entries from last 2h`);
+    // Force a WAL checkpoint after each refresh to keep the WAL bounded.
+    // wal_autocheckpoint at 1000 pages (~4MB) doesn't keep up with the 86k+
+    // INSERT OR REPLACE rate during heavy write windows, so the WAL drifts to
+    // its 64MB journal_size_limit and starts back-pressuring readers.
+    try {
+      const cp = db.pragma('wal_checkpoint(PASSIVE)');
+      if (Array.isArray(cp) && cp[0] && cp[0].busy) {
+        // Reader holds the snapshot; PASSIVE couldn't truncate. Not an error.
+      }
+    } catch (err) {
+      console.error('[PriceRefCache] wal_checkpoint failed:', err.message);
+    }
   } finally {
     priceRefCacheRunning = false;
   }
