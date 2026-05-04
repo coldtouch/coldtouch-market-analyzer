@@ -6176,8 +6176,15 @@ function _runAnalytics() {
     analyticsRunning = false;
   });
 }
-setTimeout(_runAnalytics, 35 * 60 * 1000);
-setInterval(_runAnalytics, 30 * 60 * 1000);
+// 2026-05-04: nested setInterval inside the setTimeout. Previously was
+// `setTimeout(_runAnalytics, 35min); setInterval(_runAnalytics, 30min);`
+// which fires the first run at +30min (setInterval first tick), the second
+// at +35min (setTimeout), and then every 30min — i.e. two consecutive
+// runs near boot. Cleaner: wait 35min, then fire every 30min.
+setTimeout(() => {
+  _runAnalytics();
+  setInterval(_runAnalytics, 30 * 60 * 1000);
+}, 35 * 60 * 1000);
 
 // === HISTORICAL BACKFILL (Charts + History APIs) ===
 // Runs once on start if no historical data exists
