@@ -3504,7 +3504,29 @@ const PRICE_REF_ITEM_RANGES = [
 ];
 const _priceRefYield = () => new Promise(r => setImmediate(r));
 
+// 2026-05-04 (later): serialize against spreadStats / analytics. Without this
+// the two heavy 10-min and 60-min aggregates collide every hour at boot+10min
+// (and every 60min after), thrashing SQLite's page cache. Observed: 20.9 s
+// EventLoop wedge at 17:39 even with both functions chunked. priceRefCache
+// fires every 10 min, spreadStats every 60 min — skipping one priceRefCache
+// cycle per hour costs at most ~6 min of staleness in the in-memory refs,
+// which is tolerable. The next 10-min tick will pick up the missed window.
+let priceRefCacheRunning = false;
+
 async function refreshPriceRefCache() {
+  if (priceRefCacheRunning) {
+    console.log('[PriceRefCache] Already running, skipping this cycle');
+    return;
+  }
+  if (typeof statsRunning !== 'undefined' && statsRunning) {
+    console.log('[PriceRefCache] spreadStats running, deferring this cycle');
+    return;
+  }
+  if (typeof analyticsRunning !== 'undefined' && analyticsRunning) {
+    console.log('[PriceRefCache] analytics running, deferring this cycle');
+    return;
+  }
+  priceRefCacheRunning = true;
   const cutoff = Date.now() - 2 * 60 * 60 * 1000; // last 2 hours of new data
   const now = Date.now();
   // 2026-05-02 stage 4: direct sync transaction (auto-rollback on throw).
@@ -3519,25 +3541,29 @@ async function refreshPriceRefCache() {
     GROUP BY item_id, quality, city`);
 
   let totalUpdated = 0;
-  for (const [lo, hi] of PRICE_REF_ITEM_RANGES) {
-    let rows;
-    try { rows = aggStmt.all(lo, hi, cutoff); }
-    catch (err) {
-      console.error(`[PriceRefCache-incr] Read failed for ${lo}..${hi}:`, err.message);
-      continue;
-    }
-    await _priceRefYield();
-    if (rows && rows.length > 0) {
-      try {
-        writePriceRefIncr.immediate(rows);
-        totalUpdated += rows.length;
-      } catch (err) {
-        console.error('[PriceRefCache-incr] Batch failed (auto-rolled-back):', err.message);
+  try {
+    for (const [lo, hi] of PRICE_REF_ITEM_RANGES) {
+      let rows;
+      try { rows = aggStmt.all(lo, hi, cutoff); }
+      catch (err) {
+        console.error(`[PriceRefCache-incr] Read failed for ${lo}..${hi}:`, err.message);
+        continue;
       }
+      await _priceRefYield();
+      if (rows && rows.length > 0) {
+        try {
+          writePriceRefIncr.immediate(rows);
+          totalUpdated += rows.length;
+        } catch (err) {
+          console.error('[PriceRefCache-incr] Batch failed (auto-rolled-back):', err.message);
+        }
+      }
+      await _priceRefYield();
     }
-    await _priceRefYield();
+    if (totalUpdated > 0) console.log(`[PriceRefCache] Updated ${totalUpdated} entries from last 2h`);
+  } finally {
+    priceRefCacheRunning = false;
   }
-  if (totalUpdated > 0) console.log(`[PriceRefCache] Updated ${totalUpdated} entries from last 2h`);
 }
 
 // Build in-memory price references from the small pre-aggregated cache table (~100k rows, not 21M).
@@ -3584,6 +3610,11 @@ async function buildPriceReference() {
 
 // Initial full cache build on startup (one-time scan of recent data)
 async function initPriceRefCache() {
+  if (priceRefCacheRunning) {
+    console.log('[PriceRefCache] Init: already running, skipping');
+    return;
+  }
+  priceRefCacheRunning = true;
   const cutoff6h = Date.now() - 6 * 60 * 60 * 1000; // Only last 6h on startup to keep memory low
   console.log('[PriceRefCache] Initial build from last 6h (incremental updates fill the rest)...');
   const now = Date.now();
@@ -3598,25 +3629,31 @@ async function initPriceRefCache() {
     GROUP BY item_id, quality, city`);
 
   let totalInit = 0;
-  for (const [lo, hi] of PRICE_REF_ITEM_RANGES) {
-    let rows;
-    try { rows = aggStmt.all(lo, hi, cutoff6h); }
-    catch (err) {
-      console.error(`[PriceRefCache] Init read failed for ${lo}..${hi}:`, err.message);
-      continue;
-    }
-    await _priceRefYield();
-    if (rows && rows.length > 0) {
-      try {
-        writePriceRefInit.immediate(rows);
-        totalInit += rows.length;
-      } catch (err) {
-        console.error('[PriceRefCache-init] Batch failed (auto-rolled-back):', err.message);
+  try {
+    for (const [lo, hi] of PRICE_REF_ITEM_RANGES) {
+      let rows;
+      try { rows = aggStmt.all(lo, hi, cutoff6h); }
+      catch (err) {
+        console.error(`[PriceRefCache] Init read failed for ${lo}..${hi}:`, err.message);
+        continue;
       }
+      await _priceRefYield();
+      if (rows && rows.length > 0) {
+        try {
+          writePriceRefInit.immediate(rows);
+          totalInit += rows.length;
+        } catch (err) {
+          console.error('[PriceRefCache-init] Batch failed (auto-rolled-back):', err.message);
+        }
+      }
+      await _priceRefYield();
     }
-    await _priceRefYield();
+    console.log(`[PriceRefCache] Initial build complete: ${totalInit} entries`);
+  } finally {
+    priceRefCacheRunning = false;
   }
-  console.log(`[PriceRefCache] Initial build complete: ${totalInit} entries`);
+  // buildPriceReference is independent of the priceRefCache flag — it reads
+  // from price_ref_cache (different table, different connection).
   await buildPriceReference();
 }
 
@@ -5191,6 +5228,16 @@ async function computeSpreadStats() {
   }
   if (dbBusy) { console.log('[SpreadStats] DB busy, skipping this cycle'); return; }
   if (analyticsRunning) { console.log('[SpreadStats] Analytics running, skipping this cycle'); return; }
+  // 2026-05-04: avoid concurrency with priceRefCache. Both query price_averages
+  // on the same statsDb connection; running them concurrently thrashes the page
+  // cache and stretches each chunk's sync block — observed at 17:39 producing
+  // a 20.9s EventLoop wedge. priceRefCache cycles run every 10 min and finish
+  // in ~30-50s, so spreadStats waiting one cycle (and re-firing on the next
+  // 60-min setInterval) is fine.
+  if (typeof priceRefCacheRunning !== 'undefined' && priceRefCacheRunning) {
+    console.log('[SpreadStats] PriceRefCache running, skipping this cycle');
+    return;
+  }
   statsRunning = true;
   statsStartTime = Date.now();
 
