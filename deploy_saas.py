@@ -5199,9 +5199,16 @@ async function computeSpreadStats() {
     catch (err) { console.error('[SpreadStats] Batch failed (auto-rolled-back):', err.message); }
   }
 
+  // 2026-05-04 (later): yield not just BETWEEN ranges but also within each
+  // chunk's sub-phases. The SQL aggregate (1-3s) + city-pair compute (1-3s
+  // for big chunks) + flush (~1s for 30k writes) is contiguous sync work
+  // and adds up to 5-6s on the heaviest range — which crosses the 5s WARN.
+  // Inter-phase yields keep each sync span under ~2s.
+  const yieldLoop = () => new Promise(r => setImmediate(r));
+  const COMPUTE_YIELD_EVERY = 1000; // items processed before a yield in the inner compute loop
+
   try {
     for (const [lo, hi] of ITEM_RANGES) {
-      const t0 = Date.now();
       let chunkRows;
       try {
         chunkRows = aggStmt.all(lo, hi, cutoff);
@@ -5209,7 +5216,8 @@ async function computeSpreadStats() {
         console.error(`[SpreadStats] Aggregate read failed for ${lo}..${hi}:`, err.message);
         continue; // skip range, keep going
       }
-      const aggMs = Date.now() - t0;
+      // Yield after the SQL aggregate so the compute loop starts on a fresh tick.
+      await yieldLoop();
       totalAgg += chunkRows.length;
 
       if (chunkRows.length > 0) {
@@ -5229,8 +5237,9 @@ async function computeSpreadStats() {
         chunkRows.length = 0; // free memory
 
         // Compute spreads for this chunk's items and queue writes.
-        for (const key of Object.keys(itemMap)) {
-          const { item_id, quality, cities } = itemMap[key];
+        const itemKeys = Object.keys(itemMap);
+        for (let i_k = 0; i_k < itemKeys.length; i_k++) {
+          const { item_id, quality, cities } = itemMap[itemKeys[i_k]];
           const cityNames = Object.keys(cities);
 
           for (let i = 0; i < cityNames.length; i++) {
@@ -5265,15 +5274,24 @@ async function computeSpreadStats() {
             }
           }
           processed++;
+
+          // Periodic in-chunk yield. Drain the write buffer if it crossed
+          // the batch threshold so writes don't accumulate to one giant flush.
+          if ((i_k + 1) % COMPUTE_YIELD_EVERY === 0) {
+            if (writeBuf.length >= WRITE_BATCH) flushWrites();
+            await yieldLoop();
+          }
         }
 
-        // Flush writes if buffer crossed batch threshold.
-        if (writeBuf.length >= WRITE_BATCH) flushWrites();
+        // Flush whatever's left from this chunk before moving on.
+        if (writeBuf.length > 0) {
+          await yieldLoop();
+          flushWrites();
+        }
       }
 
       // Yield to event loop between every range (regardless of chunk size).
-      // Keeps Express + WS + NATS responsive during the ~30-40s total runtime.
-      await new Promise(r => setImmediate(r));
+      await yieldLoop();
     }
 
     // Final flush for the last partial batch.
