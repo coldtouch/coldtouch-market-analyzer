@@ -5639,7 +5639,14 @@ setInterval(emitHealthLine, 10 * 60 * 1000);
 const _perfHooks = require('perf_hooks');
 const _eventLoopHist = _perfHooks.monitorEventLoopDelay({ resolution: 50 });
 _eventLoopHist.enable();
-const EVENT_LOOP_WARN_MS  = 1000;     // 1s — slow sync query, log it
+// 2026-05-04 evening: WARN threshold raised 1s → 5s after first 30 min of
+// observation showed 5 WARNs across known-heavy sync ops (startup itemmap
+// parse, spreadStats GROUP BY commits, recordSnapshots batch inserts) — all
+// under 5s, none indicating a real problem. 5s filters routine sync work
+// while still catching genuine slow queries; PANIC at 60s still catches
+// the May 3 wedge class. If we ever see WARN above 5s, that's a real
+// regression worth investigating.
+const EVENT_LOOP_WARN_MS  = 5000;     // 5s — slow sync query worth investigating
 const EVENT_LOOP_PANIC_MS = 60000;    // 60s — wedged, abort for systemd restart
 setInterval(() => {
   // Take a snapshot of max recorded delay since last reset, then reset.
