@@ -1,6 +1,9 @@
 # Dependencies
 node_modules/
 
+# Session-local one-off scripts (incident response, ad-hoc DB ops, etc.)
+tmp_check/
+
 # Python companion & test tools (not needed for the web app)
 companion.py
 test_nats.py
