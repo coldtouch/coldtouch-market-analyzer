@@ -2,6 +2,34 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-05-04 (final pass) — root cause was WAL frame traversal, not just SQL ordering
+
+After all the chunking and mutex fixes landed, spreadStats *still* logged a 23.6 s EventLoop wedge at 18:27:08 — with no concurrent priceRefCache, with the 128 MB cache, with proper chunking. CLI EXPLAIN of the same query on the same chunk: 1.78 s. Production: 23 s. 13× slower.
+
+Hypothesis: WAL frame index traversal cost. Each cross-connection read consults the WAL frame index for every page it needs. NATS flushes (every 30 s) and priceRefCache writes (87 k upserts every 10 min) push the WAL toward its 64 MB cap. With thousands of frames in the log, statsDb's reads pay an O(WAL frames) penalty per page lookup.
+
+Tested by manually running `PRAGMA wal_checkpoint(TRUNCATE)` on the live DB — WAL went from 64 MB → 0 bytes; then the same query timed at 1.78 s in CLI. Confirmed.
+
+**Three-part WAL discipline shipped:**
+
+- **`wal_autocheckpoint` lowered 1000 → 500 pages** (~4 MB → ~2 MB threshold). Keeps WAL bounded between explicit checkpoints; less frame index to traverse on every cross-connection read.
+- **End-of-`refreshPriceRefCache` checkpoint upgraded `PASSIVE` → `RESTART`**. PASSIVE was leaving frames behind whenever any reader held the snapshot (very common under live load). RESTART resets the frame count to 0 unconditionally; readers automatically restart on their next read. The file size doesn't shrink (preallocated cap stays) but frame index becomes empty.
+- **Pre-run `wal_checkpoint(RESTART)` at start of `computeSpreadStats`**. The 90-second defer window between priceRefCache end and spreadStats retry refills the WAL with NATS flushes; clearing it just before the heavy aggregate ensures spreadStats reads against a clean frame index.
+
+Both checkpoints log their `busy/log/checkpointed` counts so we have ongoing visibility.
+
+**Verified at the 18:43:55 cycle:**
+
+```
+[SpreadStats] Starting chunked aggregation... RSS: 356MB Heap: 136MB
+[SpreadStats] pre-run wal_checkpoint(RESTART): busy=0 log=25 checkpointed=25
+[SpreadStats] Done. Processed 34987 items, 171617 agg rows, wrote 336175 spread stats. RSS: 373MB
+```
+
+Total runtime 25 s. Zero EventLoop WARNs in the surrounding 30 s window. WAL log=25 frames at start (was thousands), all 25 checkpointed cleanly, frame index reset to zero before the heavy reads.
+
+The complete arc — chunking + mutex + cache bump + WAL discipline — has spreadStats running 90 s → 25 s, priceRefCache 50 s → 6-8 s, and the EventLoop watchdog reporting silent during normal cycles.
+
 ### 2026-05-04 (later evening) — `priceRefCache` + `computeAnalytics` chunked too; mutex+defer between heavy aggregates
 
 After the spreadStats fix landed and ran clean once (17:16 cycle), the watchdog caught a **22.6 s wedge at 17:26:34** with `compaction=false stats=0 analytics=0` — none of the known-heavy jobs were running. Traced to `refreshPriceRefCache` (10-min interval) doing the **same monolithic GROUP BY anti-pattern** as spreadStats: full table scan against `idx_pa_ema_stream` with column-order mismatch on the GROUP BY, forcing a full sort.
