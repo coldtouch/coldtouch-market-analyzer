@@ -5699,6 +5699,13 @@ _eventLoopHist.enable();
 // regression worth investigating.
 const EVENT_LOOP_WARN_MS  = 5000;     // 5s — slow sync query worth investigating
 const EVENT_LOOP_PANIC_MS = 60000;    // 60s — wedged, abort for systemd restart
+// 2026-05-04 (later): suppress WARN during the first 60s after boot. The
+// startup path has 3 contiguous sync ops (initPriceRefCache GROUP BY +
+// writePriceRefInit transaction + buildPriceReference loop) that combine to
+// ~5-7s. Steady-state runtime is unaffected. PANIC at 60s still fires during
+// boot — a multi-minute startup is genuinely broken and should kick a restart.
+const _bootStart = Date.now();
+const EVENT_LOOP_BOOT_GRACE_MS = 60 * 1000;
 setInterval(() => {
   // Take a snapshot of max recorded delay since last reset, then reset.
   // monitorEventLoopDelay reports in nanoseconds.
@@ -5710,7 +5717,12 @@ setInterval(() => {
     console.error(`[FATAL] Event loop blocked ${maxMs}ms (>${EVENT_LOOP_PANIC_MS}ms) — aborting for clean systemd restart`);
     if (!_aborting) { _aborting = true; process.abort(); }
   } else if (maxMs >= EVENT_LOOP_WARN_MS) {
-    console.warn(`[EventLoop] Max delay ${maxMs}ms in last 30s (compaction=${compactionRunning} stats=${typeof statsRunning !== 'undefined' && statsRunning ? 1 : 0} analytics=${typeof analyticsRunning !== 'undefined' && analyticsRunning ? 1 : 0})`);
+    const inBootGrace = (Date.now() - _bootStart) < EVENT_LOOP_BOOT_GRACE_MS;
+    if (inBootGrace) {
+      console.log(`[EventLoop] (boot grace) Max delay ${maxMs}ms in last 30s — suppressed`);
+    } else {
+      console.warn(`[EventLoop] Max delay ${maxMs}ms in last 30s (compaction=${compactionRunning} stats=${typeof statsRunning !== 'undefined' && statsRunning ? 1 : 0} analytics=${typeof analyticsRunning !== 'undefined' && analyticsRunning ? 1 : 0})`);
+    }
   }
 }, 30 * 1000);
 
