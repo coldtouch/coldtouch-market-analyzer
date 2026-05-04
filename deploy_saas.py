@@ -605,15 +605,27 @@ db.exec(`CREATE INDEX IF NOT EXISTS idx_loot_events_user_session ON loot_events(
 db.exec(`CREATE INDEX IF NOT EXISTS idx_loot_events_session ON loot_events(session_id, timestamp)`);
 
 // Dedupe migration: remove duplicates THEN install unique index. Sync sequence.
+// 2026-05-04: skip the DELETE if the unique index already exists. Once the index
+// is installed, future INSERTs are protected against duplicates by the constraint
+// itself (INSERT OR IGNORE callsites at the WS/REST ingestion paths). Re-running
+// the GROUP BY DELETE on every startup adds 5-10s of event-loop blocking on a
+// large loot_events table for zero benefit. Observed during the May 4 16:35 CEST
+// startup: 16.3s total event-loop block traced largely to this query.
 try {
-  db.exec(`DELETE FROM loot_events
-    WHERE rowid NOT IN (
-      SELECT MIN(rowid) FROM loot_events
-      GROUP BY user_id, session_id, timestamp, looted_by_name, item_id, looted_from_name, quantity
-    )`);
-  db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_loot_events_dedupe
-    ON loot_events(user_id, session_id, timestamp, looted_by_name, item_id, looted_from_name, quantity)`);
-  console.log(`[Dedup] loot_events: cleaned duplicates + installed unique index`);
+  const dedupeIdxExists = db.prepare(
+    `SELECT 1 FROM sqlite_master WHERE type='index' AND name='idx_loot_events_dedupe'`
+  ).get();
+  if (!dedupeIdxExists) {
+    console.log(`[Dedup] loot_events: first-time dedupe + index install`);
+    db.exec(`DELETE FROM loot_events
+      WHERE rowid NOT IN (
+        SELECT MIN(rowid) FROM loot_events
+        GROUP BY user_id, session_id, timestamp, looted_by_name, item_id, looted_from_name, quantity
+      )`);
+    db.exec(`CREATE UNIQUE INDEX idx_loot_events_dedupe
+      ON loot_events(user_id, session_id, timestamp, looted_by_name, item_id, looted_from_name, quantity)`);
+    console.log(`[Dedup] loot_events: cleaned duplicates + installed unique index`);
+  }
 } catch (err) {
   console.log(`[Dedup] loot_events dedupe failed: ${err.message}`);
 }
@@ -5531,6 +5543,42 @@ async function compactOldData(rawRetentionDays) {
     console.error('[Compaction] Tier2→3 failed:', err.message);
   }
 
+  // === TIER 3: prune price_averages daily rows older than 90 days ===
+  // 2026-05-04: previously daily rows had no retention policy; they accumulated
+  // forever from the Tier 2→3 roll. At ~85k daily rows/day that's ~31M rows/year
+  // unbounded. 90d cap is generous for any analytics use case (SMA-30d uses
+  // hourly, BM Flipper uses 7d). Chunked by rowid like Tier 1→2 to keep each
+  // sync block bounded and yield to the event loop between chunks.
+  const DAILY_RETENTION_DAYS = 90;
+  const dailyCutoff = now - DAILY_RETENTION_DAYS * 24 * 60 * 60 * 1000;
+  let dailyDeleted = 0;
+  try {
+    const selDailyStmt = db.prepare(`SELECT rowid FROM price_averages
+      WHERE period_type = 'daily' AND period_start < ?
+      LIMIT ?`);
+    for (let cycle = 0; cycle < COMPACTION_MAX_CYCLES; cycle++) {
+      const rss = rssNow();
+      if (rss > COMPACTION_RSS_LIMIT_MB) {
+        console.warn(`[Compaction] DailyPrune bailed: RSS ${rss}MB > ${COMPACTION_RSS_LIMIT_MB}MB at cycle ${cycle}`);
+        break;
+      }
+      const rids = selDailyStmt.all(dailyCutoff, COMPACTION_CHUNK).map(r => r.rowid);
+      if (rids.length === 0) break;
+      const placeholders = rids.map(() => '?').join(',');
+      const delStmt = db.prepare(`DELETE FROM price_averages WHERE rowid IN (${placeholders})`);
+      const info = delStmt.run(...rids);
+      dailyDeleted += info.changes;
+      await yieldLoop();
+    }
+    if (dailyDeleted > 0) {
+      console.log(`[Compaction] Daily prune: deleted ${dailyDeleted} price_averages daily rows older than ${DAILY_RETENTION_DAYS} days`);
+    } else {
+      console.log('[Compaction] No daily rows older than retention window');
+    }
+  } catch (err) {
+    console.error('[Compaction] Daily prune failed:', err.message);
+  }
+
   // Prune spread_stats older than 14 days
   try {
     const fourteenDaysAgo = now - 14 * 24 * 60 * 60 * 1000;
@@ -5554,7 +5602,7 @@ async function compactOldData(rawRetentionDays) {
   } catch (err) { console.error('[Compaction] checkpoint failed:', err.message); }
 
   const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
-  console.log(`[Compaction] Complete in ${elapsed}s — migrated=${migrated} rawDeleted=${deleted} t23=${t23rows} hourlyDeleted=${t23deleted} rss=${rssNow()}MB`);
+  console.log(`[Compaction] Complete in ${elapsed}s — migrated=${migrated} rawDeleted=${deleted} t23=${t23rows} hourlyDeleted=${t23deleted} dailyDeleted=${dailyDeleted} rss=${rssNow()}MB`);
   clearTimeout(flagWatchdog);
   compactionRunning = false;
 }

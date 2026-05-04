@@ -25,6 +25,12 @@ The afternoon's `monitorEventLoopDelay` watchdog earned its keep on its very fir
 - Covering index `(item_id, quality, city, period_start, avg_sell, avg_buy, min_sell, max_buy)` would make the aggregate index-only and drop each chunk from 1-3 s to <500 ms — but adds ~480 MB to the DB. Not justified yet.
 - Confirm overnight that no chunk crosses the 5 s WARN threshold under live concurrent load.
 
+**Plus two follow-on hardenings shipped in the same deploy:**
+
+- **`price_averages` daily rows now capped at 90 days.** Tier 2→3 compaction had no upper retention bound — daily rows accumulated forever from the price_hourly roll. At ~85 k daily rows/day that grows to ~31 M rows/year unbounded. The new prune step in `compactOldData()` runs after Tier 2→3, chunked by rowid in `COMPACTION_CHUNK`-sized slices with `setImmediate` yields between chunks (same pattern as Tier 1→2). 90 days is generous: SMA-30d uses hourly buckets, BM Flipper uses 7d, no UI surface needs more.
+
+- **Skip the loot_events dedup DELETE on subsequent restarts.** The startup sequence ran a `DELETE FROM loot_events WHERE rowid NOT IN (SELECT MIN(rowid) ... GROUP BY 7 columns)` unconditionally on every boot, taking 5-10 s on a large table. Once the unique index `idx_loot_events_dedupe` is installed, all 4 `INSERT INTO loot_events` callsites use `INSERT OR IGNORE` so duplicates can't accumulate — the recurring DELETE is pointless. New code checks for the index in `sqlite_master` and skips the GROUP BY + DELETE when it exists. Should drop startup event-loop block from ~16 s → ~1-2 s on the next clean boot.
+
 ### 2026-05-04 (afternoon) — Hardening pass after first overnight: split transient errors, raise compaction threshold, add event-loop watchdog
 
 After the morning's emergency compaction fix held cleanly through 7 compaction cycles overnight (NRestarts=0, all 1.4M migrated rows processed without wedging), reviewed the journal and fixed the loose ends I'd flagged for next session:
