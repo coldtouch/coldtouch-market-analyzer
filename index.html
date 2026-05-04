@@ -2302,6 +2302,17 @@
                     <div id="changelog-wrapper" style="max-height: 500px; overflow-y: auto; position: relative;">
                     <div class="changelog-list">
                         <div class="changelog-entry">
+                            <div class="changelog-date">May 4, 2026</div>
+                            <div class="changelog-title">🛡️ May stability arc — better-sqlite3 migration + compaction rewrite + event-loop watchdog</div>
+                            <ul>
+                                <li><strong>The migration (May 1-3):</strong> dropped <code>node-sqlite3</code> entirely in favour of <code>better-sqlite3</code>. The async-callback orphan bug class that caused 44+ unplanned restarts/day is now structurally impossible. Site went from ~94 unplanned restarts in 36 hours to zero.</li>
+                                <li><strong>The emergency (May 3-4 overnight):</strong> a hung site root-caused to <code>compactOldData()</code> loading 30 M rows synchronously into one transaction. Rewritten as chunked async with <code>setImmediate</code> yields, RSS guard, and <code>wal_checkpoint(TRUNCATE)</code>. One-time offline cleanup with bulk-copy keepers shrunk the DB 19.7 GB → 11.7 GB and process memory 9.7 GB → 191 MB.</li>
+                                <li><strong>The hardening (May 4 afternoon):</strong> classified transient network errors so a flaky AODP timeout no longer wipes in-flight compaction state. Hardened the 30 s timeout middleware against destroyed sockets. Added a libuv-level event-loop watchdog (<code>monitorEventLoopDelay</code>) that warns at 5 s and aborts at 60 s — catches sync wedges that the JS event loop itself can't observe.</li>
+                                <li><strong>The follow-up (May 4 evening):</strong> the new watchdog caught its first wedge on its first cycle — a 49.4 s sync block in <code>computeSpreadStats</code>'s big GROUP BY aggregate. Fixed by chunking the aggregate across 10 item_id ranges; each chunk now completes in 1-3 s with event-loop yields between. Headroom restored.</li>
+                                <li>Site stability over the last 24 h: <code>NRestarts=0</code>, <code>0 FATAL</code>, all HTTP routes 200 OK at &lt;300 ms.</li>
+                            </ul>
+                        </div>
+                        <div class="changelog-entry">
                             <div class="changelog-date">April 29, 2026</div>
                             <div class="changelog-title">⚙️ Stability fix — site no longer cycles every ~17 minutes</div>
                             <ul>

@@ -5110,7 +5110,7 @@ function recordSnapshots(allPrices) {
 // (which can grow to 20M+ rows from NATS and OOM the process).
 let statsRunning = false;
 let statsStartTime = 0;
-function computeSpreadStats() {
+async function computeSpreadStats() {
   // Watchdog: if statsRunning has been true for >20 min, force-reset it
   if (statsRunning) {
     if (Date.now() - statsStartTime > 20 * 60 * 1000) {
@@ -5131,89 +5131,94 @@ function computeSpreadStats() {
   const cutoff = now - windowMs;
 
   const mem = process.memoryUsage();
-  console.log(`[SpreadStats] Starting SQL-aggregated computation... RSS: ${Math.round(mem.rss/1024/1024)}MB Heap: ${Math.round(mem.heapUsed/1024/1024)}MB`);
+  console.log(`[SpreadStats] Starting chunked aggregation... RSS: ${Math.round(mem.rss/1024/1024)}MB Heap: ${Math.round(mem.heapUsed/1024/1024)}MB`);
 
-  // Use SQL GROUP BY to aggregate per (item_id, quality, city) over the 7-day window.
-  // 2026-05-02 stage 2: statsDb.all → statsDb.prepare().all() (sync).
-  // The aggregate is now sync — blocks the event loop for ~5-10s on the 14GB DB.
-  // This is acceptable because /api/me + /api/leaderboard are on readDb (a different
-  // sync connection), so they remain responsive even while statsDb is mid-query.
-  let aggRows;
+  // 2026-05-04: chunked by item_id range to keep each sync block under the
+  // 5s EventLoop WARN threshold. Single-shot .all() across the full table
+  // wedged the event loop for 49s in production (May 4 16:20:18). Index
+  // (item_id, city, quality, period_start) doesn't match GROUP BY order
+  // (item_id, quality, city), so SQLite must materialize the full result
+  // before returning — iterate() can't stream. Instead we run N smaller
+  // aggregates by item_id range and yield setImmediate between each.
+  // 9,417 distinct item_ids in 7d window; T6/T7/T8 are the heavy tiers.
+  // Each range targets ~1-3s of sync work.
+  const ITEM_RANGES = [
+    ['',     'T4_'],   // pre-T4 (gathered, refined, etc.)
+    ['T4_',  'T5_'],
+    ['T5_',  'T6_'],
+    ['T6_',  'T6_M'],  // T6 split: A-L
+    ['T6_M', 'T7_'],   // T6 split: M-Z
+    ['T7_',  'T7_M'],  // T7 split: A-L
+    ['T7_M', 'T8_'],   // T7 split: M-Z
+    ['T8_',  'T8_M'],  // T8 split: A-L
+    ['T8_M', 'U'],     // T8 split: M-Z
+    ['U',    '￿'] // UNIQUE_*, ZIGGURAT_*, anything past U
+  ];
+
+  // Pre-compile statements once across all chunks.
+  const aggStmt = statsDb.prepare(
+    `SELECT item_id, quality, city,
+      AVG(CASE WHEN min_sell > 0 THEN min_sell ELSE avg_sell END) AS avg_min_sell,
+      AVG(CASE WHEN max_buy  > 0 THEN max_buy  ELSE avg_buy  END) AS avg_max_buy,
+      COUNT(*) AS sample_count
+     FROM price_averages
+     WHERE item_id >= ? AND item_id < ?
+       AND period_start > ?
+       AND (avg_sell > 0 OR avg_buy > 0)
+     GROUP BY item_id, quality, city`
+  );
+
+  const stmt_spreadInsert = statsDb.prepare(`INSERT OR REPLACE INTO spread_stats (item_id, quality, buy_city, sell_city, avg_spread, median_spread, consistency_pct, sample_count, window_days, confidence_score, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+  const writeSpreadBatch = statsDb.transaction((rows) => {
+    for (const r of rows) stmt_spreadInsert.run(...r);
+  });
+
+  const WRITE_BATCH = 1000;
+  let writeBuf = [];
+  let processed = 0;
+  let statsWritten = 0;
+  let totalAgg = 0;
+
+  function flushWrites() {
+    if (writeBuf.length === 0) return;
+    const batch = writeBuf.splice(0);
+    statsWritten += batch.length;
+    try { writeSpreadBatch.immediate(batch); }
+    catch (err) { console.error('[SpreadStats] Batch failed (auto-rolled-back):', err.message); }
+  }
+
   try {
-    aggRows = statsDb.prepare(
-      `SELECT item_id, quality, city,
-        AVG(CASE WHEN min_sell > 0 THEN min_sell ELSE avg_sell END) AS avg_min_sell,
-        AVG(CASE WHEN max_buy  > 0 THEN max_buy  ELSE avg_buy  END) AS avg_max_buy,
-        COUNT(*) AS sample_count
-       FROM price_averages
-       WHERE period_start > ? AND (avg_sell > 0 OR avg_buy > 0)
-       GROUP BY item_id, quality, city`
-    ).all(cutoff);
-  } catch (err) {
-    console.error('[SpreadStats] Aggregate read failed:', err.message);
-    statsRunning = false;
-    return;
-  }
-  if (!aggRows || aggRows.length === 0) {
-    console.log('[SpreadStats] No data to process');
-    statsRunning = false;
-    return;
-  }
-
-      console.log(`[SpreadStats] Processing ${aggRows.length} aggregated city rows...`);
-
-      // Group by item_id + quality → map of city → { minSell, maxBuy, samples }
-      const itemMap = {};
-      for (const r of aggRows) {
-        const key = r.item_id + '_' + r.quality;
-        if (!itemMap[key]) itemMap[key] = { item_id: r.item_id, quality: r.quality, cities: {} };
-        itemMap[key].cities[r.city] = {
-          minSell: r.avg_min_sell || 0,
-          maxBuy:  r.avg_max_buy  || 0,
-          samples: r.sample_count
-        };
+    for (const [lo, hi] of ITEM_RANGES) {
+      const t0 = Date.now();
+      let chunkRows;
+      try {
+        chunkRows = aggStmt.all(lo, hi, cutoff);
+      } catch (err) {
+        console.error(`[SpreadStats] Aggregate read failed for ${lo}..${hi}:`, err.message);
+        continue; // skip range, keep going
       }
-      aggRows.length = 0; // free memory
+      const aggMs = Date.now() - t0;
+      totalAgg += chunkRows.length;
 
-      const itemKeys = Object.keys(itemMap);
-      let processed = 0;
-      let statsWritten = 0;
-      // 2026-05-02 stage 2: write batch increased 100 → 1000 (better-sqlite3
-      // sync transactions are 4-10× faster — larger batches improve throughput).
-      const WRITE_BATCH = 1000;
-      let writeBuf = [];
-
-      // 2026-05-02 stage 2: sync transaction via better-sqlite3.
-      // Eliminates: BEGIN IMMEDIATE callback chain, statsDb.serialize, stmt.finalize,
-      // manual COMMIT/ROLLBACK callbacks, batchErr accumulator. Auto-rollback on throw.
-      // Still wrapped in withWriteLock so it serializes correctly with the still-async
-      // `db` connection writers (priceRefCache-incr, nats-flush, etc.) until stage 4.
-      const stmt_spreadInsert = statsDb.prepare(`INSERT OR REPLACE INTO spread_stats (item_id, quality, buy_city, sell_city, avg_spread, median_spread, consistency_pct, sample_count, window_days, confidence_score, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
-      const writeSpreadBatch = statsDb.transaction((rows) => {
-        for (const r of rows) stmt_spreadInsert.run(...r);
-      });
-      function flushWrites() {
-        if (writeBuf.length === 0) return;
-        const batch = writeBuf.splice(0);
-        statsWritten += batch.length;
-        try { writeSpreadBatch.immediate(batch); }
-        catch (err) { console.error('[SpreadStats] Batch failed (auto-rolled-back):', err.message); }
-      }
-
-      async function processBatch(startIdx) {
-        if (startIdx >= itemKeys.length) {
-          await flushWrites();
-          const mem2 = process.memoryUsage();
-          console.log(`[SpreadStats] Done. Processed ${processed} items, wrote ${statsWritten} spread stats. RSS: ${Math.round(mem2.rss/1024/1024)}MB`);
-          statsRunning = false;
-          return;
+      if (chunkRows.length > 0) {
+        // Build per-chunk itemMap. Each item_id's full city set is contained
+        // within one chunk because GROUP BY's leading column is item_id and
+        // ranges are non-overlapping by item_id prefix.
+        const itemMap = {};
+        for (const r of chunkRows) {
+          const key = r.item_id + '_' + r.quality;
+          if (!itemMap[key]) itemMap[key] = { item_id: r.item_id, quality: r.quality, cities: {} };
+          itemMap[key].cities[r.city] = {
+            minSell: r.avg_min_sell || 0,
+            maxBuy:  r.avg_max_buy  || 0,
+            samples: r.sample_count
+          };
         }
-        const endIdx = Math.min(startIdx + 200, itemKeys.length);
+        chunkRows.length = 0; // free memory
 
-        for (let idx = startIdx; idx < endIdx; idx++) {
-          const { item_id, quality, cities } = itemMap[itemKeys[idx]];
-          delete itemMap[itemKeys[idx]]; // release memory as we go
-
+        // Compute spreads for this chunk's items and queue writes.
+        for (const key of Object.keys(itemMap)) {
+          const { item_id, quality, cities } = itemMap[key];
           const cityNames = Object.keys(cities);
 
           for (let i = 0; i < cityNames.length; i++) {
@@ -5229,17 +5234,12 @@ function computeSpreadStats() {
               const sellRevenue = sellData.maxBuy;
               if (buyCost <= 0 || sellRevenue <= 0) continue;
 
-              // sample_count is the number of hourly periods that contributed to the aggregate.
-              // Use the lesser of the two cities so we only count cycles where both had data.
               const samples = Math.min(buyData.samples, sellData.samples);
               if (samples < 3) continue;
 
-              // spread_stats is a global pre-compute; use premium-default tax (matches majority of users).
+              // spread_stats is a global pre-compute; use premium-default tax.
               const spread = sellRevenue - buyCost - (sellRevenue * TAX_RATE);
 
-              // Estimate consistency from sample count (168h per week max).
-              // Without per-cycle rows we can't compute exact positive-cycle %, but
-              // a positive average spread strongly implies consistent profitability.
               const consistencyPct = spread > 0
                 ? Math.min(85, 40 + (samples / 168) * 45)
                 : Math.max(15, 40 - (samples / 168) * 25);
@@ -5253,32 +5253,35 @@ function computeSpreadStats() {
             }
           }
           processed++;
-
-          // BACKPRESSURE: await before continuing inner loop. This keeps at
-          // most ONE spreadStats-flush task in flight per processBatch chunk.
-          if (writeBuf.length >= WRITE_BATCH) await flushWrites();
         }
 
-        // Yield to event loop between chunks so Express can still serve requests.
-        // Wrap with .catch to prevent unhandledRejection from the recursive call
-        // (processBatch is async and the setTimeout callback doesn't await it).
-        setTimeout(() => {
-          processBatch(endIdx).catch((err) => {
-            console.error('[SpreadStats] processBatch chunk crashed:', err && err.message || err);
-            statsRunning = false;
-          });
-        }, 50);
+        // Flush writes if buffer crossed batch threshold.
+        if (writeBuf.length >= WRITE_BATCH) flushWrites();
       }
 
-      processBatch(0).catch((err) => {
-        console.error('[SpreadStats] processBatch crashed:', err && err.message || err);
-        statsRunning = false;
-      });
+      // Yield to event loop between every range (regardless of chunk size).
+      // Keeps Express + WS + NATS responsive during the ~30-40s total runtime.
+      await new Promise(r => setImmediate(r));
+    }
+
+    // Final flush for the last partial batch.
+    flushWrites();
+
+    const mem2 = process.memoryUsage();
+    console.log(`[SpreadStats] Done. Processed ${processed} items, ${totalAgg} agg rows, wrote ${statsWritten} spread stats. RSS: ${Math.round(mem2.rss/1024/1024)}MB`);
+  } finally {
+    statsRunning = false;
+  }
 }
 
-// Run stats computation hourly, first run 10 minutes after start (after backfill)
-setTimeout(computeSpreadStats, 10 * 60 * 1000);
-setInterval(computeSpreadStats, 60 * 60 * 1000);
+// Run stats computation hourly, first run 10 minutes after start (after backfill).
+// Wrap to catch any top-level rejection so we never get an unhandledRejection.
+const _spreadStatsRunner = () => computeSpreadStats().catch((err) => {
+  console.error('[SpreadStats] Top-level crash:', err && err.message || err);
+  statsRunning = false;
+});
+setTimeout(_spreadStatsRunner, 10 * 60 * 1000);
+setInterval(_spreadStatsRunner, 60 * 60 * 1000);
 
 // === WAL CHECKPOINT (every 6 hours) ===
 // Prevents the WAL file from growing unbounded on a write-heavy database.

@@ -2,6 +2,29 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-05-04 (evening) — SpreadStats wedge: chunk aggregate by item_id range so event loop stays responsive
+
+The afternoon's `monitorEventLoopDelay` watchdog earned its keep on its very first cycle. At 16:20:18 UTC the journal logged `[EventLoop] Max delay 49392ms in last 30s (compaction=false stats=1 analytics=0)` — a 49.4-second event-loop block during `computeSpreadStats`, just 10 s under the 60 s `process.abort()` threshold. Process kept running, but a single quality regression away from a restart loop.
+
+**Root cause:** the SQL aggregate was a single sync `statsDb.prepare(...).all(cutoff)` returning 170,949 GROUP BY rows in one shot. SQLite's planner picked `idx_pa_ema_stream(item_id, city, quality, period_start)` for the scan, but our GROUP BY is `(item_id, quality, city)` — the column order mismatch forces a full sort before any rows are returned. `iterate()` can't stream past a sort, so the entire result set materializes before the JS loop sees anything. Direct `sqlite3` CLI: 8.8 s. Live process under concurrent NATS+snapshot load: 49 s.
+
+**Why the migration didn't catch this:** stage 2 of better-sqlite3 chunked the WRITE phase (1000-row INSERT batches with `setImmediate` yields). The READ phase stayed as one `.all()` because at the time the table was 30 M rows of price_averages and the aggregate took 5-10 s — annoying but under the (then-nonexistent) watchdog threshold. After the May 4 cleanup the table dropped to 5.9 M but the query plan got worse: ANALYZE didn't move it off `idx_pa_ema_stream`.
+
+**Fix shipped:** chunked aggregation across 10 item_id ranges (`''`-`T4_`, `T4_`-`T5_`, ..., `T8_`-`T8_M`, `T8_M`-`U`, `U`-`￿`). Each range's `WHERE item_id >= ? AND item_id < ?` switches the planner to `SEARCH ... USING INDEX (item_id>? AND item_id<?)` and runs in 1-3 s. `await new Promise(r => setImmediate(r))` between every range keeps Express + WS + NATS responsive throughout the ~30-40 s total runtime.
+
+**Other tightening in the same change:**
+- `computeSpreadStats` is now `async` proper, wrapped in try/finally so `statsRunning` always resets even on throw.
+- Top-level `_spreadStatsRunner` catches and logs unhandled rejections — a future bug can never leave the flag stuck.
+- `aggStmt` and `stmt_spreadInsert` prepared once outside the chunk loop; `processBatch` recursion + setTimeout(50) trampoline replaced with a flat for-await loop.
+
+**Validated locally:** single-chunk T6 aggregate (36,280 result rows, 2.6 s) < 5 s WARN threshold. CLI `EXPLAIN QUERY PLAN` for the chunked form: `SEARCH price_averages USING INDEX idx_pa_ema_stream (item_id>? AND item_id<?)`. `node --check` on the embedded backend.js passes.
+
+**Files modified:** `deploy_saas.py` (~140 lines net in `computeSpreadStats`).
+
+**Still TODO (deferred):**
+- Covering index `(item_id, quality, city, period_start, avg_sell, avg_buy, min_sell, max_buy)` would make the aggregate index-only and drop each chunk from 1-3 s to <500 ms — but adds ~480 MB to the DB. Not justified yet.
+- Confirm overnight that no chunk crosses the 5 s WARN threshold under live concurrent load.
+
 ### 2026-05-04 (afternoon) — Hardening pass after first overnight: split transient errors, raise compaction threshold, add event-loop watchdog
 
 After the morning's emergency compaction fix held cleanly through 7 compaction cycles overnight (NRestarts=0, all 1.4M migrated rows processed without wedging), reviewed the journal and fixed the loose ends I'd flagged for next session:
