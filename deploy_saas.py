@@ -20,6 +20,23 @@ ip = os.environ.get('VPS_IP', '5.189.189.71')
 password = os.environ['VPS_PASSWORD']
 usr = os.environ.get('VPS_USER', 'root')
 domain = os.environ.get('VPS_DOMAIN', 'albionaitool.xyz')
+REPO_ROOT = os.path.dirname(os.path.abspath(__file__))
+FRONTEND_STATIC_FILES = [
+    'index.html',
+    'app.js',
+    'style.css',
+    'db.js',
+    'zonemap.js',
+    'sw.js',
+    'manifest.json',
+    'items.json',
+    'recipes.json',
+    'itemweights.json',
+    'itemmap.json',
+    'og-image.png',
+    'robots.txt',
+    'sitemap.xml',
+]
 
 CLIENT_ID = os.environ['DISCORD_CLIENT_ID']
 CLIENT_SECRET = os.environ['DISCORD_CLIENT_SECRET']
@@ -27,16 +44,14 @@ BOT_TOKEN = os.environ['DISCORD_BOT_TOKEN']
 
 def main():
     # DO-1 rollback: `python deploy_saas.py rollback` restores the .bak backend.js.
-    # DO-6 frontend-only: `python deploy_saas.py --frontend-only` would just push
-    #   static assets, but the static frontend lives on GitHub Pages — not the VPS —
-    #   so the flag exists for future use. Today it just prints a notice and exits.
+    # DO-6 frontend-only: `python deploy_saas.py --frontend-only` pushes the static
+    #   frontend into /opt/albion-saas/public without touching backend.js or service state.
     args = [a for a in sys.argv[1:] if a]
     mode = 'deploy'
     if args and args[0] in ('rollback', '--rollback'):
         mode = 'rollback'
     elif args and args[0] in ('--frontend-only', 'frontend-only'):
-        print("[deploy_saas] --frontend-only: backend/VPS not affected. Push frontend to GitHub Pages via `git push origin main` instead.")
-        return
+        mode = 'frontend-only'
 
     # SEC-L2 / DO-1: auto-bump sw.js CACHE_NAME version so every deploy invalidates the
     # browser cache. Modifies sw.js locally — include it in your git commit before pushing.
@@ -78,6 +93,24 @@ def main():
             )
         return out
 
+    def upload_frontend_assets(sftp):
+        """Upload the static app that Express serves from the VPS."""
+        run_wait("mkdir -p /opt/albion-saas/public")
+        uploaded = 0
+        for rel_path in FRONTEND_STATIC_FILES:
+            src_path = os.path.join(REPO_ROOT, rel_path)
+            if not os.path.isfile(src_path):
+                print(f"[frontend] WARNING: missing {rel_path}, skipping")
+                continue
+            with open(src_path, 'rb') as src_f:
+                data = src_f.read()
+            remote_path = f"/opt/albion-saas/public/{rel_path}"
+            with sftp.file(remote_path, 'wb') as dst_f:
+                dst_f.write(data)
+            uploaded += len(data)
+            print(f"[frontend] Uploaded {rel_path} ({len(data)} bytes)")
+        return uploaded
+
     # PY-H2: Register SSH cleanup hook so the session is closed on any unhandled exception.
     _orig_excepthook = sys.excepthook
     def _ssh_cleanup_hook(exc_type, exc_val, exc_tb):
@@ -100,7 +133,16 @@ def main():
         ssh.close()
         return
 
+    if mode == 'frontend-only':
+        sftp = ssh.open_sftp()
+        uploaded = upload_frontend_assets(sftp)
+        sftp.close()
+        ssh.close()
+        print(f"[deploy_saas] Frontend deployed successfully ({uploaded} bytes).")
+        return
+
     run_wait("mkdir -p /opt/albion-saas")
+    run_wait("mkdir -p /opt/albion-saas/public")
     run_wait("mkdir -p /opt/albion-saas/backups")
     run_wait("systemctl disable --now albion-proxy || true")
     run_wait("apt-get update && apt-get install -y build-essential python3")
@@ -184,11 +226,12 @@ const ROUTINE_REPORT_SECRET = process.env.ROUTINE_REPORT_SECRET || '';
 const API_BASE = `https://${GAME_SERVER}.albion-online-data.com/api/v2/stats/prices`;
 const CHARTS_BASE = `https://${GAME_SERVER}.albion-online-data.com/api/v2/stats/charts`;
 const HISTORY_BASE = `https://${GAME_SERVER}.albion-online-data.com/api/v2/stats/history`;
-const ITEMS_URL = 'https://coldtouch.github.io/coldtouch-market-analyzer/items.json';
+const ITEMS_URL = process.env.ITEMS_URL || `https://${domain}/items.json`;
 const CHUNK_SIZE = 50;  // Larger chunks OK with 6 vCPU / 12GB RAM
 const SCAN_INTERVAL_MS = 10 * 60 * 1000; // 10 minutes
-const SITE_URL = 'https://coldtouch.github.io/coldtouch-market-analyzer';
+const SITE_URL = `https://${domain}`;
 const PREVIEW_ROOT = '/opt/albion-saas/previews';
+const PUBLIC_ROOT = '/opt/albion-saas/public';
 
 function maskEmail(email) {
     if (!email) return '***';
@@ -968,7 +1011,7 @@ client.on('interactionCreate', async interaction => {
         return safeEditReply({ embeds: [{
           title: 'Registration Required',
           color: 0xffa500,
-          description: 'You need a registered account on the website to use alerts.\\n\\n**How to set up:**\\n1. Visit [albionaitool.xyz](https://coldtouch.github.io/coldtouch-market-analyzer/) and create an account\\n2. Either login with Discord or create an email account and link your Discord\\n3. Come back here and run `/setup_alerts` again',
+          description: 'You need a registered account on the website to use alerts.\\n\\n**How to set up:**\\n1. Visit [albionaitool.xyz](https://albionaitool.xyz/) and create an account\\n2. Either login with Discord or create an email account and link your Discord\\n3. Come back here and run `/setup_alerts` again',
           footer: { text: 'Coldtouch Market Analyzer • Free registration required' }
         }] });
       }
@@ -1372,7 +1415,7 @@ let _transportLiveCacheTs = 0;
 
 // Manual Discord OAuth2 flow (replaces passport-discord which has no HTTP timeouts)
 const DISCORD_AUTH_URL = `https://discord.com/api/oauth2/authorize?client_id=${CLIENT_ID}&redirect_uri=${encodeURIComponent(`https://${domain}/auth/discord/callback`)}&response_type=code&scope=identify`;
-const SITE = 'https://coldtouch.github.io/coldtouch-market-analyzer';
+const SITE = SITE_URL;
 
 app.get('/auth/discord', (req, res) => res.redirect(DISCORD_AUTH_URL));
 
@@ -1537,12 +1580,13 @@ app.get('/api/item-icon/:itemId', (req, res) => {
   upstreamReq.end();
 });
 
-// Redirect root to GitHub Pages frontend, preserving query string so device-auth
-// links like https://albionaitool.xyz/?device=ABC-DEF carry the device code through.
-app.get('/', (req, res) => {
+// Legacy GitHub Pages path. Preserve query strings so old auth/share links keep
+// working after the frontend moved to the VPS root.
+app.get(['/coldtouch-market-analyzer', '/coldtouch-market-analyzer/*'], (req, res) => {
+  const rest = req.path.replace(new RegExp('^/coldtouch-market-analyzer/?'), '/');
   const qIdx = req.url.indexOf('?');
   const qs = qIdx >= 0 ? req.url.substring(qIdx) : '';
-  res.redirect('https://coldtouch.github.io/coldtouch-market-analyzer/' + qs);
+  res.redirect(301, (rest || '/') + qs);
 });
 
 // Health check for monitoring
@@ -1956,7 +2000,7 @@ app.post('/api/forgot-password', registerLimiter, (req, res) => {
       logAudit(user.id, 'forgot_password', maskEmail(emailLower), req.ip);
 
       if (mailTransporter) {
-        const resetUrl = 'https://coldtouch.github.io/coldtouch-market-analyzer/?reset=' + token;
+        const resetUrl = SITE_URL + '?reset=' + token;
         mailTransporter.sendMail({
           from: SMTP_FROM, to: emailLower,
           subject: 'Reset your Coldtouch Market Analyzer password',
@@ -2713,7 +2757,7 @@ app.post('/api/accountability/share', requireAuth, (req, res) => {
             [token, req.user.id, finalSessionId, capturesJson, (sessionName || '').slice(0, 120), Date.now(), chestLogsJson],
             function(iErr) {
                 if (iErr) return res.status(500).json({ error: 'An internal error occurred.' });
-                res.json({ token, url: `/?accShare=${token}` });
+                res.json({ token, url: `${SITE_URL}/accountability/${token}` });
             });
     });
 });
@@ -4338,6 +4382,35 @@ app.get('/api/craft/hideout-bonus', (req, res) => {
     total_bonus: total,
     rrr_approx: (1 - 1 / (1 + (18 + total) / 100)).toFixed(4)
   });
+});
+
+// === STATIC FRONTEND ===
+// Production frontend now lives beside the API on albionaitool.xyz. API/auth/
+// preview routes are all registered above this point; everything else is the SPA.
+app.use(express.static(PUBLIC_ROOT, {
+  index: false,
+  etag: true,
+  setHeaders: (res, filePath) => {
+    if (filePath.endsWith('index.html') || filePath.endsWith('sw.js')) {
+      res.setHeader('Cache-Control', 'no-store');
+    } else {
+      res.setHeader('Cache-Control', 'public, max-age=300');
+    }
+  }
+}));
+
+app.get('*', (req, res) => {
+  const p = req.path || '/';
+  if (p === '/api' || p.startsWith('/api/') ||
+      p === '/auth' || p.startsWith('/auth/') ||
+      p === '/preview' || p.startsWith('/preview/')) {
+    return res.status(404).json({ error: 'Not found' });
+  }
+  if (path.extname(p)) return res.status(404).send('Not found');
+  const indexPath = path.join(PUBLIC_ROOT, 'index.html');
+  if (!fs.existsSync(indexPath)) return res.status(503).send('Frontend not deployed yet');
+  res.set('Cache-Control', 'no-store');
+  res.sendFile(indexPath);
 });
 
 // === TLS SERVER & WSS ===
@@ -6832,8 +6905,10 @@ require('http').createServer((req, res) => {
     else:
         print(f"WARNING: weightmap.json not found at {weightmap_src} — backend weight re-resolution will be a no-op")
 
+    frontend_bytes = upload_frontend_assets(sftp)
     sftp.close()
     print(f"Uploaded backend.js ({len(backend_js)} bytes via SFTP)")
+    print(f"Uploaded frontend static assets ({frontend_bytes} bytes via SFTP)")
 
     # Write env file with restricted permissions
     game_server = os.environ.get('GAME_SERVER', 'europe')

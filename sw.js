@@ -3,18 +3,19 @@
 // both Friendly Deaths and Enemy Kills subsections (plus looter rows inside
 // the expanded death body). Helps ZvZ audits where many players share
 // similar names but wear different guild tags.
-const CACHE_NAME = 'coldtouch-v121';
+const CACHE_NAME = 'coldtouch-v122';
 const APP_SHELL = [
-    './',
-    './index.html',
-    './app.js',
-    './style.css',
-    './db.js',
-    './zonemap.js',
-    './items.json',
-    './itemmap.json',
-    './itemweights.json',  // 2026-04-28: was missing — 411KB hit on every fresh install
-    './manifest.json'
+    '/',
+    '/index.html',
+    '/app.js',
+    '/style.css',
+    '/db.js',
+    '/zonemap.js',
+    '/items.json',
+    '/recipes.json',
+    '/itemmap.json',
+    '/itemweights.json',  // 2026-04-28: was missing — 411KB hit on every fresh install
+    '/manifest.json'
 ];
 
 self.addEventListener('install', (e) => {
@@ -35,7 +36,7 @@ self.addEventListener('activate', (e) => {
 
 self.addEventListener('fetch', (e) => {
     // Pass-through: API calls and WebSocket upgrades
-    if (e.request.url.includes('/api/') || e.request.url.includes('wss://')) return;
+    if (e.request.url.includes('/api/') || e.request.url.includes('/auth/') || e.request.url.includes('wss://')) return;
     // FE-H3: stale-while-revalidate — serve cached copy instantly, refresh cache in background
     e.respondWith(
         caches.open(CACHE_NAME).then(cache =>

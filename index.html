@@ -4,6 +4,16 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <script>
+    (function () {
+        if (location.hostname !== 'coldtouch.github.io') return;
+        if (!location.pathname.startsWith('/coldtouch-market-analyzer')) return;
+        var params = new URLSearchParams(location.search);
+        if (params.has('mirror')) return;
+        var rest = location.pathname.replace(/^\/coldtouch-market-analyzer\/?/, '/');
+        location.replace('https://albionaitool.xyz' + (rest || '/') + location.search + location.hash);
+    })();
+    </script>
 
     <!-- Primary SEO -->
     <title>Coldtouch Market Analyzer – Albion Online Market Prices, Flipping &amp; Crafting Tool</title>
@@ -33,7 +43,7 @@
 
     <!-- Favicon (inline SVG — no separate image file required) -->
     <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg%20xmlns%3D'http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg'%20viewBox%3D'0%200%2024%2024'%20fill%3D'none'%20stroke%3D'%23d4af37'%20stroke-width%3D'1.5'%20stroke-linecap%3D'round'%20stroke-linejoin%3D'round'%3E%3Cpolyline%20points%3D'23%206%2013.5%2015.5%208.5%2010.5%201%2018'%2F%3E%3Cpolyline%20points%3D'17%206%2023%206%2023%2012'%2F%3E%3C%2Fsvg%3E">
-    <link rel="manifest" href="manifest.json">
+    <link rel="manifest" href="/manifest.json">
     <meta name="theme-color" content="#6366f1">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -85,7 +95,7 @@
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 
     <!-- Styles -->
-    <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="/style.css">
 
     <!-- Chart.js (SEC-M4: pinned version + SRI integrity check) -->
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.9/dist/chart.umd.min.js"
@@ -4703,10 +4713,10 @@
         </div>
     </div>
 
-    <script src="db.js"></script>
-    <script src="zonemap.js"></script>
-    <script src="app.js"></script>
-    <script>if('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js', {updateViaCache: 'none'}).catch(()=>{});</script><!-- FE-H3 -->
+    <script src="/db.js"></script>
+    <script src="/zonemap.js"></script>
+    <script src="/app.js"></script>
+    <script>if('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js', {scope: '/', updateViaCache: 'none'}).catch(()=>{});</script><!-- FE-H3 -->
 </body>
 
 </html>

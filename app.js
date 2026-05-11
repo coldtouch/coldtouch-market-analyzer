@@ -742,10 +742,10 @@ function loadData() {
         try {
             const cb = '?v=' + Date.now();
             const [resItems, resRecipes, resWeights, resItemMap] = await Promise.all([
-                fetch('items.json' + cb),
-                fetch('recipes.json' + cb),
-                fetch('itemweights.json' + cb).catch(() => ({ ok: false })),
-                fetch('itemmap.json' + cb).catch(() => ({ ok: false }))
+                fetch('/items.json' + cb),
+                fetch('/recipes.json' + cb),
+                fetch('/itemweights.json' + cb).catch(() => ({ ok: false })),
+                fetch('/itemmap.json' + cb).catch(() => ({ ok: false }))
             ]);
             ITEM_NAMES = await resItems.json();
             itemsList = Object.keys(ITEM_NAMES).filter(k => k && ITEM_NAMES[k]);
@@ -806,6 +806,147 @@ async function updateDbStatus() {
 
 
 // ====== TAB NAVIGATION ======
+const TAB_ROUTE_MAP = Object.freeze({
+    browser: 'market',
+    arbitrage: 'flipping',
+    bmflipper: 'black-market',
+    compare: 'compare',
+    toptraded: 'top-traded',
+    itempower: 'item-power',
+    favorites: 'favorites',
+    crafting: 'crafting',
+    'craft-top-n': 'crafting/top-n',
+    'refining-lab': 'refining',
+    journals: 'journals',
+    rrr: 'return-rate',
+    repair: 'repair',
+    transport: 'transport',
+    'live-flips': 'live-flips',
+    portfolio: 'portfolio',
+    'craft-runs': 'craft-runs',
+    'loot-buyer': 'lootbuyer',
+    'loot-logger': 'lootlogger',
+    farming: 'farming',
+    syphon: 'syphon',
+    alerts: 'alerts',
+    community: 'community',
+    profile: 'profile',
+    about: 'about',
+    'routine-reports': 'routine-reports',
+});
+
+const ROUTE_TAB_ALIASES = Object.freeze({
+    '': 'browser',
+    market: 'browser',
+    browser: 'browser',
+    flipping: 'arbitrage',
+    arbitrage: 'arbitrage',
+    'black-market': 'bmflipper',
+    bmflipper: 'bmflipper',
+    compare: 'compare',
+    'city-comparison': 'compare',
+    'top-traded': 'toptraded',
+    toptraded: 'toptraded',
+    'item-power': 'itempower',
+    itempower: 'itempower',
+    favorites: 'favorites',
+    crafting: 'crafting',
+    'crafting/top-n': 'craft-top-n',
+    'craft-top-n': 'craft-top-n',
+    refining: 'refining-lab',
+    'refining-lab': 'refining-lab',
+    journals: 'journals',
+    'return-rate': 'rrr',
+    rrr: 'rrr',
+    repair: 'repair',
+    transport: 'transport',
+    'live-flips': 'live-flips',
+    portfolio: 'portfolio',
+    'craft-runs': 'craft-runs',
+    lootbuyer: 'loot-buyer',
+    'loot-buyer': 'loot-buyer',
+    lootlogger: 'loot-logger',
+    'loot-logger': 'loot-logger',
+    farming: 'farming',
+    syphon: 'syphon',
+    alerts: 'alerts',
+    community: 'community',
+    profile: 'profile',
+    about: 'about',
+    'routine-reports': 'routine-reports',
+});
+
+let _suppressRouteUpdate = false;
+
+function _splitPath(pathname) {
+    return String(pathname || '/')
+        .split('/')
+        .filter(Boolean)
+        .map(part => {
+            try { return decodeURIComponent(part); }
+            catch { return part; }
+        });
+}
+
+function getRouteBasePrefix() {
+    const segments = _splitPath(window.location.pathname);
+    if (segments[0] === 'coldtouch-market-analyzer') return '/coldtouch-market-analyzer';
+    if (segments[0] === 'preview' && segments[1]) return `/preview/${encodeURIComponent(segments[1])}`;
+    return '';
+}
+
+function getAppPathSegments() {
+    const segments = _splitPath(window.location.pathname);
+    if (segments[0] === 'coldtouch-market-analyzer') segments.shift();
+    if (segments[0] === 'preview' && segments[1]) segments.splice(0, 2);
+    return segments;
+}
+
+function getRouteState() {
+    const params = new URLSearchParams(window.location.search);
+    const segments = getAppPathSegments();
+    const routeKey = segments.join('/');
+    let tab = null;
+    let sessionToken = params.get('share') || '';
+    let accToken = params.get('accShare') || '';
+
+    if (segments[0] === 'accountability') {
+        tab = 'loot-logger';
+        if (segments[1]) accToken = segments[1];
+    } else if (segments[0] === 'session' || segments[0] === 'loot-session' || segments[0] === 'share') {
+        tab = 'loot-logger';
+        if (segments[1]) sessionToken = segments[1];
+    } else if (segments[0] === 'lootlogger' || segments[0] === 'loot-logger') {
+        tab = 'loot-logger';
+        if (segments[1] === 'accountability' && segments[2]) accToken = segments[2];
+        if ((segments[1] === 'session' || segments[1] === 'share') && segments[2]) sessionToken = segments[2];
+    } else {
+        tab = ROUTE_TAB_ALIASES[routeKey] || ROUTE_TAB_ALIASES[segments[0] || ''] || null;
+    }
+
+    if (!tab) tab = params.get('tab') || null;
+    return { tab, sessionToken, accToken };
+}
+
+function appPathForTab(tabName) {
+    const route = TAB_ROUTE_MAP[tabName] || TAB_ROUTE_MAP.browser;
+    return `${getRouteBasePrefix()}/${route}`.replace(/\/{2,}/g, '/');
+}
+
+function replaceRouteForTab(tabName, mutateUrl) {
+    const url = new URL(window.location.href);
+    url.pathname = appPathForTab(tabName);
+    url.searchParams.delete('tab');
+    if (mutateUrl) mutateUrl(url);
+    history.replaceState(null, '', `${url.pathname}${url.search}${url.hash}`);
+}
+
+function getPublicAppOrigin() {
+    const host = window.location.hostname;
+    if (host === 'localhost' || host === '127.0.0.1' || host === '::1') return window.location.origin;
+    return 'https://albionaitool.xyz';
+}
+
 function initTabs() {
     const tabs = document.querySelectorAll('.nav-tab');
     const groups = document.querySelectorAll('.nav-group');
@@ -891,9 +1032,7 @@ function initTabs() {
             if (tabLabel) document.title = `${tabLabel} \u2014 Coldtouch Market Analyzer`;
 
             // Update URL with current tab (shareable deep link)
-            const url = new URL(window.location);
-            url.searchParams.set('tab', currentTab);
-            history.replaceState(null, '', url);
+            if (!_suppressRouteUpdate) replaceRouteForTab(currentTab);
 
             // UX-2: update browser tab title
             const _TAB_TITLES = { browser:'Market Browser', arbitrage:'Market Flipping', bmflipper:'BM Flipper', compare:'City Comparison', toptraded:'Top Traded', itempower:'Item Power', favorites:'Favorites', crafting:'Crafting Profits', 'craft-top-n':'Top-N Ranker', 'refining-lab':'Refining Lab', journals:'Journals', rrr:'Return Rate Calc', repair:'Repair Cost', transport:'Transport Routes', 'live-flips':'Live Flips', portfolio:'Portfolio Tracker', 'craft-runs':'Craft Runs', 'loot-buyer':'Loot Buyer', 'loot-logger':'Loot Logger', farming:'Farm Calculator', alerts:'Alerts', about:'About', community:'Community', profile:'Profile', 'routine-reports':'Routine Reports', syphon:'Syphon Check' };
@@ -910,8 +1049,9 @@ function initTabs() {
     });
 
     // Restore tab + item from URL on load (shareable deep links)
+    const routeState = getRouteState();
     const urlParams = new URLSearchParams(window.location.search);
-    const urlTab = urlParams.get('tab');
+    const urlTab = routeState.tab;
     const urlItem = urlParams.get('item');
     const urlFrom = urlParams.get('from');
     const urlTo = urlParams.get('to');
@@ -924,11 +1064,15 @@ function initTabs() {
         'transport','live-flips','portfolio','craft-runs',
         'loot-buyer','loot-logger',
         'farming',
-        'alerts','community','profile','about'
+        'syphon','alerts','community','profile','about','routine-reports'
     ]);
     if (urlTab && VALID_TABS.has(urlTab)) {
         const tabEl = document.querySelector(`.nav-tab[data-tab="${urlTab}"]`);
-        if (tabEl) tabEl.click();
+        if (tabEl) {
+            _suppressRouteUpdate = true;
+            tabEl.click();
+            _suppressRouteUpdate = false;
+        }
         // Pre-fill item search if provided
         if (urlItem) {
             setTimeout(() => {
@@ -12802,7 +12946,7 @@ async function shareAccountability(sessionId) {
         });
         const data = await res.json();
         if (!res.ok) { showToast('Share failed: ' + (data.error || res.status), 'error'); return; }
-        const fullUrl = `${window.location.origin}${window.location.pathname}?accShare=${encodeURIComponent(data.token)}`;
+        const fullUrl = `${getPublicAppOrigin()}/accountability/${encodeURIComponent(data.token)}`;
         // Open the existing copy-preview modal if present, else show a toast with the link.
         if (typeof openCopyPreview === 'function') {
             openCopyPreview('Accountability share link', fullUrl, 'Link copied — share with anyone');
@@ -14604,12 +14748,11 @@ async function doTransportScan() {
     const excludeCaerleon = document.getElementById('transport-exclude-caerleon').checked;
 
     // Update URL with transport cities for sharing
-    const shareUrl = new URL(window.location);
-    shareUrl.searchParams.set('tab', 'transport');
-    if (buyCity) shareUrl.searchParams.set('from', buyCity); else shareUrl.searchParams.delete('from');
-    if (sellCity) shareUrl.searchParams.set('to', sellCity); else shareUrl.searchParams.delete('to');
-    shareUrl.searchParams.delete('item');
-    history.replaceState(null, '', shareUrl);
+    replaceRouteForTab('transport', (shareUrl) => {
+        if (buyCity) shareUrl.searchParams.set('from', buyCity); else shareUrl.searchParams.delete('from');
+        if (sellCity) shareUrl.searchParams.set('to', sellCity); else shareUrl.searchParams.delete('to');
+        shareUrl.searchParams.delete('item');
+    });
 
     container.innerHTML = '';
     hideError(errorEl);
@@ -18078,7 +18221,7 @@ let _shareCurrentSessionId = null;
 let _shareCurrentToken = null;
 
 function _shareUrlForToken(token) {
-    return `${window.location.origin}${window.location.pathname}?share=${encodeURIComponent(token)}`;
+    return `${getPublicAppOrigin()}/session/${encodeURIComponent(token)}`;
 }
 
 function openShareSessionModal(sessionId, existingToken) {
@@ -18179,9 +18322,9 @@ function _copyShareUrl() {
 // 2026-04-18: also handles ?accShare=xxx for accountability shares.
 // Runs on load before any login check so guild members without accounts can view.
 async function _handlePublicShareLoad() {
-    const params = new URLSearchParams(window.location.search);
-    const sessionToken = params.get('share');
-    const accToken = params.get('accShare');
+    const routeState = getRouteState();
+    const sessionToken = routeState.sessionToken;
+    const accToken = routeState.accToken;
     if (!sessionToken && !accToken) return;
     try {
         if (accToken) {
