@@ -3,24 +3,54 @@ import sys
 import base64
 import os
 
-# Load secrets from .env file
+REPO_ROOT = os.path.dirname(os.path.abspath(__file__))
+
+# Load secrets from the first available env file.
+#
+# Preferred: set ALBION_DEPLOY_ENV or ALBION_ENV_PATH to a file outside the repo,
+# for example D:\Coding\secrets\albion_market_analyzer.env. The legacy repo-local
+# .env remains a fallback so existing deploys keep working until secrets are moved.
 def load_env():
-    env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.env')
-    if os.path.exists(env_path):
+    explicit_paths = [
+        os.environ.get('ALBION_DEPLOY_ENV'),
+        os.environ.get('ALBION_ENV_PATH'),
+    ]
+    candidate_paths = [p for p in explicit_paths if p]
+    candidate_paths.append(os.path.join(os.path.dirname(REPO_ROOT), 'secrets', 'albion_market_analyzer.env'))
+    candidate_paths.append(os.path.join(REPO_ROOT, '.env'))
+
+    for env_path in candidate_paths:
+        if not os.path.exists(env_path):
+            if env_path in explicit_paths:
+                raise FileNotFoundError(f"Requested env file does not exist: {env_path}")
+            continue
         with open(env_path) as f:
             for line in f:
                 line = line.strip()
                 if line and not line.startswith('#') and '=' in line:
                     key, val = line.split('=', 1)
                     os.environ[key.strip()] = val.strip()
+        print(f"[env] Loaded deploy secrets from {env_path}")
+        return env_path
+
+    return None
 
 load_env()
 
+def require_env(name):
+    value = os.environ.get(name)
+    if value:
+        return value
+    raise RuntimeError(
+        f"Missing required environment variable {name}. "
+        "Set ALBION_DEPLOY_ENV or ALBION_ENV_PATH to your deploy env file, "
+        "or keep a repo-local .env until secrets are moved."
+    )
+
 ip = os.environ.get('VPS_IP', '5.189.189.71')
-password = os.environ['VPS_PASSWORD']
+password = require_env('VPS_PASSWORD')
 usr = os.environ.get('VPS_USER', 'root')
 domain = os.environ.get('VPS_DOMAIN', 'albionaitool.xyz')
-REPO_ROOT = os.path.dirname(os.path.abspath(__file__))
 FRONTEND_STATIC_FILES = [
     'index.html',
     'app.js',
@@ -38,9 +68,9 @@ FRONTEND_STATIC_FILES = [
     'sitemap.xml',
 ]
 
-CLIENT_ID = os.environ['DISCORD_CLIENT_ID']
-CLIENT_SECRET = os.environ['DISCORD_CLIENT_SECRET']
-BOT_TOKEN = os.environ['DISCORD_BOT_TOKEN']
+CLIENT_ID = require_env('DISCORD_CLIENT_ID')
+CLIENT_SECRET = require_env('DISCORD_CLIENT_SECRET')
+BOT_TOKEN = require_env('DISCORD_BOT_TOKEN')
 
 def main():
     # DO-1 rollback: `python deploy_saas.py rollback` restores the .bak backend.js.
@@ -1298,6 +1328,26 @@ app.use(cors({
 // Security headers: HSTS, X-Content-Type-Options, X-Frame-Options, etc.
 // contentSecurityPolicy disabled — this is a JSON API, not an HTML server.
 app.use(helmet({ contentSecurityPolicy: false }));
+// SEC-L1: report-only CSP first. The current frontend still uses inline handlers
+// and dynamic HTML, so enforce mode would be noisy/brittle. Report-only lets us
+// inventory violations safely before tightening the policy.
+const CSP_REPORT_ONLY = [
+  "default-src 'self'",
+  "script-src 'self' 'unsafe-inline'",
+  "style-src 'self' 'unsafe-inline'",
+  "img-src 'self' data: https:",
+  "font-src 'self' data:",
+  "connect-src 'self' https://albionaitool.xyz wss://albionaitool.xyz https://*.albion-online-data.com",
+  "object-src 'none'",
+  "base-uri 'self'",
+  "frame-ancestors 'self'",
+  "form-action 'self' https://albionaitool.xyz",
+  "report-uri /api/csp-report"
+].join('; ');
+app.use((req, res, next) => {
+  res.setHeader('Content-Security-Policy-Report-Only', CSP_REPORT_ONLY);
+  next();
+});
 
 // JSON body parsing — must be before any route that reads req.body
 // 5 MB ceiling so big accountability shares + loot uploads don't hit the default 100 KB cap
@@ -1404,6 +1454,7 @@ app.use((req, res, next) => {
 // Rate limiting
 const apiLimiter = rateLimit({ windowMs: 60 * 1000, max: 60, standardHeaders: true, legacyHeaders: false });
 app.use('/api/', apiLimiter);
+const cspReportLimiter = rateLimit({ windowMs: 60 * 1000, max: 20, standardHeaders: true, legacyHeaders: false });
 // SEC-H2: tighter limit for the heavy batch-prices endpoint (10 req/min per IP)
 const batchPricesLimiter = rateLimit({ windowMs: 60 * 1000, max: 10, standardHeaders: true, legacyHeaders: false, message: { error: 'Too many batch-price requests. Slow down.' } });
 // SEC-H1: tight limit on the O(n²) transport-routes-live endpoint (5 req/min per IP)
@@ -1512,6 +1563,18 @@ function resolveUser(req, res, next) {
   next();
 }
 app.use('/api/', resolveUser);
+
+app.post('/api/csp-report',
+  cspReportLimiter,
+  express.json({ type: ['application/csp-report', 'application/reports+json', 'application/json'], limit: '25kb' }),
+  (req, res) => {
+    try {
+      const report = JSON.stringify(req.body || {}).slice(0, 1000);
+      console.warn('[CSP-Report]', report);
+    } catch {}
+    res.status(204).end();
+  }
+);
 
 function previewDirFor(name) {
   if (!/^[a-zA-Z0-9._-]+$/.test(name || '')) return null;
@@ -4757,7 +4820,7 @@ wss.on('connection', (ws, req) => {
             const payload = JSON.stringify({ type: 'sale-notification', data: { ...sale, userId } });
             for (const wc of wsClients) {
               if (wc.clientType === 'browser' && wc.isAuthenticated && wc.user && wc.user.id === userId) {
-                wc.send(payload);
+                wsSafeSend(wc, payload);
               }
             }
           });
@@ -4863,8 +4926,8 @@ async function broadcastFlip(flip) {
   if (liveFlips.length > MAX_FLIPS) liveFlips.pop();
   const msg = JSON.stringify({ type: 'flip', data: flip });
   for (const wc of wsClients) {
-    if (wc.readyState === WebSocket.OPEN && wc.isAuthenticated) {
-      wc.send(msg);
+    if (wc.isAuthenticated) {
+      wsSafeSend(wc, msg);
     }
   }
 }
@@ -6632,7 +6695,7 @@ let natsConnection = null;
 
         for await (const m of sub) {
           const strData = sc.decode(m.data);
-          for(let wc of wsClients) if(wc.readyState === WebSocket.OPEN && wc.clientType !== 'game-client') wc.send(strData);
+          for(let wc of wsClients) if(wc.clientType !== 'game-client') wsSafeSend(wc, strData);
 
           try {
             const payloads = JSON.parse(strData);

@@ -1,0 +1,72 @@
+name: Website CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  syntax:
+    name: Syntax and deploy smoke checks
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: JavaScript syntax
+        run: |
+          node --check app.js
+          node --check sw.js
+          node --check db.js
+
+      - name: Python syntax
+        run: python -Wall -m py_compile deploy_saas.py
+
+      - name: Static deploy asset smoke check
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          required = [
+              'index.html',
+              'app.js',
+              'style.css',
+              'db.js',
+              'zonemap.js',
+              'sw.js',
+              'manifest.json',
+              'items.json',
+              'recipes.json',
+              'itemweights.json',
+              'itemmap.json',
+              'og-image.png',
+              'robots.txt',
+              'sitemap.xml',
+          ]
+
+          missing = [p for p in required if not Path(p).is_file()]
+          if missing:
+              raise SystemExit(f"Missing deploy assets: {missing}")
+
+          sw = Path('sw.js').read_text(encoding='utf-8')
+          if "const CACHE_NAME = 'coldtouch-v" not in sw:
+              raise SystemExit('sw.js CACHE_NAME pattern missing')
+
+          html = Path('index.html').read_text(encoding='utf-8')
+          for asset in ('app.js', 'style.css', 'db.js'):
+              if asset not in html:
+                  raise SystemExit(f'index.html does not reference {asset}')
+          PY
