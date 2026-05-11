@@ -6,6 +6,8 @@ All notable changes to the Coldtouch Market Analyzer will be documented in this 
 
 Added a per-player Discord copy action to Accountability player cards. Friendly players with missing items now show a Discord button in the card header; clicking it opens the existing copy-preview modal with that player's missing items, estimated silver, deposit rate, partial-deposit context, and pickup time/source/zone details when available.
 
+Follow-up: added a per-player Discord image report. The new Image action generates a PNG card with Albion item icons, missing quantities, partial-deposit context, estimated silver, and pickup details. The PNG can be copied to the clipboard or downloaded for posting to Discord.
+
 ### 2026-05-11 — Stop DiskSafety false-positive compaction restart loop
 
 Investigated the live VPS after repeated May 11 restarts (`NRestarts=23`). The site was up between restarts, but `DiskSafety` kept launching aggressive compaction because the SQLite file measured 15.3 GB. The missing detail: `pragma_freelist_count()` showed ~6.3 GB of that file was already free pages from prior deletes, so live DB pages were only ~9 GB. Because `checkDiskUsage()` used `page_count * page_size` without subtracting the freelist, it treated a mostly-clean DB file as over-threshold forever, started compaction every post-restart 25-minute check, then the event-loop watchdog aborted the process after compaction stalls crossed 60 s.

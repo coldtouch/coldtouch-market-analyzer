@@ -2305,7 +2305,7 @@
                             <div class="changelog-date">May 11, 2026</div>
                             <div class="changelog-title">Loot Logger — per-player missing-item Discord reports</div>
                             <ul>
-                                <li>Accountability player cards now show a <strong>Discord</strong> copy button when that player has missing items. The preview includes the player's missing items, estimated silver, deposit rate, partial-deposit context, and pickup time/source/zone details when available.</li>
+                                <li>Accountability player cards now show Discord <strong>Text</strong> and <strong>Image</strong> actions when that player has missing items. Text opens the editable Markdown preview; Image generates a PNG card with Albion item icons, missing quantities, partial-deposit context, estimated silver, and pickup time/source/zone details when available.</li>
                             </ul>
                         </div>
                         <div class="changelog-entry">
@@ -4605,6 +4605,25 @@
                 <div style="display:flex; gap:0.5rem;">
                     <button class="btn-small" onclick="closeCopyPreviewModal()">Cancel</button>
                     <button class="btn-small-accent" id="copy-preview-confirm-btn" onclick="confirmCopyPreview()">📋 Copy</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Discord image report modal for Loot Logger missing items -->
+    <div id="ll-image-report-modal" class="modal hidden" onclick="if(event.target===this)closePlayerMissingImageModal()">
+        <div class="modal-content ll-image-report-modal">
+            <button class="close-btn" onclick="closePlayerMissingImageModal()">&times;</button>
+            <h2 id="ll-image-report-title" style="color:var(--accent); margin:0 0 0.75rem; font-size:1.05rem;">Discord Image Report</h2>
+            <div class="ll-image-report-preview">
+                <img id="ll-image-report-img" alt="Missing loot Discord image preview">
+            </div>
+            <div style="display:flex; gap:0.5rem; margin-top:0.75rem; justify-content:space-between; align-items:center; flex-wrap:wrap;">
+                <span id="ll-image-report-status" style="font-size:0.72rem; color:var(--text-muted);"></span>
+                <div style="display:flex; gap:0.5rem;">
+                    <button class="btn-small" onclick="closePlayerMissingImageModal()">Cancel</button>
+                    <button class="btn-small" id="ll-image-report-download-btn" onclick="downloadPlayerMissingImageReport()">Download PNG</button>
+                    <button class="btn-small-accent" id="ll-image-report-copy-btn" onclick="copyPlayerMissingImageReport()">Copy PNG</button>
                 </div>
             </div>
         </div>
