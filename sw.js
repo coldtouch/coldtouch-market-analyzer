@@ -3,7 +3,8 @@
 // both Friendly Deaths and Enemy Kills subsections (plus looter rows inside
 // the expanded death body). Helps ZvZ audits where many players share
 // similar names but wear different guild tags.
-const CACHE_NAME = 'coldtouch-v122';
+const CACHE_NAME = 'coldtouch-v123';
+const IS_GITHUB_PAGES = self.location.hostname === 'coldtouch.github.io';
 const APP_SHELL = [
     '/',
     '/index.html',
@@ -19,6 +20,10 @@ const APP_SHELL = [
 ];
 
 self.addEventListener('install', (e) => {
+    if (IS_GITHUB_PAGES) {
+        self.skipWaiting();
+        return;
+    }
     e.waitUntil(
         caches.open(CACHE_NAME).then(cache => cache.addAll(APP_SHELL))
     );
@@ -35,6 +40,12 @@ self.addEventListener('activate', (e) => {
 });
 
 self.addEventListener('fetch', (e) => {
+    if (IS_GITHUB_PAGES && e.request.mode === 'navigate') {
+        const url = new URL(e.request.url);
+        const path = url.pathname.replace(/^\/coldtouch-market-analyzer\/?/, '/') || '/';
+        e.respondWith(Response.redirect('https://albionaitool.xyz' + path + url.search + url.hash, 302));
+        return;
+    }
     // Pass-through: API calls and WebSocket upgrades
     if (e.request.url.includes('/api/') || e.request.url.includes('/auth/') || e.request.url.includes('wss://')) return;
     // FE-H3: stale-while-revalidate — serve cached copy instantly, refresh cache in background
