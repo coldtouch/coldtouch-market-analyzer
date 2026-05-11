@@ -11081,6 +11081,9 @@ function clearLootUpload() {
 // follows where `looted_from_name === victim` is definitionally something
 // looted off that victim's corpse. We attribute the corpse items to the death.
 function buildDeathTimeline(events, byPlayer, priceMap, primaryGuild, primaryAlliance) {
+    if (typeof LootLoggerCore !== 'undefined' && LootLoggerCore.buildDeathTimeline) {
+        return LootLoggerCore.buildDeathTimeline(events, byPlayer, priceMap, primaryGuild, primaryAlliance);
+    }
     const deaths = [];
     // Index loot events by victim name for O(1) lookup
     const lootByVictim = new Map();
@@ -11910,14 +11913,13 @@ function _llRenderFiltered() {
 
     // Totals (from full dataset, not filtered — exclude death events for count/value)
     const lootEventsOnly = events.filter(e => e.item_id !== '__DEATH__');
-    const deathEvents = events.filter(e => e.item_id === '__DEATH__');
     const totalItems = lootEventsOnly.reduce((s, e) => s + (e.quantity || 1), 0);
     const totalValue = lootEventsOnly.reduce((s, e) => {
         const p = priceMap[e.item_id];
         return s + (p ? p.price * (e.quantity || 1) : 0);
     }, 0);
     const totalPlayers = Object.keys(byPlayer).length;
-    const totalDeaths = deathEvents.length;
+    const totalDeaths = Array.isArray(_llDeaths) ? _llDeaths.length : events.filter(e => e.item_id === '__DEATH__').length;
     // Duration: first to last timestamp across all events
     const tsNums = events.map(e => +new Date(e.timestamp)).filter(n => !isNaN(n));
     const durMs = tsNums.length > 1 ? Math.max(...tsNums) - Math.min(...tsNums) : 0;
@@ -12434,16 +12436,19 @@ function _llRenderFiltered() {
 // Parse loot lines from text content.
 // Format (10 base columns, semicolon-delimited):
 //   timestamp;by_alliance;by_guild;by_name;item_id;item_name;qty;from_alliance;from_guild;from_name
-// Optional 11th column (added 2026-04-27): numeric_id — lets the backend re-resolve
-// item_id from its canonical itemmap when the writing client had a stale itemmap
-// (off-by-one item-id bug). Files without the 11th column still parse fine.
+// Optional 11th+ columns:
+//   11 numeric_id: backend re-resolves item_id via canonical itemmap.
+//   12 location: zone captured by the Go client.
+//   13 equipment_json: death equipment snapshot for __DEATH__ rows.
+// Files without the extra columns still parse fine.
 function parseLootLines(text) {
     const allLines = text.split('\n').map(l => l.trim()).filter(l => l && !l.startsWith('timestamp'));
     const events = [];
     for (const line of allLines) {
         const parts = line.split(';');
         if (parts.length < 10) continue;
-        const [ts, byAlliance, byGuild, byName, itemId, , qty, fromAlliance, fromGuild, fromName, numericId] = parts;
+        const [ts, byAlliance, byGuild, byName, itemId, , qty, fromAlliance, fromGuild, fromName, numericId, location] = parts;
+        const equipmentJson = parts.length > 12 ? parts.slice(12).join(';') : '';
         events.push({
             timestamp: new Date(ts).getTime() || Date.now(),
             looted_by_name: byName || '',
@@ -12455,7 +12460,9 @@ function parseLootLines(text) {
             item_id: itemId || '',
             numeric_id: numericId !== undefined ? (parseInt(numericId) || 0) : 0,
             quantity: parseInt(qty) || 1,
-            weight: 0
+            weight: 0,
+            location: location || '',
+            equipment_json: equipmentJson || null
         });
     }
     return { events, lines: allLines };
@@ -12753,10 +12760,11 @@ function populateAccountabilityDropdowns() {
                 const action = b.action || 'unknown';
                 const icon = action === 'deposit' ? '📥' : action === 'withdraw' ? '📤' : '❔';
                 const count = (b.entries || []).length;
+                const confidence = b.actionMappingVerified === true ? '' : ' · mapping unverified';
                 // Before user interacts: auto-select everything.
                 // After they manually click: preserve prior selection (only).
                 const shouldSelect = userInteracted ? priorSelected.has(String(i)) : true;
-                return `<option value="${i}"${shouldSelect ? ' selected' : ''}>${icon} ${esc(action)} — ${count} entries · ${rel}${abs ? ' (' + abs + ')' : ''}</option>`;
+                return `<option value="${i}"${shouldSelect ? ' selected' : ''}>${icon} ${esc(action)} — ${count} entries · ${rel}${abs ? ' (' + abs + ')' : ''}${confidence}</option>`;
             }).join('');
         }
     }
@@ -13174,6 +13182,7 @@ async function runAccountabilityCheck() {
         withdrawals: 0,
         depositsInWindow: 0,
         depositsOutOfWindow: 0,
+        unverifiedDepositEntries: 0,
         windowStart: chestLogWindowStart,
         windowEnd: chestLogWindowEnd,
     };
@@ -13185,6 +13194,10 @@ async function runAccountabilityCheck() {
         // Only deposits count for verification. Withdrawals tracked for the badge count only.
         if (b.action !== 'deposit') {
             if (b.action === 'withdraw') mergedLogMeta.withdrawals += b.entries.length;
+            continue;
+        }
+        if (b.actionMappingVerified !== true) {
+            mergedLogMeta.unverifiedDepositEntries += b.entries.length;
             continue;
         }
         mergedLogMeta.deposits += b.entries.length;
@@ -13502,12 +13515,15 @@ async function runAccountabilityCheck() {
         const droppedLabel = mergedLogMeta.depositsOutOfWindow > 0
             ? ` <span style="color:#fbbf24;" title="These deposits happened outside the session time window (±buffer) and were excluded from verification">${mergedLogMeta.depositsOutOfWindow} deposit${mergedLogMeta.depositsOutOfWindow !== 1 ? 's' : ''} outside window dropped</span>.`
             : '';
+        const mappingWarning = mergedLogMeta.unverifiedDepositEntries > 0
+            ? ` <span style="color:#fbbf24;" title="The client has not marked the chest-log deposit/withdraw filter mapping as verified, so these rows are not used as per-player ground truth">${mergedLogMeta.unverifiedDepositEntries} deposit-like row${mergedLogMeta.unverifiedDepositEntries !== 1 ? 's' : ''} held until mapping is verified</span>.`
+            : '';
         html += `<div class="ll-verify-banner">
             <span class="ll-verify-icon">✓</span>
             <div>
                 <strong>Chest log merged</strong> &mdash;
                 ${mergedLogMeta.batches} batch${mergedLogMeta.batches !== 1 ? 'es' : ''} ·
-                <strong>${mergedLogMeta.depositsInWindow}</strong> deposit${mergedLogMeta.depositsInWindow !== 1 ? 's' : ''} in window${mergedLogMeta.withdrawals > 0 ? ` · ${mergedLogMeta.withdrawals} withdrawal record${mergedLogMeta.withdrawals !== 1 ? 's' : ''}` : ''}.${droppedLabel}
+                <strong>${mergedLogMeta.depositsInWindow}</strong> verified deposit${mergedLogMeta.depositsInWindow !== 1 ? 's' : ''} in window${mergedLogMeta.withdrawals > 0 ? ` · ${mergedLogMeta.withdrawals} withdrawal record${mergedLogMeta.withdrawals !== 1 ? 's' : ''}` : ''}.${droppedLabel}${mappingWarning}
                 <br>
                 <span style="font-size:0.78rem; color:var(--text-muted);">
                     <strong style="color:var(--profit-green);">${verifiedLines}</strong> item line${verifiedLines !== 1 ? 's' : ''} verified
@@ -14427,7 +14443,7 @@ function _pushLiveEvent(ev) {
     normalizeLootEventInPlace(ev);
     // Skip if we've already seen this exact event (replayed via WS reconnect, etc.)
     const key = _liveEventKey(ev);
-    if (window._liveEventKeys.has(key)) return;
+    if (window._liveEventKeys.has(key)) return false;
     window._liveEventKeys.add(key);
     liveLootEvents.push(ev);
     if (ev && ev.sessionId) window._liveSessionIds.add(ev.sessionId);
@@ -14442,6 +14458,18 @@ function _pushLiveEvent(ev) {
             showToast(`Event queue at ${LIVE_EVENT_CAP.toLocaleString()} cap — oldest events are being dropped. Save now.`, 'error');
         }
     }
+    return true;
+}
+
+function _markLiveSessionDirtyAndRefresh() {
+    liveSessionSaved = false;
+    const saveBtn = document.getElementById('ll-save-btn');
+    if (saveBtn) saveBtn.textContent = 'Save Session';
+    updateLiveLootIndicator();
+    if (lootLoggerMode === 'live' && document.getElementById('loot-session-detail')?.style.display !== 'none') {
+        if (_llShowLiveTimer) clearTimeout(_llShowLiveTimer);
+        _llShowLiveTimer = setTimeout(showLiveSession, 2000);
+    }
 }
 
 // Hook into existing WS to capture loot events for live mode
@@ -14449,37 +14477,43 @@ function handleLootLoggerWsMessage(msg) {
     if (msg.type === 'death-event' && msg.data) {
         if (liveSessionActive) {
             // Store as a special loot event with __DEATH__ marker
-            _pushLiveEvent({
-                timestamp: msg.data.timestamp || Date.now(),
-                looted_by_name: msg.data.killerName || '',
-                looted_by_guild: msg.data.killerGuild || '',
-                looted_from_name: msg.data.victimName || '',
-                looted_from_guild: msg.data.victimGuild || '',
-                item_id: '__DEATH__',
-                quantity: 0
-            });
+            const deathEvent = (typeof LootLoggerCore !== 'undefined' && LootLoggerCore.normalizeDeathWsPayload)
+                ? LootLoggerCore.normalizeDeathWsPayload(msg.data)
+                : {
+                    timestamp: msg.data.timestamp || Date.now(),
+                    looted_by_name: msg.data.killerName || '',
+                    looted_by_guild: msg.data.killerGuild || '',
+                    looted_by_alliance: msg.data.killerAlliance || '',
+                    looted_from_name: msg.data.victimName || msg.data.playerName || '',
+                    looted_from_guild: msg.data.victimGuild || '',
+                    looted_from_alliance: msg.data.victimAlliance || '',
+                    item_id: '__DEATH__',
+                    numeric_id: 0,
+                    quantity: 0,
+                    weight: 0,
+                    sessionId: msg.data.sessionId || '',
+                    location: msg.data.location || '',
+                    equipmentAtDeath: Array.isArray(msg.data.equipmentAtDeath) ? msg.data.equipmentAtDeath : undefined,
+                };
+            if (deathEvent && _pushLiveEvent(deathEvent)) {
+                liveLootEvents.forEach(ev => {
+                    const evName = ev.looted_by_name || ev.lootedBy?.name || '';
+                    if (evName === deathEvent.looted_from_name) ev.died = true;
+                });
+                _markLiveSessionDirtyAndRefresh();
+            }
         }
+        return;
     }
     if (msg.type === 'loot-event' && msg.data) {
         if (liveSessionActive) {
-            _pushLiveEvent(msg.data);
-            liveSessionSaved = false; // new events invalidate saved state
-            const saveBtn = document.getElementById('ll-save-btn');
-            if (saveBtn) saveBtn.textContent = 'Save Session';
-            updateLiveLootIndicator();
-            // Debounced re-render (2s) to avoid DOM thrashing on rapid events
-            if (lootLoggerMode === 'live' && document.getElementById('loot-session-detail')?.style.display !== 'none') {
-                if (_llShowLiveTimer) clearTimeout(_llShowLiveTimer);
-                _llShowLiveTimer = setTimeout(showLiveSession, 2000);
-            }
+            if (_pushLiveEvent(msg.data)) _markLiveSessionDirtyAndRefresh();
         }
     }
     if (msg.type === 'chest-capture' && msg.data) {
         // Gate captures on chestCaptureActive flag
-        if (!chestCaptureActive && lootLoggerMode === 'accountability') {
-            // Always store if in accountability mode regardless of toggle
-        } else if (!chestCaptureActive) {
-            // Skip if capture mode is off and not on accountability tab
+        if (!chestCaptureActive && lootLoggerMode !== 'accountability') {
+            return;
         }
         // Recover UNKNOWN_<n> item IDs from a stale/missing client itemmap before
         // cosmetic filtering (otherwise mapped items like T4_RUNE would be lost
@@ -14508,21 +14542,6 @@ function handleLootLoggerWsMessage(msg) {
             renderCaptureChips();
         }
     }
-    // Death event — mark affected player's items
-    if (msg.type === 'death-event' && msg.data) {
-        const playerName = msg.data.playerName || '';
-        if (playerName) {
-            liveLootEvents.forEach(ev => {
-                const evName = ev.looted_by_name || ev.lootedBy?.name || '';
-                if (evName === playerName) ev.died = true;
-            });
-            if (lootLoggerMode === 'live' && document.getElementById('loot-session-detail')?.style.display !== 'none') {
-                if (_llShowLiveTimer) clearTimeout(_llShowLiveTimer);
-                _llShowLiveTimer = setTimeout(showLiveSession, 2000);
-            }
-        }
-    }
-
     // Chest log batch — deposit/withdraw ground truth from opcode 157.
     // Accept if the chest-log capture toggle is on OR if we're on the
     // accountability tab (same pattern as regular chest captures).
@@ -14541,6 +14560,7 @@ function _ingestChestLogBatch(batch) {
         // Capture toggle is off and user isn't on the Accountability tab — drop it.
         return;
     }
+    batch.actionMappingVerified = batch.actionMappingVerified === true || batch.mappingVerified === true;
     // Normalize any UNKNOWN_<n> IDs in case the Go client's itemmap was stale.
     for (const e of batch.entries) {
         if (typeof e.itemId === 'string' && e.itemId.startsWith('UNKNOWN_')) {
@@ -18406,7 +18426,7 @@ async function _renderPublicAccountabilityView(data) {
     const sharedLogStartIdx = window._chestLogBatches.length;
     const sharedChestLogs = Array.isArray(data.chestLogs) ? data.chestLogs : [];
     for (const batch of sharedChestLogs) {
-        window._chestLogBatches.push({ ...batch, _isSharedView: true });
+        window._chestLogBatches.push({ ...batch, actionMappingVerified: batch.actionMappingVerified === true, _isSharedView: true });
     }
 
     // 5. Pre-populate the dropdowns so runAccountabilityCheck reads exactly what was shared.
@@ -18435,7 +18455,8 @@ async function _renderPublicAccountabilityView(data) {
             const action = b.action || 'unknown';
             const icon = action === 'deposit' ? '📥' : action === 'withdraw' ? '📤' : '❔';
             const count = (b.entries || []).length;
-            return `<option value="${sharedLogStartIdx + i}" selected>${icon} ${esc(action)} — ${count} entries (shared)</option>`;
+            const confidence = b.actionMappingVerified === true ? '' : ' · mapping unverified';
+            return `<option value="${sharedLogStartIdx + i}" selected>${icon} ${esc(action)} — ${count} entries (shared${confidence})</option>`;
         }).join('');
     }
 
@@ -18452,13 +18473,18 @@ async function _renderPublicAccountabilityView(data) {
     const pane = document.getElementById('pane-loot-logger');
     if (pane && !document.getElementById('shared-acc-banner')) {
         const when = data.createdAt ? new Date(data.createdAt).toLocaleString() : '';
+        const truncatedCaptures = (data.captures || []).filter(c => c.truncated).length;
+        const truncatedLogs = sharedChestLogs.filter(b => b.truncated).length;
+        const truncationNote = (truncatedCaptures || truncatedLogs)
+            ? ` · shared data trimmed (${truncatedCaptures} capture${truncatedCaptures !== 1 ? 's' : ''}, ${truncatedLogs} log batch${truncatedLogs !== 1 ? 'es' : ''})`
+            : '';
         const banner = document.createElement('div');
         banner.id = 'shared-acc-banner';
         banner.style.cssText = 'background:linear-gradient(90deg, rgba(88,101,242,0.14), rgba(88,101,242,0.06)); border:1px solid rgba(88,101,242,0.35); border-radius:8px; padding:0.55rem 0.9rem; margin:0.5rem 0 0.75rem; font-size:0.82rem; color:#c7d2ff; display:flex; gap:0.5rem; align-items:center; flex-wrap:wrap;';
         banner.innerHTML = `
             <span>🔗</span>
             <span><strong>Shared accountability check</strong>${data.sessionName ? ` — "${esc(data.sessionName)}"` : ''}${when ? ` · created ${esc(when)}` : ''}</span>
-            <span style="margin-left:auto; color:var(--text-muted); font-size:0.72rem;">Read-only view — ${(data.events || []).length} events · ${(data.captures || []).length} chest capture${(data.captures || []).length !== 1 ? 's' : ''}${sharedChestLogs.length > 0 ? ` · ${sharedChestLogs.length} log batch${sharedChestLogs.length !== 1 ? 'es' : ''}` : ''}</span>`;
+            <span style="margin-left:auto; color:var(--text-muted); font-size:0.72rem;">Read-only view — ${(data.events || []).length} events · ${(data.captures || []).length} chest capture${(data.captures || []).length !== 1 ? 's' : ''}${sharedChestLogs.length > 0 ? ` · ${sharedChestLogs.length} log batch${sharedChestLogs.length !== 1 ? 'es' : ''}` : ''}${truncationNote}</span>`;
         // Insert right at the top of the accountability mode container.
         const accMode = document.getElementById('loot-log-accountability');
         if (accMode) accMode.insertBefore(banner, accMode.firstChild);

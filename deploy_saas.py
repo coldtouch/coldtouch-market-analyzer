@@ -57,6 +57,7 @@ FRONTEND_STATIC_FILES = [
     'style.css',
     'db.js',
     'zonemap.js',
+    'lootlogger-core.js',
     'sw.js',
     'manifest.json',
     'items.json',
@@ -426,7 +427,14 @@ function tryExec(sql) {
     catch (err) {
       if (typeof prepCb === 'function') prepCb(err);
       // Return a no-op stmt so chained .run/.finalize don't crash
-      return { run: (...a) => { const cb = a[a.length-1]; if (typeof cb==='function') cb.call({lastID:0,changes:0}, err); }, finalize: (cb) => { if (typeof cb==='function') cb(err); } };
+      return {
+        run: (...a) => {
+          const cb = a[a.length-1];
+          if (typeof cb === 'function') return cb.call({lastID:0,changes:0}, err);
+          throw err;
+        },
+        finalize: (cb) => { if (typeof cb==='function') cb(err); }
+      };
     }
     if (typeof prepCb === 'function') prepCb(null);
     // Wrap stmt.run to accept a trailing callback (matches sqlite3 statement API)
@@ -2782,6 +2790,7 @@ app.post('/api/accountability/share', requireAuth, (req, res) => {
             tabName: (c.tabName || `Capture ${i + 1}`).slice(0, 80),
             capturedAt: c.capturedAt || 0,
             containerId: c.containerId || '',
+            truncated: Array.isArray(c.items) && c.items.length > 500,
             items: Array.isArray(c.items) ? c.items.slice(0, 500).map(it => ({
                 itemId: (it.itemId || '').slice(0, 80),
                 quality: parseInt(it.quality) || 1,
@@ -2803,6 +2812,8 @@ app.post('/api/accountability/share', requireAuth, (req, res) => {
                 capturedAt: b.capturedAt || 0,
                 action: (b.action || '').slice(0, 20),
                 filterValue: typeof b.filterValue === 'number' ? b.filterValue : 0,
+                actionMappingVerified: b.actionMappingVerified === true,
+                truncated: Array.isArray(b.entries) && b.entries.length > 400,
                 entries: Array.isArray(b.entries) ? b.entries.slice(0, 400).map(e => ({
                     playerName: (e.playerName || '').slice(0, 80),
                     itemId: (e.itemId || '').slice(0, 80),
@@ -2867,8 +2878,8 @@ app.post('/api/loot-session/:sessionId/share', requireAuth, (req, res) => {
       if (err) return res.status(500).json({ error: 'An internal error occurred.' });
       if (!row) return res.status(404).json({ error: 'Session not found.' });
       // Check if a token already exists — return it
-      db.get(`SELECT public_token FROM loot_session_shares WHERE session_id = ?`,
-        [sessionId], (err2, existing) => {
+      db.get(`SELECT public_token FROM loot_session_shares WHERE session_id = ? AND user_id = ?`,
+        [sessionId, req.user.id], (err2, existing) => {
           if (err2) return res.status(500).json({ error: 'An internal error occurred.' });
           if (existing && existing.public_token) {
             return res.json({ token: existing.public_token, created: false });
@@ -3056,9 +3067,9 @@ app.post('/api/loot-sessions/merge', requireAuth, (req, res) => {
     return res.status(400).json({ error: 'Provide 2-5 session IDs to merge.' });
   }
   const uid = req.user.id;
-  const newId = name
-    ? name.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 64) + '_' + Date.now()
-    : 'merged_' + Date.now();
+  const safeUid = String(uid).replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 32);
+  const mergeBase = name ? name.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 64) : 'merged';
+  const newId = `${safeUid}_${mergeBase}_${Date.now()}`;
   const placeholders = sessionIds.map(() => '?').join(',');
   // Verify all sessions belong to this user, then copy events to new session
   db.all(`SELECT DISTINCT session_id FROM loot_events WHERE user_id = ? AND session_id IN (${placeholders})`,
@@ -3070,9 +3081,9 @@ app.post('/api/loot-sessions/merge', requireAuth, (req, res) => {
       // Copy all events to the new session_id, preserving original timestamps.
       // INSERT OR IGNORE — if the same event (by dedupe key) already exists in the target session, skip.
       db.run(`INSERT OR IGNORE INTO loot_events (user_id, session_id, timestamp, looted_by_name, looted_by_guild, looted_by_alliance,
-              looted_from_name, looted_from_guild, looted_from_alliance, item_id, numeric_id, quantity, weight, is_silver, location)
+              looted_from_name, looted_from_guild, looted_from_alliance, item_id, numeric_id, quantity, weight, is_silver, equipment_json, location)
               SELECT ?, ?, timestamp, looted_by_name, looted_by_guild, looted_by_alliance,
-              looted_from_name, looted_from_guild, looted_from_alliance, item_id, numeric_id, quantity, weight, is_silver, location
+              looted_from_name, looted_from_guild, looted_from_alliance, item_id, numeric_id, quantity, weight, is_silver, equipment_json, location
               FROM loot_events WHERE user_id = ? AND session_id IN (${placeholders})
               ORDER BY timestamp ASC`,
         [uid, newId, uid, ...sessionIds], function(err2) {
@@ -3092,13 +3103,13 @@ app.get('/api/public/loot-session/:token', (req, res) => {
   }
   let share, rows;
   try {
-    share = readDb.prepare(`SELECT session_id, created_at FROM loot_session_shares WHERE public_token = ?`).get(token);
+    share = readDb.prepare(`SELECT session_id, user_id, created_at FROM loot_session_shares WHERE public_token = ?`).get(token);
     if (!share) return res.status(404).json({ error: 'Session not found or no longer shared.' });
     // SEC-M3: expire shares after 30 days
     if (Date.now() - share.created_at > 30 * 24 * 60 * 60 * 1000) return res.status(410).json({ error: 'Share link has expired.' });
     rows = readDb.prepare(`SELECT timestamp, looted_by_name, looted_by_guild, looted_by_alliance,
-      looted_from_name, looted_from_guild, looted_from_alliance, item_id, quantity, weight
-      FROM loot_events WHERE session_id = ? ORDER BY timestamp ASC LIMIT 5000`).all(share.session_id);
+      looted_from_name, looted_from_guild, looted_from_alliance, item_id, numeric_id, quantity, weight, equipment_json, location
+      FROM loot_events WHERE session_id = ? AND user_id = ? ORDER BY timestamp ASC LIMIT 5000`).all(share.session_id, share.user_id);
   } catch (err) { return res.status(500).json({ error: 'An internal error occurred.' }); }
   res.json({ sessionId: share.session_id, sharedAt: share.created_at, events: rows || [] });
 });
@@ -3128,23 +3139,26 @@ app.post('/api/loot-upload', requireAuth, (req, res) => {
   const doInsert = (sessionId) => {
     // INSERT OR IGNORE — deduped by idx_loot_events_dedupe. Re-uploading a file that
     // overlaps with live-streamed events will silently skip the duplicates.
-    const stmt = db.prepare(`INSERT OR IGNORE INTO loot_events (user_id, session_id, timestamp, looted_by_name, looted_by_guild, looted_by_alliance, looted_from_name, looted_from_guild, looted_from_alliance, item_id, numeric_id, quantity, weight, is_silver)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0)`);
+    const stmt = db.prepare(`INSERT OR IGNORE INTO loot_events (user_id, session_id, timestamp, looted_by_name, looted_by_guild, looted_by_alliance, looted_from_name, looted_from_guild, looted_from_alliance, item_id, numeric_id, quantity, weight, is_silver, equipment_json, location)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?)`);
     let count = 0;
     let reResolved = 0;
     for (const line of lines) {
       // Format (10 base columns):
       //   timestamp_utc;by_alliance;by_guild;by_name;item_id;item_name;quantity;
       //   from_alliance;from_guild;from_name
-      // Optional 11th column added 2026-04-27: numeric_id — lets the backend
-      // re-resolve item_id via CANONICAL_ITEMMAP, fixing uploads from clients
-      // with stale itemmap.json. Files without col 11 still parse (numericId=0).
+      // Optional columns:
+      //   11 numeric_id — lets the backend re-resolve item_id via CANONICAL_ITEMMAP.
+      //   12 location — zone captured by the Go client.
+      //   13 equipment_json — death equipment snapshot for __DEATH__ rows.
       const parts = line.split(';');
       if (parts.length < 10) continue;
-      const [ts, byAlliance, byGuild, byName, itemId, itemName, qty, fromAlliance, fromGuild, fromName, numericIdRaw] = parts;
+      const [ts, byAlliance, byGuild, byName, itemId, itemName, qty, fromAlliance, fromGuild, fromName, numericIdRaw, locationRaw] = parts;
+      const equipmentRaw = parts.length > 12 ? parts.slice(12).join(';') : '';
       const timestamp = new Date(ts).getTime() || Date.now();
       // Sanitize user-supplied strings: strip control chars, limit length
       const san = s => (s || '').replace(/[\x00-\x1f\x7f]/g, '').replace(/[<>"'&]/g, '').slice(0, 64); // SEC-H4: strip HTML chars
+      const sanLoc = s => (s || '').replace(/[\x00-\x1f\x7f]/g, '').replace(/[<>"'&]/g, '').slice(0, 80);
       const numericId = parseInt(numericIdRaw, 10) || 0;
       const sanitizedItemId = san(itemId).slice(0, 100);
       // Re-resolve via canonical itemmap when numericId is present and valid.
@@ -3152,7 +3166,14 @@ app.post('/api/loot-upload', requireAuth, (req, res) => {
       // legacy 10-column TXT uploads that pre-date this column.
       const canonicalItemId = resolveCanonicalItemId(numericId, sanitizedItemId);
       if (canonicalItemId !== sanitizedItemId) reResolved++;
-      stmt.run(req.user.id, sessionId, timestamp, san(byName), san(byGuild), san(byAlliance), san(fromName), san(fromGuild), san(fromAlliance), canonicalItemId, numericId, parseInt(qty) || 1);
+      let equipmentJson = null;
+      if (canonicalItemId === '__DEATH__' && equipmentRaw && equipmentRaw.length < 8192) {
+        try {
+          const parsedEquipment = JSON.parse(equipmentRaw);
+          if (Array.isArray(parsedEquipment)) equipmentJson = JSON.stringify(parsedEquipment.slice(0, 32));
+        } catch {}
+      }
+      stmt.run(req.user.id, sessionId, timestamp, san(byName), san(byGuild), san(byAlliance), san(fromName), san(fromGuild), san(fromAlliance), canonicalItemId, numericId, parseInt(qty) || 1, equipmentJson, sanLoc(locationRaw));
       count++;
     }
     stmt.finalize();

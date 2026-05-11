@@ -29,8 +29,12 @@ jobs:
       - name: JavaScript syntax
         run: |
           node --check app.js
+          node --check lootlogger-core.js
           node --check sw.js
           node --check db.js
+
+      - name: Loot Logger tests
+        run: npm test
 
       - name: Python syntax
         run: python -Wall -m py_compile deploy_saas.py
@@ -46,6 +50,7 @@ jobs:
               'style.css',
               'db.js',
               'zonemap.js',
+              'lootlogger-core.js',
               'sw.js',
               'manifest.json',
               'items.json',
@@ -66,7 +71,7 @@ jobs:
               raise SystemExit('sw.js CACHE_NAME pattern missing')
 
           html = Path('index.html').read_text(encoding='utf-8')
-          for asset in ('app.js', 'style.css', 'db.js'):
+          for asset in ('app.js', 'style.css', 'db.js', 'lootlogger-core.js'):
               if asset not in html:
                   raise SystemExit(f'index.html does not reference {asset}')
           PY

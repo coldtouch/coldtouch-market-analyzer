@@ -2,6 +2,19 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-05-12 — Loot Logger flagship hardening
+
+Hardened Loot Logger, Accountability, public shares, and the custom client after a deep audit.
+
+- Live death WebSocket events now preserve session id, zone, alliance, and equipment-at-death metadata, mark the session unsaved, and refresh the live report like normal loot events.
+- Chest capture toggles now actually gate browser-side capture ingestion outside the Accountability workflow.
+- Death timeline attribution moved into a tested `lootlogger-core.js` helper that splits corpse loot across repeated deaths instead of attaching every victim loot row to every death.
+- Public loot-session shares now query by both `session_id` and owner `user_id`, include `numeric_id`, `equipment_json`, and `location`, and merged sessions preserve death equipment/location.
+- Accountability chest-log verification now respects a client-provided `actionMappingVerified` flag. Unverified deposit-like rows are shown but held out of green verified badges until the deposit/withdraw filter mapping is proven in a controlled in-game check.
+- Offline Go-client loot logs now include optional zone and death equipment JSON columns while keeping the first ten ao-loot-logger columns backward-compatible.
+- The private relay queue now has a durable JSONL spool and a larger bounded queue for outage recovery.
+- Added focused Loot Logger unit tests and client chest-log mapping tests.
+
 ### 2026-05-11 — Loot Logger per-player missing-item Discord report
 
 Added a per-player Discord copy action to Accountability player cards. Friendly players with missing items now show a Discord button in the card header; clicking it opens the existing copy-preview modal with that player's missing items, estimated silver, deposit rate, partial-deposit context, and pickup time/source/zone details when available.

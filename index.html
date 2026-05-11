@@ -2312,6 +2312,17 @@
                     <div id="changelog-wrapper" style="max-height: 500px; overflow-y: auto; position: relative;">
                     <div class="changelog-list">
                         <div class="changelog-entry">
+                            <div class="changelog-date">May 12, 2026</div>
+                            <div class="changelog-title">Loot Logger — flagship hardening pass</div>
+                            <ul>
+                                <li>Live death events now keep session, zone, alliance, and equipment-at-death data, and correctly mark live sessions unsaved.</li>
+                                <li>Repeated-death corpse loot attribution is now windowed and tested so one player's second death does not reuse loot from the first.</li>
+                                <li>Public session shares are owner-scoped and include richer death/item metadata; merged sessions preserve death equipment/location.</li>
+                                <li>Chest-log verification now shows mapping confidence and waits for a verified client mapping before using deposit rows as green per-player proof.</li>
+                                <li>Offline client logs now preserve optional zone and death-equipment data while staying backward-compatible with older ao-loot-logger imports.</li>
+                            </ul>
+                        </div>
+                        <div class="changelog-entry">
                             <div class="changelog-date">May 11, 2026</div>
                             <div class="changelog-title">Loot Logger — per-player missing-item Discord reports</div>
                             <ul>
@@ -4715,6 +4726,7 @@
 
     <script src="/db.js"></script>
     <script src="/zonemap.js"></script>
+    <script src="/lootlogger-core.js"></script>
     <script src="/app.js"></script>
     <script>if('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js', {scope: '/', updateViaCache: 'none'}).catch(()=>{});</script><!-- FE-H3 -->
 </body>
