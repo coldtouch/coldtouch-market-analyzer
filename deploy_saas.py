@@ -1621,7 +1621,7 @@ app.post('/api/news', requireAuth, (req, res) => {
     active: active !== false,
     message: (message || '').slice(0, 300),
     type: type || 'info', // 'info', 'warning', 'success', 'error'
-    link: (link && /^https?:\/\//.test(link)) ? link.slice(0, 200) : '', // SEC-H3: only allow http(s) URLs
+    link: (typeof link === 'string' && (link.startsWith('http://') || link.startsWith('https://'))) ? link.slice(0, 200) : '', // SEC-H3: only allow http(s) URLs
     updatedAt: Date.now()
   });
   db.run(`INSERT OR REPLACE INTO meta_config (key, value) VALUES ('news_banner', ?)`, [banner], (err) => {
@@ -3946,9 +3946,9 @@ app.get('/api/transport-routes-live', transportLiveLimiter, (req, res) => {
           // Resource/material IDs are like: T5_CLOTH, T5_PLANKS, T5_ROCK (no gear prefix)
           const isGear = /_(HEAD|ARMOR|SHOES|MAIN|2H|OFF|CAPEITEM|BAG|CAPE|MOUNT)_/.test(itemId) || itemId.startsWith('MOUNT_');
           const isStackable = !isGear && (
-            /^T\d_(ROCK|STONE|STONEBLOCK|WOOD|PLANKS|ORE|METALBAR|HIDE|LEATHER|FIBER|CLOTH|FISH)/.test(itemId) ||
+            /^T[0-9]_(ROCK|STONE|STONEBLOCK|WOOD|PLANKS|ORE|METALBAR|HIDE|LEATHER|FIBER|CLOTH|FISH)/.test(itemId) ||
             itemId.includes('POTION') || itemId.includes('MEAL') || itemId.startsWith('JOURNAL') ||
-            /^T\d_(RUNE|SOUL|RELIC|SHARD|ARTEFACT)/.test(itemId) || itemId.includes('SKILLBOOK') ||
+            /^T[0-9]_(RUNE|SOUL|RELIC|SHARD|ARTEFACT)/.test(itemId) || itemId.includes('SKILLBOOK') ||
             itemId.includes('MOB_') || itemId.includes('TREASURE') || itemId.includes('TOKEN')
           );
           const stackSize = isStackable ? 999 : 1;
