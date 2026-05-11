@@ -2189,6 +2189,13 @@ select:focus {
     align-items: center;
     flex-shrink: 0;
 }
+.ll-player-discord-btn {
+    flex-shrink: 0;
+    white-space: nowrap;
+    padding: 0.28rem 0.5rem;
+    font-size: 0.68rem;
+    line-height: 1.1;
+}
 .ll-player-stat {
     display: flex;
     flex-direction: column;

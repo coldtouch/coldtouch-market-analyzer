@@ -2,6 +2,10 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-05-11 — Loot Logger per-player missing-item Discord report
+
+Added a per-player Discord copy action to Accountability player cards. Friendly players with missing items now show a Discord button in the card header; clicking it opens the existing copy-preview modal with that player's missing items, estimated silver, deposit rate, partial-deposit context, and pickup time/source/zone details when available.
+
 ### 2026-05-04 (later, deferred backlog) — `price_hourly` retention 30 → 14 days + analytics double-fire fix
 
 After the stability arc landed, picked up two deferred backlog items:
