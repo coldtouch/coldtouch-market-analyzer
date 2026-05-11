@@ -6,6 +6,8 @@ All notable changes to the Coldtouch Market Analyzer will be documented in this 
 
 Added a per-player Discord copy action to Accountability player cards. Friendly players with missing items now show a Discord button in the card header; clicking it opens the existing copy-preview modal with that player's missing items, estimated silver, deposit rate, partial-deposit context, and pickup time/source/zone details when available.
 
+Follow-up: added a per-player Discord image report. The new Image action generates a PNG card with Albion item icons, missing quantities, partial-deposit context, estimated silver, and pickup details. The PNG can be copied to the clipboard or downloaded for posting to Discord.
+
 ### 2026-05-04 (later, deferred backlog) — `price_hourly` retention 30 → 14 days + analytics double-fire fix
 
 After the stability arc landed, picked up two deferred backlog items:

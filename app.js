@@ -13634,7 +13634,10 @@ async function runAccountabilityCheck() {
             : '';
         const deathTag = p.died ? '<span title="Died — lost items" style="color:var(--loss-red); margin-left:0.3rem;">💀</span>' : '';
         const playerDiscordBtn = (!p.isEnemy && p.totalMissing > 0)
-            ? `<button type="button" class="btn-small ll-player-discord-btn" data-action="copy-player-missing" data-player-name="${esc(p.name)}" onclick="event.stopPropagation()" title="Preview a Discord report for this player's missing items">📋 Discord</button>`
+            ? `<div class="ll-player-discord-actions" onclick="event.stopPropagation()">
+                <button type="button" class="btn-small ll-player-discord-btn" data-action="copy-player-missing" data-player-name="${esc(p.name)}" title="Preview a Discord text report for this player's missing items">📋 Text</button>
+                <button type="button" class="btn-small ll-player-discord-btn" data-action="image-player-missing" data-player-name="${esc(p.name)}" title="Generate a Discord image report with item icons">🖼 Image</button>
+            </div>`
             : '';
 
         return `<div class="ll-player-card" style="${enemyBorder}" data-player-name="${esc(p.name.toLowerCase())}" data-player-guild="${esc((p.guild || '').toLowerCase())}">
@@ -13678,18 +13681,25 @@ async function runAccountabilityCheck() {
             copyPlayerMissingToDiscord(btn.dataset.playerName || '');
         });
     });
+    resultEl.querySelectorAll('[data-action="image-player-missing"]').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            openPlayerMissingImageReport(btn.dataset.playerName || '');
+        });
+    });
     // Stamp last-run label so re-run timing is visible.
     const lastRunEl = document.getElementById('acc-last-run');
     if (lastRunEl) lastRunEl.textContent = `✓ Last checked: ${new Date().toLocaleTimeString()}`;
     trackActivity('accountability', 1);
 }
 
-function copyPlayerMissingToDiscord(playerName) {
+function getPlayerMissingReportData(playerName) {
     const r = window._llAccResults;
-    if (!r) { showToast('Run accountability check first', 'warning'); return; }
+    if (!r) { showToast('Run accountability check first', 'warning'); return null; }
     const target = String(playerName || '').toLowerCase();
     const p = (r.playerResults || []).find(x => String(x.name || '').toLowerCase() === target);
-    if (!p) { showToast('Player not found in accountability results', 'warning'); return; }
+    if (!p) { showToast('Player not found in accountability results', 'warning'); return null; }
 
     const missingItems = (p.items || [])
         .filter(it => it && it.missing > 0)
@@ -13701,7 +13711,7 @@ function copyPlayerMissingToDiscord(playerName) {
 
     if (missingItems.length === 0) {
         showToast(`${p.name} has no missing items`, 'info');
-        return;
+        return null;
     }
 
     const totalQty = missingItems.reduce((s, it) => s + (it.missing || 0), 0);
@@ -13713,6 +13723,11 @@ function copyPlayerMissingToDiscord(playerName) {
         ? `${p.pct}% (${p.totalDeposited}/${p.totalLooted} returned)`
         : 'n/a';
 
+    return { r, p, missingItems, totalQty, totalValue, chestLabel, depLine };
+}
+
+function buildPlayerMissingDiscordText(report) {
+    const { p, missingItems, totalQty, totalValue, chestLabel, depLine } = report;
     let text = `**Missing Loot - ${p.name}${p.guild ? ` [${p.guild}]` : ''}**\n`;
     text += `Chests: ${chestLabel}\n`;
     text += `Deposit rate: ${depLine}\n`;
@@ -13747,7 +13762,351 @@ function copyPlayerMissingToDiscord(playerName) {
     }
 
     text += `\n_Current market estimates; verify manually before charging silver._`;
+    return text;
+}
+
+function copyPlayerMissingToDiscord(playerName) {
+    const report = getPlayerMissingReportData(playerName);
+    if (!report) return;
+    const text = buildPlayerMissingDiscordText(report);
+    const p = report.p;
     openCopyPreview(`Preview - ${p.name} Missing Items`, text, `${p.name} missing-item report copied`);
+}
+
+let _llPlayerImageReportState = { blob: null, url: '', filename: '' };
+
+function _llReportSafeFilename(value) {
+    return String(value || 'player')
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-+|-+$/g, '')
+        .slice(0, 40) || 'player';
+}
+
+function _llItemIconProxyUrl(itemId) {
+    return `${VPS_BASE}/api/item-icon/${encodeURIComponent(itemId || 'T4_BAG')}`;
+}
+
+function _llLoadCanvasImage(src) {
+    return new Promise(resolve => {
+        const img = new Image();
+        let done = false;
+        const finish = (value) => {
+            if (done) return;
+            done = true;
+            clearTimeout(timer);
+            resolve(value);
+        };
+        const timer = setTimeout(() => finish(null), 5000);
+        img.crossOrigin = 'anonymous';
+        img.onload = () => finish(img);
+        img.onerror = () => finish(null);
+        img.src = src;
+    });
+}
+
+function _llCanvasToPngBlob(canvas) {
+    return new Promise((resolve, reject) => {
+        canvas.toBlob(blob => {
+            if (blob) resolve(blob);
+            else reject(new Error('Canvas export failed'));
+        }, 'image/png');
+    });
+}
+
+function _llRoundRect(ctx, x, y, w, h, r) {
+    const radius = Math.min(r, w / 2, h / 2);
+    ctx.beginPath();
+    ctx.moveTo(x + radius, y);
+    ctx.arcTo(x + w, y, x + w, y + h, radius);
+    ctx.arcTo(x + w, y + h, x, y + h, radius);
+    ctx.arcTo(x, y + h, x, y, radius);
+    ctx.arcTo(x, y, x + w, y, radius);
+    ctx.closePath();
+}
+
+function _llFillRoundRect(ctx, x, y, w, h, r, fill) {
+    _llRoundRect(ctx, x, y, w, h, r);
+    ctx.fillStyle = fill;
+    ctx.fill();
+}
+
+function _llStrokeRoundRect(ctx, x, y, w, h, r, stroke, lineWidth = 1) {
+    _llRoundRect(ctx, x, y, w, h, r);
+    ctx.strokeStyle = stroke;
+    ctx.lineWidth = lineWidth;
+    ctx.stroke();
+}
+
+function _llEllipsizeCanvasText(ctx, text, maxWidth) {
+    const s = String(text || '');
+    if (ctx.measureText(s).width <= maxWidth) return s;
+    let lo = 0, hi = s.length;
+    while (lo < hi) {
+        const mid = Math.ceil((lo + hi) / 2);
+        if (ctx.measureText(s.slice(0, mid) + '...').width <= maxWidth) lo = mid;
+        else hi = mid - 1;
+    }
+    return s.slice(0, lo).trimEnd() + '...';
+}
+
+function _llWrapCanvasText(ctx, text, maxWidth, maxLines = 2) {
+    const words = String(text || '').replace(/\s+/g, ' ').trim().split(' ').filter(Boolean);
+    if (words.length === 0) return [''];
+    const lines = [];
+    let line = '';
+    for (const word of words) {
+        const next = line ? `${line} ${word}` : word;
+        if (ctx.measureText(next).width <= maxWidth) {
+            line = next;
+        } else {
+            if (line) lines.push(line);
+            line = word;
+            if (lines.length >= maxLines) break;
+        }
+    }
+    if (line && lines.length < maxLines) lines.push(line);
+    if (lines.length > maxLines) lines.length = maxLines;
+    if (lines.length === maxLines) {
+        lines[maxLines - 1] = _llEllipsizeCanvasText(ctx, lines[maxLines - 1], maxWidth);
+    }
+    return lines;
+}
+
+function _llDrawPill(ctx, x, y, label, value, color) {
+    ctx.font = '700 20px Arial, sans-serif';
+    const valueWidth = ctx.measureText(value).width;
+    ctx.font = '600 16px Arial, sans-serif';
+    const labelWidth = ctx.measureText(label).width;
+    const w = Math.max(148, Math.ceil(Math.max(valueWidth, labelWidth) + 34));
+    _llFillRoundRect(ctx, x, y, w, 58, 10, 'rgba(255,255,255,0.055)');
+    _llStrokeRoundRect(ctx, x, y, w, 58, 10, 'rgba(255,255,255,0.09)');
+    ctx.fillStyle = '#9aa4b2';
+    ctx.font = '600 15px Arial, sans-serif';
+    ctx.fillText(label, x + 17, y + 22);
+    ctx.fillStyle = color;
+    ctx.font = '800 21px Arial, sans-serif';
+    ctx.fillText(value, x + 17, y + 47);
+    return w;
+}
+
+function _llPickupSummaryForReport(it) {
+    const evs = (it.pickupEvs || []).slice(0, 2);
+    if (evs.length === 0) return '';
+    const pickupText = evs.map(e => {
+        const when = e.ts ? new Date(e.ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
+        const from = e.from ? `from ${e.from}${e.fromGuild ? ` [${e.fromGuild}]` : ''}` : '';
+        const zone = e.location ? `in ${formatZone(e.location)}` : '';
+        return [when, from, zone].filter(Boolean).join(' ');
+    }).filter(Boolean).join('; ');
+    const more = (it.pickupEvs || []).length - evs.length;
+    return pickupText ? `Pickup: ${pickupText}${more > 0 ? ` (+${more} more)` : ''}` : '';
+}
+
+function _llDrawItemIcon(ctx, img, x, y, size, itemId) {
+    _llFillRoundRect(ctx, x, y, size, size, 8, '#202734');
+    _llStrokeRoundRect(ctx, x, y, size, size, 8, 'rgba(255,255,255,0.12)');
+    if (img) {
+        ctx.save();
+        _llRoundRect(ctx, x, y, size, size, 8);
+        ctx.clip();
+        ctx.drawImage(img, x + 2, y + 2, size - 4, size - 4);
+        ctx.restore();
+        return;
+    }
+    const tier = (String(itemId || '').match(/^T(\d)/) || [])[1] || '?';
+    ctx.fillStyle = '#d4af37';
+    ctx.font = '800 24px Arial, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText(`T${tier}`, x + size / 2, y + size / 2 + 8);
+    ctx.textAlign = 'left';
+}
+
+async function buildPlayerMissingImageBlob(report) {
+    const { p, missingItems, totalQty, totalValue, chestLabel, depLine } = report;
+    const rows = missingItems.slice(0, 18);
+    const extraRows = missingItems.length - rows.length;
+    const width = 1200;
+    const headerH = 214;
+    const rowH = 118;
+    const rowGap = 10;
+    const footerH = 74;
+    const height = headerH + rows.length * (rowH + rowGap) + footerH;
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext('2d');
+
+    const iconEntries = await Promise.all(rows.map(async it => [
+        it.itemId,
+        await _llLoadCanvasImage(_llItemIconProxyUrl(it.itemId))
+    ]));
+    const iconMap = new Map(iconEntries);
+
+    ctx.fillStyle = '#0f131b';
+    ctx.fillRect(0, 0, width, height);
+    _llFillRoundRect(ctx, 28, 28, width - 56, height - 56, 16, '#141924');
+    _llStrokeRoundRect(ctx, 28, 28, width - 56, height - 56, 16, 'rgba(255,255,255,0.10)', 2);
+    ctx.fillStyle = '#d4af37';
+    ctx.fillRect(28, 28, width - 56, 5);
+
+    const initials = String(p.name || '?').trim().slice(0, 2).toUpperCase();
+    _llFillRoundRect(ctx, 58, 58, 72, 72, 36, '#5865f2');
+    ctx.fillStyle = '#ffffff';
+    ctx.font = '800 26px Arial, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText(initials, 94, 103);
+    ctx.textAlign = 'left';
+
+    ctx.fillStyle = '#f4f6fb';
+    ctx.font = '800 40px Arial, sans-serif';
+    ctx.fillText('Missing Loot', 150, 84);
+    ctx.font = '700 28px Arial, sans-serif';
+    ctx.fillStyle = '#d4af37';
+    ctx.fillText(_llEllipsizeCanvasText(ctx, `${p.name}${p.guild ? ` [${p.guild}]` : ''}`, 640), 150, 122);
+    ctx.font = '500 18px Arial, sans-serif';
+    ctx.fillStyle = '#9aa4b2';
+    ctx.fillText(_llEllipsizeCanvasText(ctx, `Chests: ${chestLabel}`, 970), 58, 170);
+
+    let pillX = 650;
+    pillX += _llDrawPill(ctx, pillX, 58, 'Missing', `${totalQty} item${totalQty !== 1 ? 's' : ''}`, '#f87171') + 12;
+    pillX += _llDrawPill(ctx, pillX, 58, 'Estimate', totalValue > 0 ? formatSilver(totalValue) : '-', '#d4af37') + 12;
+    _llDrawPill(ctx, pillX, 58, 'Deposit', depLine.replace(' returned', ''), p.pct >= 80 ? '#4ade80' : p.pct >= 40 ? '#fbbf24' : '#f87171');
+
+    let y = headerH;
+    for (const it of rows) {
+        const lineValue = it._lineValue || 0;
+        const name = getFriendlyName(it.itemId) || it.itemId;
+        const partialText = it.inChest > 0 ? `partial: ${it.inChest}/${it.looted} deposited` : 'not deposited';
+        const qtyText = `${it.missing} missing of ${it.looted} looted`;
+        const valueText = lineValue > 0 ? formatSilver(lineValue) : '-';
+        const pickup = _llPickupSummaryForReport(it);
+
+        _llFillRoundRect(ctx, 58, y, width - 116, rowH, 12, '#1a202b');
+        _llStrokeRoundRect(ctx, 58, y, width - 116, rowH, 12, 'rgba(255,255,255,0.08)');
+        ctx.fillStyle = '#ef4444';
+        ctx.fillRect(58, y + 12, 5, rowH - 24);
+
+        _llDrawItemIcon(ctx, iconMap.get(it.itemId), 82, y + 18, 66, it.itemId);
+
+        ctx.font = '800 24px Arial, sans-serif';
+        ctx.fillStyle = '#f4f6fb';
+        const nameLines = _llWrapCanvasText(ctx, name, 570, 2);
+        nameLines.forEach((line, idx) => ctx.fillText(line, 170, y + 36 + idx * 27));
+
+        ctx.font = '600 17px Arial, sans-serif';
+        ctx.fillStyle = '#f87171';
+        ctx.fillText(`${qtyText} - ${partialText}`, 170, y + 86);
+
+        if (pickup) {
+            ctx.font = '500 15px Arial, sans-serif';
+            ctx.fillStyle = '#9aa4b2';
+            ctx.fillText(_llEllipsizeCanvasText(ctx, pickup, 760), 170, y + 108);
+        }
+
+        ctx.font = '800 23px Arial, sans-serif';
+        ctx.fillStyle = '#d4af37';
+        ctx.textAlign = 'right';
+        ctx.fillText(valueText, width - 86, y + 48);
+        ctx.font = '600 14px Arial, sans-serif';
+        ctx.fillStyle = '#7f8a9a';
+        ctx.fillText('estimated silver', width - 86, y + 72);
+        ctx.textAlign = 'left';
+
+        y += rowH + rowGap;
+    }
+
+    ctx.fillStyle = '#8e99aa';
+    ctx.font = '500 18px Arial, sans-serif';
+    const footer = extraRows > 0
+        ? `Showing top ${rows.length} missing item lines by value. ${extraRows} more line${extraRows !== 1 ? 's' : ''} in the text report.`
+        : 'Current market estimates; verify manually before charging silver.';
+    ctx.fillText(footer, 58, height - 42);
+    ctx.textAlign = 'right';
+    ctx.fillStyle = '#d4af37';
+    ctx.font = '700 18px Arial, sans-serif';
+    ctx.fillText('albionaitool.xyz', width - 58, height - 42);
+    ctx.textAlign = 'left';
+
+    return _llCanvasToPngBlob(canvas);
+}
+
+function closePlayerMissingImageModal() {
+    document.getElementById('ll-image-report-modal')?.classList.add('hidden');
+    if (_llPlayerImageReportState.url) URL.revokeObjectURL(_llPlayerImageReportState.url);
+    _llPlayerImageReportState = { blob: null, url: '', filename: '' };
+}
+
+function _llSetImageReportBusy(isBusy, text) {
+    const status = document.getElementById('ll-image-report-status');
+    const img = document.getElementById('ll-image-report-img');
+    const copyBtn = document.getElementById('ll-image-report-copy-btn');
+    const downloadBtn = document.getElementById('ll-image-report-download-btn');
+    if (status) status.textContent = text || '';
+    if (img && isBusy) img.removeAttribute('src');
+    if (copyBtn) copyBtn.disabled = isBusy;
+    if (downloadBtn) downloadBtn.disabled = isBusy;
+}
+
+async function openPlayerMissingImageReport(playerName) {
+    const report = getPlayerMissingReportData(playerName);
+    if (!report) return;
+
+    const modal = document.getElementById('ll-image-report-modal');
+    const title = document.getElementById('ll-image-report-title');
+    const img = document.getElementById('ll-image-report-img');
+    if (!modal || !img) {
+        showToast('Image report modal is missing', 'error');
+        return;
+    }
+
+    if (_llPlayerImageReportState.url) URL.revokeObjectURL(_llPlayerImageReportState.url);
+    _llPlayerImageReportState = { blob: null, url: '', filename: '' };
+    if (title) title.textContent = `${report.p.name} - Discord Image Report`;
+    modal.classList.remove('hidden');
+    _llSetImageReportBusy(true, 'Generating image...');
+
+    try {
+        const blob = await buildPlayerMissingImageBlob(report);
+        const url = URL.createObjectURL(blob);
+        const filename = `missing-loot-${_llReportSafeFilename(report.p.name)}-${new Date().toISOString().slice(0, 10)}.png`;
+        _llPlayerImageReportState = { blob, url, filename };
+        img.src = url;
+        _llSetImageReportBusy(false, `${report.missingItems.length} missing item line${report.missingItems.length !== 1 ? 's' : ''} - ${(blob.size / 1024).toFixed(0)} KB PNG`);
+    } catch (err) {
+        console.error('[LootLogger] Image report failed', err);
+        _llSetImageReportBusy(false, 'Could not generate image report');
+        showToast('Image report failed to generate', 'error');
+    }
+}
+
+async function copyPlayerMissingImageReport() {
+    const { blob } = _llPlayerImageReportState;
+    if (!blob) { showToast('Generate the image first', 'warning'); return; }
+    if (!navigator.clipboard?.write || typeof ClipboardItem === 'undefined') {
+        showToast('Image clipboard is not supported in this browser; use Download PNG', 'warning');
+        return;
+    }
+    try {
+        await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
+        showToast('Image copied - paste it into Discord', 'success');
+    } catch (err) {
+        console.error('[LootLogger] Image copy failed', err);
+        showToast('Image copy failed; use Download PNG', 'error');
+    }
+}
+
+function downloadPlayerMissingImageReport() {
+    const { blob, filename } = _llPlayerImageReportState;
+    if (!blob) { showToast('Generate the image first', 'warning'); return; }
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename || 'missing-loot-report.png';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 function copyAccountabilityToDiscord(template) {
@@ -17249,6 +17608,7 @@ document.addEventListener('keydown', function(e) {
     if (e.key !== 'Escape') return;
     // Close whichever modal is currently open (priority order: most-recently-opened first)
     const modalMap = [
+        ['ll-image-report-modal', () => closePlayerMissingImageModal()],
         ['copy-preview-modal',    () => closeCopyPreviewModal()],
         ['guild-leaderboard-modal', () => closeGuildLeaderboard()],
         ['session-compare-modal', () => closeSessionCompare()],

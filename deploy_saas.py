@@ -1468,6 +1468,41 @@ function resolveUser(req, res, next) {
 }
 app.use('/api/', resolveUser);
 
+// CORS-clean Albion item icon proxy for client-side PNG report generation.
+// The browser can display render.albiononline.com icons directly, but canvas
+// export requires CORS-readable image bytes. Keep this narrow so it cannot
+// become a general-purpose proxy.
+app.get('/api/item-icon/:itemId', (req, res) => {
+  const itemId = String(req.params.itemId || '').trim();
+  if (!/^[A-Za-z0-9_@-]{2,96}$/.test(itemId)) {
+    return res.status(400).json({ error: 'Invalid item id' });
+  }
+  const upstreamPath = `/v1/item/${encodeURIComponent(itemId)}.png`;
+  const upstreamReq = https.request({
+    hostname: 'render.albiononline.com',
+    port: 443,
+    path: upstreamPath,
+    method: 'GET',
+    headers: { 'User-Agent': 'AlbionAITool/1.0' }
+  }, upstreamRes => {
+    if (upstreamRes.statusCode !== 200) {
+      upstreamRes.resume();
+      return res.status(404).json({ error: 'Icon not found' });
+    }
+    res.setHeader('Content-Type', 'image/png');
+    res.setHeader('Cache-Control', 'public, max-age=86400');
+    res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+    upstreamRes.pipe(res);
+  });
+  upstreamReq.setTimeout(8000, () => upstreamReq.destroy(new Error('Icon fetch timeout')));
+  upstreamReq.on('error', err => {
+    console.warn('[ItemIcon] proxy failed:', err.message);
+    if (!res.headersSent) return res.status(502).json({ error: 'Icon fetch failed' });
+    res.destroy(err);
+  });
+  upstreamReq.end();
+});
+
 // Redirect root to GitHub Pages frontend, preserving query string so device-auth
 // links like https://albionaitool.xyz/?device=ABC-DEF carry the device code through.
 app.get('/', (req, res) => {
@@ -3500,18 +3535,22 @@ let volumeRef = {};     // { "itemId_quality_city": avg_sample_count } — activ
 // share the same GROUP-BY-against-price_averages anti-pattern (column order
 // mismatch with idx_pa_ema_stream forces a full sort, blocking the event
 // loop). Chunking by item_id range keeps each chunk's sync work under ~2s.
-const PRICE_REF_ITEM_RANGES = [
-  ['',     'T4_'],   // pre-T4 (gathered, refined, etc.)
-  ['T4_',  'T5_'],
-  ['T5_',  'T6_'],
-  ['T6_',  'T6_M'],  // T6 split: A-L
-  ['T6_M', 'T7_'],   // T6 split: M-Z
-  ['T7_',  'T7_M'],  // T7 split: A-L
-  ['T7_M', 'T8_'],   // T7 split: M-Z
-  ['T8_',  'T8_M'],  // T8 split: A-L
-  ['T8_M', 'U'],     // T8 split: M-Z
-  ['U',    '￿'] // UNIQUE_*, ZIGGURAT_*, anything past U
-];
+function makePriceRefItemRanges() {
+  const ranges = [['', 'T4_']]; // pre-T4 gathered/refined/etc.
+  const bounds = ['0','1','2','3','4','5','6','7','8','9','A','B','C','D','E','F','G','H','I','J','K','L','M','N','O','P','Q','R','S','T','U','V','W','X','Y','Z'];
+  for (let tier = 4; tier <= 8; tier++) {
+    const prefix = `T${tier}_`;
+    ranges.push([prefix, `${prefix}${bounds[0]}`]);
+    for (let i = 0; i < bounds.length; i++) {
+      const lo = `${prefix}${bounds[i]}`;
+      const hi = i + 1 < bounds.length ? `${prefix}${bounds[i + 1]}` : `T${tier + 1}_`;
+      ranges.push([lo, hi]);
+    }
+  }
+  ranges.push(['T9_', '￿']); // UNIQUE_*, ZIGGURAT_*, anything past T8
+  return ranges;
+}
+const PRICE_REF_ITEM_RANGES = makePriceRefItemRanges();
 const _priceRefYield = () => new Promise(r => setImmediate(r));
 
 // 2026-05-04 (later): serialize against spreadStats / analytics. Without this
@@ -3636,6 +3675,24 @@ async function buildPriceReference() {
 async function initPriceRefCache() {
   if (priceRefCacheRunning) {
     console.log('[PriceRefCache] Init: already running, skipping');
+    return;
+  }
+  const persistedCutoff = Date.now() - 2 * 24 * 60 * 60 * 1000;
+  let persistedRows = 0;
+  try {
+    const row = readDb.prepare(`SELECT COUNT(*) AS c FROM price_ref_cache WHERE updated_at > ? AND avg_sell > 0`).get(persistedCutoff);
+    persistedRows = row && row.c ? row.c : 0;
+  } catch (err) {
+    console.error('[PriceRefCache] Persisted-cache count failed:', err.message);
+  }
+  if (persistedRows > 5000) {
+    console.log(`[PriceRefCache] Startup using ${persistedRows} persisted cache rows; heavy refresh deferred`);
+    await buildPriceReference();
+    setTimeout(() => {
+      refreshPriceRefCache()
+        .then(() => buildPriceReference())
+        .catch((err) => console.error('[PriceRefCache] Deferred startup refresh failed:', err && err.message || err));
+    }, 2 * 60 * 1000);
     return;
   }
   priceRefCacheRunning = true;
@@ -5182,8 +5239,10 @@ function recordSnapshots(allPrices) {
   // write lock for 500-2000 ms each, starving the NATS 30s-flush and triggering
   // SQLITE_BUSY cascades. 500 rows committed in ~50-100 ms lets the NATS flush
   // slot in between.
-  const BATCH = 500;
+  const BATCH = 50;
   let i = 0, count = 0;
+  let rejectedSell = 0, rejectedBuy = 0;
+  const rejectedExamples = [];
 
   // 2026-05-02 stage 4: direct sync transaction (auto-rollback on throw).
   // Keep 500-row chunking + setImmediate yields so a 50K-row scan doesn't block
@@ -5206,11 +5265,13 @@ function recordSnapshots(allPrices) {
       const gAvg = globalPriceRef[entry.item_id + '_' + (entry.quality || 1)] || 0;
       if (gAvg > 0) {
         if (sell > 0 && (sell > gAvg * 100 || sell < gAvg * 0.01)) {
-          console.log(`[Snapshots] Rejecting outlier sell=${sell} for ${entry.item_id} q${entry.quality||1} ${entry.city} (gAvg=${gAvg})`);
+          rejectedSell++;
+          if (rejectedExamples.length < 5) rejectedExamples.push(`sell ${entry.item_id} q${entry.quality||1} ${entry.city}`);
           sell = 0;
         }
         if (buy > 0 && (buy > gAvg * 100 || buy < gAvg * 0.01)) {
-          console.log(`[Snapshots] Rejecting outlier buy=${buy} for ${entry.item_id} q${entry.quality||1} ${entry.city} (gAvg=${gAvg})`);
+          rejectedBuy++;
+          if (rejectedExamples.length < 5) rejectedExamples.push(`buy ${entry.item_id} q${entry.quality||1} ${entry.city}`);
           buy = 0;
         }
         if (sell <= 0 && buy <= 0) continue;
@@ -5226,8 +5287,11 @@ function recordSnapshots(allPrices) {
     try { writeSnapshotChunk.immediate(slice, hourStart); }
     catch (err) { console.error('[Snapshots] Batch failed (auto-rolled-back):', err.message); }
     if (i < allPrices.length) {
-      setImmediate(writeBatch);
+      setTimeout(writeBatch, 2);
     } else {
+      if (rejectedSell || rejectedBuy) {
+        console.log(`[Snapshots] Rejected outliers sell=${rejectedSell} buy=${rejectedBuy}${rejectedExamples.length ? ` examples=${rejectedExamples.join('; ')}` : ''}`);
+      }
       console.log(`[Snapshots] Recorded ${count} prices into price_averages (hourly)`);
     }
   }
