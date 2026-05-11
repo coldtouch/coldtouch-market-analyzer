@@ -147,6 +147,7 @@ const cors = require('cors');
 const https = require('https');
 const http = require('http');
 const fs = require('fs');
+const path = require('path');
 const zlib = require('zlib');
 const WebSocket = require('ws');
 // 2026-05-02 stage 4: node-sqlite3 dropped entirely. All 3 connections (db,
@@ -187,6 +188,7 @@ const ITEMS_URL = 'https://coldtouch.github.io/coldtouch-market-analyzer/items.j
 const CHUNK_SIZE = 50;  // Larger chunks OK with 6 vCPU / 12GB RAM
 const SCAN_INTERVAL_MS = 10 * 60 * 1000; // 10 minutes
 const SITE_URL = 'https://coldtouch.github.io/coldtouch-market-analyzer';
+const PREVIEW_ROOT = '/opt/albion-saas/previews';
 
 function maskEmail(email) {
     if (!email) return '***';
@@ -1467,6 +1469,73 @@ function resolveUser(req, res, next) {
   next();
 }
 app.use('/api/', resolveUser);
+
+function previewDirFor(name) {
+  if (!/^[a-zA-Z0-9._-]+$/.test(name || '')) return null;
+  const root = path.resolve(PREVIEW_ROOT);
+  const dir = path.resolve(root, name);
+  if (!dir.startsWith(root + path.sep)) return null;
+  return dir;
+}
+
+function sendPreviewIndex(req, res) {
+  const dir = previewDirFor(req.params.previewName);
+  if (!dir) return res.status(404).send('Preview not found');
+  const indexPath = path.join(dir, 'index.html');
+  if (!fs.existsSync(indexPath)) return res.status(404).send('Preview not found');
+  res.set('Cache-Control', 'no-store');
+  res.sendFile(indexPath);
+}
+
+// Same-origin frontend previews. Files live under:
+//   /opt/albion-saas/previews/<name>/
+// This lets us verify PR/static-frontend changes on albionaitool.xyz without
+// merging GitHub Pages main or widening API CORS to random preview hosts.
+app.use('/preview/:previewName', (req, res, next) => {
+  const dir = previewDirFor(req.params.previewName);
+  if (!dir) return res.status(404).send('Preview not found');
+  express.static(dir, {
+    index: 'index.html',
+    etag: false,
+    setHeaders: (res) => res.setHeader('Cache-Control', 'no-store')
+  })(req, res, next);
+});
+app.get('/preview/:previewName/*', sendPreviewIndex);
+
+// CORS-clean Albion item icon proxy for client-side PNG report generation.
+// The browser can display render.albiononline.com icons directly, but canvas
+// export requires CORS-readable image bytes. Keep this narrow so it cannot
+// become a general-purpose proxy.
+app.get('/api/item-icon/:itemId', (req, res) => {
+  const itemId = String(req.params.itemId || '').trim();
+  if (!/^[A-Za-z0-9_@-]{2,96}$/.test(itemId)) {
+    return res.status(400).json({ error: 'Invalid item id' });
+  }
+  const upstreamPath = `/v1/item/${encodeURIComponent(itemId)}.png`;
+  const upstreamReq = https.request({
+    hostname: 'render.albiononline.com',
+    port: 443,
+    path: upstreamPath,
+    method: 'GET',
+    headers: { 'User-Agent': 'AlbionAITool/1.0' }
+  }, upstreamRes => {
+    if (upstreamRes.statusCode !== 200) {
+      upstreamRes.resume();
+      return res.status(404).json({ error: 'Icon not found' });
+    }
+    res.setHeader('Content-Type', 'image/png');
+    res.setHeader('Cache-Control', 'public, max-age=86400');
+    res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+    upstreamRes.pipe(res);
+  });
+  upstreamReq.setTimeout(8000, () => upstreamReq.destroy(new Error('Icon fetch timeout')));
+  upstreamReq.on('error', err => {
+    console.warn('[ItemIcon] proxy failed:', err.message);
+    if (!res.headersSent) return res.status(502).json({ error: 'Icon fetch failed' });
+    res.destroy(err);
+  });
+  upstreamReq.end();
+});
 
 // Redirect root to GitHub Pages frontend, preserving query string so device-auth
 // links like https://albionaitool.xyz/?device=ABC-DEF carry the device code through.
@@ -3500,18 +3569,22 @@ let volumeRef = {};     // { "itemId_quality_city": avg_sample_count } — activ
 // share the same GROUP-BY-against-price_averages anti-pattern (column order
 // mismatch with idx_pa_ema_stream forces a full sort, blocking the event
 // loop). Chunking by item_id range keeps each chunk's sync work under ~2s.
-const PRICE_REF_ITEM_RANGES = [
-  ['',     'T4_'],   // pre-T4 (gathered, refined, etc.)
-  ['T4_',  'T5_'],
-  ['T5_',  'T6_'],
-  ['T6_',  'T6_M'],  // T6 split: A-L
-  ['T6_M', 'T7_'],   // T6 split: M-Z
-  ['T7_',  'T7_M'],  // T7 split: A-L
-  ['T7_M', 'T8_'],   // T7 split: M-Z
-  ['T8_',  'T8_M'],  // T8 split: A-L
-  ['T8_M', 'U'],     // T8 split: M-Z
-  ['U',    '￿'] // UNIQUE_*, ZIGGURAT_*, anything past U
-];
+function makePriceRefItemRanges() {
+  const ranges = [['', 'T4_']]; // pre-T4 gathered/refined/etc.
+  const bounds = ['0','1','2','3','4','5','6','7','8','9','A','B','C','D','E','F','G','H','I','J','K','L','M','N','O','P','Q','R','S','T','U','V','W','X','Y','Z'];
+  for (let tier = 4; tier <= 8; tier++) {
+    const prefix = `T${tier}_`;
+    ranges.push([prefix, `${prefix}${bounds[0]}`]);
+    for (let i = 0; i < bounds.length; i++) {
+      const lo = `${prefix}${bounds[i]}`;
+      const hi = i + 1 < bounds.length ? `${prefix}${bounds[i + 1]}` : `T${tier + 1}_`;
+      ranges.push([lo, hi]);
+    }
+  }
+  ranges.push(['T9_', '￿']); // UNIQUE_*, ZIGGURAT_*, anything past T8
+  return ranges;
+}
+const PRICE_REF_ITEM_RANGES = makePriceRefItemRanges();
 const _priceRefYield = () => new Promise(r => setImmediate(r));
 
 // 2026-05-04 (later): serialize against spreadStats / analytics. Without this
@@ -3526,6 +3599,10 @@ let priceRefCacheRunning = false;
 async function refreshPriceRefCache() {
   if (priceRefCacheRunning) {
     console.log('[PriceRefCache] Already running, skipping this cycle');
+    return;
+  }
+  if (typeof compactionRunning !== 'undefined' && compactionRunning) {
+    console.log('[PriceRefCache] Compaction running, deferring this cycle');
     return;
   }
   if (typeof statsRunning !== 'undefined' && statsRunning) {
@@ -3636,6 +3713,24 @@ async function buildPriceReference() {
 async function initPriceRefCache() {
   if (priceRefCacheRunning) {
     console.log('[PriceRefCache] Init: already running, skipping');
+    return;
+  }
+  const persistedCutoff = Date.now() - 2 * 24 * 60 * 60 * 1000;
+  let persistedRows = 0;
+  try {
+    const row = readDb.prepare(`SELECT COUNT(*) AS c FROM price_ref_cache WHERE updated_at > ? AND avg_sell > 0`).get(persistedCutoff);
+    persistedRows = row && row.c ? row.c : 0;
+  } catch (err) {
+    console.error('[PriceRefCache] Persisted-cache count failed:', err.message);
+  }
+  if (persistedRows > 5000) {
+    console.log(`[PriceRefCache] Startup using ${persistedRows} persisted cache rows; heavy refresh deferred`);
+    await buildPriceReference();
+    setTimeout(() => {
+      refreshPriceRefCache()
+        .then(() => buildPriceReference())
+        .catch((err) => console.error('[PriceRefCache] Deferred startup refresh failed:', err && err.message || err));
+    }, 2 * 60 * 1000);
     return;
   }
   priceRefCacheRunning = true;
@@ -5182,8 +5277,10 @@ function recordSnapshots(allPrices) {
   // write lock for 500-2000 ms each, starving the NATS 30s-flush and triggering
   // SQLITE_BUSY cascades. 500 rows committed in ~50-100 ms lets the NATS flush
   // slot in between.
-  const BATCH = 500;
+  const BATCH = 50;
   let i = 0, count = 0;
+  let rejectedSell = 0, rejectedBuy = 0;
+  const rejectedExamples = [];
 
   // 2026-05-02 stage 4: direct sync transaction (auto-rollback on throw).
   // Keep 500-row chunking + setImmediate yields so a 50K-row scan doesn't block
@@ -5206,11 +5303,13 @@ function recordSnapshots(allPrices) {
       const gAvg = globalPriceRef[entry.item_id + '_' + (entry.quality || 1)] || 0;
       if (gAvg > 0) {
         if (sell > 0 && (sell > gAvg * 100 || sell < gAvg * 0.01)) {
-          console.log(`[Snapshots] Rejecting outlier sell=${sell} for ${entry.item_id} q${entry.quality||1} ${entry.city} (gAvg=${gAvg})`);
+          rejectedSell++;
+          if (rejectedExamples.length < 5) rejectedExamples.push(`sell ${entry.item_id} q${entry.quality||1} ${entry.city}`);
           sell = 0;
         }
         if (buy > 0 && (buy > gAvg * 100 || buy < gAvg * 0.01)) {
-          console.log(`[Snapshots] Rejecting outlier buy=${buy} for ${entry.item_id} q${entry.quality||1} ${entry.city} (gAvg=${gAvg})`);
+          rejectedBuy++;
+          if (rejectedExamples.length < 5) rejectedExamples.push(`buy ${entry.item_id} q${entry.quality||1} ${entry.city}`);
           buy = 0;
         }
         if (sell <= 0 && buy <= 0) continue;
@@ -5226,8 +5325,11 @@ function recordSnapshots(allPrices) {
     try { writeSnapshotChunk.immediate(slice, hourStart); }
     catch (err) { console.error('[Snapshots] Batch failed (auto-rolled-back):', err.message); }
     if (i < allPrices.length) {
-      setImmediate(writeBatch);
+      setTimeout(writeBatch, 2);
     } else {
+      if (rejectedSell || rejectedBuy) {
+        console.log(`[Snapshots] Rejected outliers sell=${rejectedSell} buy=${rejectedBuy}${rejectedExamples.length ? ` examples=${rejectedExamples.join('; ')}` : ''}`);
+      }
       console.log(`[Snapshots] Recorded ${count} prices into price_averages (hourly)`);
     }
   }
@@ -5252,6 +5354,11 @@ async function computeSpreadStats() {
   }
   if (dbBusy) { console.log('[SpreadStats] DB busy, skipping this cycle'); return; }
   if (analyticsRunning) { console.log('[SpreadStats] Analytics running, skipping this cycle'); return; }
+  if (typeof compactionRunning !== 'undefined' && compactionRunning) {
+    console.log('[SpreadStats] Compaction running, deferring 90s');
+    setTimeout(_spreadStatsRunner, 90 * 1000);
+    return;
+  }
   // 2026-05-04: avoid concurrency with priceRefCache. Both query price_averages
   // on the same statsDb connection; running them concurrently thrashes the page
   // cache and stretches each chunk's sync block — observed at 17:39 producing
@@ -5548,7 +5655,11 @@ function scheduleVacuumIfNeeded(rowsDeleted) {
 //     unbounded. VACUUM is a manual / off-hours operation.
 //   - skip while analyticsRunning/statsRunning to avoid simultaneous heavy DB
 let compactionRunning = false;
-const COMPACTION_CHUNK = 5000;             // rows per micro-batch
+// 2026-05-11: 5000-row chunks still produced 15-60s event-loop stalls on the
+// live 16GB DB under concurrent load. Smaller chunks plus inter-phase yields
+// trade wall-clock time for responsiveness, which is the right side to choose
+// for an always-on web service.
+const COMPACTION_CHUNK = 1000;             // rows per micro-batch
 const COMPACTION_RSS_LIMIT_MB = 1500;      // bail above this; baseline is ~250 MB
 const COMPACTION_MAX_CYCLES = 20000;       // hard ceiling on chunks per call
 
@@ -5564,6 +5675,10 @@ async function compactOldData(rawRetentionDays) {
   }
   if (typeof statsRunning !== 'undefined' && statsRunning) {
     console.log('[Compaction] Skipped — statsRunning');
+    return;
+  }
+  if (typeof priceRefCacheRunning !== 'undefined' && priceRefCacheRunning) {
+    console.log('[Compaction] Skipped — priceRefCacheRunning');
     return;
   }
   compactionRunning = true;
@@ -5627,13 +5742,18 @@ async function compactOldData(rawRetentionDays) {
       }
       const rows = selT1.all(rawCutoff, COMPACTION_CHUNK);
       if (rows.length === 0) break;
+      await yieldLoop();
       writeChunk.immediate(rows);
+      await yieldLoop();
       // Build DELETE for these rowids
       const placeholders = rows.map(() => '?').join(',');
       const delStmt = db.prepare(`DELETE FROM price_averages WHERE rowid IN (${placeholders})`);
       const info = delStmt.run(...rows.map(r => r.rid));
       migrated += rows.length;
       deleted  += info.changes;
+      if (cycle > 0 && cycle % 100 === 0) {
+        console.log(`[Compaction] Tier1→2 progress: migrated=${migrated} deleted=${deleted} rss=${rssNow()}MB`);
+      }
       // Yield to event loop after every chunk
       await yieldLoop();
     }
@@ -5680,7 +5800,7 @@ async function compactOldData(rawRetentionDays) {
         insT2.run(r.item_id, r.quality, r.city, Math.round(r.avg_sell), Math.round(r.avg_buy), r.min_sell || 0, r.max_buy || 0, r.cnt, r.day_start);
       }
     });
-    const ITEM_BATCH = 200;            // process N items per cycle
+    const ITEM_BATCH = 20;             // process N items per cycle; keep each sync span bounded
     let lastItem = '';
     for (let cycle = 0; cycle < COMPACTION_MAX_CYCLES; cycle++) {
       const rss = rssNow();
@@ -5693,12 +5813,18 @@ async function compactOldData(rawRetentionDays) {
       const itemIds = items.map(r => r.item_id);
       const itemsJson = JSON.stringify(itemIds);
       lastItem = itemIds[itemIds.length - 1];
+      await yieldLoop();
       const aggRows = aggStmt.all(itemsJson, hourlyCutoffStr);
+      await yieldLoop();
       if (aggRows.length > 0) {
         writeT2.immediate(aggRows);
+        await yieldLoop();
         const dInfo = delT2.run(itemsJson, hourlyCutoffStr);
         t23rows    += aggRows.length;
         t23deleted += dInfo.changes;
+      }
+      if (cycle > 0 && cycle % 50 === 0) {
+        console.log(`[Compaction] Tier2→3 progress: dailyRows=${t23rows} hourlyDeleted=${t23deleted} lastItem=${lastItem} rss=${rssNow()}MB`);
       }
       await yieldLoop();
     }
@@ -5732,10 +5858,14 @@ async function compactOldData(rawRetentionDays) {
       }
       const rids = selDailyStmt.all(dailyCutoff, COMPACTION_CHUNK).map(r => r.rowid);
       if (rids.length === 0) break;
+      await yieldLoop();
       const placeholders = rids.map(() => '?').join(',');
       const delStmt = db.prepare(`DELETE FROM price_averages WHERE rowid IN (${placeholders})`);
       const info = delStmt.run(...rids);
       dailyDeleted += info.changes;
+      if (cycle > 0 && cycle % 100 === 0) {
+        console.log(`[Compaction] Daily prune progress: deleted=${dailyDeleted} rss=${rssNow()}MB`);
+      }
       await yieldLoop();
     }
     if (dailyDeleted > 0) {
@@ -5791,20 +5921,34 @@ const DB_WARN_GB  = 15;
 const DB_EMERG_GB = 20;
 
 function checkDiskUsage() {
-  db.get(`SELECT page_count * page_size as size FROM pragma_page_count(), pragma_page_size()`, (err, row) => {
+  db.get(`SELECT
+      (SELECT page_count FROM pragma_page_count()) AS page_count,
+      (SELECT freelist_count FROM pragma_freelist_count()) AS freelist_count,
+      (SELECT page_size FROM pragma_page_size()) AS page_size`, (err, row) => {
     if (err || !row) return;
-    const sizeBytes = row.size;
-    const sizeGB = sizeBytes / (1024 * 1024 * 1024);
-    const sizeMB = sizeBytes / (1024 * 1024);
+    const pageCount = row.page_count || 0;
+    const freelistCount = row.freelist_count || 0;
+    const pageSize = row.page_size || 4096;
+    const totalBytes = pageCount * pageSize;
+    const freeBytes = freelistCount * pageSize;
+    const usedBytes = Math.max(0, totalBytes - freeBytes);
+    const totalGB = totalBytes / (1024 * 1024 * 1024);
+    const freeGB = freeBytes / (1024 * 1024 * 1024);
+    const usedGB = usedBytes / (1024 * 1024 * 1024);
+    const usedMB = usedBytes / (1024 * 1024);
 
-    if (sizeGB >= DB_EMERG_GB) {
-      console.error(`[DiskSafety] EMERGENCY: DB is ${sizeGB.toFixed(1)}GB (>${DB_EMERG_GB}GB). Emergency compact: 1 day raw retention`);
+    // Use live pages, not total file pages, for compaction decisions. DELETE
+    // frees pages onto SQLite's freelist but does not shrink the file without
+    // VACUUM; using page_count alone re-triggered aggressive compaction forever
+    // after May 11 had ~6GB already-free pages in a 15.3GB file.
+    if (usedGB >= DB_EMERG_GB) {
+      console.error(`[DiskSafety] EMERGENCY: DB live=${usedGB.toFixed(1)}GB total=${totalGB.toFixed(1)}GB freePages=${freeGB.toFixed(1)}GB (>${DB_EMERG_GB}GB live). Emergency compact: 1 day raw retention`);
       compactOldData(1).catch(e => console.error('[Compaction] uncaught:', e && e.message));
-    } else if (sizeGB >= DB_WARN_GB) {
-      console.warn(`[DiskSafety] WARNING: DB is ${sizeGB.toFixed(1)}GB (>${DB_WARN_GB}GB). Aggressive compact: 3 day raw retention`);
+    } else if (usedGB >= DB_WARN_GB) {
+      console.warn(`[DiskSafety] WARNING: DB live=${usedGB.toFixed(1)}GB total=${totalGB.toFixed(1)}GB freePages=${freeGB.toFixed(1)}GB (>${DB_WARN_GB}GB live). Aggressive compact: 3 day raw retention`);
       compactOldData(3).catch(e => console.error('[Compaction] uncaught:', e && e.message));
     } else {
-      console.log(`[DiskSafety] DB size: ${sizeMB.toFixed(0)}MB — OK`);
+      console.log(`[DiskSafety] DB live=${usedMB.toFixed(0)}MB total=${totalGB.toFixed(1)}GB freePages=${freeGB.toFixed(1)}GB — OK`);
     }
   });
 }
@@ -5918,6 +6062,11 @@ async function computeAnalytics() {
     }
   }
   if (dbBusy) { console.log('[Analytics] DB busy, skipping'); return; }
+  if (typeof compactionRunning !== 'undefined' && compactionRunning) {
+    console.log('[Analytics] Compaction running, deferring 90s');
+    setTimeout(_runAnalytics, 90 * 1000);
+    return;
+  }
   // 2026-05-04: defer rather than skip on concurrent heavy job — same reasoning
   // as in computeSpreadStats. setInterval (30 min) modulo 10 min would always
   // hit priceRefCache.

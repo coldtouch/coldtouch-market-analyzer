@@ -2,6 +2,22 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-05-11 — Loot Logger per-player missing-item Discord report
+
+Added a per-player Discord copy action to Accountability player cards. Friendly players with missing items now show a Discord button in the card header; clicking it opens the existing copy-preview modal with that player's missing items, estimated silver, deposit rate, partial-deposit context, and pickup time/source/zone details when available.
+
+### 2026-05-11 — Stop DiskSafety false-positive compaction restart loop
+
+Investigated the live VPS after repeated May 11 restarts (`NRestarts=23`). The site was up between restarts, but `DiskSafety` kept launching aggressive compaction because the SQLite file measured 15.3 GB. The missing detail: `pragma_freelist_count()` showed ~6.3 GB of that file was already free pages from prior deletes, so live DB pages were only ~9 GB. Because `checkDiskUsage()` used `page_count * page_size` without subtracting the freelist, it treated a mostly-clean DB file as over-threshold forever, started compaction every post-restart 25-minute check, then the event-loop watchdog aborted the process after compaction stalls crossed 60 s.
+
+Fixes:
+- `checkDiskUsage()` now bases WARN/EMERGENCY compaction decisions on live pages: `(page_count - freelist_count) * page_size`. Logs now include live size, total file size, and free-page size.
+- Heavy background jobs now respect `compactionRunning` both ways: spreadStats and analytics defer while compaction runs; compaction skips while priceRefCache is running; priceRefCache skips while compaction runs.
+- Compaction chunks reduced 5000 -> 1000 rows, Tier2 item batches reduced 200 -> 20 items, and extra `setImmediate` yields were added between read/write/delete phases. This lowers per-tick blocking risk on the live 16 GB DB.
+- Added progress logs inside long compaction tiers so the next incident report shows exactly which phase is slow instead of only "Starting" followed by a watchdog abort.
+
+Operational note: the VPS disk is still tight because `/opt/albion-saas/backups` holds four ~16 GB DB backups (~62 GB total). That is bounded by the current cron, but it leaves only ~15 GB free on a 96 GB disk; consider reducing backup count or compressing/offloading snapshots once the service is stable.
+
 ### 2026-05-04 (later, deferred backlog) — `price_hourly` retention 30 → 14 days + analytics double-fire fix
 
 After the stability arc landed, picked up two deferred backlog items:

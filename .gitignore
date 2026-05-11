@@ -4,6 +4,10 @@ node_modules/
 # Session-local one-off scripts (incident response, ad-hoc DB ops, etc.)
 tmp_check/
 
+# Local assistant/session artifacts. Keep them on disk as history, but do not ship.
+.claude/
+.memory/
+
 # Python companion & test tools (not needed for the web app)
 companion.py
 test_nats.py

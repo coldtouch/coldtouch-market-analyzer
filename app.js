@@ -13633,6 +13633,9 @@ async function runAccountabilityCheck() {
             ? '<span style="font-size:0.6rem; padding:0.1rem 0.35rem; background:rgba(239,68,68,0.2); color:var(--loss-red); border-radius:8px; margin-left:0.3rem;">Enemy Loot</span>'
             : '';
         const deathTag = p.died ? '<span title="Died — lost items" style="color:var(--loss-red); margin-left:0.3rem;">💀</span>' : '';
+        const playerDiscordBtn = (!p.isEnemy && p.totalMissing > 0)
+            ? `<button type="button" class="btn-small ll-player-discord-btn" data-action="copy-player-missing" data-player-name="${esc(p.name)}" onclick="event.stopPropagation()" title="Preview a Discord report for this player's missing items">📋 Discord</button>`
+            : '';
 
         return `<div class="ll-player-card" style="${enemyBorder}" data-player-name="${esc(p.name.toLowerCase())}" data-player-guild="${esc((p.guild || '').toLowerCase())}">
             <div class="ll-player-header" onclick="this.closest('.ll-player-card').classList.toggle('expanded')">
@@ -13659,6 +13662,7 @@ async function runAccountabilityCheck() {
                         <span class="ll-stat-value ${p.totalMissing > 0 ? 'red' : 'green'}">${p.totalMissing}${p.missingSilver > 0 ? ` (${formatSilver(p.missingSilver)})` : ''}</span>
                     </div>` : ''}
                 </div>
+                ${playerDiscordBtn}
                 <span class="ll-player-chevron">&#x25BE;</span>
             </div>
             <div class="ll-deposit-bar"><div class="ll-deposit-fill" style="width:${p.pct}%; background:${barColor};"></div></div>
@@ -13667,10 +13671,83 @@ async function runAccountabilityCheck() {
     }).join('');
 
     resultEl.innerHTML = html;
+    resultEl.querySelectorAll('[data-action="copy-player-missing"]').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            copyPlayerMissingToDiscord(btn.dataset.playerName || '');
+        });
+    });
     // Stamp last-run label so re-run timing is visible.
     const lastRunEl = document.getElementById('acc-last-run');
     if (lastRunEl) lastRunEl.textContent = `✓ Last checked: ${new Date().toLocaleTimeString()}`;
     trackActivity('accountability', 1);
+}
+
+function copyPlayerMissingToDiscord(playerName) {
+    const r = window._llAccResults;
+    if (!r) { showToast('Run accountability check first', 'warning'); return; }
+    const target = String(playerName || '').toLowerCase();
+    const p = (r.playerResults || []).find(x => String(x.name || '').toLowerCase() === target);
+    if (!p) { showToast('Player not found in accountability results', 'warning'); return; }
+
+    const missingItems = (p.items || [])
+        .filter(it => it && it.missing > 0)
+        .map(it => {
+            const price = r.priceMap?.[it.itemId]?.price || 0;
+            return { ...it, _lineValue: price * it.missing };
+        })
+        .sort((a, b) => (b._lineValue - a._lineValue) || ((b.missing || 0) - (a.missing || 0)));
+
+    if (missingItems.length === 0) {
+        showToast(`${p.name} has no missing items`, 'info');
+        return;
+    }
+
+    const totalQty = missingItems.reduce((s, it) => s + (it.missing || 0), 0);
+    const totalValue = missingItems.reduce((s, it) => s + (it._lineValue || 0), 0);
+    const chestLabel = (r.selectedTabNames && r.selectedTabNames.length > 0)
+        ? r.selectedTabNames.join(', ')
+        : 'selected chest capture';
+    const depLine = p.pct >= 0
+        ? `${p.pct}% (${p.totalDeposited}/${p.totalLooted} returned)`
+        : 'n/a';
+
+    let text = `**Missing Loot - ${p.name}${p.guild ? ` [${p.guild}]` : ''}**\n`;
+    text += `Chests: ${chestLabel}\n`;
+    text += `Deposit rate: ${depLine}\n`;
+    text += `Missing: ${totalQty} item${totalQty !== 1 ? 's' : ''}`;
+    if (totalValue > 0) text += ` (~${Math.round(totalValue).toLocaleString()} silver)`;
+    if (p.died) text += `\nNote: this player died during the session; items marked Lost on Death are excluded below.`;
+    text += `\n\n__Missing items__\n`;
+
+    const maxLines = 25;
+    for (const it of missingItems.slice(0, maxLines)) {
+        const name = getFriendlyName(it.itemId) || it.itemId;
+        const valText = it._lineValue > 0 ? ` - ~${Math.round(it._lineValue).toLocaleString()} silver` : '';
+        const partialText = it.inChest > 0 ? ` (${it.inChest}/${it.looted} deposited)` : '';
+        text += `- ${it.missing}x ${name}${partialText}${valText}\n`;
+
+        const evs = (it.pickupEvs || []).slice(0, 2);
+        if (evs.length > 0) {
+            const pickupText = evs.map(e => {
+                const when = e.ts ? new Date(e.ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
+                const from = e.from ? ` from ${e.from}${e.fromGuild ? ` [${e.fromGuild}]` : ''}` : '';
+                const zone = e.location ? ` in ${formatZone(e.location)}` : '';
+                return `${when}${from}${zone}`.trim();
+            }).filter(Boolean).join('; ');
+            if (pickupText) {
+                const more = (it.pickupEvs || []).length - evs.length;
+                text += `  picked up: ${pickupText}${more > 0 ? ` (+${more} more)` : ''}\n`;
+            }
+        }
+    }
+    if (missingItems.length > maxLines) {
+        text += `- ...and ${missingItems.length - maxLines} more item line${missingItems.length - maxLines !== 1 ? 's' : ''}\n`;
+    }
+
+    text += `\n_Current market estimates; verify manually before charging silver._`;
+    openCopyPreview(`Preview - ${p.name} Missing Items`, text, `${p.name} missing-item report copied`);
 }
 
 function copyAccountabilityToDiscord(template) {
