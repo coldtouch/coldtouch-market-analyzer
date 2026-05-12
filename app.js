@@ -12920,41 +12920,56 @@ async function _accDeleteDuplicates() {
 // Create a public share link for the current accountability check.
 // Snapshots the session + selected chest captures to the backend so viewers
 // can render the breakdown without needing access to live capture data.
-async function shareAccountability(sessionId) {
-    const captureSel = document.getElementById('acc-capture-select');
-    const selectedIdxs = Array.from(captureSel.selectedOptions).map(o => parseInt(o.value)).filter(v => !isNaN(v));
+async function shareAccountability(sessionId, btnEl) {
     if (!sessionId) { showToast('No session selected', 'warn'); return; }
-    if (selectedIdxs.length === 0) { showToast('Select at least one chest capture first', 'warn'); return; }
-    const captures = window._chestCaptures || [];
-    const selectedCaptures = selectedIdxs.map(i => captures[i]).filter(Boolean);
-    if (selectedCaptures.length === 0) { showToast('Selected captures no longer available', 'warn'); return; }
-    // Snapshot the chest-log batches the user has selected for verification
-    // (opcode 157 deposit/withdraw ground truth). Without this the shared view
-    // renders the accountability check with zero deposits and no "verified"
-    // badges. If the user hasn't touched the chestlog dropdown we include ALL
-    // loaded batches so the recipient sees the same verification result.
-    const chestLogSel = document.getElementById('acc-chestlog-select');
-    const allBatches = window._chestLogBatches || [];
-    let batchesForShare = [];
-    if (chestLogSel) {
-        const selBatchIdxs = Array.from(chestLogSel.selectedOptions)
-            .map(o => parseInt(o.value)).filter(v => !isNaN(v));
-        batchesForShare = selBatchIdxs.length > 0
-            ? selBatchIdxs.map(i => allBatches[i]).filter(Boolean)
-            : allBatches; // fall back to all loaded batches
-    } else {
-        batchesForShare = allBatches;
+
+    const useLastRun = window._llAccShareContext && window._llAccShareContext.sessionId === sessionId;
+    let selectedCaptures = useLastRun ? (window._llAccShareContext.captures || []) : null;
+    let batchesForShare = useLastRun ? (window._llAccShareContext.chestLogs || []) : null;
+
+    if (!useLastRun) {
+        const captureSel = document.getElementById('acc-capture-select');
+        const selectedIdxs = captureSel
+            ? Array.from(captureSel.selectedOptions).map(o => parseInt(o.value)).filter(v => !isNaN(v))
+            : [];
+        if (selectedIdxs.length === 0) { showToast('Run the accountability check first so Share can use that exact result', 'warn'); return; }
+        const captures = window._chestCaptures || [];
+        selectedCaptures = selectedIdxs.map(i => captures[i]).filter(Boolean);
+        // Fallback for older rendered results: use the dropdown state only if we do
+        // not have a last-run snapshot. Current reports store the exact selected
+        // chest-log batches so Share does not depend on rechecking dropdowns.
+        const chestLogSel = document.getElementById('acc-chestlog-select');
+        const allBatches = window._chestLogBatches || [];
+        if (chestLogSel) {
+            const selBatchIdxs = Array.from(chestLogSel.selectedOptions)
+                .map(o => parseInt(o.value)).filter(v => !isNaN(v));
+            batchesForShare = selBatchIdxs.map(i => allBatches[i]).filter(Boolean);
+        } else {
+            batchesForShare = [];
+        }
     }
+
+    if (selectedCaptures.length === 0) { showToast('Selected captures no longer available', 'warn'); return; }
+
     // Get the session name from saved names if available.
     let sessionName = '';
     try {
         const savedNames = typeof getSavedSessionNames === 'function' ? getSavedSessionNames() : {};
         sessionName = savedNames[sessionId] || '';
     } catch {}
+    if (!sessionName && useLastRun) sessionName = window._llAccShareContext.sessionName || '';
+
+    const originalHtml = btnEl ? btnEl.innerHTML : '';
+    if (btnEl) {
+        btnEl.disabled = true;
+        btnEl.classList.add('is-loading');
+        btnEl.innerHTML = 'Creating link...';
+    }
     try {
         const res = await fetch(`${VPS_BASE}/api/accountability/share`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', ...authHeaders() },
+            signal: AbortSignal.timeout(45000),
             body: JSON.stringify({ sessionId, captures: selectedCaptures, sessionName, chestLogs: batchesForShare })
         });
         const data = await res.json();
@@ -12968,7 +12983,16 @@ async function shareAccountability(sessionId) {
             showToast(`Link copied to clipboard: ${fullUrl}`, 'success');
         }
     } catch (e) {
-        showToast('Share failed: ' + e.message, 'error');
+        const msg = e.name === 'TimeoutError'
+            ? 'Share timed out while creating the snapshot. Try again, or reduce selected chest captures.'
+            : 'Share failed: ' + e.message;
+        showToast(msg, 'error');
+    } finally {
+        if (btnEl) {
+            btnEl.disabled = false;
+            btnEl.classList.remove('is-loading');
+            btnEl.innerHTML = originalHtml || '🔗 Share';
+        }
     }
 }
 
@@ -13101,6 +13125,7 @@ async function runAccountabilityCheck() {
     }
 
     resultEl.innerHTML = '<div class="empty-state"><p>Analyzing…</p></div>';
+    window._llAccShareContext = null;
     const lastRunLabel = document.getElementById('acc-last-run');
     if (lastRunLabel) lastRunLabel.textContent = `Running check at ${new Date().toLocaleTimeString()}…`;
 
@@ -13156,6 +13181,7 @@ async function runAccountabilityCheck() {
 
     // Merge selected chest captures into deposit inventory
     const captures = window._chestCaptures || [];
+    const selectedCapturesForShare = selectedIdxs.map(i => captures[i]).filter(Boolean);
     const deposited = {};
     const selectedTabNames = [];
     for (const idx of selectedIdxs) {
@@ -13180,6 +13206,7 @@ async function runAccountabilityCheck() {
     const chestLogIdxs = chestLogSel
         ? Array.from(chestLogSel.selectedOptions).map(o => parseInt(o.value)).filter(v => !isNaN(v))
         : [];
+    const selectedChestLogsForShare = chestLogIdxs.map(i => (window._chestLogBatches || [])[i]).filter(Boolean);
     const chestLogDeposits = {};
     const mergedLogMeta = {
         batches: 0,
@@ -13448,7 +13475,21 @@ async function runAccountabilityCheck() {
     const suspects = playerResults.filter(p => !p.isEnemy && p.pct >= 0 && p.pct < 80 && p.totalMissing > 0);
 
     // Store for export
-    window._llAccResults = { playerResults, priceMap, selectedTabNames, totalLooted, totalDeposited, totalMissing, totalMissingSilver };
+    let shareSessionName = '';
+    try {
+        const savedNames = typeof getSavedSessionNames === 'function' ? getSavedSessionNames() : {};
+        shareSessionName = savedNames[sessionId] || '';
+    } catch {}
+    window._llAccShareContext = {
+        sessionId,
+        captures: selectedCapturesForShare,
+        chestLogs: selectedChestLogsForShare,
+        selectedCaptureIdxs: selectedIdxs.slice(),
+        selectedChestLogIdxs: chestLogIdxs.slice(),
+        sessionName: shareSessionName,
+        createdAt: Date.now(),
+    };
+    window._llAccResults = { playerResults, priceMap, selectedTabNames, totalLooted, totalDeposited, totalMissing, totalMissingSilver, shareContext: window._llAccShareContext };
     // Stash for the guild-perspective dropdown render below.
     window._llAccGuildContext = {
         sessionId,
@@ -13614,7 +13655,7 @@ async function runAccountabilityCheck() {
     // Action buttons: view switcher + Share + Expand/Collapse + Discord + Export
     html += `<div style="display:flex; gap:0.4rem; margin-bottom:0.5rem; flex-wrap:wrap;">
         <button class="btn-small btn-small-accent" onclick="_accShowEventView('${esc(sessionId)}')" title="See the same per-player event layout as the session detail view, with deposit-status colors overlaid on each item">📋 Event View</button>
-        <button class="btn-small" onclick="shareAccountability('${esc(sessionId)}')" title="Create a public link for this accountability check — viewers can toggle before/after view">🔗 Share</button>
+        <button class="btn-small" onclick="shareAccountability('${esc(sessionId)}', this)" title="Create a public link from this exact accountability result">🔗 Share</button>
         <button class="btn-small" onclick="document.querySelectorAll('#accountability-result .ll-player-card').forEach(c=>c.classList.add('expanded'))">Expand All</button>
         <button class="btn-small" onclick="document.querySelectorAll('#accountability-result .ll-player-card').forEach(c=>c.classList.remove('expanded'))">Collapse All</button>
         <div class="ll-discord-dropdown">
