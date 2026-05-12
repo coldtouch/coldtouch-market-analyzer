@@ -1945,6 +1945,8 @@ app.post('/api/register', registerLimiter, async (req, res) => {
 // loginLimiter declared above (UX-3). Additional limiters below.
 const deviceAuthLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 10, message: { error: 'Too many device authorization attempts. Try again in 15 minutes.' }, keyGenerator: (req) => req.user ? req.user.id : req.ip });
 const evalLimiter = rateLimit({ windowMs: 60 * 1000, max: 10, message: { error: 'Too many loot evaluations. Slow down.' }, keyGenerator: (req) => req.user ? req.user.id : req.ip });
+const LOOT_EVALUATE_MAX_ITEMS = 2000;
+const LOOT_TAB_SAVE_MAX_ITEMS = 2000;
 
 app.post('/api/login', loginLimiter, async (req, res) => {
   const { email, password } = req.body;
@@ -2320,8 +2322,8 @@ app.get('/api/capture-token', (req, res) => {
 app.post('/api/loot-evaluate', evalLimiter, (req, res) => {
   if (!req.user) return res.status(401).json({ error: 'Login required.' });
   const { items, askingPrice, isPremium } = req.body;
-  if (!items || !Array.isArray(items) || items.length === 0 || items.length > 300) {
-    return res.status(400).json({ error: 'Items array required (1-300 items).' });
+  if (!items || !Array.isArray(items) || items.length === 0 || items.length > LOOT_EVALUATE_MAX_ITEMS) {
+    return res.status(400).json({ error: `Items array required (1-${LOOT_EVALUATE_MAX_ITEMS} items).` });
   }
 
   // Respect per-user premium status for accurate tax math.
@@ -2462,8 +2464,8 @@ setInterval(() => {
 // "I Bought This" — save a loot tab with purchase price to DB
 app.post('/api/loot-tab/save', requireAuth, (req, res) => {
   const { tabName, city, purchasePrice, items } = req.body;
-  if (!tabName || !items || !Array.isArray(items) || items.length === 0 || items.length > 300) {
-    return res.status(400).json({ error: 'tabName and items array required (1-300 items).' });
+  if (!tabName || !items || !Array.isArray(items) || items.length === 0 || items.length > LOOT_TAB_SAVE_MAX_ITEMS) {
+    return res.status(400).json({ error: `tabName and items array required (1-${LOOT_TAB_SAVE_MAX_ITEMS} items).` });
   }
   const price = Math.max(0, parseInt(purchasePrice) || 0);
   const now = Date.now();

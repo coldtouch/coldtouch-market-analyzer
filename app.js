@@ -9824,7 +9824,7 @@ async function showSellStrategy(tabId) {
         // Inline mini Sell Plan table
         let html = `<table class="compare-table" style="width:100%;margin-top:0.4rem;"><thead>
             <tr><th>Item</th><th>Qty</th><th>Best Instant</th><th>Best Patient</th><th>Recommended</th></tr></thead><tbody>`;
-        for (const r of (data.results || [])) {
+        for (const r of (data.items || data.results || [])) {
             const instant = r.bestInstantSell;
             const patient = r.bestMarketSell;
             let rec = 'N/A';
