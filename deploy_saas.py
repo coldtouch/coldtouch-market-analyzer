@@ -1460,7 +1460,13 @@ app.use((req, res, next) => {
 });
 
 // Rate limiting
-const apiLimiter = rateLimit({ windowMs: 60 * 1000, max: 60, standardHeaders: true, legacyHeaders: false });
+const apiLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 180,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many API requests. Please wait a minute and try again.' }
+});
 app.use('/api/', apiLimiter);
 const cspReportLimiter = rateLimit({ windowMs: 60 * 1000, max: 20, standardHeaders: true, legacyHeaders: false });
 // SEC-H2: tighter limit for the heavy batch-prices endpoint (10 req/min per IP)

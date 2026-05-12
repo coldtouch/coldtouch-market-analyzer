@@ -12972,8 +12972,15 @@ async function shareAccountability(sessionId, btnEl) {
             signal: AbortSignal.timeout(45000),
             body: JSON.stringify({ sessionId, captures: selectedCaptures, sessionName, chestLogs: batchesForShare })
         });
-        const data = await res.json();
+        const raw = await res.text();
+        let data = {};
+        try {
+            data = raw ? JSON.parse(raw) : {};
+        } catch {
+            data = { error: raw ? raw.slice(0, 240) : `HTTP ${res.status}` };
+        }
         if (!res.ok) { showToast('Share failed: ' + (data.error || res.status), 'error'); return; }
+        if (!data.token) { showToast('Share failed: response did not include a link token', 'error'); return; }
         const fullUrl = `${getPublicAppOrigin()}/accountability/${encodeURIComponent(data.token)}`;
         // Open the existing copy-preview modal if present, else show a toast with the link.
         if (typeof openCopyPreview === 'function') {
