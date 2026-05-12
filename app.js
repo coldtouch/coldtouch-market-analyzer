@@ -12538,6 +12538,9 @@ async function processLootFiles(files) {
                     slot.outerHTML = `<button class="btn-small-accent" onclick="openShareSessionModal('${safeSid}', null)" title="Generate a public link — anyone with it can view this session">🔗 Share</button>
                         <button class="btn-small-accent" onclick="runAccountabilityForSession('${safeSid}')" title="Cross-reference this session against chest deposits">✓ Accountability</button>`;
                 }
+                if (typeof populateAccountabilityDropdowns === 'function') {
+                    populateAccountabilityDropdowns();
+                }
             }
         }
     } catch { /* silent — viewing works without login */ }
@@ -12557,22 +12560,6 @@ function populateAccountabilityDropdowns() {
         .then(r => r.json())
         .then(data => {
             const sessions = (data.sessions || []);
-            // Already ORDER BY started_at DESC server-side, but sort defensively so newest is on top.
-            sessions.sort((a, b) => (b.started_at || 0) - (a.started_at || 0));
-
-            // Detect likely duplicate uploads of the same file: identical (started_at minute,
-            // event_count, player_count, total_weight) tuple is almost certainly the same data.
-            // We keep all rows but flag the later ones as duplicates so the user can clean up.
-            const fingerprintSeen = new Map(); // fingerprint → earliest session_id
-            for (const s of sessions) {
-                const fp = `${Math.floor((s.started_at || 0) / 60000)}_${s.event_count}_${s.player_count}_${Math.round(s.total_weight || 0)}`;
-                if (!fingerprintSeen.has(fp)) fingerprintSeen.set(fp, s.session_id);
-            }
-
-            const savedNames = typeof getSavedSessionNames === 'function' ? getSavedSessionNames() : {};
-            const justUploaded = window._justUploadedSessionId;
-            const recentUpload = window._justUploadedAt && (Date.now() - window._justUploadedAt < 3 * 60000);
-
             // Uploaded sessions use session_id = "<userId>_upload_<uploadMs>". The events they
             // contain carry their original (in-game) timestamps, so grouping/labeling by
             // MIN(event.timestamp) showed things like "7 days ago" for a file uploaded 2 min
@@ -12582,6 +12569,24 @@ function populateAccountabilityDropdowns() {
                 const m = sid.match(/_upload_(\d{10,})$/);
                 return m ? parseInt(m[1], 10) : 0;
             };
+            const sessionListTs = (s) => Number(s.listed_at || 0) || Number(s.uploaded_at || 0) || parseUploadTs(s.session_id) || Number(s.started_at || 0) || 0;
+            // Server orders by listed_at before LIMIT, but sort defensively in case an older
+            // backend is still serving while the frontend has already deployed.
+            sessions.sort((a, b) => sessionListTs(b) - sessionListTs(a));
+
+            // Detect likely duplicate uploads of the same file: identical (started_at minute,
+            // event_count, player_count, total_weight) tuple is almost certainly the same data.
+            // We keep all rows but flag the lower-priority copies so the user can clean up.
+            const fingerprintSeen = new Map(); // fingerprint → highest-priority session_id
+            for (const s of sessions) {
+                const fp = `${Math.floor((s.started_at || 0) / 60000)}_${s.event_count}_${s.player_count}_${Math.round(s.total_weight || 0)}`;
+                if (!fingerprintSeen.has(fp)) fingerprintSeen.set(fp, s.session_id);
+            }
+
+            const savedNames = typeof getSavedSessionNames === 'function' ? getSavedSessionNames() : {};
+            const justUploaded = window._justUploadedSessionId;
+            const recentUpload = window._justUploadedAt && (Date.now() - window._justUploadedAt < 3 * 60000);
+
             const recentUploadWindow = 24 * 60 * 60 * 1000; // 24h — survives a browser refresh
 
             let opts = '<option value="">-- Select session --</option>';
@@ -12598,7 +12603,7 @@ function populateAccountabilityDropdowns() {
                 const fp = `${Math.floor((s.started_at || 0) / 60000)}_${s.event_count}_${s.player_count}_${Math.round(s.total_weight || 0)}`;
                 const isFirstOfFingerprint = fingerprintSeen.get(fp) === s.session_id;
                 const isDup = !isFirstOfFingerprint;
-                const uploadTs = parseUploadTs(s.session_id);
+                const uploadTs = Number(s.uploaded_at || 0) || parseUploadTs(s.session_id);
                 s._uploadTs = uploadTs;
                 const isNewlyUploaded = s.session_id === justUploaded && recentUpload;
                 const isRecentUpload = uploadTs > 0 && (now - uploadTs < recentUploadWindow);

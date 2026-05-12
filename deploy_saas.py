@@ -2744,19 +2744,30 @@ app.get('/api/loot-sessions', requireAuth, (req, res) => {
   // readDb — read-only aggregation that doesn't need the write connection.
   let rows;
   try {
-    rows = readDb.prepare(`SELECT e.session_id,
-        MIN(e.timestamp) as started_at,
-        MAX(e.timestamp) as ended_at,
-        COUNT(*) as event_count,
-        COUNT(DISTINCT e.looted_by_name) as player_count,
-        ROUND(SUM(CASE WHEN e.item_id != '__DEATH__' THEN e.weight * e.quantity ELSE 0 END), 1) as total_weight,
-        SUM(CASE WHEN e.item_id = '__DEATH__' THEN 1 ELSE 0 END) as death_count,
-        s.public_token as public_token
-      FROM loot_events e
-      LEFT JOIN loot_session_shares s ON s.session_id = e.session_id AND s.user_id = e.user_id
-      WHERE e.user_id = ?
-      GROUP BY e.session_id
-      ORDER BY started_at DESC
+    rows = readDb.prepare(`WITH session_rollups AS (
+        SELECT e.session_id,
+          MIN(e.timestamp) as started_at,
+          MAX(e.timestamp) as ended_at,
+          CASE
+            WHEN instr(e.session_id, '_upload_') > 0
+            THEN CAST(substr(e.session_id, instr(e.session_id, '_upload_') + 8) AS INTEGER)
+            ELSE 0
+          END as uploaded_at,
+          COUNT(*) as event_count,
+          COUNT(DISTINCT e.looted_by_name) as player_count,
+          ROUND(SUM(CASE WHEN e.item_id != '__DEATH__' THEN e.weight * e.quantity ELSE 0 END), 1) as total_weight,
+          SUM(CASE WHEN e.item_id = '__DEATH__' THEN 1 ELSE 0 END) as death_count,
+          MAX(s.public_token) as public_token
+        FROM loot_events e
+        LEFT JOIN loot_session_shares s ON s.session_id = e.session_id AND s.user_id = e.user_id
+        WHERE e.user_id = ?
+        GROUP BY e.session_id
+      )
+      SELECT session_id, started_at, ended_at, event_count, player_count, total_weight,
+        death_count, public_token, uploaded_at,
+        CASE WHEN uploaded_at > 0 THEN uploaded_at ELSE ended_at END as listed_at
+      FROM session_rollups
+      ORDER BY listed_at DESC
       LIMIT 50`).all(req.user.id);
   } catch (err) { return res.status(500).json({ error: 'An internal error occurred.' }); }
   res.json({ sessions: rows || [] });
