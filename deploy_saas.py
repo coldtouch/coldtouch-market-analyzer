@@ -3733,6 +3733,8 @@ function makePriceRefItemRanges() {
 }
 const PRICE_REF_ITEM_RANGES = makePriceRefItemRanges();
 const _priceRefYield = () => new Promise(r => setImmediate(r));
+const PRICE_REF_REFRESH_INTERVAL_MS = 30 * 60 * 1000; // 30 min — historical refs do not need 10-min churn
+const PRICE_REF_REFRESH_LOOKBACK_MS = 2 * 60 * 60 * 1000; // keep >=2 hourly samples for reference quality
 
 // 2026-05-04 (later): serialize against spreadStats / analytics. Without this
 // the two heavy 10-min and 60-min aggregates collide every hour at boot+10min
@@ -3761,7 +3763,7 @@ async function refreshPriceRefCache() {
     return;
   }
   priceRefCacheRunning = true;
-  const cutoff = Date.now() - 2 * 60 * 60 * 1000; // last 2 hours of new data
+  const cutoff = Date.now() - PRICE_REF_REFRESH_LOOKBACK_MS;
   const now = Date.now();
   // 2026-05-02 stage 4: direct sync transaction (auto-rollback on throw).
   const stmt_priceRefIncr = db.prepare(`INSERT OR REPLACE INTO price_ref_cache (item_id, quality, city, avg_sell, avg_vol, sample_count, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)`);
@@ -3929,16 +3931,27 @@ const _initPriceRefCacheRunner = () => initPriceRefCache().catch((err) => {
   console.error('[PriceRefCache] Top-level crash:', err && err.message || err);
 });
 setTimeout(_initPriceRefCacheRunner, 15000);
-// Every 10 min: incrementally update cache with last 2h data, then rebuild in-memory refs.
+// Every 30 min: incrementally update cache with recent hourly buckets, then rebuild in-memory refs.
+// This was every 10 min and was responsible for recurring 5-8s event-loop stalls
+// on a tiny site. Live prices still come from NATS/market cache; these refs are
+// historical sanity baselines for outlier checks and transport enrichment.
+let priceRefRunnerRunning = false;
 const _priceRefRunner = () => {
-  refreshPriceRefCache().catch((err) => {
-    console.error('[PriceRefCache-incr] Top-level crash:', err && err.message || err);
-  });
-  setTimeout(() => buildPriceReference().catch((err) => {
-    console.error('[PriceRef] Top-level crash:', err && err.message || err);
-  }), 5000);
+  if (priceRefRunnerRunning) {
+    console.log('[PriceRef] Runner already active, skipping this tick');
+    return;
+  }
+  priceRefRunnerRunning = true;
+  refreshPriceRefCache()
+    .then(() => buildPriceReference())
+    .catch((err) => {
+      console.error('[PriceRef] Runner crash:', err && err.message || err);
+    })
+    .finally(() => {
+      priceRefRunnerRunning = false;
+    });
 };
-setInterval(_priceRefRunner, 10 * 60 * 1000);
+setInterval(_priceRefRunner, PRICE_REF_REFRESH_INTERVAL_MS);
 
 app.get('/api/transport-routes-live', transportLiveLimiter, (req, res) => {
   // SEC-H1: serve cached result for 30s to avoid repeated O(n²) computation per IP
@@ -5570,27 +5583,11 @@ async function computeSpreadStats() {
     console.error('[SpreadStats] pre-run wal_checkpoint failed:', err.message);
   }
 
-  // 2026-05-04: chunked by item_id range to keep each sync block under the
-  // 5s EventLoop WARN threshold. Single-shot .all() across the full table
-  // wedged the event loop for 49s in production (May 4 16:20:18). Index
-  // (item_id, city, quality, period_start) doesn't match GROUP BY order
-  // (item_id, quality, city), so SQLite must materialize the full result
-  // before returning — iterate() can't stream. Instead we run N smaller
-  // aggregates by item_id range and yield setImmediate between each.
-  // 9,417 distinct item_ids in 7d window; T6/T7/T8 are the heavy tiers.
-  // Each range targets ~1-3s of sync work.
-  const ITEM_RANGES = [
-    ['',     'T4_'],   // pre-T4 (gathered, refined, etc.)
-    ['T4_',  'T5_'],
-    ['T5_',  'T6_'],
-    ['T6_',  'T6_M'],  // T6 split: A-L
-    ['T6_M', 'T7_'],   // T6 split: M-Z
-    ['T7_',  'T7_M'],  // T7 split: A-L
-    ['T7_M', 'T8_'],   // T7 split: M-Z
-    ['T8_',  'T8_M'],  // T8 split: A-L
-    ['T8_M', 'U'],     // T8 split: M-Z
-    ['U',    '￿'] // UNIQUE_*, ZIGGURAT_*, anything past U
-  ];
+  // 2026-05-13: reuse the fine-grained priceRef ranges instead of the old
+  // 10 broad buckets. Production still saw 20-46s event-loop stalls in the
+  // T8/UNIQUE chunks; narrower ranges trade more short queries for no long
+  // synchronous block, which is the right shape for a public web process.
+  const ITEM_RANGES = PRICE_REF_ITEM_RANGES;
 
   // Pre-compile statements once across all chunks.
   const aggStmt = statsDb.prepare(
@@ -5610,7 +5607,7 @@ async function computeSpreadStats() {
     for (const r of rows) stmt_spreadInsert.run(...r);
   });
 
-  const WRITE_BATCH = 1000;
+  const WRITE_BATCH = 250;
   let writeBuf = [];
   let processed = 0;
   let statsWritten = 0;
@@ -5630,7 +5627,7 @@ async function computeSpreadStats() {
   // and adds up to 5-6s on the heaviest range — which crosses the 5s WARN.
   // Inter-phase yields keep each sync span under ~2s.
   const yieldLoop = () => new Promise(r => setImmediate(r));
-  const COMPUTE_YIELD_EVERY = 1000; // items processed before a yield in the inner compute loop
+  const COMPUTE_YIELD_EVERY = 250; // items processed before a yield in the inner compute loop
 
   try {
     for (const [lo, hi] of ITEM_RANGES) {
@@ -5729,14 +5726,17 @@ async function computeSpreadStats() {
   }
 }
 
-// Run stats computation hourly, first run 10 minutes after start (after backfill).
+// Run stats computation every 6h, first run 25 minutes after start.
+// Spread stats are historical confidence baselines, not user-facing live data.
+// Hourly runs were excessive for current traffic and caused event-loop stalls.
 // Wrap to catch any top-level rejection so we never get an unhandledRejection.
 const _spreadStatsRunner = () => computeSpreadStats().catch((err) => {
   console.error('[SpreadStats] Top-level crash:', err && err.message || err);
   statsRunning = false;
 });
-setTimeout(_spreadStatsRunner, 10 * 60 * 1000);
-setInterval(_spreadStatsRunner, 60 * 60 * 1000);
+const SPREAD_STATS_INTERVAL_MS = 6 * 60 * 60 * 1000;
+setTimeout(_spreadStatsRunner, 25 * 60 * 1000);
+setInterval(_spreadStatsRunner, SPREAD_STATS_INTERVAL_MS);
 
 // === WAL CHECKPOINT (every 6 hours) ===
 // Prevents the WAL file from growing unbounded on a write-heavy database.
@@ -6148,8 +6148,9 @@ setInterval(() => { if (!compactionRunning) compactOldData().catch(e => console.
 // future bloat is visible immediately in `journalctl -u albion-saas | grep HEALTH`.
 function emitHealthLine() {
   try {
-    const dbBytesRow = db.prepare('SELECT page_count * page_size AS bytes FROM pragma_page_count(), pragma_page_size()').get();
-    const dbMB = Math.round((dbBytesRow && dbBytesRow.bytes ? dbBytesRow.bytes : 0) / 1048576);
+    const pageCount = db.pragma('page_count', { simple: true }) || 0;
+    const pageSize = db.pragma('page_size', { simple: true }) || 0;
+    const dbMB = Math.round((pageCount * pageSize) / 1048576);
     let walMB = 0;
     try { walMB = Math.round(fs.statSync('/opt/albion-saas/database.sqlite-wal').size / 1048576); } catch {}
     const m = process.memoryUsage();
@@ -6209,14 +6210,14 @@ setInterval(() => {
     if (inBootGrace) {
       console.log(`[EventLoop] (boot grace) Max delay ${maxMs}ms in last 30s — suppressed`);
     } else {
-      console.warn(`[EventLoop] Max delay ${maxMs}ms in last 30s (compaction=${compactionRunning} stats=${typeof statsRunning !== 'undefined' && statsRunning ? 1 : 0} analytics=${typeof analyticsRunning !== 'undefined' && analyticsRunning ? 1 : 0})`);
+      console.warn(`[EventLoop] Max delay ${maxMs}ms in last 30s (compaction=${compactionRunning} stats=${typeof statsRunning !== 'undefined' && statsRunning ? 1 : 0} analytics=${typeof analyticsRunning !== 'undefined' && analyticsRunning ? 1 : 0} priceRef=${typeof priceRefCacheRunning !== 'undefined' && priceRefCacheRunning ? 1 : 0})`);
     }
   }
 }, 30 * 1000);
 
 // === ANALYTICS COMPUTATION ENGINE ===
 // Computes SMA 7d, SMA 30d, EMA 7d, VWAP 7d, price_trend, spread_volatility
-// per active item+city+quality combo. Runs every 30 minutes.
+// per active item+city+quality combo. Runs every few hours.
 let analyticsRunning = false;
 let analyticsStartTime = 0;
 // Generation token: bumped each time a run starts AND each time the stuck-flag
@@ -6499,8 +6500,9 @@ async function computeAnalytics() {
   finalize('ok');
 }
 
-// Run analytics every 30 minutes; first run 35 minutes after start (after spread stats)
-// STAGGERED: SpreadStats @10min, Compaction @25min, Analytics @35min
+// Run analytics every 4h; first run 65 minutes after start.
+// These are chart enrichment metrics, not live data. The previous 30-minute
+// cadence was too aggressive for a small app and contributed avoidable stalls.
 // 2026-05-02 stage 2: computeAnalytics is now async — wrap so an unhandled
 // rejection logs + resets the flag rather than escalating to _handleFatal.
 function _runAnalytics() {
@@ -6513,11 +6515,12 @@ function _runAnalytics() {
 // `setTimeout(_runAnalytics, 35min); setInterval(_runAnalytics, 30min);`
 // which fires the first run at +30min (setInterval first tick), the second
 // at +35min (setTimeout), and then every 30min — i.e. two consecutive
-// runs near boot. Cleaner: wait 35min, then fire every 30min.
+// runs near boot. Cleaner: wait, then start the recurring cadence.
+const ANALYTICS_INTERVAL_MS = 4 * 60 * 60 * 1000;
 setTimeout(() => {
   _runAnalytics();
-  setInterval(_runAnalytics, 30 * 60 * 1000);
-}, 35 * 60 * 1000);
+  setInterval(_runAnalytics, ANALYTICS_INTERVAL_MS);
+}, 65 * 60 * 1000);
 
 // === HISTORICAL BACKFILL (Charts + History APIs) ===
 // Runs once on start if no historical data exists
@@ -7068,7 +7071,7 @@ WantedBy=multi-user.target
     b64_svc = base64.b64encode(svc.encode()).decode()
     run_wait(f"echo '{b64_svc}' | base64 -d > /etc/systemd/system/albion-saas.service")
 
-    # DO-3: install/refresh SQLite backup cron. Runs every 6h, keeps last 4 snapshots (~1 day).
+    # DO-3: install/refresh SQLite backup cron.
     #
     # Prior version used `&&` between backup and prune and an mtime-based `find ... -mtime +7
     # -delete` retention. Two failure modes:
@@ -7076,10 +7079,43 @@ WantedBy=multi-user.target
     #       the backup failed, the prune never ran, and the disk stayed full forever.
     #   (2) 7 days × 4 snapshots/day × ~6GB each = 168 GB projected on a 96 GB disk.
     #
-    # New version uses `;` so prune ALWAYS runs, and keep-by-count instead of keep-by-time
-    # so disk usage is bounded regardless of DB growth rate.
-    backup_cron = """# Albion SaaS DB backup — 4x daily, keep last 4 snapshots (~24h rollback window). Managed by deploy_saas.py.
-0 */6 * * * root sqlite3 /opt/albion-saas/database.sqlite ".backup /opt/albion-saas/backups/db-$(date +\\%Y\\%m\\%d-\\%H).sqlite" 2>>/var/log/albion-backup.log; ls -t /opt/albion-saas/backups/db-*.sqlite 2>/dev/null | tail -n +5 | xargs -r rm -f
+    # 2026-05-13: full local backups reached 61 GB (4 × ~16 GB) on a 96 GB VPS.
+    # New version runs twice daily, compresses with low-priority gzip, and keeps
+    # only the latest 2 compressed snapshots. Live DB + 2 compressed local copies
+    # is a sane ceiling until backups are moved off-box.
+    backup_script = """#!/bin/bash
+set -u
+DB=/opt/albion-saas/database.sqlite
+BACKUP_DIR=/opt/albion-saas/backups
+LOCK=/tmp/albion-db-backup.lock
+mkdir -p "$BACKUP_DIR"
+find "$BACKUP_DIR" -name 'db-*.sqlite-journal' -type f -delete
+find "$BACKUP_DIR" -name 'db-*.tmp' -type f -delete
+exec 9>"$LOCK"
+if ! flock -n 9; then
+  echo "$(date -Is) backup already running"
+  exit 0
+fi
+stamp=$(date +%Y%m%d-%H)
+tmp="$BACKUP_DIR/db-$stamp.sqlite.tmp"
+out="$BACKUP_DIR/db-$stamp.sqlite.gz"
+if [ ! -f "$out" ]; then
+  echo "$(date -Is) starting sqlite backup to $out"
+  nice -n 10 ionice -c2 -n7 sqlite3 "$DB" ".backup '$tmp'"
+  nice -n 10 ionice -c2 -n7 gzip -1 -f "$tmp"
+  mv "$tmp.gz" "$out"
+  echo "$(date -Is) backup complete $(du -h "$out" | cut -f1)"
+fi
+ls -t "$BACKUP_DIR"/db-*.sqlite.gz 2>/dev/null | tail -n +3 | xargs -r rm -f
+if ls "$BACKUP_DIR"/db-*.sqlite.gz >/dev/null 2>&1; then
+  ls "$BACKUP_DIR"/db-*.sqlite 2>/dev/null | xargs -r rm -f
+fi
+"""
+    b64_backup_script = base64.b64encode(backup_script.encode()).decode()
+    run_wait(f"echo '{b64_backup_script}' | base64 -d > /usr/local/sbin/albion-db-backup.sh && chmod 755 /usr/local/sbin/albion-db-backup.sh")
+
+    backup_cron = """# Albion SaaS DB backup — twice daily, keep last 2 compressed snapshots. Managed by deploy_saas.py.
+17 3,15 * * * root /usr/local/sbin/albion-db-backup.sh >>/var/log/albion-backup.log 2>&1
 """
     b64_cron = base64.b64encode(backup_cron.encode()).decode()
     run_wait(f"echo '{b64_cron}' | base64 -d > /etc/cron.d/albion-backup && chmod 644 /etc/cron.d/albion-backup")

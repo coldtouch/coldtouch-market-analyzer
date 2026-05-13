@@ -3,7 +3,7 @@
 // both Friendly Deaths and Enemy Kills subsections (plus looter rows inside
 // the expanded death body). Helps ZvZ audits where many players share
 // similar names but wear different guild tags.
-const CACHE_NAME = 'coldtouch-v130';
+const CACHE_NAME = 'coldtouch-v133';
 const IS_GITHUB_PAGES = self.location.hostname === 'coldtouch.github.io';
 const APP_SHELL = [
     '/',
