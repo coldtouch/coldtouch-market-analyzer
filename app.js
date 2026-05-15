@@ -640,7 +640,7 @@ function categorizeItem(itemId) {
         if (!id.includes('PLANKS') && !id.includes('METALBAR') && !id.includes('LEATHER') && !id.includes('CLOTH') && !id.includes('STONEBLOCK')) return 'resources';
     }
     if (id.includes('PLANKS') || id.includes('METALBAR') || id.includes('LEATHER') || id.includes('CLOTH') || id.includes('STONEBLOCK')) return 'materials';
-    if (id.includes('POTION_') || id.includes('MEAL_') || id.includes('FISH')) return 'consumables';
+    if (id.includes('POTION_') || id.includes('MEAL_') || /^T[0-9]_FISH/.test(id)) return 'consumables';
     if (id.includes('MOUNT_') || id.includes('MOUNT')) return 'mounts';
     if (id.includes('2H_TOOL_')) return 'other';
     return 'other';
@@ -14819,6 +14819,7 @@ async function doTransportScan() {
     const transportMode = document.querySelector('.transport-mode-btn.active')?.dataset.mode || 'live';
     const sellStrategy = document.getElementById('transport-sell-strategy')?.value || 'market';
     const excludeCaerleon = document.getElementById('transport-exclude-caerleon').checked;
+    const itemType = document.getElementById('transport-item-type')?.value || 'all';
 
     // Update URL with transport cities for sharing
     replaceRouteForTab('transport', (shareUrl) => {
@@ -14849,6 +14850,7 @@ async function doTransportScan() {
             if (buyCity) params.set('buy_city', buyCity);
             if (sellCity) params.set('sell_city', sellCity);
             if (excludeCaerleon) params.set('exclude', 'Caerleon,Black Market');
+            if (itemType && itemType !== 'all') params.set('item_type', itemType);
 
             const res = await fetch(`${VPS_BASE}/api/transport-routes-live?${params}`);
             if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -14869,6 +14871,8 @@ async function doTransportScan() {
             const params = new URLSearchParams({ min_confidence: minConfidence, limit: 150 });
             if (buyCity) params.set('buy_city', buyCity);
             if (sellCity) params.set('sell_city', sellCity);
+            if (itemType && itemType !== 'all') params.set('item_type', itemType);
+            if (excludeCaerleon) params.set('exclude', 'Caerleon,Black Market');
             const res = await fetch(`${VPS_BASE}/api/transport-routes?${params}`);
             if (!res.ok) throw new Error(`HTTP ${res.status}`);
             routes = await res.json();
