@@ -756,6 +756,18 @@ db.exec(`CREATE TABLE IF NOT EXISTS price_analytics (
 )`);
 db.exec(`CREATE INDEX IF NOT EXISTS idx_analytics_item ON price_analytics(item_id, city, quality)`);
 
+db.exec(`CREATE TABLE IF NOT EXISTS market_liquidity_daily (
+  item_id TEXT NOT NULL,
+  quality INTEGER DEFAULT 1,
+  city TEXT NOT NULL,
+  avg_daily REAL DEFAULT 0,
+  last_daily REAL DEFAULT 0,
+  samples INTEGER DEFAULT 0,
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY(item_id, quality, city)
+)`);
+db.exec(`CREATE INDEX IF NOT EXISTS idx_liquidity_updated ON market_liquidity_daily(updated_at)`);
+
 db.exec(`CREATE TABLE IF NOT EXISTS price_hourly (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   item_id TEXT NOT NULL,
@@ -1733,6 +1745,12 @@ app.get('/api/health/internal', (req, res) => {
       running: analyticsRunning,
       lastStartMs: analyticsStartTime || 0,
       ageSinceLastStartMs: analyticsStartTime ? now - analyticsStartTime : null,
+      lastFinishMs: analyticsLastFinishTime || 0,
+      ageSinceLastFinishMs: analyticsLastFinishTime ? now - analyticsLastFinishTime : null,
+      lastSuccessMs: analyticsLastSuccessAt || 0,
+      ageSinceLastSuccessMs: analyticsLastSuccessAt ? now - analyticsLastSuccessAt : null,
+      lastDurationMs: analyticsLastDurationMs || 0,
+      lastResult: analyticsLastResult,
     },
     spreadStats: {
       running: statsRunning,
@@ -3303,6 +3321,131 @@ app.get('/api/market-cache/status', (req, res) => {
   });
 });
 
+const LIQUIDITY_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
+const LIQUIDITY_LOOKBACK_DAYS = 7;
+const LIQUIDITY_MAX_ITEMS = 80;
+const LIQUIDITY_MAX_CITIES = 8;
+
+function computeDailyLiquidity(entry) {
+  const counts = entry && entry.data && Array.isArray(entry.data.item_count) ? entry.data.item_count : [];
+  const recent = counts
+    .slice(-LIQUIDITY_LOOKBACK_DAYS)
+    .map(v => Number(v))
+    .filter(v => Number.isFinite(v) && v > 0);
+  const lastRaw = Number(counts[counts.length - 1]);
+  const lastDaily = Number.isFinite(lastRaw) && lastRaw > 0 ? lastRaw : 0;
+  if (recent.length === 0) return { avgDaily: 0, lastDaily, samples: 0 };
+  return {
+    avgDaily: recent.reduce((sum, v) => sum + v, 0) / recent.length,
+    lastDaily,
+    samples: recent.length
+  };
+}
+
+app.get('/api/market-liquidity', async (req, res) => {
+  const itemIds = String(req.query.item_ids || req.query.items || '')
+    .split(',')
+    .map(s => s.trim())
+    .filter(Boolean)
+    .slice(0, LIQUIDITY_MAX_ITEMS);
+  const quality = Math.max(1, Math.min(5, parseInt(req.query.quality) || 1));
+  const cities = String(req.query.cities || '')
+    .split(',')
+    .map(s => s.trim())
+    .filter(Boolean)
+    .slice(0, LIQUIDITY_MAX_CITIES);
+
+  if (itemIds.length === 0) return res.status(400).json({ error: 'item_ids required' });
+  if (cities.length === 0) return res.status(400).json({ error: 'cities required' });
+
+  const now = Date.now();
+  const freshAfter = now - LIQUIDITY_CACHE_TTL_MS;
+  const result = {};
+  for (const id of itemIds) result[id] = {};
+
+  function addRow(row) {
+    if (!result[row.item_id]) result[row.item_id] = {};
+    result[row.item_id][row.city] = {
+      avg_daily: Number(row.avg_daily) || 0,
+      last_daily: Number(row.last_daily) || 0,
+      samples: row.samples || 0,
+      updated_at: row.updated_at || now
+    };
+  }
+
+  try {
+    const itemPh = itemIds.map(() => '?').join(',');
+    const cityPh = cities.map(() => '?').join(',');
+    const cached = readDb.prepare(`SELECT item_id, quality, city, avg_daily, last_daily, samples, updated_at
+      FROM market_liquidity_daily
+      WHERE quality = ? AND updated_at > ? AND item_id IN (${itemPh}) AND city IN (${cityPh})`)
+      .all(quality, freshAfter, ...itemIds, ...cities);
+    for (const row of cached) addRow(row);
+  } catch (err) {
+    console.error('[Liquidity] cache read failed:', err.message);
+  }
+
+  const missingItems = itemIds.filter(id => cities.some(city => !result[id] || !result[id][city]));
+  if (missingItems.length > 0) {
+    const upsertRows = [];
+    const returned = new Set();
+    const resolved = new Set();
+    const locationQuery = cities.map(encodeURIComponent).join(',');
+    for (let i = 0; i < missingItems.length; i += 35) {
+      const chunk = missingItems.slice(i, i + 35);
+      try {
+        const url = `${CHARTS_BASE}/${chunk.map(encodeURIComponent).join(',')}.json?time-scale=24&locations=${locationQuery}&qualities=${quality}`;
+        const apiRes = await fetch(url, { signal: AbortSignal.timeout(12000) });
+        if (!apiRes.ok) continue;
+        const data = await apiRes.json();
+        if (!Array.isArray(data)) continue;
+        for (const itemId of chunk) {
+          for (const city of cities) resolved.add(`${itemId}|${city}`);
+        }
+        for (const entry of data) {
+          const itemId = entry.item_id;
+          const city = entry.location || '';
+          if (!itemId || !city || !cities.includes(city)) continue;
+          const stats = computeDailyLiquidity(entry);
+          const row = { item_id: itemId, quality, city, avg_daily: stats.avgDaily, last_daily: stats.lastDaily, samples: stats.samples, updated_at: now };
+          upsertRows.push(row);
+          returned.add(`${itemId}|${city}`);
+          addRow(row);
+        }
+      } catch (err) {
+        console.error('[Liquidity] chart fetch failed:', err.message);
+      }
+    }
+
+    for (const itemId of missingItems) {
+      for (const city of cities) {
+        const key = `${itemId}|${city}`;
+        if (resolved.has(key) && !returned.has(key) && (!result[itemId] || !result[itemId][city])) {
+          const row = { item_id: itemId, quality, city, avg_daily: 0, last_daily: 0, samples: 0, updated_at: now };
+          upsertRows.push(row);
+          addRow(row);
+        }
+      }
+    }
+
+    if (upsertRows.length > 0) {
+      try {
+        const stmt = db.prepare(`INSERT OR REPLACE INTO market_liquidity_daily
+          (item_id, quality, city, avg_daily, last_daily, samples, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?)`);
+        const write = db.transaction((rows) => {
+          for (const r of rows) stmt.run(r.item_id, r.quality, r.city, r.avg_daily, r.last_daily, r.samples, r.updated_at);
+        });
+        write.immediate(upsertRows);
+      } catch (err) {
+        console.error('[Liquidity] cache write failed:', err.message);
+      }
+    }
+  }
+
+  res.json({ quality, lookback_days: LIQUIDITY_LOOKBACK_DAYS, liquidity: result });
+});
+
 // === ALERT CRUD ENDPOINTS (auth required) ===
 function requireAuth(req, res, next) {
   if (!req.user) return res.status(401).json({ error: 'Login required' });
@@ -3657,6 +3800,64 @@ app.get('/api/spread-stats/top', (req, res) => {
   res.json(rows || []);
 });
 
+function transportItemCategorySql(alias = 'ss') {
+  const id = `UPPER(${alias}.item_id)`;
+  const has = (token) => `INSTR(${id}, '${token}') > 0`;
+  const lacks = (token) => `INSTR(${id}, '${token}') = 0`;
+  const weapons = `((${has('MAIN_')} OR ${has('2H_')}) AND ${lacks('TOOL_')})`;
+  const armor = `((${has('HEAD_')} OR ${has('ARMOR_')} OR ${has('SHOES_')}) AND (${has('PLATE_')} OR ${has('LEATHER_')} OR ${has('CLOTH_')}))`;
+  const offhand = has('OFF_');
+  const accessories = `(${has('BAG')} OR ${has('CAPE')})`;
+  const mounts = `(${has('MOUNT_')} OR ${has('MOUNT')})`;
+  const gearish = `(${weapons} OR ${armor} OR ${offhand} OR ${accessories} OR ${mounts})`;
+  const resources = `((${has('_WOOD')} OR ${has('_ORE')} OR ${has('_HIDE')} OR ${has('_FIBER')} OR ${has('_ROCK')}) AND ${lacks('PLANKS')} AND ${lacks('METALBAR')} AND ${lacks('LEATHER')} AND ${lacks('CLOTH')} AND ${lacks('STONEBLOCK')})`;
+  const materials = `((${has('PLANKS')} OR ${has('METALBAR')} OR ${has('LEATHER')} OR ${has('CLOTH')} OR ${has('STONEBLOCK')}) AND NOT ${gearish})`;
+  const consumables = `(${has('POTION')} OR ${has('MEAL')} OR ${id} GLOB 'T[0-9]_FISH*')`;
+  return { weapons, armor, offhand, accessories, resources, materials, consumables, mounts, gearish, stackable: `(NOT ${gearish})` };
+}
+
+function transportItemTypeWhere(itemType, alias = 'ss') {
+  const type = String(itemType || 'all').toLowerCase();
+  if (!type || type === 'all') return '';
+  const c = transportItemCategorySql(alias);
+  const map = {
+    weapons: c.weapons,
+    armor: c.armor,
+    offhand: c.offhand,
+    accessories: c.accessories,
+    resources: c.resources,
+    materials: c.materials,
+    consumables: c.consumables,
+    mounts: c.mounts,
+    gear: c.gearish,
+    stackable: c.stackable
+  };
+  return map[type] ? ` AND ${map[type]}` : '';
+}
+
+function categorizeTransportItemId(itemId) {
+  const id = String(itemId || '').toUpperCase();
+  const weapons = ((id.includes('MAIN_') || id.includes('2H_')) && !id.includes('TOOL_'));
+  if (weapons) return 'weapons';
+  if (id.includes('TOOL_')) return 'other';
+  if ((id.includes('HEAD_') || id.includes('ARMOR_') || id.includes('SHOES_')) && (id.includes('PLATE_') || id.includes('LEATHER_') || id.includes('CLOTH_'))) return 'armor';
+  if (id.includes('BAG') || id.includes('CAPE')) return 'accessories';
+  if (id.includes('OFF_')) return 'offhand';
+  if ((id.includes('_WOOD') || id.includes('_ORE') || id.includes('_HIDE') || id.includes('_FIBER') || id.includes('_ROCK')) && !id.includes('PLANKS') && !id.includes('METALBAR') && !id.includes('LEATHER') && !id.includes('CLOTH') && !id.includes('STONEBLOCK')) return 'resources';
+  if (id.includes('PLANKS') || id.includes('METALBAR') || id.includes('LEATHER') || id.includes('CLOTH') || id.includes('STONEBLOCK')) return 'materials';
+  if (id.includes('POTION') || id.includes('MEAL') || /^T[0-9]_FISH/.test(id)) return 'consumables';
+  if (id.includes('MOUNT')) return 'mounts';
+  return 'other';
+}
+
+function transportItemMatchesType(itemId, itemType, isStackable) {
+  const type = String(itemType || 'all').toLowerCase();
+  if (!type || type === 'all') return true;
+  if (type === 'gear') return !isStackable;
+  if (type === 'stackable') return isStackable;
+  return categorizeTransportItemId(itemId) === type;
+}
+
 // === TRANSPORT ROUTES API ===
 // Returns profitable routes enriched with daily volume data for bulk transport
 app.get('/api/transport-routes', (req, res) => {
@@ -3665,24 +3866,27 @@ app.get('/api/transport-routes', (req, res) => {
   const minProfit = parseInt(req.query.min_profit) || 0;
   const minConfidence = parseInt(req.query.min_confidence) || 0;
   const limit = Math.min(parseInt(req.query.limit) || 100, 200);
+  const itemType = req.query.item_type || 'all';
+  const excludeCities = (req.query.exclude || '').split(',').map(c => c.trim()).filter(Boolean);
 
-  // Get spread_stats routes that are profitable, then enrich with volume
-  const cutoff7d = Date.now() - 7 * 24 * 60 * 60 * 1000;
+  // Get spread_stats routes that are profitable, then enrich with volume from
+  // the precomputed price_ref_cache. The old query grouped 7 days of the large
+  // price_averages table per request and could take 20s+.
+  const refFreshAfter = Date.now() - 2 * 24 * 60 * 60 * 1000;
 
   let whereClause = `WHERE ss.window_days = 7 AND ss.avg_spread > ? AND ss.confidence_score >= ?`;
-  const params = [cutoff7d, minProfit, minConfidence];
+  const params = [refFreshAfter, refFreshAfter, minProfit, minConfidence];
 
   if (buyCity) { whereClause += ` AND ss.buy_city = ?`; params.push(buyCity); }
   if (sellCity) { whereClause += ` AND ss.sell_city = ?`; params.push(sellCity); }
+  if (excludeCities.length > 0) {
+    const placeholders = excludeCities.map(() => '?').join(',');
+    whereClause += ` AND ss.buy_city NOT IN (${placeholders}) AND ss.sell_city NOT IN (${placeholders})`;
+    params.push(...excludeCities, ...excludeCities);
+  }
+  whereClause += transportItemTypeWhere(itemType, 'ss');
 
-  // CTE pre-aggregates volume data once, then JOINs to spread_stats (10-50x faster than correlated subqueries)
   const sql = `
-    WITH vol AS (
-      SELECT item_id, quality, city, AVG(sample_count) as avg_vol
-      FROM price_averages
-      WHERE period_type IN ('daily','hourly') AND period_start > ?
-      GROUP BY item_id, quality, city
-    )
     SELECT
       ss.item_id, ss.quality, ss.buy_city, ss.sell_city,
       ss.avg_spread, ss.median_spread, ss.consistency_pct,
@@ -3690,8 +3894,8 @@ app.get('/api/transport-routes', (req, res) => {
       COALESCE(bv.avg_vol, 0) as buy_volume,
       COALESCE(sv.avg_vol, 0) as sell_volume
     FROM spread_stats ss
-    LEFT JOIN vol bv ON bv.item_id = ss.item_id AND bv.quality = ss.quality AND bv.city = ss.buy_city
-    LEFT JOIN vol sv ON sv.item_id = ss.item_id AND sv.quality = ss.quality AND sv.city = ss.sell_city
+    LEFT JOIN price_ref_cache bv ON bv.item_id = ss.item_id AND bv.quality = ss.quality AND bv.city = ss.buy_city AND bv.updated_at > ?
+    LEFT JOIN price_ref_cache sv ON sv.item_id = ss.item_id AND sv.quality = ss.quality AND sv.city = ss.sell_city AND sv.updated_at > ?
     ${whereClause}
     ORDER BY (ss.avg_spread * COALESCE(bv.avg_vol, 0)) DESC
     LIMIT ?
@@ -3954,10 +4158,6 @@ const _priceRefRunner = () => {
 setInterval(_priceRefRunner, PRICE_REF_REFRESH_INTERVAL_MS);
 
 app.get('/api/transport-routes-live', transportLiveLimiter, (req, res) => {
-  // SEC-H1: serve cached result for 30s to avoid repeated O(n²) computation per IP
-  if (_transportLiveCache && Date.now() - _transportLiveCacheTs < 30 * 1000) {
-    return res.json(_transportLiveCache);
-  }
   try {
   const buyCity = req.query.buy_city || '';
   const sellCity = req.query.sell_city || '';
@@ -3969,18 +4169,45 @@ app.get('/api/transport-routes-live', transportLiveLimiter, (req, res) => {
   // 2026-04-28: tightened default 120 → 30 min. Audit found buy_age averages
   // 555 minutes with the 120m cap, telling users 9-hour-old data is "real-time
   // NATS data". 30m default cuts the freshness lie and forces stale items off
-  // the live feed. Power users can override via ?max_age= up to 240.
-  const maxAge = Math.min(parseInt(req.query.max_age) || 30, 240);
+  // the live feed. Cap at 60m so broad all-city scans cannot wedge the event loop.
+  const maxAge = Math.min(parseInt(req.query.max_age) || 30, 60);
   const limit = Math.min(parseInt(req.query.limit) || 200, 500);
   const excludeCities = (req.query.exclude || '').split(',').filter(Boolean);
+  const itemType = req.query.item_type || 'all';
   // Per-user premium tax: accept `premium=0` to opt-out; default premium.
   const userIsPremium = req.query.premium !== '0';
   const TAX_INSTANT = taxInstant(userIsPremium);
   const TAX_ORDER = taxSellOrder(userIsPremium);
 
+  const cacheKey = JSON.stringify({ buyCity, sellCity, sellStrategy, minProfit, maxAge, limit, excludeCities, itemType, userIsPremium });
+  // SEC-H1: serve cached result for 30s to avoid repeated O(n²) computation per parameter set.
+  if (_transportLiveCache && _transportLiveCache.key === cacheKey && Date.now() - _transportLiveCacheTs < 30 * 1000) {
+    return res.json(_transportLiveCache.payload);
+  }
+
   const now = Date.now();
   const maxAgeMs = maxAge * 60 * 1000;
   const routes = [];
+  const keepLimit = Math.min(Math.max(limit * 4, limit + 50), 1000);
+  let totalRoutes = 0;
+  let minKeptTripProfit = -Infinity;
+
+  function rememberTopRoute(route) {
+    if (routes.length < keepLimit) {
+      routes.push(route);
+      if (routes.length === keepLimit) {
+        minKeptTripProfit = Math.min(...routes.map(r => r.est_trip_profit));
+      }
+      return;
+    }
+    if (route.est_trip_profit <= minKeptTripProfit) return;
+    let minIdx = 0;
+    for (let k = 1; k < routes.length; k++) {
+      if (routes[k].est_trip_profit < routes[minIdx].est_trip_profit) minIdx = k;
+    }
+    routes[minIdx] = route;
+    minKeptTripProfit = Math.min(...routes.map(r => r.est_trip_profit));
+  }
 
   for (const [itemId, qualities] of Object.entries(alertMarketDb)) {
     for (const [qStr, cities] of Object.entries(qualities)) {
@@ -4005,6 +4232,17 @@ app.get('/api/transport-routes-live', transportLiveLimiter, (req, res) => {
       // Use the lower of (min across cities) and (global historical avg) as the baseline
       // This catches both live manipulation AND historical pollution
       const baseline = Math.min(minSellAcrossCities, globalAvg);
+
+      // Detect stackable items once per item/quality, not once per route.
+      const isGear = /_(HEAD|ARMOR|SHOES|MAIN|2H|OFF|CAPEITEM|BAG|CAPE|MOUNT)_/.test(itemId) || itemId.startsWith('MOUNT_');
+      const isStackable = !isGear && (
+        /^T[0-9]_(ROCK|STONE|STONEBLOCK|WOOD|PLANKS|ORE|METALBAR|HIDE|LEATHER|FIBER|CLOTH|FISH)/.test(itemId) ||
+        itemId.includes('POTION') || itemId.includes('MEAL') || itemId.startsWith('JOURNAL') ||
+        /^T[0-9]_(RUNE|SOUL|RELIC|SHARD|ARTEFACT)/.test(itemId) || itemId.includes('SKILLBOOK') ||
+        itemId.includes('MOB_') || itemId.includes('TREASURE') || itemId.includes('TOKEN')
+      );
+      const stackSize = isStackable ? 999 : 1;
+      if (!transportItemMatchesType(itemId, itemType, isStackable)) continue;
 
       for (let i = 0; i < cityEntries.length; i++) {
         const [srcCity, srcData] = cityEntries[i];
@@ -4057,27 +4295,17 @@ app.get('/api/transport-routes-live', transportLiveLimiter, (req, res) => {
           const roi = (profit / srcData.sellMin) * 100;
           if (roi > 150) continue; // Skip extreme outliers but allow low-margin bulk routes
 
-          // Detect stackable items by ID pattern.
-          // Gear IDs contain: HEAD_, ARMOR_, SHOES_, MAIN_, 2H_, OFF_, CAPEITEM_, BAG_, CAPE_
-          // Resource/material IDs are like: T5_CLOTH, T5_PLANKS, T5_ROCK (no gear prefix)
-          const isGear = /_(HEAD|ARMOR|SHOES|MAIN|2H|OFF|CAPEITEM|BAG|CAPE|MOUNT)_/.test(itemId) || itemId.startsWith('MOUNT_');
-          const isStackable = !isGear && (
-            /^T[0-9]_(ROCK|STONE|STONEBLOCK|WOOD|PLANKS|ORE|METALBAR|HIDE|LEATHER|FIBER|CLOTH|FISH)/.test(itemId) ||
-            itemId.includes('POTION') || itemId.includes('MEAL') || itemId.startsWith('JOURNAL') ||
-            /^T[0-9]_(RUNE|SOUL|RELIC|SHARD|ARTEFACT)/.test(itemId) || itemId.includes('SKILLBOOK') ||
-            itemId.includes('MOB_') || itemId.includes('TREASURE') || itemId.includes('TOKEN')
-          );
-          const stackSize = isStackable ? 999 : 1;
           // Rough trip profit: profit × (budget / buyPrice) capped by 48 slots
           const maxByBudget = Math.floor(30000000 / srcData.sellMin); // assume 30M budget
           const maxBySlots = isStackable ? 48 * stackSize : 48;
           const estQuantity = Math.min(maxByBudget, maxBySlots);
           const estTripProfit = Math.floor(profit * estQuantity);
+          totalRoutes++;
+          if (routes.length >= keepLimit && estTripProfit <= minKeptTripProfit) continue;
 
-          routes.push({
+          rememberTopRoute({
             item_id: itemId,
             quality: q,
-            name: getFriendlyName(itemId),
             buy_city: srcCity,
             sell_city: dstCity,
             buy_price: srcData.sellMin,
@@ -4101,6 +4329,7 @@ app.get('/api/transport-routes-live', transportLiveLimiter, (req, res) => {
 
   routes.sort((a, b) => b.est_trip_profit - a.est_trip_profit);
   const result = routes.slice(0, limit);
+  for (const r of result) r.name = getFriendlyName(r.item_id);
   // Also count how many have buy orders (instant sell) available for the same route
   let instantAvailable = 0;
   for (const r of result) {
@@ -4111,9 +4340,9 @@ app.get('/api/transport-routes-live', transportLiveLimiter, (req, res) => {
       if (r.instant_profit > 0) instantAvailable++;
     }
   }
-  const payload = { routes: result, total: routes.length, dataPoints: Object.keys(alertMarketDb).length };
-  _transportLiveCache = payload; _transportLiveCacheTs = Date.now(); // SEC-H1: cache 30s
-  console.log(`[Transport-Live] ${routes.length} routes (strategy=${sellStrategy}, maxAge=${maxAge}m, instant=${instantAvailable})`);
+  const payload = { routes: result, total: totalRoutes, dataPoints: Object.keys(alertMarketDb).length };
+  _transportLiveCache = { key: cacheKey, payload }; _transportLiveCacheTs = Date.now(); // SEC-H1: cache 30s
+  console.log(`[Transport-Live] ${totalRoutes} routes scanned, kept ${routes.length} (strategy=${sellStrategy}, maxAge=${maxAge}m, instant=${instantAvailable})`);
   res.json(payload);
   } catch(e) {
     console.error('[Transport-Live] Computation error:', e);
@@ -4159,20 +4388,33 @@ app.get('/api/price-history', (req, res) => {
   const history = histRows || [];
   const ohlc = ohlcRows || [];
   const analytics = {};
+  let analyticsComputedAt = null;
   for (const r of (analyticsRows || [])) {
     if (city) {
       analytics[r.metric] = r.value;
     } else {
       if (!analytics[r.city]) analytics[r.city] = {};
       analytics[r.city][r.metric] = r.value;
+      analytics[r.city].computed_at = newestIsoTimestamp(analytics[r.city].computed_at, r.computed_at);
     }
+    analyticsComputedAt = newestIsoTimestamp(analyticsComputedAt, r.computed_at);
   }
-  res.json({ history, ohlc, analytics });
+  res.json({ history, ohlc, analytics, analyticsComputedAt });
 });
 
 // === ANALYTICS API ===
 // Returns all pre-computed metrics from price_analytics per item+city+quality.
 // Optional query params: city, quality (default 1)
+function newestIsoTimestamp(a, b) {
+  if (!a) return b || null;
+  if (!b) return a || null;
+  const at = Date.parse(a);
+  const bt = Date.parse(b);
+  if (!Number.isFinite(at)) return b;
+  if (!Number.isFinite(bt)) return a;
+  return bt > at ? b : a;
+}
+
 app.get('/api/analytics/:itemId', (req, res) => {
   const item_id = req.params.itemId;
   const quality  = parseInt(req.query.quality) || 1;
@@ -4194,7 +4436,7 @@ app.get('/api/analytics/:itemId', (req, res) => {
     let computed_at = null;
     for (const r of rows) {
       metrics[r.metric] = r.value;
-      computed_at = computed_at || r.computed_at;
+      computed_at = newestIsoTimestamp(computed_at, r.computed_at);
     }
     res.json({ item_id, city, quality, metrics, computed_at });
   } else {
@@ -4204,7 +4446,8 @@ app.get('/api/analytics/:itemId', (req, res) => {
     for (const r of rows) {
       if (!cities[r.city]) cities[r.city] = {};
       cities[r.city][r.metric] = r.value;
-      computed_at = computed_at || r.computed_at;
+      cities[r.city].computed_at = newestIsoTimestamp(cities[r.city].computed_at, r.computed_at);
+      computed_at = newestIsoTimestamp(computed_at, r.computed_at);
     }
     res.json({ item_id, quality, cities, computed_at });
   }
@@ -6220,6 +6463,10 @@ setInterval(() => {
 // per active item+city+quality combo. Runs every few hours.
 let analyticsRunning = false;
 let analyticsStartTime = 0;
+let analyticsLastFinishTime = 0;
+let analyticsLastSuccessAt = 0;
+let analyticsLastDurationMs = 0;
+let analyticsLastResult = null;
 // Generation token: bumped each time a run starts AND each time the stuck-flag
 // reset invalidates a stale run. Every async callback captures its own `myGen`
 // in closure and aborts if the current generation has moved on. This prevents
@@ -6266,8 +6513,13 @@ async function computeAnalytics() {
   // flag state is never trampled.
   function finalize(reason) {
     if (myGen !== analyticsGeneration) return;
+    const finishedAt = Date.now();
     analyticsRunning = false;
-    const elapsed = Math.round((Date.now() - analyticsStartTime) / 1000);
+    analyticsLastFinishTime = finishedAt;
+    analyticsLastDurationMs = Math.max(0, finishedAt - analyticsStartTime);
+    analyticsLastResult = reason;
+    if (reason === 'ok') analyticsLastSuccessAt = finishedAt;
+    const elapsed = Math.round(analyticsLastDurationMs / 1000);
     console.log(`[Analytics] Finalized (${reason}). Total time: ${elapsed}s`);
   }
 
@@ -6424,10 +6676,10 @@ async function computeAnalytics() {
   if (isStale()) return;
   console.log(`[Analytics] Wrote ${bulkResults.length} bulk metrics (SMA/VWAP/trend/volatility)`);
 
-  // === STEP 3: EMA 7d — single ordered streaming pass via stmt.iterate() ===
-  // Replaces the old per-batch query loop. ONE query, rows stream back in
-  // (item_id, city, quality, period_start) order, EMA computed incrementally in JS.
-  // We yield to the event loop every 5K rows so HTTP requests stay responsive.
+  // === STEP 3: EMA 7d — ordered streaming pass by item-id range ===
+  // The old single stream could still spend a long time inside one SQLite scan.
+  // Reusing the same narrow ranges as spreadStats/priceRef gives the event loop
+  // natural breaks while preserving item_id/city/quality/period_start order.
   const EMA_ALPHA = 0.25; // α = 2/(7+1) for a 7-period EMA
   let curKey = null;
   let curEma = 0;
@@ -6439,31 +6691,36 @@ async function computeAnalytics() {
     const emaStmt = statsDb.prepare(
       `SELECT item_id, city, quality, avg_sell
         FROM price_averages
-        WHERE period_start > ? AND avg_sell > 0
+        WHERE item_id >= ? AND item_id < ?
+          AND period_start > ? AND avg_sell > 0
         ORDER BY item_id, city, quality, period_start ASC`
     );
     let chunkCount = 0;
-    for (const row of emaStmt.iterate(sevenDaysAgo)) {
+    for (const [lo, hi] of PRICE_REF_ITEM_RANGES) {
       if (isStale()) break;
-      const k = row.item_id + '|' + row.city + '|' + row.quality;
-      if (!comboSet.has(k)) continue;
-      if (k !== curKey) {
-        if (curKey && rowsInGroup > 0) {
-          const [ii, cc, qq] = curKey.split('|');
-          emaResults.push([ii, cc, parseInt(qq), 'ema_7d', curEma, computedAt]);
+      for (const row of emaStmt.iterate(lo, hi, sevenDaysAgo)) {
+        if (isStale()) break;
+        const k = row.item_id + '|' + row.city + '|' + row.quality;
+        if (!comboSet.has(k)) continue;
+        if (k !== curKey) {
+          if (curKey && rowsInGroup > 0) {
+            const [ii, cc, qq] = curKey.split('|');
+            emaResults.push([ii, cc, parseInt(qq), 'ema_7d', curEma, computedAt]);
+          }
+          curKey = k;
+          curEma = row.avg_sell;
+          rowsInGroup = 1;
+        } else {
+          curEma = EMA_ALPHA * row.avg_sell + (1 - EMA_ALPHA) * curEma;
+          rowsInGroup++;
         }
-        curKey = k;
-        curEma = row.avg_sell;
-        rowsInGroup = 1;
-      } else {
-        curEma = EMA_ALPHA * row.avg_sell + (1 - EMA_ALPHA) * curEma;
-        rowsInGroup++;
+        rowsProcessed++;
+        if (++chunkCount >= 5000) {
+          chunkCount = 0;
+          await new Promise(r => setImmediate(r));
+        }
       }
-      rowsProcessed++;
-      if (++chunkCount >= 5000) {
-        chunkCount = 0;
-        await new Promise(r => setImmediate(r));
-      }
+      await _analyticsYield();
     }
   } catch (errStream) {
     console.error('[Analytics] EMA stream FAILED:', errStream.message || errStream);
@@ -6508,6 +6765,9 @@ async function computeAnalytics() {
 function _runAnalytics() {
   computeAnalytics().catch((err) => {
     console.error('[Analytics] Unhandled error:', err && err.message || err);
+    analyticsLastFinishTime = Date.now();
+    analyticsLastDurationMs = analyticsStartTime ? Math.max(0, analyticsLastFinishTime - analyticsStartTime) : 0;
+    analyticsLastResult = 'unhandled-error';
     analyticsRunning = false;
   });
 }

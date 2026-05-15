@@ -1519,6 +1519,125 @@ function getVolatilityBadge(consistencyPct) {
     return '';
 }
 
+const MARKET_LIQUIDITY_TTL_MS = 6 * 60 * 60 * 1000;
+const MARKET_LIQUIDITY_CACHE = new Map();
+
+function marketLiquidityKey(itemId, quality, city) {
+    return `${itemId}|${parseInt(quality) || 1}|${city}`;
+}
+
+function getCachedMarketLiquidity(itemId, quality, city) {
+    const cached = MARKET_LIQUIDITY_CACHE.get(marketLiquidityKey(itemId, quality, city));
+    if (!cached || Date.now() - cached.ts > MARKET_LIQUIDITY_TTL_MS) return null;
+    return cached.data;
+}
+
+function setCachedMarketLiquidity(itemId, quality, city, data) {
+    MARKET_LIQUIDITY_CACHE.set(marketLiquidityKey(itemId, quality, city), { data, ts: Date.now() });
+}
+
+async function fetchMarketLiquidity(itemIds, cities, quality = 1) {
+    const ids = [...new Set((itemIds || []).filter(Boolean))];
+    const cityList = [...new Set((cities || []).filter(Boolean))];
+    const q = parseInt(quality) || 1;
+    if (ids.length === 0 || cityList.length === 0) return;
+
+    const missingIds = ids.filter(id => cityList.some(city => !getCachedMarketLiquidity(id, q, city)));
+    if (missingIds.length === 0) return;
+
+    for (let i = 0; i < missingIds.length; i += 80) {
+        const idChunk = missingIds.slice(i, i + 80);
+        for (let j = 0; j < cityList.length; j += 8) {
+            const cityChunk = cityList.slice(j, j + 8);
+            const params = new URLSearchParams({
+                item_ids: idChunk.join(','),
+                cities: cityChunk.join(','),
+                quality: String(q),
+            });
+            try {
+                const res = await fetch(`${VPS_BASE}/api/market-liquidity?${params}`, { signal: AbortSignal.timeout(15000) });
+                if (!res.ok) continue;
+                const payload = await res.json();
+                const liquidity = payload && payload.liquidity ? payload.liquidity : {};
+                for (const itemId of idChunk) {
+                    const cityMap = liquidity[itemId] || {};
+                    for (const city of cityChunk) {
+                        if (Object.prototype.hasOwnProperty.call(cityMap, city)) {
+                            setCachedMarketLiquidity(itemId, q, city, cityMap[city]);
+                        }
+                    }
+                }
+            } catch (err) {
+                if (DEBUG) console.warn('[Liquidity] fetch failed:', err.message);
+            }
+        }
+    }
+}
+
+function marketLiquidityDaily(itemId, quality, city) {
+    const stat = getCachedMarketLiquidity(itemId, quality, city);
+    return stat ? Number(stat.avg_daily || stat.last_daily || 0) : 0;
+}
+
+function marketLiquiditySamples(itemId, quality, city) {
+    const stat = getCachedMarketLiquidity(itemId, quality, city);
+    return stat ? Number(stat.samples || 0) : 0;
+}
+
+async function enrichTradesWithLiquidity(trades) {
+    const list = (trades || []).slice(0, 80);
+    if (list.length === 0) return trades;
+    const byQuality = new Map();
+    for (const trade of list) {
+        const q = parseInt(trade.quality) || 1;
+        if (!byQuality.has(q)) byQuality.set(q, { items: new Set(), cities: new Set() });
+        const bucket = byQuality.get(q);
+        bucket.items.add(trade.itemId);
+        if (trade.buyCity) bucket.cities.add(trade.buyCity);
+        if (trade.sellCity) bucket.cities.add(trade.sellCity);
+    }
+    await Promise.all([...byQuality.entries()].map(([q, bucket]) =>
+        fetchMarketLiquidity([...bucket.items], [...bucket.cities], q)
+    ));
+    for (const trade of list) {
+        const q = parseInt(trade.quality) || 1;
+        trade.buyDailyVolume = marketLiquidityDaily(trade.itemId, q, trade.buyCity);
+        trade.sellDailyVolume = marketLiquidityDaily(trade.itemId, q, trade.sellCity);
+        trade.sellDailySamples = marketLiquiditySamples(trade.itemId, q, trade.sellCity);
+    }
+    return trades;
+}
+
+function formatDailyVolume(value) {
+    const n = Number(value) || 0;
+    if (n <= 0) return 'no history';
+    if (n >= 1000) return `${(n / 1000).toFixed(n >= 10000 ? 0 : 1)}k/day`;
+    return `${Math.round(n)}/day`;
+}
+
+function getLiquidityClass(value, samples = 0) {
+    const n = Number(value) || 0;
+    if (samples <= 0 && n <= 0) return 'unknown';
+    if (n < 10) return 'low';
+    if (n < 50) return 'mid';
+    return 'high';
+}
+
+function getTradeLiquidityBadges(trade) {
+    if (!trade || trade.sellDailyVolume === undefined) return '';
+    const cls = getLiquidityClass(trade.sellDailyVolume, trade.sellDailySamples);
+    const cityLabel = trade.sellCity === 'Black Market' ? 'BM' : trade.sellCity;
+    const title = `${cityLabel} average sales per day from Albion Data Project chart item_count. Use this as demand/liquidity context, not a guaranteed order count.`;
+    return `<span class="liquidity-badge ${cls}" title="${esc(title)}">Sold ${formatDailyVolume(trade.sellDailyVolume)}</span>`;
+}
+
+function getTopNLiquidityBadge(row) {
+    if (!row || row.dailyVolume === undefined) return '';
+    const cls = getLiquidityClass(row.dailyVolume, row.liquiditySamples);
+    const label = cls === 'unknown' ? 'No volume history' : `Sold ${formatDailyVolume(row.dailyVolume)}`;
+    return `<span class="topn-badge topn-badge-liquidity ${cls}" title="Average daily sold volume in ${esc(row.bestSellCity)}">${esc(label)}</span>`;
+}
+
 const _analyticsInFlight = new Map(); // dedup concurrent fetches for same itemId
 async function fetchAnalytics(itemId) {
     if (analyticsCache.has(itemId)) {
@@ -1835,6 +1954,9 @@ function buildArbitrageCardDOM(trade) {
                 <span title="Buy Data Age">${getFreshnessIndicator(trade.dateBuy)} ${esc(trade.buyCity)}: ${timeAgo(trade.dateBuy)}</span>
                 <span title="Sell Data Age">${getFreshnessIndicator(trade.dateSell)} ${esc(trade.sellCity)}: ${timeAgo(trade.dateSell)}</span>
             </div>
+            <div style="margin-top:0.4rem; display:flex; justify-content:center; align-items:center; gap:0.5rem; flex-wrap:wrap;">
+                ${getTradeLiquidityBadges(trade)}
+            </div>
             ${trade.confidence !== null ? `
             <div style="margin-top:0.4rem; display:flex; justify-content:center; align-items:center; gap:0.5rem; flex-wrap:wrap;">
                 ${getConfidenceBadge(trade.confidence)}
@@ -1980,8 +2102,6 @@ async function doArbScan(targetItemId = null) {
         try {
             const cachedData = await MarketDB.getAllPrices();
             if (cachedData.length > 0) {
-                spinner.classList.add('hidden');
-
                 // Filter by category
                 let filteredData = cachedData;
                 if (category !== 'all') {
@@ -1995,6 +2115,8 @@ async function doArbScan(targetItemId = null) {
                 }
 
                 const trades = processArbitrage(filteredData, quality, tier, enchantment, includeBM, buyCityFilter, sellCityFilter, isSingleItem, freshMode, freshThresholdMins, sortBy, minConfidence);
+                await enrichTradesWithLiquidity(trades);
+                spinner.classList.add('hidden');
                 renderArbitrage(trades, isSingleItem, targetItemId);
                 return;
             } else {
@@ -2014,8 +2136,9 @@ async function doArbScan(targetItemId = null) {
         const server = getServer();
         const data = await fetchMarketData(server, itemsToFetch);
         if (data.length > 0) await MarketDB.saveMarketData(data);
-        spinner.classList.add('hidden');
         const trades = processArbitrage(data, quality, tier, enchantment, includeBM, buyCityFilter, sellCityFilter, isSingleItem, freshMode, freshThresholdMins, sortBy, minConfidence);
+        await enrichTradesWithLiquidity(trades);
+        spinner.classList.add('hidden');
         renderArbitrage(trades, isSingleItem);
         await updateDbStatus();
     } catch (e) {
@@ -3460,9 +3583,9 @@ async function doCraftScan() {
 
     try {
         const cachedData = await MarketDB.getAllPrices();
-        spinner.classList.add('hidden');
 
         if (cachedData.length === 0) {
+            spinner.classList.add('hidden');
             showError(errorEl, 'No cached data available yet. Data loads automatically — please wait a moment and try again.');
             return;
         }
@@ -3484,6 +3607,7 @@ async function doCraftScan() {
         }
 
         const crafts = processCrafting(filteredData, tier, sortBy);
+        spinner.classList.add('hidden');
         renderCrafting(crafts);
     } catch (e) {
         spinner.classList.add('hidden');
@@ -3574,6 +3698,25 @@ function setupCardButtons(container) {
 const TOPN_CACHE = { key: null, items: null, ts: 0 };
 const CRAFT_SECONDS_PER = 3; // assumption: 3 seconds per craft attempt in-game (swing) for silver/hour estimate
 
+async function enrichTopNLiquidity(rows) {
+    const groups = new Map();
+    for (const row of rows || []) {
+        if (!row.itemId || !row.bestSellCity) continue;
+        const q = 1;
+        const key = `${q}|${row.bestSellCity}`;
+        if (!groups.has(key)) groups.set(key, { quality: q, city: row.bestSellCity, items: new Set() });
+        groups.get(key).items.add(row.itemId);
+    }
+    await Promise.all([...groups.values()].map(group =>
+        fetchMarketLiquidity([...group.items], [group.city], group.quality)
+    ));
+    for (const row of rows || []) {
+        row.dailyVolume = marketLiquidityDaily(row.itemId, 1, row.bestSellCity);
+        row.liquiditySamples = marketLiquiditySamples(row.itemId, 1, row.bestSellCity);
+        row.liquidityKnown = row.liquiditySamples > 0 || row.dailyVolume > 0;
+    }
+}
+
 async function doTopNRank() {
     if (itemsList.length === 0) await loadData();
     const spinner = document.getElementById('topn-spinner');
@@ -3614,7 +3757,7 @@ async function doTopNRank() {
         }
     }
 
-    const ranked = [];
+    let ranked = [];
     for (const [itemId, recipe] of Object.entries(recipesData)) {
         const { tier: t, ench } = parseTierEnch(itemId);
         if (!t) continue;
@@ -3677,22 +3820,13 @@ async function doTopNRank() {
             if (baseFocus > 0) focusCost = calculateFocusCostV2(baseFocus, specLevel, masteryLevel, 0, CraftConfig.foodBuff);
         }
 
-        // Liquidity — use spreadStatsCache or analytics cache if present; else assume unlimited
-        let dailyVolume = Infinity;
-        const cacheKey = itemId + '_1_' + bestSellCity;
-        if (analyticsCache.has(itemId)) {
-            const a = analyticsCache.get(itemId);
-            if (a && a.avg_volume_24h != null) dailyVolume = a.avg_volume_24h;
-        }
-        if (dailyVolume < liquidityMin) continue;
-
         ranked.push({
             itemId, recipe, profit, roi: matCost > 0 ? (profit / matCost * 100) : 0,
             matCost, revenue, tax, fee, focusCost,
             silverPerFocus: focusCost > 0 ? profit / focusCost : 0,
             silverPerHour: profit / (CRAFT_SECONDS_PER / 3600),
             bestSellCity, bestSpecialtyCity: bestSpecialty.c, cityBonus,
-            rrrPct: rrr * 100, dailyVolume,
+            rrrPct: rrr * 100, dailyVolume: 0, liquiditySamples: 0, liquidityKnown: false,
             autoSpecialty: bestSpecialty.d.autoApplied, specReason: bestSpecialty.d.reason,
         });
     }
@@ -3705,6 +3839,13 @@ async function doTopNRank() {
         roi:              (a, b) => b.roi            - a.roi,
     };
     ranked.sort(sortFns[sortBy] || sortFns.net_profit);
+
+    const liquidityProbe = ranked.slice(0, Math.min(360, ranked.length));
+    await enrichTopNLiquidity(liquidityProbe);
+    if (liquidityMin > 0) {
+        ranked = ranked.filter(r => r.liquidityKnown && r.dailyVolume >= liquidityMin);
+        ranked.sort(sortFns[sortBy] || sortFns.net_profit);
+    }
 
     spinner.classList.add('hidden');
     renderTopN(ranked.slice(0, 60), sortBy);
@@ -3751,7 +3892,7 @@ function renderTopN(list, sortBy) {
             </div>
             <div class="topn-badges">
                 ${r.autoSpecialty ? `<span class="topn-badge topn-badge-specialty" title="${esc(r.specReason)}">+${r.cityBonus}% ${esc(r.bestSpecialtyCity)}</span>` : ''}
-                ${r.dailyVolume === Infinity ? '' : r.dailyVolume < 50 ? '<span class="topn-badge topn-badge-illiquid">⚠ Low Volume</span>' : ''}
+                ${getTopNLiquidityBadge(r)}
             </div>
         `;
         card.addEventListener('click', () => switchToCraft(r.itemId));
@@ -5728,9 +5869,9 @@ async function doBMFlipperScan() {
 
     try {
         const cachedData = await MarketDB.getAllPrices();
-        spinner.classList.add('hidden');
 
         if (cachedData.length === 0) {
+            spinner.classList.add('hidden');
             showError(errorEl, 'No cached data available yet. Data loads automatically — please wait a moment and try again.');
             return;
         }
@@ -5766,6 +5907,8 @@ async function doBMFlipperScan() {
         // Filter for BM sell and minimum profit
         const bmTrades = trades.filter(t => t.sellCity === 'Black Market' && t.profit >= minProfit);
 
+        await enrichTradesWithLiquidity(bmTrades);
+        spinner.classList.add('hidden');
         renderBMFlips(bmTrades);
     } catch (e) {
         spinner.classList.add('hidden');
@@ -5830,6 +5973,9 @@ function renderBMFlips(trades) {
                 <div style="display:flex; justify-content:center; gap:1rem; flex-wrap:wrap;">
                     <span title="Buy Data Age">${getFreshnessIndicator(trade.dateBuy)} ${esc(trade.buyCity)}: ${timeAgo(trade.dateBuy)}</span>
                     <span title="Sell Data Age">${getFreshnessIndicator(trade.dateSell)} BM: ${timeAgo(trade.dateSell)}</span>
+                </div>
+                <div style="margin-top:0.4rem; display:flex; justify-content:center; align-items:center; gap:0.5rem; flex-wrap:wrap;">
+                    ${getTradeLiquidityBadges(trade)}
                 </div>
                 ${trade.confidence !== null ? `
                 <div style="margin-top:0.4rem; display:flex; justify-content:center; align-items:center; gap:0.5rem; flex-wrap:wrap;">
@@ -7837,13 +7983,16 @@ function renderLiveFlips(isNewFlip = false) {
         const typeBadge = flipType === 'instant'
             ? '<span class="flip-type-badge instant">Instant</span>'
             : '<span class="flip-type-badge cross-city">Transport</span>';
+        const unverifiedBadge = flip.unverified
+            ? '<span class="flip-type-badge unverified" title="Live edge found before the backend could verify matching destination demand/history">Unverified</span>'
+            : '';
         const routeArrow = flipType === 'instant'
             ? '<span style="margin:0 4px; color:var(--purple);">&#8634;</span>'
             : '<span style="margin:0 4px; color:var(--text-muted);">&#10142;</span>';
         return `<div class="flip-card${isNew ? ' new' : ''}" data-flip-item="${esc(flip.itemId)}" data-flip-quality="${flip.quality}" data-flip-id="${esc(flip.id)}" style="cursor:pointer;" title="Click to view chart; × to dismiss">
             <img class="flip-icon" src="https://render.albiononline.com/v1/item/${flip.itemId}.png?quality=${flip.quality}" alt="" loading="lazy">
             <div style="min-width:0;">
-                <div style="display:flex; align-items:center; gap:0.4rem; font-weight:600; font-size:0.88rem; color:var(--text-primary); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${esc(flip.name)}${qualName} ${typeBadge}</div>
+                <div style="display:flex; align-items:center; gap:0.4rem; font-weight:600; font-size:0.88rem; color:var(--text-primary); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${esc(flip.name)}${qualName} ${typeBadge}${unverifiedBadge}</div>
                 <div class="flip-route">
                     <span style="color:var(--text-secondary);">${esc(flip.buyCity)}</span>
                     <span style="color:var(--text-muted);"> @ ${Math.floor(flip.buyPrice).toLocaleString()}</span>
