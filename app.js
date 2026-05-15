@@ -14838,7 +14838,7 @@ async function doTransportScan() {
             // NEW: Use backend-computed routes from alertMarketDb (real-time NATS data)
             const freshMode = document.getElementById('transport-fresh-mode')?.value || 'off';
             const freshMins = parseInt(document.getElementById('transport-fresh-threshold')?.value) || 60;
-            const maxAge = freshMode !== 'off' ? freshMins : 120; // default 2h max age for live data
+            const maxAge = freshMode !== 'off' ? freshMins : 30; // default 30m max age for live data
 
             const params = new URLSearchParams({
                 sell_strategy: sellStrategy,
