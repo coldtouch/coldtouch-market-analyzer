@@ -2,6 +2,14 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-05-15 — Transport liquidity-aware route sizing
+
+Transport routes now use Albion Data chart `item_count` history as a destination sell-through signal before sizing hauls.
+
+- Route scans batch-fetch recent per-market sell counts for candidate items and show a Sold/Day value on transport cards.
+- Haul quantities are now capped by live source availability when known, destination sell-through when available, and a conservative scout cap when quantity is unknown.
+- The haul planner now respects each route's capped carry quantity in both packing passes, preventing planned stacks from exceeding known availability.
+
 ### 2026-05-12 — Loot Logger flagship hardening
 
 Hardened Loot Logger, Accountability, public shares, and the custom client after a deep audit.

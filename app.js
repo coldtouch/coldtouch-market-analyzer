@@ -14635,6 +14635,126 @@ function _ingestChestLogBatch(batch) {
 
 // ====== TRANSPORT TAB ======
 let lastTransportRoutes = null;
+const TRANSPORT_LIQUIDITY_LOOKBACK_DAYS = 7;
+const TRANSPORT_LIQUIDITY_FRACTION = 0.35;
+const TRANSPORT_LIQUIDITY_CACHE_TTL_MS = 30 * 60 * 1000;
+const TRANSPORT_UNKNOWN_STACKABLE_CAP = 999;
+const TRANSPORT_UNKNOWN_SINGLE_CAP = 1;
+const transportLiquidityCache = new Map();
+
+function _transportPositiveNumber(value) {
+    const n = Number(value);
+    return Number.isFinite(n) && n > 0 ? n : 0;
+}
+
+function _transportLiquidityKey(server, itemId, quality, city) {
+    return `${server}|${itemId}|${quality || 1}|${city || ''}`;
+}
+
+function _getTransportLiquidity(server, itemId, quality, city) {
+    const hit = transportLiquidityCache.get(_transportLiquidityKey(server, itemId, quality, city));
+    if (!hit || Date.now() - hit.ts > TRANSPORT_LIQUIDITY_CACHE_TTL_MS) return null;
+    return hit;
+}
+
+function _setTransportLiquidity(server, itemId, quality, city, stats) {
+    if (!itemId || !city) return;
+    transportLiquidityCache.set(_transportLiquidityKey(server, itemId, quality, city), {
+        ...stats,
+        ts: Date.now()
+    });
+}
+
+function _computeTransportDailyVolume(entry) {
+    const counts = entry?.data?.item_count;
+    if (!Array.isArray(counts) || counts.length === 0) return { avgDaily: 0, lastDaily: 0, samples: 0 };
+
+    const recent = counts
+        .slice(-TRANSPORT_LIQUIDITY_LOOKBACK_DAYS)
+        .map(v => Number(v))
+        .filter(v => Number.isFinite(v) && v > 0);
+    const lastDaily = _transportPositiveNumber(counts[counts.length - 1]);
+    if (recent.length === 0) return { avgDaily: 0, lastDaily, samples: 0 };
+
+    const avgDaily = recent.reduce((sum, v) => sum + v, 0) / recent.length;
+    return { avgDaily, lastDaily, samples: recent.length };
+}
+
+function getTransportUnknownQtyCap(stackable, stackSize, availableSlots) {
+    if (stackable) {
+        const safeStack = Math.max(1, stackSize || TRANSPORT_UNKNOWN_STACKABLE_CAP);
+        const slotCap = Math.max(1, availableSlots || 1) * safeStack;
+        return Math.max(1, Math.min(TRANSPORT_UNKNOWN_STACKABLE_CAP, slotCap));
+    }
+    return TRANSPORT_UNKNOWN_SINGLE_CAP;
+}
+
+async function enrichTransportRoutesWithMarketVolume(routes) {
+    if (!Array.isArray(routes) || routes.length === 0) return;
+
+    const server = getServer();
+    const chartBase = CHART_API_URLS[server];
+    if (!chartBase) return;
+
+    const locations = new Set();
+    const idsByQuality = new Map();
+    const candidates = routes.slice(0, 300);
+
+    for (const r of candidates) {
+        if (!r?.item_id) continue;
+        const quality = Number(r.quality || 1);
+        if (r.buy_city) locations.add(r.buy_city);
+        if (r.sell_city) locations.add(r.sell_city);
+        if (!_getTransportLiquidity(server, r.item_id, quality, r.buy_city) ||
+            !_getTransportLiquidity(server, r.item_id, quality, r.sell_city)) {
+            if (!idsByQuality.has(quality)) idsByQuality.set(quality, new Set());
+            idsByQuality.get(quality).add(r.item_id);
+        }
+    }
+
+    const locList = [...locations].filter(Boolean);
+    if (locList.length > 0 && idsByQuality.size > 0) {
+        const locationQuery = locList.map(encodeURIComponent).join(',');
+        const fetches = [];
+
+        for (const [quality, idsSet] of idsByQuality.entries()) {
+            const ids = [...idsSet];
+            for (let i = 0; i < ids.length; i += 35) {
+                const chunk = ids.slice(i, i + 35);
+                const url = `${chartBase}/${chunk.join(',')}.json?time-scale=24&locations=${locationQuery}&qualities=${quality}`;
+                fetches.push(fetch(url, { signal: AbortSignal.timeout(12_000) })
+                    .then(res => res.ok ? res.json() : [])
+                    .then(data => ({ server, data: Array.isArray(data) ? data : [] }))
+                    .catch(() => ({ server, data: [] })));
+            }
+        }
+
+        const responses = await Promise.all(fetches);
+        for (const response of responses) {
+            for (const entry of response.data) {
+                const stats = _computeTransportDailyVolume(entry);
+                _setTransportLiquidity(response.server, entry.item_id, Number(entry.quality || 1), entry.location || '', stats);
+            }
+        }
+    }
+
+    for (const r of routes) {
+        const quality = Number(r.quality || 1);
+        const buyStats = _getTransportLiquidity(server, r.item_id, quality, r.buy_city);
+        const sellStats = _getTransportLiquidity(server, r.item_id, quality, r.sell_city);
+
+        if (buyStats?.avgDaily > 0) {
+            r.buy_volume = buyStats.avgDaily;
+            r._buyDailyVolume = buyStats.avgDaily;
+            r._buyDailyLast = buyStats.lastDaily || 0;
+        }
+        if (sellStats?.avgDaily > 0) {
+            r.sell_volume = sellStats.avgDaily;
+            r._sellDailyVolume = sellStats.avgDaily;
+            r._sellDailyLast = sellStats.lastDaily || 0;
+        }
+    }
+}
 
 // ============================================================
 // Transport enhancements (2026-04-18) — gank-rate, auto-refresh, saved plans, swap, Discord embed
@@ -14879,6 +14999,7 @@ async function doTransportScan() {
             lastTransportRoutes = routes;
         }
 
+        await enrichTransportRoutesWithMarketVolume(lastTransportRoutes);
         spinner.classList.add('hidden');
         await enrichAndRenderTransport(lastTransportRoutes, budget, sortBy, mountCapacity, freeSlots);
         // Contributions the transport_plan activity score — once per successful load.
@@ -14936,6 +15057,7 @@ async function enrichAndRenderTransport(routes, budget, sortBy, mountCapacity, f
             if (ld.sell_age >= 0 && ld.sell_age < 9999) dateSell = new Date(Date.now() - ld.sell_age * 60000).toISOString();
             // Carry through available amounts from NATS
             r._buyAmount = ld.buy_amount || 0;
+            r._sellAmount = ld.sell_amount || 0;
         } else if (transportMode === 'historical') {
             // Historical mode: use spread_stats avg_spread directly
             const spread = r.avg_spread || 0;
@@ -14981,10 +15103,10 @@ async function enrichAndRenderTransport(routes, budget, sortBy, mountCapacity, f
         const effectiveTaxRate = sellMode === 'instant' ? TAX_RATE : (TAX_RATE + SETUP_FEE);
         const tax = sellPrice * effectiveTaxRate;
         const roi = (profitPerUnit / buyPrice) * 100;
-        const sellVolume = r.sell_volume || 0;
-        const buyVolume = r.buy_volume || 0;
-        const volume = Math.max(buyVolume, sellVolume);
-        const realisticVolume = Math.min(buyVolume || volume, sellVolume || volume);
+        const sellDailyVolume = _transportPositiveNumber(r._sellDailyVolume ?? r.sell_volume);
+        const buyDailyVolume = _transportPositiveNumber(r._buyDailyVolume ?? r.buy_volume);
+        const volume = Math.max(buyDailyVolume, sellDailyVolume);
+        const realisticVolume = Math.min(buyDailyVolume || sellDailyVolume || 0, sellDailyVolume || buyDailyVolume || 0);
 
         // Weight + slot calculation
         const itemWeight = calcItemWeight(r.item_id);
@@ -14994,18 +15116,29 @@ async function enrichAndRenderTransport(routes, budget, sortBy, mountCapacity, f
 
         // Use AVAILABLE slots (player's actual free slots), not hardcoded 48
         let maxByBudget = Math.floor(budget / buyPrice);
-        const hasVolumeData = realisticVolume > 0;
-        let maxByVolume = hasVolumeData ? Math.ceil(realisticVolume) : Infinity;
+        const hasVolumeData = sellDailyVolume > 0 || buyDailyVolume > 0;
+        const unknownQtyCap = getTransportUnknownQtyCap(stackable, stackSize, availableSlots);
+        const buyAmount = _transportPositiveNumber(r._buyAmount || r.buyAmount);
+        const sellAmount = _transportPositiveNumber(r._sellAmount || r.sellAmount);
+        const sellThroughCap = sellDailyVolume > 0 ? Math.max(1, Math.floor(sellDailyVolume * TRANSPORT_LIQUIDITY_FRACTION)) : 0;
+        const sourceActivityCap = buyAmount <= 0 && buyDailyVolume > 0 ? Math.max(1, Math.floor(buyDailyVolume * TRANSPORT_LIQUIDITY_FRACTION)) : 0;
+        const liquidityCaps = [];
+        if (sellThroughCap > 0) liquidityCaps.push(sellThroughCap);
+        if (sourceActivityCap > 0) liquidityCaps.push(sourceActivityCap);
+        if (sellMode === 'instant' && sellAmount > 0) liquidityCaps.push(sellAmount);
+        let maxByVolume = liquidityCaps.length > 0 ? Math.min(...liquidityCaps) : unknownQtyCap;
         let maxBySlots = stackable ? availableSlots * stackSize : availableSlots;
-        let maxByWeight = itemWeight > 0 ? Math.floor(mountCapacity / itemWeight) : Infinity;
+        let maxByWeight = itemWeight > 0 ? Math.floor(mountCapacity / itemWeight) : Number.MAX_SAFE_INTEGER;
         // Hard cap: available quantity at this price (from NATS order amounts)
-        const buyAmount = r._buyAmount || r.buyAmount || 0;
-        let maxByAmount = buyAmount > 0 ? buyAmount : Infinity;
+        let maxByAmount = buyAmount > 0 ? buyAmount : unknownQtyCap;
 
-        const unitsCanCarry = Math.max(1, Math.min(maxByBudget, maxByVolume, maxBySlots, maxByWeight, maxByAmount));
+        if (maxByBudget <= 0 || maxBySlots <= 0 || maxByWeight <= 0 || maxByAmount <= 0 || maxByVolume <= 0) continue;
+
+        const unitsCanCarry = Math.floor(Math.min(maxByBudget, maxByVolume, maxBySlots, maxByWeight, maxByAmount));
+        if (!Number.isFinite(unitsCanCarry) || unitsCanCarry <= 0) continue;
         const silverUsed = unitsCanCarry * buyPrice;
         const tripProfit = profitPerUnit * unitsCanCarry;
-        const transportScore = profitPerUnit * volume;
+        const transportScore = profitPerUnit * (hasVolumeData ? maxByVolume : unitsCanCarry);
 
         // Slot efficiency: profit per slot used (key metric for haul packing)
         const slotsUsed = stackable ? Math.ceil(unitsCanCarry / stackSize) : unitsCanCarry;
@@ -15013,8 +15146,12 @@ async function enrichAndRenderTransport(routes, budget, sortBy, mountCapacity, f
 
         // Determine limiting factor
         let limitingFactor = 'budget';
-        if (unitsCanCarry === maxByAmount && maxByAmount < maxByBudget) limitingFactor = 'available';
-        if (unitsCanCarry === maxByVolume && maxByVolume < maxByBudget && maxByVolume <= maxByAmount) limitingFactor = 'volume';
+        if (unitsCanCarry === maxByAmount && maxByAmount < maxByBudget) limitingFactor = buyAmount > 0 ? 'available' : 'quantity';
+        if (unitsCanCarry === maxByVolume && maxByVolume < maxByBudget && maxByVolume <= maxByAmount) {
+            limitingFactor = sellMode === 'instant' && sellAmount > 0 && maxByVolume === sellAmount
+                ? 'instant'
+                : (hasVolumeData ? 'liquidity' : 'quantity');
+        }
         if (unitsCanCarry === maxBySlots && maxBySlots < maxByBudget && maxBySlots <= maxByVolume && maxBySlots <= maxByAmount) limitingFactor = 'slots';
         if (unitsCanCarry === maxByWeight && maxByWeight < maxByBudget && maxByWeight <= maxByVolume && maxByWeight <= maxBySlots && maxByWeight <= maxByAmount) limitingFactor = 'weight';
 
@@ -15026,6 +15163,10 @@ async function enrichAndRenderTransport(routes, budget, sortBy, mountCapacity, f
             buyPrice, sellPrice, tax, profitPerUnit, roi,
             volume: Math.round(volume),
             realisticVolume: Math.round(realisticVolume),
+            buyDailyVolume: Math.round(buyDailyVolume),
+            sellDailyVolume: Math.round(sellDailyVolume),
+            liquidityCap: Math.round(maxByVolume),
+            unknownQtyCap: buyAmount > 0 || hasVolumeData ? 0 : unknownQtyCap,
             hasVolumeData,
             unitsCanCarry,
             slotsUsed,
@@ -15046,7 +15187,8 @@ async function enrichAndRenderTransport(routes, budget, sortBy, mountCapacity, f
             sampleCount: r.sample_count,
             dateBuy, dateSell,
             isHistorical, sellMode,
-            buyAmount: r._buyAmount || 0,
+            buyAmount,
+            sellAmount,
             instantSellPrice: r._liveData?.instant_sell_price || 0,
             instantProfit: r._liveData?.instant_profit || 0
         });
@@ -15110,7 +15252,8 @@ async function enrichAndRenderTransport(routes, budget, sortBy, mountCapacity, f
         // For stackable (999 per slot): profitPerSlot = profitPerUnit * min(budget/price, volume, 999)
         const scored = items.map(item => {
             const maxAffordable = Math.floor(budget / item.buyPrice);
-            const maxVol = item.realisticVolume > 0 ? Math.ceil(item.realisticVolume) : maxAffordable;
+            const routeUnitCap = Math.max(0, Math.floor(item.unitsCanCarry || 0));
+            const maxVol = item.liquidityCap > 0 ? Math.min(Math.floor(item.liquidityCap), routeUnitCap) : routeUnitCap;
             const maxWt = item.itemWeight > 0 ? Math.floor(mountCapacity / item.itemWeight) : maxAffordable;
             const unitsPerSlot = item.stackable ? Math.min(item.stackSize, maxAffordable, maxVol) : 1;
             return { ...item, slotScore: item.profitPerUnit * unitsPerSlot };
@@ -15133,12 +15276,13 @@ async function enrichAndRenderTransport(routes, budget, sortBy, mountCapacity, f
 
             let maxAfford = Math.floor(Math.min(remainingBudget, maxBudgetPerItem) / item.buyPrice);
             if (maxAfford <= 0) continue;
-            let maxVolume = item.realisticVolume > 0 ? Math.ceil(item.realisticVolume) : Infinity;
+            let maxRouteUnits = Math.max(0, Math.floor(item.unitsCanCarry || 0));
+            let maxVolume = item.liquidityCap > 0 ? Math.floor(item.liquidityCap) : maxRouteUnits;
             const slotsAvail = Math.min(maxSlotsPerItem, remainingSlots);
             let maxSlots = item.stackable ? slotsAvail * item.stackSize : slotsAvail;
-            let maxWeight = item.itemWeight > 0 ? Math.floor(remainingWeight / item.itemWeight) : Infinity;
+            let maxWeight = item.itemWeight > 0 ? Math.floor(remainingWeight / item.itemWeight) : Number.MAX_SAFE_INTEGER;
 
-            const units = Math.min(maxAfford, maxVolume, maxSlots, maxWeight);
+            const units = Math.min(maxAfford, maxVolume, maxSlots, maxWeight, maxRouteUnits);
             if (units <= 0) continue;
 
             const cost = units * item.buyPrice;
@@ -15160,10 +15304,12 @@ async function enrichAndRenderTransport(routes, budget, sortBy, mountCapacity, f
                 if (remainingBudget <= pi.buyPrice * 0.5 || remainingSlots <= 0) break;
                 let extraAfford = Math.floor(remainingBudget / pi.buyPrice);
                 if (extraAfford <= 0) continue;
-                let extraVol = pi.realisticVolume > 0 ? Math.max(0, Math.ceil(pi.realisticVolume) - pi.planUnits) : Infinity;
+                const extraRouteUnits = Math.max(0, Math.floor(pi.unitsCanCarry || 0) - pi.planUnits);
+                const volumeCap = pi.liquidityCap > 0 ? Math.floor(pi.liquidityCap) : Math.floor(pi.unitsCanCarry || 0);
+                let extraVol = Math.max(0, volumeCap - pi.planUnits);
                 let extraSlots = pi.stackable ? remainingSlots * pi.stackSize : remainingSlots;
-                let extraWeight = pi.itemWeight > 0 ? Math.floor(remainingWeight / pi.itemWeight) : Infinity;
-                const extra = Math.min(extraAfford, extraVol, extraSlots, extraWeight);
+                let extraWeight = pi.itemWeight > 0 ? Math.floor(remainingWeight / pi.itemWeight) : Number.MAX_SAFE_INTEGER;
+                const extra = Math.min(extraAfford, extraVol, extraSlots, extraWeight, extraRouteUnits);
                 if (extra <= 0) continue;
                 const extraCost = extra * pi.buyPrice;
                 const extraProfit = extra * pi.profitPerUnit;
@@ -15312,7 +15458,13 @@ function renderTransportResults(routes, budget, mountCapacity, haulPlans, availa
             detailDiv.style.display = 'none';
 
             let itemsHtml = plan.items.map(item => {
-                const limitIcon = item.limitingFactor === 'available' ? '📦' : item.limitingFactor === 'volume' ? '📊' : item.limitingFactor === 'weight' ? '⚖️' : item.limitingFactor === 'slots' ? '🎒' : '💰';
+                const limitIcon = item.limitingFactor === 'available' ? '📦'
+                    : item.limitingFactor === 'liquidity' ? '📊'
+                    : item.limitingFactor === 'instant' ? '✓'
+                    : item.limitingFactor === 'quantity' ? '⚠'
+                    : item.limitingFactor === 'weight' ? '⚖️'
+                    : item.limitingFactor === 'slots' ? '🎒'
+                    : '💰';
                 const weightStr = item.planWeight > 0 ? `${(item.planWeight).toFixed(1)} kg` : '—';
                 const slotsStr = item.stackable ? `${item.planSlots} slot${item.planSlots > 1 ? 's' : ''}` : `${item.planSlots} slot${item.planSlots > 1 ? 's' : ''}`;
                 return `<div class="haul-item-row" style="display:flex; align-items:center; gap:0.5rem; padding:0.4rem 0; border-bottom:1px solid var(--border-dim);">
@@ -15338,8 +15490,9 @@ function renderTransportResults(routes, budget, mountCapacity, haulPlans, availa
                                 ? item.planUnits > item.buyAmount
                                     ? ` <span style="color:#f59e0b;" title="Only ${item.buyAmount} available at this price, but ${item.planUnits} suggested">⚠ ${item.buyAmount} avail</span>`
                                     : ` <span style="color:var(--profit-green); font-size:0.65rem;" title="${item.buyAmount} units available at this price (from live orders)">✓ ${item.buyAmount} avail</span>`
-                                : !item.hasVolumeData ? ' <span style="color:#f59e0b;" title="No quantity data — verify availability in-game">⚠ qty unknown</span>'
-                                : item.realisticVolume > 0 ? ` <span style="color:var(--text-muted);" title="Estimated daily volume">~${Math.round(item.realisticVolume)}/day</span>` : ''}
+                                : item.sellDailyVolume > 0
+                                    ? ` <span style="color:var(--text-muted);" title="Average destination sell-through from Albion Data charts; route capped at ${item.liquidityCap.toLocaleString()} units">~${Math.round(item.sellDailyVolume).toLocaleString()}/day sold</span>`
+                                    : ` <span style="color:#f59e0b;" title="No source quantity or sell-through data; route capped to a scout amount">⚠ qty unknown</span>`}
                         </div>
                     </div>
                     <div style="display:grid; grid-template-columns: repeat(5, auto); gap:0.6rem; align-items:center; font-size:0.76rem; flex-shrink:0; text-align:right;">
@@ -15552,7 +15705,10 @@ function renderTransportResults(routes, budget, mountCapacity, haulPlans, availa
         grid.className = 'transport-results-grid';
 
         routes.forEach(r => {
-            const limitLabel = r.limitingFactor === 'volume' ? '<span title="Limited by daily sell volume" style="color:#f59e0b;">📊 Vol-capped</span>'
+            const limitLabel = r.limitingFactor === 'liquidity' ? '<span title="Limited by average sold quantity in the destination market" style="color:#f59e0b;">📊 Sold/day capped</span>'
+                : r.limitingFactor === 'available' ? '<span title="Limited by live source order amount at the buy price" style="color:#22c55e;">✓ Available capped</span>'
+                : r.limitingFactor === 'instant' ? '<span title="Limited by destination buy-order amount for instant selling" style="color:#22c55e;">✓ Buy-order capped</span>'
+                : r.limitingFactor === 'quantity' ? '<span title="Quantity is unknown, so this is capped to a conservative scout amount" style="color:#f59e0b;">⚠ Qty unknown</span>'
                 : r.limitingFactor === 'weight' ? '<span title="Limited by mount carry weight" style="color:#ef4444;">⚖️ Weight-capped</span>'
                 : r.limitingFactor === 'slots' ? `<span title="Limited by ${availableSlots} free inventory slots" style="color:#8b5cf6;">🎒 Slot-capped</span>`
                 : '<span title="Budget is the limiting factor" style="color:var(--accent);">💰 Budget-limited</span>';
@@ -15607,6 +15763,10 @@ function renderTransportResults(routes, budget, mountCapacity, haulPlans, availa
                     <div class="transport-stat">
                         <div class="transport-stat-label">Carry Qty</div>
                         <div class="transport-stat-value">${r.unitsCanCarry.toLocaleString()}</div>
+                    </div>
+                    <div class="transport-stat">
+                        <div class="transport-stat-label">Sold/Day</div>
+                        <div class="transport-stat-value">${r.sellDailyVolume > 0 ? Math.round(r.sellDailyVolume).toLocaleString() : 'Unknown'}</div>
                     </div>
                     <div class="transport-stat">
                         <div class="transport-stat-label">Slots</div>

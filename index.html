@@ -2312,6 +2312,15 @@
                     <div id="changelog-wrapper" style="max-height: 500px; overflow-y: auto; position: relative;">
                     <div class="changelog-list">
                         <div class="changelog-entry">
+                            <div class="changelog-date">May 15, 2026</div>
+                            <div class="changelog-title">Transport — liquidity-aware route sizing</div>
+                            <ul>
+                                <li>Transport routes now fetch recent Albion Data sold-count history and show Sold/Day on route cards.</li>
+                                <li>Haul quantities are capped by live source availability, destination sell-through, or a conservative scout cap when quantity is unknown.</li>
+                                <li>Haul plans now respect those route caps in both packing passes, so planned stacks cannot exceed known availability.</li>
+                            </ul>
+                        </div>
+                        <div class="changelog-entry">
                             <div class="changelog-date">May 12, 2026</div>
                             <div class="changelog-title">Loot Logger — flagship hardening pass</div>
                             <ul>
