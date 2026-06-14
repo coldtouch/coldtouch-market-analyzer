@@ -2,6 +2,59 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-06-14 — Albion item catalog refresh
+
+- Refreshed Loot Logger item maps and weights from the 2026-05-26 `ao-bin-dumps` data so numeric loot IDs resolve to the current Albion item strings and names.
+- Bumped the service-worker cache version so browsers can pick up the refreshed catalog assets after deployment.
+
+### 2026-05-28 — Accountability chest scan timestamps
+
+- Accountability results now show the selected chest capture scan time next to each tab name after a check runs.
+- Per-player missing-loot Discord text and generated image reports now include the same chest scan timestamp, so officer screenshots show which chest snapshot was used.
+
+### 2026-05-27 — Loot Logger upload accountability fix
+
+- Fixed `/api/loot-upload` saving uploaded rows one-by-one outside a transaction. Large log files could make the frontend wait long enough that Share and Accountability looked missing until the session list eventually refreshed. Uploads now save in one `better-sqlite3` transaction and return their `sessionId` promptly.
+- The Upload UI now shows a saving state, reports server-save failures, refreshes the Accountability dropdown after save, and waits for that refresh before pre-selecting the uploaded session.
+
+### 2026-05-21 — Transport shopping-list quality floor
+
+- Transport haul plans now skip tiny filler routes that are technically profitable but add negligible silver to the trip. Low-profit items still remain visible in the individual route list, but no longer pollute copied shopping lists.
+- The shopping-list gate scales with budget and requires meaningful expected profit both per item line and per inventory slot, so high-budget mammoth-style plans stay focused on cargo worth hauling.
+
+### 2026-05-21 — Transport unknown-demand caps
+
+- Transport Routes now defaults items with unknown destination Sold/Day to Scout Only, capping them to a small test quantity instead of letting budget, slots, or source availability create oversized haul suggestions.
+- Added an Unknown Demand control: Scout Only, Hide Unknown, or Allow Full Size. Sold/Day unknown items are now visibly badged as scout-demand risk in haul plans and individual route cards.
+
+### 2026-05-21 — Navigation dropdown recovery
+
+- Fixed top navigation dropdown groups opening and immediately closing. The guarded startup path had moved `init()` to `DOMContentLoaded`, but the older timers-widget `window.load` hook still called `init()` again, attaching duplicate dropdown handlers.
+- Service-worker cache bumped and the `app.js` script URL versioned so browsers receive the fixed frontend shell instead of repeatedly serving the broken cached `app.js`.
+
+### 2026-05-21 — NATS burst stability
+
+- NATS price-buffer writes now drain in bounded SQLite chunks with short event-loop yields, preventing large market bursts from freezing public health checks and WebSocket handling for several seconds.
+- Shutdown and RSS-watchdog exits still perform a synchronous best-effort NATS flush so buffered live prices are not intentionally dropped during restarts.
+- The legacy historical backfill job no longer runs automatically on production boot, and its existence check no longer uses `COUNT(*)` over the 15GB `price_averages` table.
+- Full market-cache scans now defer while DB maintenance is active, reducing CPU and DB pressure during the compaction window.
+- DB compaction now treats an overlapping DB backup lock as a clean skip instead of a failed systemd unit, so backup/compaction timing collisions do not page as false maintenance failures.
+
+### 2026-05-20 — Market Flipping quality filters
+
+- Market Flipping now has Min Profit and Min ROI controls, defaulting to `10k+` and `5%+`, so the scanner no longer fills results with tiny technically-profitable routes.
+- ROI sorting now rejects obvious low-side junk listings, such as 1-silver bait prices, using the same style of low-price guard already used by live flip detection.
+- Freshness filtering now filters only; it no longer silently overrides the selected sort mode. Highest Profit, Highest ROI, and Highest Confidence now sort as labeled.
+
+### 2026-05-20 — Startup and backend stability hardening
+
+- The frontend now boots `init()` exactly once after the script loads. This restores the normal startup path for tab handlers, initial data loading, live sync setup, portfolio render, favorites dropdown hydration, and other non-inline controls.
+- Favorites storage is now defensive: corrupted or non-object `albion_favorites` data in `localStorage` no longer throws during startup or Favorites tab actions.
+- SpreadStats stuck-run recovery now uses a generation token, matching the analytics hardening pattern. If a stale run is invalidated, it stops at the next yield instead of continuing to write after a replacement run starts.
+- Backend maintenance jobs now avoid broad `price_averages` range scans. SpreadStats, analytics, and historical price-reference refreshes use per-item SQLite queries from the loaded item catalog so one large tier/prefix cannot freeze the public event loop.
+- Automatic SpreadStats, analytics, and historical price-reference refreshes are now disabled by default until those enrichment jobs are isolated from the public web process. Existing cached rows continue serving, while uptime is protected.
+- Routine WAL checkpoints now use non-blocking `PASSIVE` mode in hot paths, and NATS price buffers now retry safely after a busy write instead of dropping the buffered live prices.
+
 ### 2026-05-15 — Transport liquidity-aware route sizing
 
 Transport routes now use Albion Data chart `item_count` history as a destination sell-through signal before sizing hauls.

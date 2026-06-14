@@ -631,6 +631,26 @@
                     </select>
                 </div>
                 <div class="control-group">
+                    <label for="arb-min-profit">Min Profit</label>
+                    <select id="arb-min-profit">
+                        <option value="0">Any</option>
+                        <option value="10000" selected>10k+</option>
+                        <option value="25000">25k+</option>
+                        <option value="50000">50k+</option>
+                        <option value="100000">100k+</option>
+                    </select>
+                </div>
+                <div class="control-group">
+                    <label for="arb-min-roi">Min ROI</label>
+                    <select id="arb-min-roi">
+                        <option value="0">Any</option>
+                        <option value="3">3%+</option>
+                        <option value="5" selected>5%+</option>
+                        <option value="10">10%+</option>
+                        <option value="20">20%+</option>
+                    </select>
+                </div>
+                <div class="control-group">
                     <label for="arb-min-confidence">Min Confidence</label>
                     <select id="arb-min-confidence">
                         <option value="0">Any</option>
@@ -1060,6 +1080,16 @@
                         <select id="transport-sell-strategy" title="How you plan to sell in the destination city">
                             <option value="instant" selected>Instant Sell (Buy Orders)</option>
                             <option value="market">List on Market (7d avg)</option>
+                        </select>
+                    </div>
+                    <div class="control-group">
+                        <label for="transport-unknown-demand" title="Controls routes where Albion Data has no destination sold-count history. Scout Only caps these to a small test buy.">
+                            Unknown Demand
+                        </label>
+                        <select id="transport-unknown-demand">
+                            <option value="scout" selected>Scout Only</option>
+                            <option value="hide">Hide Unknown</option>
+                            <option value="include">Allow Full Size</option>
                         </select>
                     </div>
                     <div class="control-group">
@@ -2311,6 +2341,34 @@
                     <h2 class="about-heading">Changelog</h2>
                     <div id="changelog-wrapper" style="max-height: 500px; overflow-y: auto; position: relative;">
                     <div class="changelog-list">
+                        <div class="changelog-entry">
+                            <div class="changelog-date">May 28, 2026</div>
+                            <div class="changelog-title">Accountability chest scan timestamps</div>
+                            <ul>
+                                <li>Accountability results now show the selected chest capture scan time next to each tab name after a check runs.</li>
+                                <li>Per-player missing-loot Discord text and generated image reports include the same timestamp, so screenshots show which chest snapshot was used.</li>
+                            </ul>
+                        </div>
+                        <div class="changelog-entry">
+                            <div class="changelog-date">May 27, 2026</div>
+                            <div class="changelog-title">Loot Logger upload accountability fix</div>
+                            <ul>
+                                <li>Uploaded loot logs now save in one backend transaction and get their session id back quickly, so the Upload report can show Share and Accountability actions without waiting for the session list to refresh.</li>
+                                <li>The upload flow now shows a saving state, reports server-save failures, refreshes the Accountability dropdown after save, and waits before pre-selecting the new session.</li>
+                            </ul>
+                        </div>
+                        <div class="changelog-entry">
+                            <div class="changelog-date">May 20, 2026</div>
+                            <div class="changelog-title">Startup and backend stability hardening</div>
+                            <ul>
+                                <li>The frontend now boots its startup initializer exactly once after scripts load, restoring the normal startup path for tab handlers, initial data loading, live sync, portfolio render, and Favorites hydration.</li>
+                                <li>Corrupted Favorites data in browser storage no longer crashes startup or Favorites tab actions; invalid stored data is ignored safely.</li>
+                                <li>SpreadStats stuck-run recovery now invalidates stale async runs before a replacement can write, matching the backend analytics generation-token guard.</li>
+                                <li>Backend maintenance jobs now use per-item historical queries instead of broad tier/prefix scans, reducing the risk that stats, analytics, or price-reference refreshes freeze the public service.</li>
+                                <li>Automatic SpreadStats, analytics, and historical price-reference refreshes are disabled by default until those enrichment jobs run outside the public web process; existing cached stats continue serving.</li>
+                                <li>Routine WAL checkpoints now avoid reader-waiting modes, and live NATS prices remain buffered for retry if SQLite is briefly busy.</li>
+                            </ul>
+                        </div>
                         <div class="changelog-entry">
                             <div class="changelog-date">May 15, 2026</div>
                             <div class="changelog-title">Transport — liquidity-aware route sizing</div>
@@ -4736,7 +4794,7 @@
     <script src="/db.js"></script>
     <script src="/zonemap.js"></script>
     <script src="/lootlogger-core.js"></script>
-    <script src="/app.js"></script>
+    <script src="/app.js?v=147"></script>
     <script>if('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js', {scope: '/', updateViaCache: 'none'}).catch(()=>{});</script><!-- FE-H3 -->
 </body>
 

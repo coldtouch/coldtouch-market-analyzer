@@ -263,6 +263,12 @@ const SCAN_INTERVAL_MS = 10 * 60 * 1000; // 10 minutes
 const SITE_URL = `https://${domain}`;
 const PREVIEW_ROOT = '/opt/albion-saas/previews';
 const PUBLIC_ROOT = '/opt/albion-saas/public';
+const DB_MAINTENANCE_SENTINEL = '/tmp/albion-db-maintenance-active';
+
+function isDbMaintenanceActive() {
+  try { return fs.existsSync(DB_MAINTENANCE_SENTINEL); }
+  catch { return false; }
+}
 
 function maskEmail(email) {
     if (!email) return '***';
@@ -307,13 +313,15 @@ let itemNames = {};
 // 2026-05-02 stage 3: db migrated from node-sqlite3 to better-sqlite3 (sync).
 // All db.run/get/all/each/serialize call sites converted to sync prepare()/exec()/transaction().
 // Errors throw SqliteError synchronously at the call site instead of via callback.
-const db = new Better('/opt/albion-saas/database.sqlite', { fileMustExist: false, timeout: 30000 });
+const SQLITE_BUSY_TIMEOUT_MS = Number(process.env.SQLITE_BUSY_TIMEOUT_MS || 1500);
+const db = new Better('/opt/albion-saas/database.sqlite', { fileMustExist: false, timeout: SQLITE_BUSY_TIMEOUT_MS });
 
 // Performance PRAGMAs — WAL mode dramatically reduces read/write contention.
 // 2026-05-01: journal_size_limit bounds WAL growth (Loke.dev documented 20GB+
 // without it). Source: https://loke.dev/blog/sqlite-checkpoint-starvation-wal-growth
 db.pragma('journal_mode = WAL');
 db.pragma('synchronous = NORMAL');
+db.pragma(`busy_timeout = ${SQLITE_BUSY_TIMEOUT_MS}`);
 db.pragma('cache_size = -32000');         // 32MB page cache
 db.pragma('mmap_size = 0');               // disable mmap to prevent RSS inflation
 // 2026-05-04: lowered 1000 → 500. With heavy writers (NATS every 30s,
@@ -495,8 +503,9 @@ function tryExec(sql) {
 // once db is also on better-sqlite3 and the JS event loop becomes the natural
 // serialization layer.
 // journal_mode + journal_size_limit dropped — set globally by `db` (still file-level).
-const statsDb = new Better('/opt/albion-saas/database.sqlite', { fileMustExist: true, timeout: 30000 });
+const statsDb = new Better('/opt/albion-saas/database.sqlite', { fileMustExist: true, timeout: SQLITE_BUSY_TIMEOUT_MS });
 statsDb.pragma('synchronous = NORMAL');
+statsDb.pragma(`busy_timeout = ${SQLITE_BUSY_TIMEOUT_MS}`);
 // 2026-05-04: bumped 16MB → 128MB. priceRefCache + spreadStats + analytics
 // each scan ~150-200k aggregate rows from price_averages. With a 16MB cache
 // each chunk evicted the previous chunk's hot pages, forcing cold disk reads
@@ -512,7 +521,8 @@ statsDb.pragma('mmap_size = 0');
 // All readDb.get/.all sites converted to readDb.prepare(sql).get/all(...params).
 // journal_mode + journal_size_limit dropped — readonly connection cannot write
 // PRAGMAs (the file is already in WAL mode globally, set by the writer).
-const readDb = new Better('/opt/albion-saas/database.sqlite', { readonly: true, fileMustExist: true, timeout: 30000 });
+const readDb = new Better('/opt/albion-saas/database.sqlite', { readonly: true, fileMustExist: true, timeout: SQLITE_BUSY_TIMEOUT_MS });
+readDb.pragma(`busy_timeout = ${SQLITE_BUSY_TIMEOUT_MS}`);
 readDb.pragma('mmap_size = 0');
 readDb.pragma('cache_size = -8000');  // 8MB — read-only, doesn't need large cache
 
@@ -880,6 +890,10 @@ const SNAPSHOT_INTERVAL = 15 * 60 * 1000; // Record snapshots every 15 min, not 
 const SCAN_TIMEOUT_MS = 4 * 60 * 1000;    // Auto-reset stuck scans after 4 minutes
 
 async function doServerScan() {
+  if (isDbMaintenanceActive()) {
+    console.log('[Cache] DB maintenance active, deferring full market scan');
+    return;
+  }
   // Watchdog: if a scan has been "in progress" for > 4 minutes, force-reset it
   if (scanInProgress) {
     const elapsed = Date.now() - scanStartTime;
@@ -3180,40 +3194,42 @@ app.post('/api/loot-upload', requireAuth, (req, res) => {
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?)`);
     let count = 0;
     let reResolved = 0;
-    for (const line of lines) {
-      // Format (10 base columns):
-      //   timestamp_utc;by_alliance;by_guild;by_name;item_id;item_name;quantity;
-      //   from_alliance;from_guild;from_name
-      // Optional columns:
-      //   11 numeric_id — lets the backend re-resolve item_id via CANONICAL_ITEMMAP.
-      //   12 location — zone captured by the Go client.
-      //   13 equipment_json — death equipment snapshot for __DEATH__ rows.
-      const parts = line.split(';');
-      if (parts.length < 10) continue;
-      const [ts, byAlliance, byGuild, byName, itemId, itemName, qty, fromAlliance, fromGuild, fromName, numericIdRaw, locationRaw] = parts;
-      const equipmentRaw = parts.length > 12 ? parts.slice(12).join(';') : '';
-      const timestamp = new Date(ts).getTime() || Date.now();
-      // Sanitize user-supplied strings: strip control chars, limit length
-      const san = s => (s || '').replace(/[\x00-\x1f\x7f]/g, '').replace(/[<>"'&]/g, '').slice(0, 64); // SEC-H4: strip HTML chars
-      const sanLoc = s => (s || '').replace(/[\x00-\x1f\x7f]/g, '').replace(/[<>"'&]/g, '').slice(0, 80);
-      const numericId = parseInt(numericIdRaw, 10) || 0;
-      const sanitizedItemId = san(itemId).slice(0, 100);
-      // Re-resolve via canonical itemmap when numericId is present and valid.
-      // Falls back to the client's string when numericId is 0 or unknown — preserves
-      // legacy 10-column TXT uploads that pre-date this column.
-      const canonicalItemId = resolveCanonicalItemId(numericId, sanitizedItemId);
-      if (canonicalItemId !== sanitizedItemId) reResolved++;
-      let equipmentJson = null;
-      if (canonicalItemId === '__DEATH__' && equipmentRaw && equipmentRaw.length < 8192) {
-        try {
-          const parsedEquipment = JSON.parse(equipmentRaw);
-          if (Array.isArray(parsedEquipment)) equipmentJson = JSON.stringify(parsedEquipment.slice(0, 32));
-        } catch {}
+    const insertLines = db.transaction((uploadLines) => {
+      for (const line of uploadLines) {
+        // Format (10 base columns):
+        //   timestamp_utc;by_alliance;by_guild;by_name;item_id;item_name;quantity;
+        //   from_alliance;from_guild;from_name
+        // Optional columns:
+        //   11 numeric_id — lets the backend re-resolve item_id via CANONICAL_ITEMMAP.
+        //   12 location — zone captured by the Go client.
+        //   13 equipment_json — death equipment snapshot for __DEATH__ rows.
+        const parts = line.split(';');
+        if (parts.length < 10) continue;
+        const [ts, byAlliance, byGuild, byName, itemId, itemName, qty, fromAlliance, fromGuild, fromName, numericIdRaw, locationRaw] = parts;
+        const equipmentRaw = parts.length > 12 ? parts.slice(12).join(';') : '';
+        const timestamp = new Date(ts).getTime() || Date.now();
+        // Sanitize user-supplied strings: strip control chars, limit length
+        const san = s => (s || '').replace(/[\x00-\x1f\x7f]/g, '').replace(/[<>"'&]/g, '').slice(0, 64); // SEC-H4: strip HTML chars
+        const sanLoc = s => (s || '').replace(/[\x00-\x1f\x7f]/g, '').replace(/[<>"'&]/g, '').slice(0, 80);
+        const numericId = parseInt(numericIdRaw, 10) || 0;
+        const sanitizedItemId = san(itemId).slice(0, 100);
+        // Re-resolve via canonical itemmap when numericId is present and valid.
+        // Falls back to the client's string when numericId is 0 or unknown — preserves
+        // legacy 10-column TXT uploads that pre-date this column.
+        const canonicalItemId = resolveCanonicalItemId(numericId, sanitizedItemId);
+        if (canonicalItemId !== sanitizedItemId) reResolved++;
+        let equipmentJson = null;
+        if (canonicalItemId === '__DEATH__' && equipmentRaw && equipmentRaw.length < 8192) {
+          try {
+            const parsedEquipment = JSON.parse(equipmentRaw);
+            if (Array.isArray(parsedEquipment)) equipmentJson = JSON.stringify(parsedEquipment.slice(0, 32));
+          } catch {}
+        }
+        stmt.run(req.user.id, sessionId, timestamp, san(byName), san(byGuild), san(byAlliance), san(fromName), san(fromGuild), san(fromAlliance), canonicalItemId, numericId, parseInt(qty) || 1, equipmentJson, sanLoc(locationRaw));
+        count++;
       }
-      stmt.run(req.user.id, sessionId, timestamp, san(byName), san(byGuild), san(byAlliance), san(fromName), san(fromGuild), san(fromAlliance), canonicalItemId, numericId, parseInt(qty) || 1, equipmentJson, sanLoc(locationRaw));
-      count++;
-    }
-    stmt.finalize();
+    });
+    insertLines(lines);
     if (reResolved > 0) console.log(`[LootUpload] Re-resolved ${reResolved}/${count} item_ids via canonical itemmap (user=${req.user.username})`);
     res.json({ success: true, sessionId, eventsImported: count, reResolved });
   };
@@ -3914,31 +3930,36 @@ app.get('/api/transport-routes', (req, res) => {
 let cityPriceRef = {};
 let globalPriceRef = {}; // { "itemId_quality": avgPrice } for outlier detection
 let volumeRef = {};     // { "itemId_quality_city": avg_sample_count } — activity proxy for liquidity flags
-// Incrementally update the pre-aggregated price_ref_cache from recent price_averages data.
-// Only scans the last 2 hours of new data — never touches the full 21M-row table.
-// 2026-05-04: same item_id ranges used by computeSpreadStats. Both functions
-// share the same GROUP-BY-against-price_averages anti-pattern (column order
-// mismatch with idx_pa_ema_stream forces a full sort, blocking the event
-// loop). Chunking by item_id range keeps each chunk's sync work under ~2s.
-function makePriceRefItemRanges() {
-  const ranges = [['', 'T4_']]; // pre-T4 gathered/refined/etc.
-  const bounds = ['0','1','2','3','4','5','6','7','8','9','A','B','C','D','E','F','G','H','I','J','K','L','M','N','O','P','Q','R','S','T','U','V','W','X','Y','Z'];
-  for (let tier = 4; tier <= 8; tier++) {
-    const prefix = `T${tier}_`;
-    ranges.push([prefix, `${prefix}${bounds[0]}`]);
-    for (let i = 0; i < bounds.length; i++) {
-      const lo = `${prefix}${bounds[i]}`;
-      const hi = i + 1 < bounds.length ? `${prefix}${bounds[i + 1]}` : `T${tier + 1}_`;
-      ranges.push([lo, hi]);
-    }
-  }
-  ranges.push(['T9_', '￿']); // UNIQUE_*, ZIGGURAT_*, anything past T8
-  return ranges;
-}
-const PRICE_REF_ITEM_RANGES = makePriceRefItemRanges();
+// Incrementally update the pre-aggregated price_ref_cache from recent
+// price_averages data. Heavy historical jobs use concrete item_id equality
+// queries from the loaded item catalog; broad range scans are intentionally
+// avoided because production still saw near-fatal event-loop stalls from them.
 const _priceRefYield = () => new Promise(r => setImmediate(r));
 const PRICE_REF_REFRESH_INTERVAL_MS = 30 * 60 * 1000; // 30 min — historical refs do not need 10-min churn
 const PRICE_REF_REFRESH_LOOKBACK_MS = 2 * 60 * 60 * 1000; // keep >=2 hourly samples for reference quality
+const HEAVY_JOB_MIN_ITEM_IDS = 1000;
+// These jobs are useful enrichment, but they are not worth taking down the
+// public process. Keep them disabled until they are moved to an isolated worker
+// or a separate maintenance service. Existing cached rows continue serving.
+const ENABLE_PRICE_REF_REFRESH = process.env.ENABLE_PRICE_REF_REFRESH === '1';
+const ENABLE_SPREAD_STATS = process.env.ENABLE_SPREAD_STATS === '1';
+const ENABLE_ANALYTICS = process.env.ENABLE_ANALYTICS === '1';
+const ENABLE_COMPACTION = process.env.ENABLE_COMPACTION === '1';
+
+function getKnownMarketItemIds() {
+  return Object.keys(itemNames || {})
+    .filter((id) => typeof id === 'string' && id.length > 0)
+    .sort();
+}
+
+function getHeavyJobItemIds(jobName) {
+  const ids = getKnownMarketItemIds();
+  if (ids.length < HEAVY_JOB_MIN_ITEM_IDS) {
+    console.log(`[${jobName}] Item catalog not loaded (${ids.length} ids); skipping broad historical scan for stability`);
+    return null;
+  }
+  return ids;
+}
 
 // 2026-05-04 (later): serialize against spreadStats / analytics. Without this
 // the two heavy 10-min and 60-min aggregates collide every hour at boot+10min
@@ -3950,6 +3971,10 @@ const PRICE_REF_REFRESH_LOOKBACK_MS = 2 * 60 * 60 * 1000; // keep >=2 hourly sam
 let priceRefCacheRunning = false;
 
 async function refreshPriceRefCache() {
+  if (!ENABLE_PRICE_REF_REFRESH) {
+    console.log('[PriceRefCache] Automatic refresh disabled; serving persisted price_ref_cache rows');
+    return;
+  }
   if (priceRefCacheRunning) {
     console.log('[PriceRefCache] Already running, skipping this cycle');
     return;
@@ -3969,6 +3994,12 @@ async function refreshPriceRefCache() {
   priceRefCacheRunning = true;
   const cutoff = Date.now() - PRICE_REF_REFRESH_LOOKBACK_MS;
   const now = Date.now();
+  const itemIds = getHeavyJobItemIds('PriceRefCache');
+  if (!itemIds) {
+    priceRefCacheRunning = false;
+    return;
+  }
+  console.log(`[PriceRefCache] Refresh using ${itemIds.length} per-item queries from last 2h`);
   // 2026-05-02 stage 4: direct sync transaction (auto-rollback on throw).
   const stmt_priceRefIncr = db.prepare(`INSERT OR REPLACE INTO price_ref_cache (item_id, quality, city, avg_sell, avg_vol, sample_count, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)`);
   const writePriceRefIncr = db.transaction((rows) => {
@@ -3977,40 +4008,45 @@ async function refreshPriceRefCache() {
     }
   });
   const aggStmt = statsDb.prepare(`SELECT item_id, quality, city, AVG(avg_sell) as avg_price, AVG(sample_count) as avg_vol, COUNT(*) as samples
-    FROM price_averages WHERE item_id >= ? AND item_id < ? AND period_start > ? AND avg_sell > 0
+    FROM price_averages WHERE item_id = ? AND period_type = 'hourly' AND period_start > ? AND avg_sell > 0
     GROUP BY item_id, quality, city`);
 
   let totalUpdated = 0;
+  const WRITE_BATCH = 1000;
+  let writeBuf = [];
+  function flushPriceRefWrites() {
+    if (writeBuf.length === 0) return;
+    const batch = writeBuf.splice(0, WRITE_BATCH);
+    try {
+      writePriceRefIncr.immediate(batch);
+      totalUpdated += batch.length;
+    } catch (err) {
+      console.error('[PriceRefCache-incr] Batch failed (auto-rolled-back):', err.message);
+    }
+  }
   try {
-    for (const [lo, hi] of PRICE_REF_ITEM_RANGES) {
+    for (let idx = 0; idx < itemIds.length; idx++) {
+      const itemId = itemIds[idx];
       let rows;
-      try { rows = aggStmt.all(lo, hi, cutoff); }
+      try { rows = aggStmt.all(itemId, cutoff); }
       catch (err) {
-        console.error(`[PriceRefCache-incr] Read failed for ${lo}..${hi}:`, err.message);
+        console.error(`[PriceRefCache-incr] Read failed for ${itemId}:`, err.message);
         continue;
       }
-      await _priceRefYield();
       if (rows && rows.length > 0) {
-        try {
-          writePriceRefIncr.immediate(rows);
-          totalUpdated += rows.length;
-        } catch (err) {
-          console.error('[PriceRefCache-incr] Batch failed (auto-rolled-back):', err.message);
-        }
+        for (const row of rows) writeBuf.push(row);
+        while (writeBuf.length >= WRITE_BATCH) flushPriceRefWrites();
       }
-      await _priceRefYield();
+      if ((idx + 1) % 50 === 0) await _priceRefYield();
     }
+    flushPriceRefWrites();
     if (totalUpdated > 0) console.log(`[PriceRefCache] Updated ${totalUpdated} entries from last 2h`);
-    // Force a WAL checkpoint after each refresh. Use RESTART (not PASSIVE) so
-    // any readers that hadn't yet moved past the old snapshot are signalled
-    // to start a new transaction; the next read sees a clean WAL frame index.
-    // RESTART doesn't truncate the file but resets frame count to 0, which is
-    // what matters for read perf (each cross-connection read consults the WAL
-    // frame index, so frame count = read overhead).
+    // Keep WAL frames merged without waiting on active readers. RESTART can
+    // block the public event loop; PASSIVE is the safer routine checkpoint.
     try {
-      const cp = db.pragma('wal_checkpoint(RESTART)');
+      const cp = db.pragma('wal_checkpoint(PASSIVE)');
       if (Array.isArray(cp) && cp[0]) {
-        console.log(`[PriceRefCache] wal_checkpoint(RESTART): busy=${cp[0].busy} log=${cp[0].log} checkpointed=${cp[0].checkpointed}`);
+        console.log(`[PriceRefCache] wal_checkpoint(PASSIVE): busy=${cp[0].busy} log=${cp[0].log} checkpointed=${cp[0].checkpointed}`);
       }
     } catch (err) {
       console.error('[PriceRefCache] wal_checkpoint failed:', err.message);
@@ -4037,7 +4073,7 @@ async function buildPriceReference() {
 
   const cityRef = {}, volRef = {};
   const globalAcc = {}; // accumulator for global averages
-  // Yield every 10k rows so the loop doesn't block the event loop on big tables.
+  // Yield every 8k rows so the loop doesn't block the event loop on big tables.
   for (let i = 0; i < rows.length; i++) {
     const r = rows[i];
     if (r.sample_count >= 2 && r.avg_sell > 0) {
@@ -4048,7 +4084,7 @@ async function buildPriceReference() {
       globalAcc[gk].sum += r.avg_sell;
       globalAcc[gk].cnt++;
     }
-    if ((i & 0x2FFF) === 0x2FFF) await _priceRefYield(); // ~every 12k rows
+    if ((i & 0x1FFF) === 0x1FFF) await _priceRefYield();
   }
   cityPriceRef = cityRef;
   volumeRef = volRef;
@@ -4079,16 +4115,26 @@ async function initPriceRefCache() {
   if (persistedRows > 5000) {
     console.log(`[PriceRefCache] Startup using ${persistedRows} persisted cache rows; heavy refresh deferred`);
     await buildPriceReference();
-    setTimeout(() => {
-      refreshPriceRefCache()
-        .then(() => buildPriceReference())
-        .catch((err) => console.error('[PriceRefCache] Deferred startup refresh failed:', err && err.message || err));
-    }, 2 * 60 * 1000);
+    if (ENABLE_PRICE_REF_REFRESH) {
+      setTimeout(() => {
+        refreshPriceRefCache()
+          .then(() => buildPriceReference())
+          .catch((err) => console.error('[PriceRefCache] Deferred startup refresh failed:', err && err.message || err));
+      }, 2 * 60 * 1000);
+    } else {
+      console.log('[PriceRefCache] Deferred startup refresh disabled; using persisted refs only');
+    }
+    return;
+  }
+  const itemIds = getHeavyJobItemIds('PriceRefCache');
+  if (!itemIds) {
+    console.log('[PriceRefCache] Startup cache is sparse and item catalog is not ready; retrying init in 60s');
+    setTimeout(_initPriceRefCacheRunner, 60 * 1000);
     return;
   }
   priceRefCacheRunning = true;
   const cutoff6h = Date.now() - 6 * 60 * 60 * 1000; // Only last 6h on startup to keep memory low
-  console.log('[PriceRefCache] Initial build from last 6h (incremental updates fill the rest)...');
+  console.log(`[PriceRefCache] Initial build from last 6h using ${itemIds.length} per-item queries (incremental updates fill the rest)...`);
   const now = Date.now();
   const stmt_priceRefInit = db.prepare(`INSERT OR REPLACE INTO price_ref_cache (item_id, quality, city, avg_sell, avg_vol, sample_count, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)`);
   const writePriceRefInit = db.transaction((rows) => {
@@ -4097,29 +4143,38 @@ async function initPriceRefCache() {
     }
   });
   const aggStmt = statsDb.prepare(`SELECT item_id, quality, city, AVG(avg_sell) as avg_price, AVG(sample_count) as avg_vol, COUNT(*) as samples
-    FROM price_averages WHERE item_id >= ? AND item_id < ? AND period_start > ? AND avg_sell > 0
+    FROM price_averages WHERE item_id = ? AND period_type = 'hourly' AND period_start > ? AND avg_sell > 0
     GROUP BY item_id, quality, city`);
 
   let totalInit = 0;
+  const WRITE_BATCH = 1000;
+  let writeBuf = [];
+  function flushPriceRefInitWrites() {
+    if (writeBuf.length === 0) return;
+    const batch = writeBuf.splice(0, WRITE_BATCH);
+    try {
+      writePriceRefInit.immediate(batch);
+      totalInit += batch.length;
+    } catch (err) {
+      console.error('[PriceRefCache-init] Batch failed (auto-rolled-back):', err.message);
+    }
+  }
   try {
-    for (const [lo, hi] of PRICE_REF_ITEM_RANGES) {
+    for (let idx = 0; idx < itemIds.length; idx++) {
+      const itemId = itemIds[idx];
       let rows;
-      try { rows = aggStmt.all(lo, hi, cutoff6h); }
+      try { rows = aggStmt.all(itemId, cutoff6h); }
       catch (err) {
-        console.error(`[PriceRefCache] Init read failed for ${lo}..${hi}:`, err.message);
+        console.error(`[PriceRefCache] Init read failed for ${itemId}:`, err.message);
         continue;
       }
-      await _priceRefYield();
       if (rows && rows.length > 0) {
-        try {
-          writePriceRefInit.immediate(rows);
-          totalInit += rows.length;
-        } catch (err) {
-          console.error('[PriceRefCache-init] Batch failed (auto-rolled-back):', err.message);
-        }
+        for (const row of rows) writeBuf.push(row);
+        while (writeBuf.length >= WRITE_BATCH) flushPriceRefInitWrites();
       }
-      await _priceRefYield();
+      if ((idx + 1) % 50 === 0) await _priceRefYield();
     }
+    flushPriceRefInitWrites();
     console.log(`[PriceRefCache] Initial build complete: ${totalInit} entries`);
   } finally {
     priceRefCacheRunning = false;
@@ -4141,6 +4196,7 @@ setTimeout(_initPriceRefCacheRunner, 15000);
 // historical sanity baselines for outlier checks and transport enrichment.
 let priceRefRunnerRunning = false;
 const _priceRefRunner = () => {
+  if (!ENABLE_PRICE_REF_REFRESH) return;
   if (priceRefRunnerRunning) {
     console.log('[PriceRef] Runner already active, skipping this tick');
     return;
@@ -4155,7 +4211,11 @@ const _priceRefRunner = () => {
       priceRefRunnerRunning = false;
     });
 };
-setInterval(_priceRefRunner, PRICE_REF_REFRESH_INTERVAL_MS);
+if (ENABLE_PRICE_REF_REFRESH) {
+  setInterval(_priceRefRunner, PRICE_REF_REFRESH_INTERVAL_MS);
+} else {
+  console.log('[PriceRefCache] Recurring refresh disabled; set ENABLE_PRICE_REF_REFRESH=1 only after worker isolation');
+}
 
 app.get('/api/transport-routes-live', transportLiveLimiter, (req, res) => {
   try {
@@ -5703,6 +5763,7 @@ let dbBusy = false; // Prevents concurrent transaction collisions
 // This eliminates the compaction pipeline and prevents unbounded table growth.
 function recordSnapshots(allPrices) {
   if (dbBusy) { console.log('[Snapshots] DB busy, skipping'); return; }
+  if (isDbMaintenanceActive()) { console.log('[Snapshots] DB maintenance active, deferring snapshot write'); return; }
   const now = Date.now();
   const hourStart = Math.floor(now / 3600000) * 3600000;
   // Tier 3 fix (2026-04-24): 5000 → 500. 5000-row transactions held the WAL
@@ -5750,7 +5811,17 @@ function recordSnapshots(allPrices) {
       count++;
     }
   });
+  let maintenancePauseLogged = false;
   function writeBatch() {
+    if (isDbMaintenanceActive()) {
+      if (!maintenancePauseLogged) {
+        console.log(`[Snapshots] DB maintenance active, pausing snapshot write at ${i}/${allPrices.length}`);
+        maintenancePauseLogged = true;
+      }
+      setTimeout(writeBatch, 5000);
+      return;
+    }
+    maintenancePauseLogged = false;
     const end = Math.min(i + BATCH, allPrices.length);
     const slice = allPrices.slice(i, end);
     i = end;
@@ -5773,12 +5844,20 @@ function recordSnapshots(allPrices) {
 // (which can grow to 20M+ rows from NATS and OOM the process).
 let statsRunning = false;
 let statsStartTime = 0;
+let statsGeneration = 0;
 async function computeSpreadStats() {
-  // Watchdog: if statsRunning has been true for >20 min, force-reset it
+  if (!ENABLE_SPREAD_STATS) {
+    console.log('[SpreadStats] Disabled by default; serving existing cached spread_stats rows');
+    return;
+  }
+  // Watchdog: if statsRunning has been true for >20 min, invalidate the old
+  // run before allowing a replacement. Without a generation token, a stale
+  // async run can keep writing after the flag reset starts a new run.
   if (statsRunning) {
     if (Date.now() - statsStartTime > 20 * 60 * 1000) {
-      console.error('[SpreadStats] Resetting stuck statsRunning flag after 20min');
+      console.error('[SpreadStats] Resetting stuck statsRunning flag after 20min (invalidating stale run)');
       statsRunning = false;
+      statsGeneration++;
     } else {
       console.log('[SpreadStats] Busy, skipping this cycle');
       return;
@@ -5805,6 +5884,8 @@ async function computeSpreadStats() {
   }
   statsRunning = true;
   statsStartTime = Date.now();
+  const myStatsGeneration = ++statsGeneration;
+  const isStaleStatsRun = () => myStatsGeneration !== statsGeneration;
 
   const now = Date.now();
   const windowMs = 7 * 24 * 60 * 60 * 1000; // 7 days
@@ -5813,24 +5894,28 @@ async function computeSpreadStats() {
   const mem = process.memoryUsage();
   console.log(`[SpreadStats] Starting chunked aggregation... RSS: ${Math.round(mem.rss/1024/1024)}MB Heap: ${Math.round(mem.heapUsed/1024/1024)}MB`);
 
-  // Drain WAL before the heavy aggregate. NATS flushes (every 30s) and the
-  // last priceRefCache cycle leave thousands of WAL frames; cross-connection
-  // reads then have to consult the WAL frame index for every page request,
-  // multiplying scan time by 10x+. RESTART resets the frame count to 0.
+  // Merge WAL frames before the heavy aggregate without waiting on readers.
+  // RESTART previously helped scan speed, but can itself block the public
+  // event loop. PASSIVE is the safer tradeoff for uptime.
   try {
-    const cp = db.pragma('wal_checkpoint(RESTART)');
+    const cp = db.pragma('wal_checkpoint(PASSIVE)');
     if (Array.isArray(cp) && cp[0]) {
-      console.log(`[SpreadStats] pre-run wal_checkpoint(RESTART): busy=${cp[0].busy} log=${cp[0].log} checkpointed=${cp[0].checkpointed}`);
+      console.log(`[SpreadStats] pre-run wal_checkpoint(PASSIVE): busy=${cp[0].busy} log=${cp[0].log} checkpointed=${cp[0].checkpointed}`);
     }
   } catch (err) {
     console.error('[SpreadStats] pre-run wal_checkpoint failed:', err.message);
   }
 
-  // 2026-05-13: reuse the fine-grained priceRef ranges instead of the old
-  // 10 broad buckets. Production still saw 20-46s event-loop stalls in the
-  // T8/UNIQUE chunks; narrower ranges trade more short queries for no long
-  // synchronous block, which is the right shape for a public web process.
-  const ITEM_RANGES = PRICE_REF_ITEM_RANGES;
+  // 2026-05-20: range chunking was still not bounded enough on production:
+  // some T8/UNIQUE ranges froze the public Node event loop for 55-57s, just
+  // below the 60s abort threshold. Use the loaded item catalog and query one
+  // concrete item_id at a time so every synchronous SQLite span stays small.
+  const itemIds = getHeavyJobItemIds('SpreadStats');
+  if (!itemIds) {
+    statsRunning = false;
+    return;
+  }
+  console.log(`[SpreadStats] Work plan: ${itemIds.length} per-item aggregate queries`);
 
   // Pre-compile statements once across all chunks.
   const aggStmt = statsDb.prepare(
@@ -5839,7 +5924,8 @@ async function computeSpreadStats() {
       AVG(CASE WHEN max_buy  > 0 THEN max_buy  ELSE avg_buy  END) AS avg_max_buy,
       COUNT(*) AS sample_count
      FROM price_averages
-     WHERE item_id >= ? AND item_id < ?
+     WHERE item_id = ?
+       AND period_type = 'hourly'
        AND period_start > ?
        AND (avg_sell > 0 OR avg_buy > 0)
      GROUP BY item_id, quality, city`
@@ -5857,6 +5943,10 @@ async function computeSpreadStats() {
   let totalAgg = 0;
 
   function flushWrites() {
+    if (isStaleStatsRun()) {
+      writeBuf.length = 0;
+      return;
+    }
     if (writeBuf.length === 0) return;
     const batch = writeBuf.splice(0);
     statsWritten += batch.length;
@@ -5873,16 +5963,25 @@ async function computeSpreadStats() {
   const COMPUTE_YIELD_EVERY = 250; // items processed before a yield in the inner compute loop
 
   try {
-    for (const [lo, hi] of ITEM_RANGES) {
+    for (let unitIndex = 0; unitIndex < itemIds.length; unitIndex++) {
+      const itemIdForQuery = itemIds[unitIndex];
+      if (isStaleStatsRun()) {
+        console.warn('[SpreadStats] Stale run cancelled before next item');
+        return;
+      }
       let chunkRows;
       try {
-        chunkRows = aggStmt.all(lo, hi, cutoff);
+        chunkRows = aggStmt.all(itemIdForQuery, cutoff);
       } catch (err) {
-        console.error(`[SpreadStats] Aggregate read failed for ${lo}..${hi}:`, err.message);
-        continue; // skip range, keep going
+        console.error(`[SpreadStats] Aggregate read failed for ${itemIdForQuery}:`, err.message);
+        continue; // skip item, keep going
       }
       // Yield after the SQL aggregate so the compute loop starts on a fresh tick.
       await yieldLoop();
+      if (isStaleStatsRun()) {
+        console.warn('[SpreadStats] Stale run cancelled after aggregate read');
+        return;
+      }
       totalAgg += chunkRows.length;
 
       if (chunkRows.length > 0) {
@@ -5945,6 +6044,10 @@ async function computeSpreadStats() {
           if ((i_k + 1) % COMPUTE_YIELD_EVERY === 0) {
             if (writeBuf.length >= WRITE_BATCH) flushWrites();
             await yieldLoop();
+            if (isStaleStatsRun()) {
+              console.warn('[SpreadStats] Stale run cancelled during compute');
+              return;
+            }
           }
         }
 
@@ -5955,7 +6058,10 @@ async function computeSpreadStats() {
         }
       }
 
-      // Yield to event loop between every range (regardless of chunk size).
+      if ((unitIndex + 1) % 1000 === 0) {
+        console.log(`[SpreadStats] Progress: ${unitIndex + 1}/${itemIds.length} items, wrote=${statsWritten}, rss=${Math.round(process.memoryUsage().rss/1024/1024)}MB`);
+      }
+      // Yield to event loop between every item (regardless of chunk size).
       await yieldLoop();
     }
 
@@ -5965,7 +6071,7 @@ async function computeSpreadStats() {
     const mem2 = process.memoryUsage();
     console.log(`[SpreadStats] Done. Processed ${processed} items, ${totalAgg} agg rows, wrote ${statsWritten} spread stats. RSS: ${Math.round(mem2.rss/1024/1024)}MB`);
   } finally {
-    statsRunning = false;
+    if (!isStaleStatsRun()) statsRunning = false;
   }
 }
 
@@ -5975,27 +6081,27 @@ async function computeSpreadStats() {
 // Wrap to catch any top-level rejection so we never get an unhandledRejection.
 const _spreadStatsRunner = () => computeSpreadStats().catch((err) => {
   console.error('[SpreadStats] Top-level crash:', err && err.message || err);
+  statsGeneration++;
   statsRunning = false;
 });
 const SPREAD_STATS_INTERVAL_MS = 6 * 60 * 60 * 1000;
-setTimeout(_spreadStatsRunner, 25 * 60 * 1000);
-setInterval(_spreadStatsRunner, SPREAD_STATS_INTERVAL_MS);
+if (ENABLE_SPREAD_STATS) {
+  setTimeout(_spreadStatsRunner, 25 * 60 * 1000);
+  setInterval(_spreadStatsRunner, SPREAD_STATS_INTERVAL_MS);
+} else {
+  console.log('[SpreadStats] Automatic computation disabled; set ENABLE_SPREAD_STATS=1 only after worker isolation');
+}
 
 // === WAL CHECKPOINT (every 6 hours) ===
 // Prevents the WAL file from growing unbounded on a write-heavy database.
 function runWalCheckpoint() {
   if (dbBusy) return;
-  // TRUNCATE requires no other connection to hold a read transaction — otherwise
-  // it returns SQLITE_LOCKED and the WAL doesn't shrink. Try TRUNCATE first; on
-  // lock, fall back to PASSIVE which merges what it can without blocking.
-  db.run('PRAGMA wal_checkpoint(TRUNCATE)', (err) => {
-    if (!err) { console.log('[WAL] Checkpoint (TRUNCATE) complete'); return; }
-    const isLocked = /SQLITE_LOCKED|locked|busy/i.test(err.message || '');
-    if (!isLocked) { console.error('[WAL] Checkpoint error:', err.message); return; }
-    db.run('PRAGMA wal_checkpoint(PASSIVE)', (err2) => {
-      if (err2) console.error('[WAL] Checkpoint PASSIVE fallback also failed:', err2.message);
-      else console.log('[WAL] Checkpoint (PASSIVE fallback) complete — WAL not fully truncated');
-    });
+  if (isDbMaintenanceActive()) { console.log('[WAL] DB maintenance active, skipping checkpoint'); return; }
+  // Routine checkpointing must not wait for readers. Use PASSIVE and let the
+  // health heartbeat surface WAL growth instead of freezing the web process.
+  db.run('PRAGMA wal_checkpoint(PASSIVE)', (err) => {
+    if (err) console.error('[WAL] Checkpoint error:', err.message);
+    else console.log('[WAL] Checkpoint (PASSIVE) complete');
   });
 }
 setInterval(runWalCheckpoint, 30 * 60 * 1000); // every 30 min (was 6 hours — WAL grew to 5.4GB)
@@ -6070,8 +6176,8 @@ function scheduleVacuumIfNeeded(rowsDeleted) {
 //   - `await setImmediate` between chunks so HTTP/WS/NATS get event-loop time
 //   - bail early if RSS exceeds COMPACTION_RSS_LIMIT_MB (defaults to 1.5 GB)
 //   - skip the in-process auto-VACUUM: it's also sync and would re-wedge the
-//     event loop. Replaced by `wal_checkpoint(TRUNCATE)` so WAL can't grow
-//     unbounded. VACUUM is a manual / off-hours operation.
+//     event loop. Routine checkpoints use PASSIVE so WAL frames can merge
+//     without waiting on active readers. VACUUM is manual / off-hours.
 //   - skip while analyticsRunning/statsRunning to avoid simultaneous heavy DB
 let compactionRunning = false;
 // 2026-05-11: 5000-row chunks still produced 15-60s event-loop stalls on the
@@ -6083,6 +6189,10 @@ const COMPACTION_RSS_LIMIT_MB = 1500;      // bail above this; baseline is ~250 
 const COMPACTION_MAX_CYCLES = 20000;       // hard ceiling on chunks per call
 
 async function compactOldData(rawRetentionDays) {
+  if (!ENABLE_COMPACTION) {
+    console.log('[Compaction] Automatic compaction disabled; run only from isolated maintenance worker');
+    return;
+  }
   if (compactionRunning) {
     console.log('[Compaction] Already running, skipping this cycle');
     return;
@@ -6310,12 +6420,11 @@ async function compactOldData(rawRetentionDays) {
     if (info.changes > 0) console.log(`[Compaction] Pruned ${info.changes} contributions rows older than 60 days`);
   } catch (err) { console.error('[Compaction] contributions prune failed:', err.message); }
 
-  // Force WAL checkpoint to release accumulated frames. TRUNCATE shrinks the
-  // -wal file back to (near) zero. This is safe between cycles because no
-  // long-running readers should be active.
+  // Merge accumulated WAL frames without waiting on active readers. TRUNCATE
+  // can reclaim the WAL file, but it can also block the public event loop.
   try {
-    const cp = db.pragma('wal_checkpoint(TRUNCATE)');
-    console.log(`[Compaction] wal_checkpoint(TRUNCATE):`, JSON.stringify(cp));
+    const cp = db.pragma('wal_checkpoint(PASSIVE)');
+    console.log(`[Compaction] wal_checkpoint(PASSIVE):`, JSON.stringify(cp));
   } catch (err) { console.error('[Compaction] checkpoint failed:', err.message); }
 
   const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
@@ -6340,6 +6449,10 @@ const DB_WARN_GB  = 15;
 const DB_EMERG_GB = 20;
 
 function checkDiskUsage() {
+  if (isDbMaintenanceActive()) {
+    console.log('[DiskSafety] DB maintenance active, skipping public-process disk check');
+    return;
+  }
   db.get(`SELECT
       (SELECT page_count FROM pragma_page_count()) AS page_count,
       (SELECT freelist_count FROM pragma_freelist_count()) AS freelist_count,
@@ -6360,6 +6473,11 @@ function checkDiskUsage() {
     // frees pages onto SQLite's freelist but does not shrink the file without
     // VACUUM; using page_count alone re-triggered aggressive compaction forever
     // after May 11 had ~6GB already-free pages in a 15.3GB file.
+    if (!ENABLE_COMPACTION) {
+      const level = usedGB >= DB_EMERG_GB ? 'EMERGENCY' : (usedGB >= DB_WARN_GB ? 'WARNING' : 'OK');
+      console.log(`[DiskSafety] ${level}: DB live=${usedGB.toFixed(1)}GB total=${totalGB.toFixed(1)}GB freePages=${freeGB.toFixed(1)}GB — automatic compaction disabled in public process`);
+      return;
+    }
     if (usedGB >= DB_EMERG_GB) {
       console.error(`[DiskSafety] EMERGENCY: DB live=${usedGB.toFixed(1)}GB total=${totalGB.toFixed(1)}GB freePages=${freeGB.toFixed(1)}GB (>${DB_EMERG_GB}GB live). Emergency compact: 1 day raw retention`);
       compactOldData(1).catch(e => console.error('[Compaction] uncaught:', e && e.message));
@@ -6382,7 +6500,11 @@ setTimeout(() => { checkDiskUsage(); }, 25 * 60 * 1000);
 setInterval(() => { checkDiskUsage(); }, 2 * 60 * 60 * 1000);
 // Daily 7-day-retention compaction at small DB sizes (won't fire for us until
 // we shrink under 10 GB, but kept for the post-cleanup state).
-setInterval(() => { if (!compactionRunning) compactOldData().catch(e => console.error('[Compaction] uncaught:', e && e.message)); }, 24 * 60 * 60 * 1000);
+if (ENABLE_COMPACTION) {
+  setInterval(() => { if (!compactionRunning) compactOldData().catch(e => console.error('[Compaction] uncaught:', e && e.message)); }, 24 * 60 * 60 * 1000);
+} else {
+  console.log('[Compaction] Automatic schedules disabled; set ENABLE_COMPACTION=1 only for an isolated maintenance process');
+}
 
 // === HEALTH HEARTBEAT (root-cause observability, 2026-05-04) ===
 // Without this, the May 3 outage was invisible: DB grew from ~5GB → 19GB across
@@ -6391,6 +6513,13 @@ setInterval(() => { if (!compactionRunning) compactOldData().catch(e => console.
 // future bloat is visible immediately in `journalctl -u albion-saas | grep HEALTH`.
 function emitHealthLine() {
   try {
+    if (isDbMaintenanceActive()) {
+      const m = process.memoryUsage();
+      const rssMB = Math.round(m.rss / 1048576);
+      const heapMB = Math.round(m.heapUsed / 1048576);
+      console.log(`[HEALTH] dbMaintenance=1 rssMB=${rssMB} heapMB=${heapMB} compaction=0 stats=0 analytics=0`);
+      return;
+    }
     const pageCount = db.pragma('page_count', { simple: true }) || 0;
     const pageSize = db.pragma('page_size', { simple: true }) || 0;
     const dbMB = Math.round((pageCount * pageSize) / 1048576);
@@ -6475,6 +6604,10 @@ let analyticsLastResult = null;
 let analyticsGeneration = 0;
 
 async function computeAnalytics() {
+  if (!ENABLE_ANALYTICS) {
+    console.log('[Analytics] Disabled by default; serving existing cached price_analytics rows');
+    return;
+  }
   if (analyticsRunning) {
     if (Date.now() - analyticsStartTime > 25 * 60 * 1000) {
       console.error('[Analytics] Resetting stuck flag after 25min (invalidating stale run via generation bump)');
@@ -6530,12 +6663,17 @@ async function computeAnalytics() {
   const computedAt    = new Date(now).toISOString();
 
   console.log(`[Analytics] Starting computation (gen=${myGen})...`);
+  const analyticsItemIds = getHeavyJobItemIds('Analytics');
+  if (!analyticsItemIds) {
+    finalize('no-item-catalog');
+    return;
+  }
+  console.log(`[Analytics] Work plan: ${analyticsItemIds.length} per-item aggregate queries`);
 
   // === STEP 1: Bulk SQL metrics (SMA 7d, SMA 30d, scan-weighted avg 7d, price_trend, spread_volatility) ===
-  // 2026-05-04: chunked by item_id range — same anti-pattern fix as priceRefCache
-  // and spreadStats. Single .all() over price_averages was a 5-15s sync block
-  // (full-table GROUP BY against idx_pa_ema_stream). Now 1-3s per chunk with
-  // setImmediate yields between.
+  // 2026-05-20: production still showed 10s+ sync stalls from range chunks.
+  // Query one concrete item_id at a time; total wall time may be longer, but
+  // each SQLite span is small enough for the public event loop to keep serving.
   const _analyticsYield = () => new Promise(r => setImmediate(r));
   const aggStmt7d = statsDb.prepare(
     `SELECT item_id, city, quality,
@@ -6548,7 +6686,8 @@ async function computeAnalytics() {
       SUM(CASE WHEN min_sell > 0 AND max_buy > 0 THEN CAST(min_sell - max_buy AS REAL) * (min_sell - max_buy) ELSE NULL END) AS sum_spread_sq,
       COUNT(CASE WHEN min_sell > 0 AND max_buy > 0 THEN 1 ELSE NULL END) AS spread_count
     FROM price_averages
-    WHERE item_id >= ? AND item_id < ?
+    WHERE item_id = ?
+      AND period_type = 'hourly'
       AND period_start > ? AND (avg_sell > 0 OR avg_buy > 0)
     GROUP BY item_id, city, quality
     HAVING data_points_7d >= 2`
@@ -6556,11 +6695,12 @@ async function computeAnalytics() {
   const map7d = {};
   let total7d = 0;
   try {
-    for (const [lo, hi] of PRICE_REF_ITEM_RANGES) {
+    for (let idx = 0; idx < analyticsItemIds.length; idx++) {
+      const itemId = analyticsItemIds[idx];
       let chunk;
-      try { chunk = aggStmt7d.all(oneDayAgo, lo, hi, sevenDaysAgo); }
+      try { chunk = aggStmt7d.all(oneDayAgo, itemId, sevenDaysAgo); }
       catch (err) {
-        console.error(`[Analytics] 7d chunk failed for ${lo}..${hi}:`, err.message || err);
+        console.error(`[Analytics] 7d item failed for ${itemId}:`, err.message || err);
         continue;
       }
       await _analyticsYield();
@@ -6571,6 +6711,9 @@ async function computeAnalytics() {
         }
         total7d += chunk.length;
         chunk.length = 0;
+      }
+      if ((idx + 1) % 1000 === 0) {
+        console.log(`[Analytics] 7d progress: ${idx + 1}/${analyticsItemIds.length} items, rows=${total7d}`);
       }
       await _analyticsYield();
     }
@@ -6590,17 +6733,18 @@ async function computeAnalytics() {
     `SELECT item_id, city, quality,
       AVG(CASE WHEN avg_sell > 0 THEN avg_sell ELSE NULL END) AS sma_30d
     FROM price_averages
-    WHERE item_id >= ? AND item_id < ?
+    WHERE item_id = ?
       AND period_start > ? AND (avg_sell > 0 OR avg_buy > 0)
     GROUP BY item_id, city, quality`
   );
   const map30d = {};
   try {
-    for (const [lo, hi] of PRICE_REF_ITEM_RANGES) {
+    for (let idx = 0; idx < analyticsItemIds.length; idx++) {
+      const itemId = analyticsItemIds[idx];
       let chunk;
-      try { chunk = aggStmt30d.all(lo, hi, thirtyDaysAgo); }
+      try { chunk = aggStmt30d.all(itemId, thirtyDaysAgo); }
       catch (err) {
-        console.error(`[Analytics] 30d chunk failed for ${lo}..${hi}:`, err.message || err);
+        console.error(`[Analytics] 30d item failed for ${itemId}:`, err.message || err);
         continue;
       }
       await _analyticsYield();
@@ -6610,6 +6754,9 @@ async function computeAnalytics() {
           map30d[r.item_id + '|' + r.city + '|' + r.quality] = r.sma_30d;
         }
         chunk.length = 0;
+      }
+      if ((idx + 1) % 1000 === 0) {
+        console.log(`[Analytics] 30d progress: ${idx + 1}/${analyticsItemIds.length} items`);
       }
       await _analyticsYield();
     }
@@ -6655,12 +6802,12 @@ async function computeAnalytics() {
     for (const r of rows) stmt_aInsert.run(...r);
   });
 
-  // Flush bulk results — chunked at 5K rows with setImmediate yields between chunks
+  // Flush bulk results in small chunks with setImmediate yields between chunks
   // so that a 200K-row write doesn't freeze the event loop for several seconds.
   // Still wrapped in withWriteLock until stage 4 deletes that infrastructure.
   async function flushBulk(results) {
     if (results.length === 0) return;
-    const CHUNK = 5000;
+    const CHUNK = 1000;
     for (let i = 0; i < results.length; i += CHUNK) {
       if (isStale()) return;
       const slice = results.slice(i, i + CHUNK);
@@ -6691,14 +6838,16 @@ async function computeAnalytics() {
     const emaStmt = statsDb.prepare(
       `SELECT item_id, city, quality, avg_sell
         FROM price_averages
-        WHERE item_id >= ? AND item_id < ?
+        WHERE item_id = ?
+          AND period_type = 'hourly'
           AND period_start > ? AND avg_sell > 0
-        ORDER BY item_id, city, quality, period_start ASC`
+        ORDER BY city, quality, period_start ASC`
     );
     let chunkCount = 0;
-    for (const [lo, hi] of PRICE_REF_ITEM_RANGES) {
+    for (let idx = 0; idx < analyticsItemIds.length; idx++) {
       if (isStale()) break;
-      for (const row of emaStmt.iterate(lo, hi, sevenDaysAgo)) {
+      const itemId = analyticsItemIds[idx];
+      for (const row of emaStmt.iterate(itemId, sevenDaysAgo)) {
         if (isStale()) break;
         const k = row.item_id + '|' + row.city + '|' + row.quality;
         if (!comboSet.has(k)) continue;
@@ -6720,6 +6869,9 @@ async function computeAnalytics() {
           await new Promise(r => setImmediate(r));
         }
       }
+      if ((idx + 1) % 1000 === 0) {
+        console.log(`[Analytics] EMA progress: ${idx + 1}/${analyticsItemIds.length} items, rows=${rowsProcessed}`);
+      }
       await _analyticsYield();
     }
   } catch (errStream) {
@@ -6740,7 +6892,7 @@ async function computeAnalytics() {
   }
   // Chunked EMA flush (same shape as flushBulk).
   try {
-    const CHUNK = 5000;
+    const CHUNK = 1000;
     for (let i = 0; i < emaResults.length; i += CHUNK) {
       if (isStale()) return;
       const slice = emaResults.slice(i, i + CHUNK);
@@ -6777,20 +6929,38 @@ function _runAnalytics() {
 // at +35min (setTimeout), and then every 30min — i.e. two consecutive
 // runs near boot. Cleaner: wait, then start the recurring cadence.
 const ANALYTICS_INTERVAL_MS = 4 * 60 * 60 * 1000;
-setTimeout(() => {
-  _runAnalytics();
-  setInterval(_runAnalytics, ANALYTICS_INTERVAL_MS);
-}, 65 * 60 * 1000);
+if (ENABLE_ANALYTICS) {
+  setTimeout(() => {
+    _runAnalytics();
+    setInterval(_runAnalytics, ANALYTICS_INTERVAL_MS);
+  }, 65 * 60 * 1000);
+} else {
+  console.log('[Analytics] Automatic computation disabled; set ENABLE_ANALYTICS=1 only after worker isolation');
+}
 
 // === HISTORICAL BACKFILL (Charts + History APIs) ===
-// Runs once on start if no historical data exists
+// Legacy one-time seeding path. Disabled by default for production stability:
+// the live database already has history, and a boot-time COUNT(*) over the
+// 15GB price_averages table blocked the public event loop during compaction.
+const ENABLE_HISTORICAL_BACKFILL = process.env.ENABLE_HISTORICAL_BACKFILL === '1';
 async function backfillHistoricalData() {
+  if (!ENABLE_HISTORICAL_BACKFILL) {
+    console.log('[Backfill] Automatic historical backfill disabled; live price history already exists');
+    return;
+  }
+  if (isDbMaintenanceActive()) {
+    console.log('[Backfill] DB maintenance active, retrying historical backfill later');
+    setTimeout(backfillHistoricalData, 15 * 60 * 1000);
+    return;
+  }
   // Check if we already have historical data
-  const hasData = await new Promise((resolve) => {
-    db.get(`SELECT COUNT(*) as cnt FROM price_averages`, (err, row) => {
-      resolve(row && row.cnt > 0);
-    });
-  });
+  let hasData = false;
+  try {
+    hasData = !!db.prepare(`SELECT 1 FROM price_averages LIMIT 1`).get();
+  } catch (err) {
+    console.error('[Backfill] Historical data existence check failed:', err.message);
+    return;
+  }
   if (hasData) {
     console.log('[Backfill] Historical data already exists, skipping backfill');
     return;
@@ -6895,18 +7065,27 @@ async function backfillHistoricalData() {
   dbBusy = false;
   console.log(`[Backfill] Complete! Total: ${dailyCount} daily + ${hourlyCount} hourly records`);
 
-  // Trigger a spread stats computation right after backfill
-  setTimeout(computeSpreadStats, 5000);
+  // Trigger a spread stats computation right after backfill only when the
+  // isolated maintenance path is explicitly enabled.
+  if (ENABLE_SPREAD_STATS) setTimeout(computeSpreadStats, 5000);
 }
 
-// Start backfill 30 minutes after boot (after first scan is long finished and server is stable)
-setTimeout(backfillHistoricalData, 30 * 60 * 1000);
+// Start backfill only when explicitly enabled.
+if (ENABLE_HISTORICAL_BACKFILL) {
+  setTimeout(backfillHistoricalData, 30 * 60 * 1000);
+} else {
+  console.log('[Backfill] Automatic historical backfill disabled; set ENABLE_HISTORICAL_BACKFILL=1 for a fresh database only');
+}
 
 // === NATS SNAPSHOT BUFFER ===
 // Buffer incoming NATS orders — deduplicated by item/quality/city, flushed every 60s
 // Only stores the BEST price per item/quality/city combo (lowest sell, highest buy)
 const natsSnapshotMap = {};  // key: "itemId_quality_city" → { sell, buy }
 const NATS_FLUSH_INTERVAL = 30 * 1000; // 30s (was 60s) — reduce buffer memory
+const NATS_FLUSH_CHUNK_SIZE = 300; // Bound sync SQLite work; 5k+ bursts caused 7-10s EventLoop WARNs.
+const NATS_FLUSH_YIELD_MS = 5;
+let natsFlushRunning = false;
+let natsFlushRunToken = 0;
 
 // Hoisted prepared statement for the NATS upsert hot path (~30s flush cadence).
 const stmt_natsBatchUpsert = db.prepare(`INSERT INTO price_averages (item_id, quality, city, avg_sell, avg_buy, min_sell, max_buy, sample_count, period_type, period_start)
@@ -6918,48 +7097,115 @@ const stmt_natsBatchUpsert = db.prepare(`INSERT INTO price_averages (item_id, qu
     max_buy = CASE WHEN excluded.max_buy > max_buy THEN excluded.max_buy ELSE max_buy END,
     sample_count = sample_count + 1`);
 
-function flushNatsBuffer() {
-  const keys = Object.keys(natsSnapshotMap);
-  if (keys.length === 0 || dbBusy || statsRunning) return;
-
-  // Snapshot and clear the map
-  const batch = [];
-  for (const key of keys) {
-    batch.push(natsSnapshotMap[key]);
-    delete natsSnapshotMap[key];
-  }
-  const now = Date.now();
-  const hourStart = Math.floor(now / 3600000) * 3600000;
-
-  // 2026-05-02 stage 4: direct sync transaction (auto-rollback on throw).
-  // Replaces the BEGIN IMMEDIATE → prepare → run loop → finalize → COMMIT chain
-  // and the withWriteLock + ROLLBACK callback handling.
-  const writeNatsBatch = db.transaction((batch, hourStart) => {
-    for (const e of batch) {
-      let sell = e.sell || 0;
-      let buy = e.buy || 0;
-      if (sell <= 0 && buy <= 0) continue;
-      // 2026-04-28: outlier rejection — single typo'd listings poison sma_7d.
-      const gAvg = globalPriceRef[e.item_id + '_' + e.quality] || 0;
-      if (gAvg > 0) {
-        if (sell > 0 && (sell > gAvg * 100 || sell < gAvg * 0.01)) {
-          console.log(`[NATS] Rejecting outlier sell=${sell} for ${e.item_id} q${e.quality} ${e.city} (gAvg=${gAvg})`);
-          sell = 0;
-        }
-        if (buy > 0 && (buy > gAvg * 100 || buy < gAvg * 0.01)) {
-          console.log(`[NATS] Rejecting outlier buy=${buy} for ${e.item_id} q${e.quality} ${e.city} (gAvg=${gAvg})`);
-          buy = 0;
-        }
-        if (sell <= 0 && buy <= 0) continue;
+// 2026-05-02 stage 4: direct sync transaction (auto-rollback on throw).
+// Replaces the BEGIN IMMEDIATE -> prepare -> run loop -> finalize -> COMMIT chain
+// and the withWriteLock + ROLLBACK callback handling.
+const writeNatsBatch = db.transaction((batch, hourStart) => {
+  for (const e of batch) {
+    let sell = e.sell || 0;
+    let buy = e.buy || 0;
+    if (sell <= 0 && buy <= 0) continue;
+    // 2026-04-28: outlier rejection — single typo'd listings poison sma_7d.
+    const gAvg = globalPriceRef[e.item_id + '_' + e.quality] || 0;
+    if (gAvg > 0) {
+      if (sell > 0 && (sell > gAvg * 100 || sell < gAvg * 0.01)) {
+        console.log(`[NATS] Rejecting outlier sell=${sell} for ${e.item_id} q${e.quality} ${e.city} (gAvg=${gAvg})`);
+        sell = 0;
       }
-      stmt_natsBatchUpsert.run(e.item_id, e.quality, e.city, sell, buy, sell, buy, hourStart);
+      if (buy > 0 && (buy > gAvg * 100 || buy < gAvg * 0.01)) {
+        console.log(`[NATS] Rejecting outlier buy=${buy} for ${e.item_id} q${e.quality} ${e.city} (gAvg=${gAvg})`);
+        buy = 0;
+      }
+      if (sell <= 0 && buy <= 0) continue;
     }
-  });
-  try {
+    stmt_natsBatchUpsert.run(e.item_id, e.quality, e.city, sell, buy, sell, buy, hourStart);
+  }
+});
+
+function flushNatsBuffer(options = {}) {
+  const sync = options && options.sync === true;
+  if (natsFlushRunning && !sync) return;
+  const keys = Object.keys(natsSnapshotMap);
+  if (keys.length === 0 || dbBusy) return;
+  if (isDbMaintenanceActive()) {
+    if (keys.length > 50) console.log(`[NATS] DB maintenance active; keeping ${keys.length} deduped prices buffered`);
+    return;
+  }
+
+  // Snapshot the key list first, clear each key only after its chunk commits.
+  // Normal runtime drains in small chunks with event-loop yields, so a market
+  // data burst cannot block HTTP/WSS/health checks for one giant transaction.
+  const hourStart = Math.floor(Date.now() / 3600000) * 3600000;
+  let cursor = 0;
+  let flushed = 0;
+
+  function nextChunkKeys() {
+    const chunkKeys = [];
+    while (cursor < keys.length && chunkKeys.length < NATS_FLUSH_CHUNK_SIZE) {
+      const key = keys[cursor++];
+      if (natsSnapshotMap[key]) chunkKeys.push(key);
+    }
+    return chunkKeys;
+  }
+
+  function writeChunk(chunkKeys) {
+    const batch = chunkKeys.map((key) => natsSnapshotMap[key]).filter(Boolean);
+    if (batch.length === 0) return 0;
     writeNatsBatch.immediate(batch, hourStart);
-    if (batch.length > 50) console.log('[NATS] Flushed ' + batch.length + ' prices into price_averages');
+    for (const key of chunkKeys) delete natsSnapshotMap[key];
+    return batch.length;
+  }
+
+  function logFinished(label) {
+    if (flushed > 50) {
+      const chunked = keys.length > NATS_FLUSH_CHUNK_SIZE ? ` in chunks of ${NATS_FLUSH_CHUNK_SIZE}` : '';
+      console.log(`[NATS] Flushed ${flushed} prices into price_averages${chunked}${label || ''}`);
+    }
+  }
+
+  if (sync) {
+    natsFlushRunToken++;
+    natsFlushRunning = false;
+    try {
+      while (cursor < keys.length) flushed += writeChunk(nextChunkKeys());
+      logFinished(' synchronously');
+    } catch (err) {
+      console.error(`[NATS] Sync flush failed; keeping ${Object.keys(natsSnapshotMap).length} deduped prices buffered:`, err.message);
+    }
+    return;
+  }
+
+  natsFlushRunning = true;
+  const runToken = ++natsFlushRunToken;
+  function drainNextChunk() {
+    if (runToken !== natsFlushRunToken) return;
+    if (dbBusy) { natsFlushRunning = false; return; }
+    if (isDbMaintenanceActive()) {
+      natsFlushRunning = false;
+      const remaining = Object.keys(natsSnapshotMap).length;
+      if (remaining > 50) console.log(`[NATS] DB maintenance active; pausing chunked flush with about ${remaining} deduped prices buffered`);
+      return;
+    }
+    try {
+      const chunkKeys = nextChunkKeys();
+      if (chunkKeys.length > 0) flushed += writeChunk(chunkKeys);
+    } catch (err) {
+      natsFlushRunning = false;
+      console.error(`[NATS] Flush failed; keeping buffered prices for retry:`, err.message);
+      return;
+    }
+    if (cursor < keys.length) {
+      setTimeout(drainNextChunk, NATS_FLUSH_YIELD_MS);
+    } else {
+      natsFlushRunning = false;
+      logFinished('');
+    }
+  }
+  try {
+    drainNextChunk();
   } catch (err) {
-    console.error('[NATS] Flush failed (auto-rolled-back):', err.message);
+    console.error(`[NATS] Flush failed; keeping ${keys.length} deduped prices buffered:`, err.message);
+    natsFlushRunning = false;
   }
 }
 
@@ -7162,7 +7408,7 @@ process.on('unhandledRejection', (reason) => _handleFatal('Unhandled rejection',
 // === GRACEFUL SHUTDOWN ===
 function shutdown(signal) {
   console.log(`[Shutdown] Received ${signal}, closing...`);
-  flushNatsBuffer(); // Save any buffered NATS data before exit
+  flushNatsBuffer({ sync: true }); // Save any buffered NATS data before exit
   if (natsConnection) natsConnection.close();
   wss.close();
   client.destroy();
@@ -7192,7 +7438,7 @@ setInterval(() => {
     console.error(`[FATAL] RSS ${rssMb}MB > ${RSS_EXIT_THRESHOLD_MB}MB — aborting for clean systemd restart`);
     // RSS-driven exit: try a best-effort NATS flush — DB likely still healthy here
     // (no SQLite error preceded this), so the flush won't re-wedge.
-    try { flushNatsBuffer(); } catch {}
+    try { flushNatsBuffer({ sync: true }); } catch {}
     process.abort();
   }
 }, 60 * 1000); // was 10 min; 1 min for faster detection of runaway growth
@@ -7271,10 +7517,21 @@ require('http').createServer((req, res) => {
     else:
         print(f"WARNING: weightmap.json not found at {weightmap_src} — backend weight re-resolution will be a no-op")
 
+    maintenance_src = os.path.join(REPO_ROOT, 'maintenance_compaction.js')
+    if os.path.isfile(maintenance_src):
+        with open(maintenance_src, 'rb') as src_f:
+            maintenance_bytes = src_f.read()
+        with sftp.file('/opt/albion-saas/maintenance_compaction.js', 'wb') as f:
+            f.write(maintenance_bytes)
+        print(f"Uploaded maintenance_compaction.js ({len(maintenance_bytes)} bytes via SFTP)")
+    else:
+        print(f"WARNING: maintenance_compaction.js not found at {maintenance_src} — DB compaction worker will not be refreshed")
+
     frontend_bytes = upload_frontend_assets(sftp)
     sftp.close()
     print(f"Uploaded backend.js ({len(backend_js)} bytes via SFTP)")
     print(f"Uploaded frontend static assets ({frontend_bytes} bytes via SFTP)")
+    run_wait("test -f /opt/albion-saas/maintenance_compaction.js && chmod 644 /opt/albion-saas/maintenance_compaction.js || true")
 
     # Write env file with restricted permissions
     game_server = os.environ.get('GAME_SERVER', 'europe')
@@ -7331,6 +7588,46 @@ WantedBy=multi-user.target
     b64_svc = base64.b64encode(svc.encode()).decode()
     run_wait(f"echo '{b64_svc}' | base64 -d > /etc/systemd/system/albion-saas.service")
 
+    compaction_service = """
+[Unit]
+Description=Albion DB Compaction Worker
+After=network.target albion-saas.service
+
+[Service]
+Type=oneshot
+EnvironmentFile=/opt/albion-saas/.env
+WorkingDirectory=/opt/albion-saas
+Environment=COMPACTION_MAX_RUN_MS=600000
+Environment=COMPACTION_SLEEP_MS=200
+Environment=COMPACTION_BUSY_TIMEOUT_MS=1000
+ExecStart=/bin/bash -lc 'exec 9>/tmp/albion-db-maintenance.lock; if ! /usr/bin/flock -n 9; then echo "another DB maintenance job is already running; skipping compaction"; exit 0; fi; exec /usr/bin/nice -n 15 /usr/bin/ionice -c2 -n7 /usr/bin/node --max-old-space-size=1024 /opt/albion-saas/maintenance_compaction.js'
+User=root
+Nice=15
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+CPUQuota=35%
+TimeoutStartSec=12min
+"""
+    b64_compaction_service = base64.b64encode(compaction_service.encode()).decode()
+    run_wait(f"echo '{b64_compaction_service}' | base64 -d > /etc/systemd/system/albion-db-compaction.service")
+
+    compaction_timer = """
+[Unit]
+Description=Run Albion DB compaction outside the public web process
+
+[Timer]
+OnActiveSec=45min
+OnUnitActiveSec=2h
+RandomizedDelaySec=10min
+AccuracySec=1min
+Persistent=false
+
+[Install]
+WantedBy=timers.target
+"""
+    b64_compaction_timer = base64.b64encode(compaction_timer.encode()).decode()
+    run_wait(f"echo '{b64_compaction_timer}' | base64 -d > /etc/systemd/system/albion-db-compaction.timer")
+
     # DO-3: install/refresh SQLite backup cron.
     #
     # Prior version used `&&` between backup and prune and an mtime-based `find ... -mtime +7
@@ -7347,13 +7644,13 @@ WantedBy=multi-user.target
 set -u
 DB=/opt/albion-saas/database.sqlite
 BACKUP_DIR=/opt/albion-saas/backups
-LOCK=/tmp/albion-db-backup.lock
+LOCK=/tmp/albion-db-maintenance.lock
 mkdir -p "$BACKUP_DIR"
 find "$BACKUP_DIR" -name 'db-*.sqlite-journal' -type f -delete
 find "$BACKUP_DIR" -name 'db-*.tmp' -type f -delete
 exec 9>"$LOCK"
 if ! flock -n 9; then
-  echo "$(date -Is) backup already running"
+  echo "$(date -Is) another DB maintenance job is already running"
   exit 0
 fi
 stamp=$(date +%Y%m%d-%H)
@@ -7382,6 +7679,12 @@ fi
 
     run_wait("systemctl daemon-reload")
     run_wait("systemctl enable albion-saas")
+    compaction_timer_state = run_wait("systemctl is-enabled albion-db-compaction.timer || true", check=False).strip()
+    if os.environ.get("ENABLE_DB_COMPACTION_TIMER") == "1" or compaction_timer_state == "enabled":
+        run_wait("systemctl enable --now albion-db-compaction.timer")
+    else:
+        run_wait("systemctl disable --now albion-db-compaction.timer", check=False)
+        print("DB compaction timer left disabled; set ENABLE_DB_COMPACTION_TIMER=1 to enable it.")
     run_wait("systemctl restart albion-saas")
 
     status = run_wait("systemctl is-active albion-saas")

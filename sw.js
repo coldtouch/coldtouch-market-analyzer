@@ -1,9 +1,7 @@
 // Service Worker for Coldtouch Market Analyzer (PWA app shell caching)
-// v58: deaths section now shows [Guild] prefix on victim + killer names in
-// both Friendly Deaths and Enemy Kills subsections (plus looter rows inside
-// the expanded death body). Helps ZvZ audits where many players share
-// similar names but wear different guild tags.
-const CACHE_NAME = 'coldtouch-v140';
+// v149: Refresh Albion item maps/weights from ao-bin-dumps 20260526 so loot
+// logger numeric IDs resolve to the current game items.
+const CACHE_NAME = 'coldtouch-v150';
 const IS_GITHUB_PAGES = self.location.hostname === 'coldtouch.github.io';
 const APP_SHELL = [
     '/',

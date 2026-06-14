@@ -15,6 +15,7 @@ const CHART_API_URLS = {
 };
 
 const CITIES = ['Martlock', 'Thetford', 'Fort Sterling', 'Lymhurst', 'Bridgewatch', 'Caerleon', 'Brecilien', 'Black Market'];
+const ARB_LOW_PRICE_MEDIAN_MULTIPLIER = 0.10; // Reject obvious 1-silver/junk listings in flip scans.
 // === TAX + CRAFTING CONFIG ===
 // Tax rates depend on Premium status (per 2023 Lands Awakened + forum 169251 / devtracker 510446ae).
 // Premium: 4% instant-sell (to buy orders), 4% + 2.5% setup = 6.5% sell-order.
@@ -570,6 +571,28 @@ function timeAgo(dateString) {
     if (!dateString || dateString.startsWith('0001')) return text;
     const ts = dateString.endsWith('Z') ? dateString : dateString + 'Z';
     return `<span class="time-ago" data-ts="${esc(ts)}">${text}</span>`;
+}
+
+function _captureTimestampMs(capture) {
+    if (!capture) return 0;
+    if (typeof capture.capturedAt === 'number') return Number.isFinite(capture.capturedAt) ? capture.capturedAt : 0;
+    return capture.capturedAt ? (new Date(capture.capturedAt).getTime() || 0) : 0;
+}
+
+function _formatChestScanTime(capturedMs) {
+    if (!capturedMs || !Number.isFinite(capturedMs)) return 'scan time unknown';
+    const d = new Date(capturedMs);
+    const now = new Date();
+    const sameDay = d.toDateString() === now.toDateString();
+    const abs = sameDay
+        ? d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+        : d.toLocaleString([], { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+    return `scanned ${abs}`;
+}
+
+function _formatChestCaptureLabel(capture, fallbackName) {
+    const name = capture?.customName || capture?.tabName || fallbackName || 'Chest capture';
+    return `${name} - ${_formatChestScanTime(_captureTimestampMs(capture))}`;
 }
 
 function _computeFreshness(dateString) {
@@ -1727,7 +1750,7 @@ function computeEMA(values, period) {
 // ============================================================
 // MARKET FLIPPING (ARBITRAGE)
 // ============================================================
-function processArbitrage(data, quality, tier, enchantment, includeBM, buyCityFilter, sellCityFilter, isSingleItem = false, freshMode = 'off', freshThresholdMins = 30, sortBy = 'profit', minConfidence = 0) {
+function processArbitrage(data, quality, tier, enchantment, includeBM, buyCityFilter, sellCityFilter, isSingleItem = false, freshMode = 'off', freshThresholdMins = 30, sortBy = 'profit', minConfidence = 0, minProfit = 0, minRoi = 0) {
     const itemsData = {};
     data.forEach(entry => {
         if (quality !== 'all' && entry.quality.toString() !== quality) return;
@@ -1792,9 +1815,10 @@ function processArbitrage(data, quality, tier, enchantment, includeBM, buyCityFi
                 const priceSell = citiesObj[citySell].buyMax;
 
                 // Skip junk/placeholder sell prices (buy-from side)
-                // A price >20x the median for the same item is almost certainly a junk listing
+                // A price >20x the median is junk; a price <10% of median is usually a 1-silver bait/listing glitch.
                 const median = itemMedians[itemKey];
                 if (median && priceBuy > median * 20) continue;
+                if (median && priceBuy < median * ARB_LOW_PRICE_MEDIAN_MULTIPLIER) continue;
 
                 if (priceBuy > 0 && priceSell > 0) {
                     const tax = priceSell * TAX_RATE;
@@ -1852,33 +1876,46 @@ function processArbitrage(data, quality, tier, enchantment, includeBM, buyCityFi
         filtered = filtered.filter(t => t.confidence !== null && t.confidence >= minConfidence);
     }
 
+    // Apply quality gates. Without these, confidence/ROI sorts can surface tiny
+    // "technically profitable" routes that are not worth a market trip.
+    minProfit = Math.max(0, Number(minProfit) || 0);
+    minRoi = Math.max(0, Number(minRoi) || 0);
+    if (minProfit > 0 || minRoi > 0) {
+        filtered = filtered.filter(t => t.profit >= minProfit && t.roi >= minRoi);
+    }
+
     // Sort
+    const routeFreshnessKey = (t) => {
+        if (freshMode === 'buy') return t.dateBuy || '';
+        if (freshMode === 'sell') return t.dateSell || '';
+        if (freshMode === 'both') return (t.dateBuy > t.dateSell ? t.dateBuy : t.dateSell) || '';
+        return '';
+    };
     if (sortBy === 'confidence') {
         filtered.sort((a, b) => {
             const ca = a.confidence !== null ? a.confidence : -1;
             const cb = b.confidence !== null ? b.confidence : -1;
             if (cb !== ca) return cb - ca;
-            return b.profit - a.profit;
-        });
-    } else if (sortBy === 'roi') {
-        filtered.sort((a, b) => b.roi - a.roi);
-    } else if (freshMode !== 'off') {
-        filtered.sort((a, b) => {
-            // Sort by the freshness side that matters for the selected mode
-            let dateA, dateB;
-            if (freshMode === 'buy') { dateA = a.dateBuy; dateB = b.dateBuy; }
-            else if (freshMode === 'sell') { dateA = a.dateSell; dateB = b.dateSell; }
-            else { dateA = a.dateBuy > a.dateSell ? a.dateBuy : a.dateSell; dateB = b.dateBuy > b.dateSell ? b.dateBuy : b.dateSell; }
-            if (dateB > dateA) return 1;
-            if (dateA > dateB) return -1;
             const pDiff = b.profit - a.profit;
             if (pDiff !== 0) return pDiff;
-            return (a.itemId || '').localeCompare(b.itemId || '');
+            return routeFreshnessKey(b).localeCompare(routeFreshnessKey(a));
+        });
+    } else if (sortBy === 'roi') {
+        filtered.sort((a, b) => {
+            const roiDiff = b.roi - a.roi;
+            if (roiDiff !== 0) return roiDiff;
+            const pDiff = b.profit - a.profit;
+            if (pDiff !== 0) return pDiff;
+            return routeFreshnessKey(b).localeCompare(routeFreshnessKey(a));
         });
     } else {
         filtered.sort((a, b) => {
             const pDiff = b.profit - a.profit;
             if (pDiff !== 0) return pDiff;
+            const roiDiff = b.roi - a.roi;
+            if (roiDiff !== 0) return roiDiff;
+            const freshDiff = routeFreshnessKey(b).localeCompare(routeFreshnessKey(a));
+            if (freshDiff !== 0) return freshDiff;
             return (a.itemId || '').localeCompare(b.itemId || '');
         });
     }
@@ -2071,6 +2108,8 @@ async function doArbScan(targetItemId = null) {
     const freshThresholdMins = parseInt(document.getElementById('fresh-threshold').value) || 30;
     const sortBy = document.getElementById('arb-sort').value;
     const minConfidence = parseInt(document.getElementById('arb-min-confidence').value) || 0;
+    const minProfit = parseInt(document.getElementById('arb-min-profit')?.value) || 0;
+    const minRoi = parseFloat(document.getElementById('arb-min-roi')?.value) || 0;
 
     if (!targetItemId) {
         hideError(errorEl);
@@ -2114,7 +2153,7 @@ async function doArbScan(targetItemId = null) {
                     });
                 }
 
-                const trades = processArbitrage(filteredData, quality, tier, enchantment, includeBM, buyCityFilter, sellCityFilter, isSingleItem, freshMode, freshThresholdMins, sortBy, minConfidence);
+                const trades = processArbitrage(filteredData, quality, tier, enchantment, includeBM, buyCityFilter, sellCityFilter, isSingleItem, freshMode, freshThresholdMins, sortBy, minConfidence, minProfit, minRoi);
                 await enrichTradesWithLiquidity(trades);
                 spinner.classList.add('hidden');
                 renderArbitrage(trades, isSingleItem, targetItemId);
@@ -2136,7 +2175,7 @@ async function doArbScan(targetItemId = null) {
         const server = getServer();
         const data = await fetchMarketData(server, itemsToFetch);
         if (data.length > 0) await MarketDB.saveMarketData(data);
-        const trades = processArbitrage(data, quality, tier, enchantment, includeBM, buyCityFilter, sellCityFilter, isSingleItem, freshMode, freshThresholdMins, sortBy, minConfidence);
+        const trades = processArbitrage(data, quality, tier, enchantment, includeBM, buyCityFilter, sellCityFilter, isSingleItem, freshMode, freshThresholdMins, sortBy, minConfidence, minProfit, minRoi);
         await enrichTradesWithLiquidity(trades);
         spinner.classList.add('hidden');
         renderArbitrage(trades, isSingleItem);
@@ -7205,6 +7244,17 @@ async function init() {
     const sellStrategyEl = document.getElementById('transport-sell-strategy');
     if (sellStrategyEl) {
         sellStrategyEl.addEventListener('change', () => {
+            if (lastTransportRoutes) {
+                const budget = parseInt(document.getElementById('transport-budget').value) || 500000;
+                const sortBy = document.getElementById('transport-sort').value;
+                const { mountCapacity, freeSlots } = getTransportMountConfig();
+                enrichAndRenderTransport(lastTransportRoutes, budget, sortBy, mountCapacity, freeSlots);
+            }
+        });
+    }
+    const unknownDemandEl = document.getElementById('transport-unknown-demand');
+    if (unknownDemandEl) {
+        unknownDemandEl.addEventListener('change', () => {
             if (lastTransportRoutes) {
                 const budget = parseInt(document.getElementById('transport-budget').value) || 500000;
                 const sortBy = document.getElementById('transport-sort').value;
@@ -12656,6 +12706,23 @@ async function processLootFiles(files) {
     _llRemovedPlayers.clear();
     await renderLootSessionEvents(allParsed, resultEl);
 
+    const actionSlot = document.getElementById('ll-report-share-slot');
+    if (actionSlot) {
+        actionSlot.outerHTML = `<span id="ll-report-share-slot" style="display:inline-flex; align-items:center; gap:0.35rem;">
+            <button class="btn-small" disabled title="Saving this upload so Share and Accountability can use it">Saving...</button>
+        </span>`;
+    }
+
+    const canSaveUpload = !!localStorage.getItem('albion_auth_token') || (typeof discordUser !== 'undefined' && !!discordUser);
+    if (!canSaveUpload) {
+        status.textContent += ' — preview only (log in to save, share, or run accountability)';
+        const slot = document.getElementById('ll-report-share-slot');
+        if (slot) slot.innerHTML = `<span style="font-size:0.72rem; color:var(--text-muted);">Log in to enable Share / Accountability</span>`;
+        return;
+    }
+
+    status.textContent += ' — saving for Share / Accountability...';
+
     // Background upload for accountability use
     try {
         const res = await fetch(`${VPS_BASE}/api/loot-upload`, {
@@ -12663,6 +12730,14 @@ async function processLootFiles(files) {
             headers: { 'Content-Type': 'application/json', ...authHeaders() },
             body: JSON.stringify({ lines: allLines })
         });
+        if (!res.ok) {
+            let message = `HTTP ${res.status}`;
+            try {
+                const errData = await res.json();
+                if (errData && errData.error) message = errData.error;
+            } catch {}
+            throw new Error(message);
+        }
         if (res.ok) {
             const data = await res.json();
             status.textContent += ` — saved (${data.eventsImported} events)`;
@@ -12688,11 +12763,18 @@ async function processLootFiles(files) {
                         <button class="btn-small-accent" onclick="runAccountabilityForSession('${safeSid}')" title="Cross-reference this session against chest deposits">✓ Accountability</button>`;
                 }
                 if (typeof populateAccountabilityDropdowns === 'function') {
-                    populateAccountabilityDropdowns();
+                    await populateAccountabilityDropdowns();
                 }
             }
         }
-    } catch { /* silent — viewing works without login */ }
+    } catch (e) {
+        status.textContent += ` — server save failed (${e.message})`;
+        const slot = document.getElementById('ll-report-share-slot');
+        if (slot) {
+            slot.innerHTML = `<span style="font-size:0.72rem; color:var(--loss-red);">Save failed: Share / Accountability unavailable</span>`;
+        }
+        showToast(`Upload preview loaded, but server save failed: ${e.message}`, 'warning');
+    }
 }
 
 // === ACCOUNTABILITY CHECK ===
@@ -12700,12 +12782,12 @@ async function processLootFiles(files) {
 function populateAccountabilityDropdowns() {
     // Shared-accountability viewer commandeers the dropdowns with a synthetic session +
     // pre-selected captures; don't overwrite them when the user's own session list loads.
-    if (window._sharedAccountabilityActive) return;
+    if (window._sharedAccountabilityActive) return Promise.resolve();
     const sessionSel = document.getElementById('acc-session-select');
     const captureSel = document.getElementById('acc-capture-select');
-    if (!sessionSel || !captureSel) return;
+    if (!sessionSel || !captureSel) return Promise.resolve();
 
-    fetch(`${VPS_BASE}/api/loot-sessions`, { headers: authHeaders() })
+    const sessionsPromise = fetch(`${VPS_BASE}/api/loot-sessions`, { headers: authHeaders() })
         .then(r => r.json())
         .then(data => {
             const sessions = (data.sessions || []);
@@ -12922,6 +13004,8 @@ function populateAccountabilityDropdowns() {
             }).join('');
         }
     }
+
+    return sessionsPromise;
 }
 
 // Re-run the last accountability check. Useful when people deposit loot a bit later
@@ -13247,12 +13331,20 @@ async function runAccountabilityForSession(sessionId) {
     // Ensure dropdown has the session as an option, then select it
     const sel = document.getElementById('acc-session-select');
     if (sel) {
-        // Wait for populateAccountabilityDropdowns to finish if we just triggered it
-        await new Promise(r => setTimeout(r, 250));
-        const has = Array.from(sel.options).some(o => o.value === sessionId);
-        if (!has) {
-            // Force re-populate (may have failed if not authed, but try)
+        if (typeof populateAccountabilityDropdowns === 'function') {
             await populateAccountabilityDropdowns();
+        }
+        let has = Array.from(sel.options).some(o => o.value === sessionId);
+        if (!has) {
+            await new Promise(r => setTimeout(r, 500));
+            if (typeof populateAccountabilityDropdowns === 'function') {
+                await populateAccountabilityDropdowns();
+            }
+            has = Array.from(sel.options).some(o => o.value === sessionId);
+        }
+        if (!has) {
+            showToast('Session is still saving. Try Accountability again in a moment.', 'warning');
+            return;
         }
         sel.value = sessionId;
         // Scroll into view so the user sees they're in the right mode
@@ -13340,13 +13432,16 @@ async function runAccountabilityCheck() {
     const selectedCapturesForShare = selectedIdxs.map(i => captures[i]).filter(Boolean);
     const deposited = {};
     const selectedTabNames = [];
+    const selectedCaptureLabels = [];
     for (const idx of selectedIdxs) {
         const cap = captures[idx];
         if (!cap || !cap.items) continue;
         // Re-normalize capture items now that loadData is guaranteed to have
         // finished — share-view injection may have happened before the map loaded.
         normalizeChestCaptureInPlace(cap);
-        selectedTabNames.push(cap.tabName || `Tab ${idx + 1}`);
+        const tabName = cap.tabName || `Tab ${idx + 1}`;
+        selectedTabNames.push(tabName);
+        selectedCaptureLabels.push(_formatChestCaptureLabel(cap, tabName));
         for (const item of cap.items) {
             deposited[item.itemId] = (deposited[item.itemId] || 0) + (item.quantity || 1);
         }
@@ -13574,13 +13669,9 @@ async function runAccountabilityCheck() {
         });
     }
     // Add a synthetic "you" row if the logged-in user isn't already in the list.
-    // Albion's protocol doesn't broadcast the local player's own pickups, so Coldtouch
-    // (or whoever is logged in) would otherwise be missing from the accountability list.
-    // The previous version attempted to attribute "unclaimed" chest items (deposited qty
-    // exceeding tracked pickups) to the local user — but the user correctly pointed out
-    // that unclaimed items can come from any number of untracked sources (castle chests,
-    // outpost chests, out-of-range players, vault transfers, items already in the chest
-    // from a prior run). So we now show a placeholder row WITHOUT any inferred attribution.
+    // Current packet clients can infer self-loot from loot-container moves, but old
+    // sessions/clients did not emit those rows. Show a placeholder without inventing
+    // attribution so legacy sessions don't look like the account holder disappeared.
     const selfName = (discordUser?.username || window._userData?.user?.username || '').trim();
     if (selfName) {
         const already = playerResults.some(p => p.name.toLowerCase() === selfName.toLowerCase());
@@ -13645,7 +13736,7 @@ async function runAccountabilityCheck() {
         sessionName: shareSessionName,
         createdAt: Date.now(),
     };
-    window._llAccResults = { playerResults, priceMap, selectedTabNames, totalLooted, totalDeposited, totalMissing, totalMissingSilver, shareContext: window._llAccShareContext };
+    window._llAccResults = { playerResults, priceMap, selectedTabNames, selectedCaptureLabels, totalLooted, totalDeposited, totalMissing, totalMissingSilver, shareContext: window._llAccShareContext };
     // Stash for the guild-perspective dropdown render below.
     window._llAccGuildContext = {
         sessionId,
@@ -13657,21 +13748,22 @@ async function runAccountabilityCheck() {
 
     let html = '';
     if (selectedTabNames.length > 0) {
-        html += `<div style="font-size:0.78rem; color:var(--text-muted); margin-bottom:0.75rem;">Comparing against: <strong>${selectedTabNames.map(n => esc(n)).join(', ')}</strong></div>`;
+        const captureList = (selectedCaptureLabels.length ? selectedCaptureLabels : selectedTabNames)
+            .map(n => `<strong>${esc(n)}</strong>`)
+            .join(', ');
+        html += `<div style="font-size:0.78rem; color:var(--text-muted); margin-bottom:0.75rem;">Comparing against: ${captureList}</div>`;
     }
 
-    // Known-limitation banner: Albion's protocol never broadcasts the LOCAL player's
-    // own loot pickups — only OTHER players in range. So the account holder won't
-    // appear as a looter in the list even when they picked up items. We surface that
-    // here so it doesn't look like a bug.
+    // Legacy-session banner: newer clients can infer local pickups from loot-container
+    // moves, but old sessions may still have no self-loot rows.
     const myName = (discordUser?.username || window._userData?.user?.username || '').trim();
     const foundMe = myName && playerResults.some(p => p.name.toLowerCase() === myName.toLowerCase());
     if (myName && !foundMe) {
         html += `<div style="background:rgba(88,101,242,0.10); border:1px solid rgba(88,101,242,0.35); border-radius:8px; padding:0.65rem 0.9rem; margin-bottom:0.75rem; font-size:0.82rem; color:var(--text-secondary); display:flex; gap:0.6rem; align-items:flex-start;">
             <span style="font-size:1.1rem; line-height:1;">ℹ️</span>
             <div>
-                <strong style="color:#c7d2ff;">"${esc(myName)}" not in the list? That's expected.</strong><br>
-                Albion's network protocol only broadcasts OTHER players' loot pickups — your own pickups aren't sent as events, so the Go client can't record them.
+                <strong style="color:#c7d2ff;">"${esc(myName)}" not in the list?</strong><br>
+                This session has no recorded self-loot rows for your account. Newer clients can infer self-loot while they are running, but older logs and missed packet windows still cannot be backfilled.
                 If you deposited items into the tracked chest, they're counted in the total but aren't attributed to you individually.
             </div>
         </div>`;
@@ -13825,9 +13917,8 @@ async function runAccountabilityCheck() {
     </div>`;
 
     html += playerResults.map(p => {
-        // Self-untracked placeholder row — show the user that they're in the session,
-        // but explain pickups aren't tracked. Render a simplified card with optional
-        // inferred-items strip when residual chest deposits can be attributed to them.
+        // Legacy/no-data placeholder row — show the user that they're in the session,
+        // but avoid inventing loot rows when no self-loot events were recorded.
         if (p.isSelfUntracked) {
             const inferredStrip = p.hasInferredItems
                 ? `<div style="padding:0.5rem 0.8rem; border-top:1px solid rgba(88,101,242,0.15); background:rgba(88,101,242,0.04);">
@@ -13853,7 +13944,7 @@ async function runAccountabilityCheck() {
                             <span class="tier-badge" style="background:rgba(88,101,242,0.18); color:#c7d2ff;">You</span>
                             ${p.hasInferredItems ? `<span class="tier-badge" style="background:rgba(240,192,64,0.18); color:var(--accent);" title="Chest items that don't match any tracked player's pickups — best-effort attribution">+${p.items.length} inferred</span>` : ''}
                         </div>
-                        <div style="font-size:0.72rem; color:var(--text-muted);">Your pickups aren't tracked by Albion's protocol. Items below are "unclaimed" deposits attributed to you as a best-effort.</div>
+                        <div style="font-size:0.72rem; color:var(--text-muted);">No self-loot rows were recorded for this session. Update/run the packet client during looting so your pickups can be attributed.</div>
                     </div>
                 </div>
                 ${inferredStrip}
@@ -14078,8 +14169,11 @@ function getPlayerMissingReportData(playerName) {
 
     const totalQty = missingItems.reduce((s, it) => s + (it.missing || 0), 0);
     const totalValue = missingItems.reduce((s, it) => s + (it._lineValue || 0), 0);
-    const chestLabel = (r.selectedTabNames && r.selectedTabNames.length > 0)
-        ? r.selectedTabNames.join(', ')
+    const captureLabels = (r.selectedCaptureLabels && r.selectedCaptureLabels.length > 0)
+        ? r.selectedCaptureLabels
+        : (r.selectedTabNames || []);
+    const chestLabel = captureLabels.length > 0
+        ? captureLabels.join(', ')
         : 'selected chest capture';
     const depLine = p.pct >= 0
         ? `${p.pct}% (${p.totalDeposited}/${p.totalLooted} returned)`
@@ -14477,10 +14571,13 @@ function copyAccountabilityToDiscord(template) {
     const guildPlayers = r.playerResults.filter(p => !p.isEnemy);
     let text = '';
     const tmpl = template || 'table';
+    const captureLabelText = ((r.selectedCaptureLabels && r.selectedCaptureLabels.length > 0)
+        ? r.selectedCaptureLabels
+        : (r.selectedTabNames || [])).join(', ');
     if (tmpl === 'regear') {
         // Regear report: per-player missing items with silver value
         text = `**Regear Report**\n`;
-        text += `Session: ${r.selectedTabNames.join(', ')}\n`;
+        text += `Session: ${captureLabelText}\n`;
         text += `Total owed: ~${Math.round(r.totalMissingSilver).toLocaleString()} silver across ${guildPlayers.filter(p => p.totalMissing > 0).length} player(s)\n\n`;
         for (const p of guildPlayers) {
             if (p.totalMissing <= 0) continue;
@@ -14495,7 +14592,7 @@ function copyAccountabilityToDiscord(template) {
     } else {
         // Default table
         text = `**Loot Accountability Report**\n`;
-        text += `Chests: ${r.selectedTabNames.join(', ')}\n`;
+        text += `Chests: ${captureLabelText}\n`;
         text += `Looted: ${r.totalLooted} | In Chest: ${r.totalDeposited} | Missing: ${r.totalMissing}`;
         if (r.totalMissingSilver > 0) text += ` (~${Math.round(r.totalMissingSilver).toLocaleString()} silver)`;
         text += `\n\n`;
@@ -14789,6 +14886,14 @@ const TRANSPORT_LIQUIDITY_FRACTION = 0.35;
 const TRANSPORT_LIQUIDITY_CACHE_TTL_MS = 30 * 60 * 1000;
 const TRANSPORT_UNKNOWN_STACKABLE_CAP = 999;
 const TRANSPORT_UNKNOWN_SINGLE_CAP = 1;
+const TRANSPORT_UNKNOWN_DEMAND_STACKABLE_CAP = 25;
+const TRANSPORT_UNKNOWN_DEMAND_SINGLE_CAP = 1;
+const TRANSPORT_UNKNOWN_DEMAND_BUDGET_FRACTION = 0.05;
+const TRANSPORT_UNKNOWN_DEMAND_SCORE_MULTIPLIER = 0.25;
+const TRANSPORT_MIN_PLAN_ITEM_PROFIT = 10_000;
+const TRANSPORT_MAX_PLAN_ITEM_PROFIT = 100_000;
+const TRANSPORT_MIN_PLAN_PROFIT_PER_SLOT = 8_000;
+const TRANSPORT_MAX_PLAN_PROFIT_PER_SLOT = 75_000;
 const transportLiquidityCache = new Map();
 
 function _transportPositiveNumber(value) {
@@ -14836,6 +14941,35 @@ function getTransportUnknownQtyCap(stackable, stackSize, availableSlots) {
         return Math.max(1, Math.min(TRANSPORT_UNKNOWN_STACKABLE_CAP, slotCap));
     }
     return TRANSPORT_UNKNOWN_SINGLE_CAP;
+}
+
+function getTransportUnknownDemandPolicy() {
+    const value = document.getElementById('transport-unknown-demand')?.value || 'scout';
+    return ['hide', 'scout', 'include'].includes(value) ? value : 'scout';
+}
+
+function getTransportUnknownDemandCap(stackable, stackSize, availableSlots, buyPrice, budget) {
+    const baseCap = stackable ? TRANSPORT_UNKNOWN_DEMAND_STACKABLE_CAP : TRANSPORT_UNKNOWN_DEMAND_SINGLE_CAP;
+    const safeStack = Math.max(1, stackSize || baseCap);
+    const slotCap = stackable ? Math.max(1, availableSlots || 1) * safeStack : Math.max(1, availableSlots || 1);
+    const budgetCap = buyPrice > 0 ? Math.max(1, Math.floor((budget * TRANSPORT_UNKNOWN_DEMAND_BUDGET_FRACTION) / buyPrice)) : baseCap;
+    return Math.max(1, Math.min(baseCap, slotCap, budgetCap));
+}
+
+function getTransportPlanProfitFloor(budget) {
+    const scaled = (Number(budget) || 0) * 0.0025;
+    return Math.round(Math.max(TRANSPORT_MIN_PLAN_ITEM_PROFIT, Math.min(TRANSPORT_MAX_PLAN_ITEM_PROFIT, scaled)));
+}
+
+function getTransportPlanProfitPerSlotFloor(budget) {
+    const scaled = (Number(budget) || 0) * 0.0015;
+    return Math.round(Math.max(TRANSPORT_MIN_PLAN_PROFIT_PER_SLOT, Math.min(TRANSPORT_MAX_PLAN_PROFIT_PER_SLOT, scaled)));
+}
+
+function isTransportHaulPlanWorthy(profit, slots, budget) {
+    const safeSlots = Math.max(1, Math.ceil(slots || 1));
+    return profit >= getTransportPlanProfitFloor(budget) &&
+        (profit / safeSlots) >= getTransportPlanProfitPerSlotFloor(budget);
 }
 
 async function enrichTransportRoutesWithMarketVolume(routes) {
@@ -14938,6 +15072,7 @@ function _applyTransportPlan(plan) {
     set('transport-item-type', plan.itemType || 'all');
     set('transport-min-confidence', plan.minConfidence || 40);
     set('transport-sell-strategy', plan.sellStrategy || 'instant');
+    set('transport-unknown-demand', plan.unknownDemand || 'scout');
     set('transport-fresh-mode', plan.freshMode || 'off');
     set('transport-fresh-threshold', plan.freshThreshold || 60);
     set('transport-sort', plan.sortBy || 'trip_profit');
@@ -15039,6 +15174,7 @@ function initTransportEnhancements() {
                 itemType: document.getElementById('transport-item-type').value,
                 minConfidence: parseInt(document.getElementById('transport-min-confidence').value) || 0,
                 sellStrategy: document.getElementById('transport-sell-strategy').value,
+                unknownDemand: document.getElementById('transport-unknown-demand')?.value || 'scout',
                 freshMode: document.getElementById('transport-fresh-mode').value,
                 freshThreshold: parseInt(document.getElementById('transport-fresh-threshold').value) || 60,
                 sortBy: document.getElementById('transport-sort').value,
@@ -15254,8 +15390,13 @@ async function enrichAndRenderTransport(routes, budget, sortBy, mountCapacity, f
         const roi = (profitPerUnit / buyPrice) * 100;
         const sellDailyVolume = _transportPositiveNumber(r._sellDailyVolume ?? r.sell_volume);
         const buyDailyVolume = _transportPositiveNumber(r._buyDailyVolume ?? r.buy_volume);
-        const volume = Math.max(buyDailyVolume, sellDailyVolume);
-        const realisticVolume = Math.min(buyDailyVolume || sellDailyVolume || 0, sellDailyVolume || buyDailyVolume || 0);
+        const hasSellThroughData = sellDailyVolume > 0;
+        const hasSourceActivityData = buyDailyVolume > 0;
+        const hasVolumeData = hasSellThroughData || hasSourceActivityData;
+        const volume = sellDailyVolume;
+        const realisticVolume = hasSellThroughData && hasSourceActivityData
+            ? Math.min(buyDailyVolume, sellDailyVolume)
+            : sellDailyVolume;
 
         // Weight + slot calculation
         const itemWeight = calcItemWeight(r.item_id);
@@ -15265,14 +15406,19 @@ async function enrichAndRenderTransport(routes, budget, sortBy, mountCapacity, f
 
         // Use AVAILABLE slots (player's actual free slots), not hardcoded 48
         let maxByBudget = Math.floor(budget / buyPrice);
-        const hasVolumeData = sellDailyVolume > 0 || buyDailyVolume > 0;
+        const unknownDemandPolicy = getTransportUnknownDemandPolicy();
+        if (!hasSellThroughData && unknownDemandPolicy === 'hide') continue;
         const unknownQtyCap = getTransportUnknownQtyCap(stackable, stackSize, availableSlots);
+        const unknownDemandCap = !hasSellThroughData && unknownDemandPolicy === 'scout'
+            ? getTransportUnknownDemandCap(stackable, stackSize, availableSlots, buyPrice, budget)
+            : 0;
         const buyAmount = _transportPositiveNumber(r._buyAmount || r.buyAmount);
         const sellAmount = _transportPositiveNumber(r._sellAmount || r.sellAmount);
         const sellThroughCap = sellDailyVolume > 0 ? Math.max(1, Math.floor(sellDailyVolume * TRANSPORT_LIQUIDITY_FRACTION)) : 0;
         const sourceActivityCap = buyAmount <= 0 && buyDailyVolume > 0 ? Math.max(1, Math.floor(buyDailyVolume * TRANSPORT_LIQUIDITY_FRACTION)) : 0;
         const liquidityCaps = [];
         if (sellThroughCap > 0) liquidityCaps.push(sellThroughCap);
+        else if (unknownDemandCap > 0) liquidityCaps.push(unknownDemandCap);
         if (sourceActivityCap > 0) liquidityCaps.push(sourceActivityCap);
         if (sellMode === 'instant' && sellAmount > 0) liquidityCaps.push(sellAmount);
         let maxByVolume = liquidityCaps.length > 0 ? Math.min(...liquidityCaps) : unknownQtyCap;
@@ -15287,7 +15433,9 @@ async function enrichAndRenderTransport(routes, budget, sortBy, mountCapacity, f
         if (!Number.isFinite(unitsCanCarry) || unitsCanCarry <= 0) continue;
         const silverUsed = unitsCanCarry * buyPrice;
         const tripProfit = profitPerUnit * unitsCanCarry;
-        const transportScore = profitPerUnit * (hasVolumeData ? maxByVolume : unitsCanCarry);
+        const transportScore = profitPerUnit * (hasSellThroughData
+            ? maxByVolume
+            : maxByVolume * TRANSPORT_UNKNOWN_DEMAND_SCORE_MULTIPLIER);
 
         // Slot efficiency: profit per slot used (key metric for haul packing)
         const slotsUsed = stackable ? Math.ceil(unitsCanCarry / stackSize) : unitsCanCarry;
@@ -15299,7 +15447,7 @@ async function enrichAndRenderTransport(routes, budget, sortBy, mountCapacity, f
         if (unitsCanCarry === maxByVolume && maxByVolume < maxByBudget && maxByVolume <= maxByAmount) {
             limitingFactor = sellMode === 'instant' && sellAmount > 0 && maxByVolume === sellAmount
                 ? 'instant'
-                : (hasVolumeData ? 'liquidity' : 'quantity');
+                : (unknownDemandCap > 0 && maxByVolume === unknownDemandCap ? 'demand' : (hasVolumeData ? 'liquidity' : 'quantity'));
         }
         if (unitsCanCarry === maxBySlots && maxBySlots < maxByBudget && maxBySlots <= maxByVolume && maxBySlots <= maxByAmount) limitingFactor = 'slots';
         if (unitsCanCarry === maxByWeight && maxByWeight < maxByBudget && maxByWeight <= maxByVolume && maxByWeight <= maxBySlots && maxByWeight <= maxByAmount) limitingFactor = 'weight';
@@ -15316,6 +15464,8 @@ async function enrichAndRenderTransport(routes, budget, sortBy, mountCapacity, f
             sellDailyVolume: Math.round(sellDailyVolume),
             liquidityCap: Math.round(maxByVolume),
             unknownQtyCap: buyAmount > 0 || hasVolumeData ? 0 : unknownQtyCap,
+            unknownDemandCap: Math.round(unknownDemandCap),
+            hasSellThroughData,
             hasVolumeData,
             unitsCanCarry,
             slotsUsed,
@@ -15440,6 +15590,7 @@ async function enrichAndRenderTransport(routes, budget, sortBy, mountCapacity, f
             const slots = item.stackable ? Math.ceil(units / item.stackSize) : units;
 
             if (slots > remainingSlots) continue;
+            if (!isTransportHaulPlanWorthy(profit, slots, budget)) continue;
 
             planItems.push({ ...item, planUnits: units, planCost: Math.round(cost), planProfit: Math.round(profit), planWeight: weight, planSlots: slots });
             remainingBudget -= cost;
@@ -15552,6 +15703,8 @@ function renderTransportResults(routes, budget, mountCapacity, haulPlans, availa
             const roiPct = plan.totalCost > 0 ? ((plan.totalProfit / plan.totalCost) * 100).toFixed(1) : 0;
             const confBadge = plan.avgConfidence >= 70 ? '<span style="color:#22c55e; font-size:0.7rem;">HIGH</span>' : plan.avgConfidence >= 40 ? '<span style="color:#f59e0b; font-size:0.7rem;">MED</span>' : '<span style="color:#ef4444; font-size:0.7rem;">LOW</span>';
             const histBadge = plan.isHistorical ? ' <span style="background:rgba(167,139,250,0.15); color:#a78bfa; border:1px solid rgba(167,139,250,0.3); padding:0 4px; border-radius:4px; font-size:0.6rem; font-weight:700;">HISTORICAL</span>' : '';
+            const unknownDemandCount = plan.items.filter(i => !i.hasSellThroughData).length;
+            const demandBadge = unknownDemandCount > 0 ? ` <span style="background:rgba(245,158,11,0.12); color:#f59e0b; border:1px solid rgba(245,158,11,0.35); padding:0 4px; border-radius:4px; font-size:0.6rem; font-weight:700;" title="${unknownDemandCount} item${unknownDemandCount > 1 ? 's have' : ' has'} no destination sold/day history and ${unknownDemandCount > 1 ? 'are' : 'is'} capped to a scout quantity">SCOUT DEMAND</span>` : '';
 
             // Find oldest price date among all items to show worst-case freshness
             const allDates = plan.items.flatMap(i => [i.dateBuy, i.dateSell]).filter(d => d);
@@ -15572,7 +15725,7 @@ function renderTransportResults(routes, budget, mountCapacity, haulPlans, availa
                         </div>
                         <div style="min-width:0;">
                             <div style="font-weight:600; font-size:0.9rem; color:var(--text-primary);">${esc(plan.buyCity)} ➔ ${esc(plan.sellCity)}</div>
-                            <div style="font-size:0.72rem; color:var(--text-muted);">${plan.items.length} item${plan.items.length > 1 ? 's' : ''} &bull; ${plan.totalSlots}/${availableSlots} slots &bull; ${Number.isFinite(mountCapacity) ? `${plan.totalWeight.toFixed(1)}/${mountCapacity} kg` : `${plan.totalWeight.toFixed(1)} kg`} &bull; ${plan.budgetUsed}% budget &bull; ${freshnessHtml} ${confBadge}${histBadge}</div>
+                            <div style="font-size:0.72rem; color:var(--text-muted);">${plan.items.length} item${plan.items.length > 1 ? 's' : ''} &bull; ${plan.totalSlots}/${availableSlots} slots &bull; ${Number.isFinite(mountCapacity) ? `${plan.totalWeight.toFixed(1)}/${mountCapacity} kg` : `${plan.totalWeight.toFixed(1)} kg`} &bull; ${plan.budgetUsed}% budget &bull; ${freshnessHtml} ${confBadge}${histBadge}${demandBadge}</div>
                         </div>
                     </div>
                     <div style="display:flex; align-items:center; gap:1.2rem; flex-shrink:0;">
@@ -15610,6 +15763,7 @@ function renderTransportResults(routes, budget, mountCapacity, haulPlans, availa
                 const limitIcon = item.limitingFactor === 'available' ? '📦'
                     : item.limitingFactor === 'liquidity' ? '📊'
                     : item.limitingFactor === 'instant' ? '✓'
+                    : item.limitingFactor === 'demand' ? '⚠'
                     : item.limitingFactor === 'quantity' ? '⚠'
                     : item.limitingFactor === 'weight' ? '⚖️'
                     : item.limitingFactor === 'slots' ? '🎒'
@@ -15635,13 +15789,18 @@ function renderTransportResults(routes, budget, mountCapacity, haulPlans, availa
                                    &nbsp;${getFreshnessIndicator(item.dateSell)} ${item.sellMode === 'market' ? 'Avg' : 'Sell'} @ ${Math.floor(item.sellPrice).toLocaleString()} <span style="opacity:0.7">${item.sellMode === 'market' ? '7d avg' : timeAgo(item.dateSell)}</span>
                                    ${item.instantSellPrice > 0 ? `&nbsp;<span style="color:var(--profit-green); font-size:0.65rem;" title="Active buy order — instant sell available">⚡ Instant: ${Math.floor(item.instantSellPrice).toLocaleString()}</span>` : ''}`
                             }
+                            ${item.sellDailyVolume > 0
+                                ? ` <span style="color:var(--text-muted);" title="Average destination sell-through from Albion Data charts; route capped at ${item.liquidityCap.toLocaleString()} units">~${Math.round(item.sellDailyVolume).toLocaleString()}/day sold</span>`
+                                : item.unknownDemandCap > 0
+                                    ? ` <span style="color:#f59e0b;" title="No destination sold/day history; capped to a small scout buy by the Unknown Demand setting">⚠ demand unknown, scout x${item.unknownDemandCap.toLocaleString()}</span>`
+                                    : ` <span style="color:#f59e0b;" title="No destination sold/day history for this city">⚠ demand unknown</span>`}
                             ${item.buyAmount > 0
                                 ? item.planUnits > item.buyAmount
                                     ? ` <span style="color:#f59e0b;" title="Only ${item.buyAmount} available at this price, but ${item.planUnits} suggested">⚠ ${item.buyAmount} avail</span>`
                                     : ` <span style="color:var(--profit-green); font-size:0.65rem;" title="${item.buyAmount} units available at this price (from live orders)">✓ ${item.buyAmount} avail</span>`
-                                : item.sellDailyVolume > 0
-                                    ? ` <span style="color:var(--text-muted);" title="Average destination sell-through from Albion Data charts; route capped at ${item.liquidityCap.toLocaleString()} units">~${Math.round(item.sellDailyVolume).toLocaleString()}/day sold</span>`
-                                    : ` <span style="color:#f59e0b;" title="No source quantity or sell-through data; route capped to a scout amount">⚠ qty unknown</span>`}
+                                : !item.hasVolumeData
+                                    ? ` <span style="color:#f59e0b;" title="No source quantity history either; source is capped defensively">⚠ source qty unknown</span>`
+                                    : ''}
                         </div>
                     </div>
                     <div style="display:grid; grid-template-columns: repeat(5, auto); gap:0.6rem; align-items:center; font-size:0.76rem; flex-shrink:0; text-align:right;">
@@ -15857,6 +16016,7 @@ function renderTransportResults(routes, budget, mountCapacity, haulPlans, availa
             const limitLabel = r.limitingFactor === 'liquidity' ? '<span title="Limited by average sold quantity in the destination market" style="color:#f59e0b;">📊 Sold/day capped</span>'
                 : r.limitingFactor === 'available' ? '<span title="Limited by live source order amount at the buy price" style="color:#22c55e;">✓ Available capped</span>'
                 : r.limitingFactor === 'instant' ? '<span title="Limited by destination buy-order amount for instant selling" style="color:#22c55e;">✓ Buy-order capped</span>'
+                : r.limitingFactor === 'demand' ? '<span title="No destination sold/day history; capped to a small scout buy" style="color:#f59e0b;">⚠ Scout demand cap</span>'
                 : r.limitingFactor === 'quantity' ? '<span title="Quantity is unknown, so this is capped to a conservative scout amount" style="color:#f59e0b;">⚠ Qty unknown</span>'
                 : r.limitingFactor === 'weight' ? '<span title="Limited by mount carry weight" style="color:#ef4444;">⚖️ Weight-capped</span>'
                 : r.limitingFactor === 'slots' ? `<span title="Limited by ${availableSlots} free inventory slots" style="color:#8b5cf6;">🎒 Slot-capped</span>`
@@ -15915,7 +16075,7 @@ function renderTransportResults(routes, budget, mountCapacity, haulPlans, availa
                     </div>
                     <div class="transport-stat">
                         <div class="transport-stat-label">Sold/Day</div>
-                        <div class="transport-stat-value">${r.sellDailyVolume > 0 ? Math.round(r.sellDailyVolume).toLocaleString() : 'Unknown'}</div>
+                        <div class="transport-stat-value">${r.sellDailyVolume > 0 ? Math.round(r.sellDailyVolume).toLocaleString() : (r.unknownDemandCap > 0 ? `Unknown (scout x${r.unknownDemandCap.toLocaleString()})` : 'Unknown')}</div>
                     </div>
                     <div class="transport-stat">
                         <div class="transport-stat-label">Slots</div>
@@ -16326,21 +16486,44 @@ function renderItemPowerResults(results) {
 // ============================================================
 const FAV_STORAGE_KEY = 'albion_favorites';
 
+function _readFavoriteLists() {
+    try {
+        const lists = JSON.parse(localStorage.getItem(FAV_STORAGE_KEY) || '{}');
+        return lists && typeof lists === 'object' && !Array.isArray(lists) ? lists : {};
+    } catch (err) {
+        console.warn('[Favorites] Ignoring invalid stored favorites:', err && err.message);
+        return {};
+    }
+}
+
+function _writeFavoriteLists(lists) {
+    try {
+        localStorage.setItem(FAV_STORAGE_KEY, JSON.stringify(lists || {}));
+        return true;
+    } catch (err) {
+        console.warn('[Favorites] Failed to persist favorites:', err && err.message);
+        if (typeof showToast === 'function') showToast('Could not save favorites in this browser.', 'warn');
+        return false;
+    }
+}
+
+function _favoriteListItems(list) {
+    return Array.isArray(list?.items) ? list.items : [];
+}
+
 // G12: Aggregate all favorited item IDs across every user list → Set for O(1) lookup.
 // Used by Loot Buyer + Loot Logger to highlight items the user has previously starred.
 let _favoriteItemIds = null;
 function getAllFavoriteItemIds() {
     if (_favoriteItemIds) return _favoriteItemIds;
     const set = new Set();
-    try {
-        const lists = JSON.parse(localStorage.getItem(FAV_STORAGE_KEY) || '{}');
-        for (const name of Object.keys(lists)) {
-            for (const item of (lists[name].items || [])) {
-                const id = typeof item === 'string' ? item : (item?.itemId || item?.id);
-                if (id) set.add(id);
-            }
+    const lists = _readFavoriteLists();
+    for (const name of Object.keys(lists)) {
+        for (const item of _favoriteListItems(lists[name])) {
+            const id = typeof item === 'string' ? item : (item?.itemId || item?.id);
+            if (id) set.add(id);
         }
-    } catch {}
+    }
     _favoriteItemIds = set;
     return set;
 }
@@ -16352,14 +16535,14 @@ function loadFavoriteLists() {
     const select = document.getElementById('fav-list-select');
     if (!select) return;
 
-    const lists = JSON.parse(localStorage.getItem(FAV_STORAGE_KEY) || '{}');
+    const lists = _readFavoriteLists();
     select.innerHTML = '<option value="">-- Select a list --</option>';
 
     const names = Object.keys(lists).sort();
     names.forEach(name => {
         const opt = document.createElement('option');
         opt.value = name;
-        opt.textContent = `${name} (${lists[name].items.length} items)`;
+        opt.textContent = `${name} (${_favoriteListItems(lists[name]).length} items)`;
         select.appendChild(opt);
     });
 }
@@ -16377,12 +16560,12 @@ function saveFavoriteList() {
         return;
     }
 
-    const lists = JSON.parse(localStorage.getItem(FAV_STORAGE_KEY) || '{}');
+    const lists = _readFavoriteLists();
     lists[name] = {
         items: [...favCurrentItems],
         created: Date.now()
     };
-    localStorage.setItem(FAV_STORAGE_KEY, JSON.stringify(lists));
+    if (!_writeFavoriteLists(lists)) return;
     _invalidateFavoriteCache();
 
     loadFavoriteLists();
@@ -16406,9 +16589,9 @@ function deleteFavoriteList() {
     }
 
     showConfirm(`Delete the list "${name}"?`, () => {
-        const lists = JSON.parse(localStorage.getItem(FAV_STORAGE_KEY) || '{}');
+        const lists = _readFavoriteLists();
         delete lists[name];
-        localStorage.setItem(FAV_STORAGE_KEY, JSON.stringify(lists));
+        if (!_writeFavoriteLists(lists)) return;
         _invalidateFavoriteCache();
         loadFavoriteLists();
         const container = document.getElementById('fav-results');
@@ -16456,9 +16639,10 @@ async function loadFavoriteListPrices() {
         return;
     }
 
-    const lists = JSON.parse(localStorage.getItem(FAV_STORAGE_KEY) || '{}');
+    const lists = _readFavoriteLists();
     const list = lists[name];
-    if (!list || list.items.length === 0) {
+    const items = _favoriteListItems(list);
+    if (items.length === 0) {
         if (errorEl) showError(errorEl, 'Selected list is empty.');
         return;
     }
@@ -16469,7 +16653,7 @@ async function loadFavoriteListPrices() {
 
     try {
         const server = getServer();
-        const priceData = await fetchMarketData(server, list.items);
+        const priceData = await fetchMarketData(server, items);
         if (spinner) spinner.classList.add('hidden');
 
         // Build price map: item_id -> { city -> sell_price_min }
@@ -16483,7 +16667,7 @@ async function loadFavoriteListPrices() {
             }
         }
 
-        renderFavoritePrices(list.items, priceMap);
+        renderFavoritePrices(items, priceMap);
     } catch (e) {
         if (spinner) spinner.classList.add('hidden');
         if (errorEl) showError(errorEl, 'Error fetching prices: ' + e.message);
@@ -16581,10 +16765,10 @@ function renderFavoritePrices(items, priceMap) {
                 const select = document.getElementById('fav-list-select');
                 const name = select ? select.value : '';
                 if (!name) return;
-                const lists = JSON.parse(localStorage.getItem(FAV_STORAGE_KEY) || '{}');
+                const lists = _readFavoriteLists();
                 if (!lists[name]) return;
-                lists[name].items = (lists[name].items || []).filter(x => (typeof x === 'string' ? x : (x.itemId || x.id)) !== itemId);
-                localStorage.setItem(FAV_STORAGE_KEY, JSON.stringify(lists));
+                lists[name].items = _favoriteListItems(lists[name]).filter(x => (typeof x === 'string' ? x : (x.itemId || x.id)) !== itemId);
+                if (!_writeFavoriteLists(lists)) return;
                 _invalidateFavoriteCache();
                 loadFavoriteListPrices();
                 showToast(`Removed ${getFriendlyName(itemId)} from "${name}"`, 'info');
@@ -16598,15 +16782,15 @@ function renderFavoritePrices(items, priceMap) {
 // Call toggleStarredItem(itemId) from any card. It picks (or creates) a default "Watchlist" list.
 function toggleStarredItem(itemId, listName = 'Watchlist') {
     if (!itemId) return false;
-    const lists = JSON.parse(localStorage.getItem(FAV_STORAGE_KEY) || '{}');
+    const lists = _readFavoriteLists();
     if (!lists[listName]) lists[listName] = { items: [], created: Date.now() };
-    const existing = lists[listName].items || [];
+    const existing = _favoriteListItems(lists[listName]).slice();
     const idx = existing.findIndex(x => (typeof x === 'string' ? x : (x.itemId || x.id)) === itemId);
     let added = false;
     if (idx >= 0) { existing.splice(idx, 1); added = false; }
     else { existing.push(itemId); added = true; }
     lists[listName].items = existing;
-    localStorage.setItem(FAV_STORAGE_KEY, JSON.stringify(lists));
+    if (!_writeFavoriteLists(lists)) return false;
     _invalidateFavoriteCache();
     showToast(added ? `⭐ Added to ${listName}` : `Removed from ${listName}`, added ? 'success' : 'info');
     // Update any visible star buttons on the page
@@ -19636,10 +19820,15 @@ document.addEventListener('keydown', (e) => {
     }
 });
 
-// Init with timers widget
-const _origInit = typeof init === 'function' ? init : null;
-function _wrappedInit() { if (_origInit) _origInit(); initTimersWidget(); }
-window.addEventListener('load', _wrappedInit);
+// Init already runs through the guarded DOMContentLoaded boot path below.
+// Keep the legacy load hook for the timers widget only; calling init() here
+// attaches duplicate UI handlers, which makes dropdown toggles open then close.
+function _startTimersWidgetOnce() {
+    if (window.__albionTimersWidgetStarted) return;
+    window.__albionTimersWidgetStarted = true;
+    initTimersWidget();
+}
+window.addEventListener('load', _startTimersWidgetOnce);
 
 // ============================================================
 // CRAFT RUNS TAB
@@ -20332,4 +20521,23 @@ function crSetupTargetAutocomplete() {
             dropdown.classList.add('hidden');
         }
     }, { passive: true });
+}
+
+if (typeof window !== 'undefined' && typeof document !== 'undefined') {
+    const bootAlbionApp = () => {
+        if (window.__albionAppInitStarted) return;
+        window.__albionAppInitStarted = true;
+        Promise.resolve(init()).catch(err => {
+            console.error('[Init] Startup failed:', err);
+            if (typeof showToast === 'function') {
+                showToast('Startup failed. Refresh once; if it repeats, report the console error.', 'error', 9000);
+            }
+        });
+    };
+
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', bootAlbionApp, { once: true });
+    } else {
+        bootAlbionApp();
+    }
 }
