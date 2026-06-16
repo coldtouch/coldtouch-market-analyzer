@@ -2,6 +2,12 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-06-16 — Loot Logger viewer: multi-guild filter, source guild/alliance, death zones
+
+- The loot report's **guild filter is now multi-select** — Ctrl/Cmd-click to show players from several guilds at once; no selection still means all guilds.
+- Expanded player-card loot rows now show the **source's alliance and guild**, not just the name (`from [Alliance] Guild Name`).
+- **Death rows show the death zone (📍) again.** The zone was always captured in the log; the Deaths list just wasn't rendering it (it now resolves names too — e.g. zone `1312` → "Deadpine Forest").
+
 ### 2026-06-16 — Outage fix: backup starvation + price_analytics retention
 
 - Root-caused a site-wide outage: the twice-daily `sqlite3 .backup` cron took 3+ hours at 90% CPU on a 31 GB DB, starving the single Node process and wedging the event loop (every route, including static, timed out). Recovered by killing the stuck backup (the live DB is untouched — `.backup` only reads the source) and restarting the service. Disabled the backup cron pending a hardened (throttled, stream-to-gzip) version.

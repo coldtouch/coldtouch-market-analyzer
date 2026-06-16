@@ -11580,6 +11580,10 @@ function renderDeathsSection(deaths) {
         const killerGuildPrefix = d.killerGuild ? `<span class="ll-death-row-guild" style="color:var(--text-muted);font-size:0.78rem;margin-right:0.25rem;">[${esc(d.killerGuild)}]</span>` : '';
         const sideClass = d.wasFriendly ? 'll-death-friendly' : 'll-death-enemy';
         const sideIcon = d.wasFriendly ? '🛡️' : '💀';
+        // 2026-06-16: surface the death zone (📍). The data was captured all along
+        // (d.location, from the .txt column 12), but renderDeathsSection never rendered it.
+        const _deathZone = d.location ? formatZone(d.location) : '';
+        const locHtml = _deathZone ? `<div class="ll-death-row-loc" style="font-size:0.72rem;color:var(--accent);margin:0 0 0.3rem;">📍 ${esc(_deathZone)}</div>` : '';
         const sideLabel = d.wasFriendly ? 'friendly' : 'enemy';
         const when = d.timestamp ? new Date(d.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '—';
         const value = d.estimatedValue > 0 ? formatSilver(d.estimatedValue) : '—';
@@ -11655,6 +11659,7 @@ function renderDeathsSection(deaths) {
                 <span class="ll-death-badge">${sideLabel}</span>
             </summary>
             <div class="ll-death-row-body">
+                ${locHtml}
                 ${equipmentHtml}
                 ${lootSection}
                 <div class="ll-death-actions">
@@ -12051,10 +12056,11 @@ function _llRenderFiltered() {
     if (minVal > 0) {
         entries = entries.filter(([, data]) => (data.totalValue || 0) >= minVal);
     }
-    // Guild filter (dropdown)
-    const guildFilter = document.getElementById('ll-filter-guild')?.value || '';
-    if (guildFilter) {
-        entries = entries.filter(([, data]) => (data.guild || '') === guildFilter);
+    // Guild filter (multi-select dropdown — no selection = all guilds)
+    const guildSelEl = document.getElementById('ll-filter-guild');
+    const guildFilters = guildSelEl ? Array.from(guildSelEl.selectedOptions).map(o => o.value).filter(Boolean) : [];
+    if (guildFilters.length) {
+        entries = entries.filter(([, data]) => guildFilters.includes(data.guild || ''));
     }
     // Alliance filter (dropdown)
     const allianceFilter = document.getElementById('ll-filter-alliance')?.value || '';
@@ -12144,7 +12150,7 @@ function _llRenderFiltered() {
         _llGuildTotals.set(g, (_llGuildTotals.get(g) || 0) + (d.totalValue || 0));
         _llGuildCounts.set(g, (_llGuildCounts.get(g) || 0) + 1);
     }
-    const _llGroupByGuild = !guildFilter;
+    const _llGroupByGuild = !guildFilters.length;
     if (_llGroupByGuild) {
         entries.sort((a, b) => {
             const ga = a[1].guild || '';
@@ -12247,7 +12253,8 @@ function _llRenderFiltered() {
     const uniqueGuilds = [...new Set(Object.values(byPlayer).map(d => d.guild).filter(Boolean))].sort();
     const uniqueAlliances = [...new Set(Object.values(byPlayer).map(d => d.alliance).filter(Boolean))].sort();
     const uniquePlayers = [...Object.keys(byPlayer)].sort();
-    const selectedGuild = document.getElementById('ll-filter-guild')?.value || '';
+    const _selGuildEl = document.getElementById('ll-filter-guild');
+    const selectedGuilds = _selGuildEl ? Array.from(_selGuildEl.selectedOptions).map(o => o.value).filter(Boolean) : [];
     const selectedAlliance = document.getElementById('ll-filter-alliance')?.value || '';
     const selectedPlayer = document.getElementById('ll-filter-player')?.value || '';
     html += `<div class="ll-filter-bar">
@@ -12255,9 +12262,8 @@ function _llRenderFiltered() {
             <span class="search-icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg></span>
             <input type="text" id="ll-search" placeholder="Search player, guild, alliance, or item..." value="${esc(searchVal)}" oninput="_llDebouncedRender(300)" aria-label="Search players, guilds, alliances, or items">
         </div>
-        <select id="ll-filter-guild" class="transport-select" style="min-width:140px;" onchange="_llDebouncedRender(100)" aria-label="Filter by guild" title="Show only players in this guild">
-            <option value="">All guilds</option>
-            ${uniqueGuilds.map(g => `<option value="${esc(g)}"${selectedGuild === g ? ' selected' : ''}>${esc(g)}</option>`).join('')}
+        <select id="ll-filter-guild" class="transport-select" multiple size="3" style="min-width:140px; min-height:2.4rem;" onchange="_llDebouncedRender(100)" aria-label="Filter by guild (select one or more; none = all)" title="Show players in any of the selected guilds — Ctrl/Cmd-click to pick several; none selected = all guilds">
+            ${uniqueGuilds.map(g => `<option value="${esc(g)}"${selectedGuilds.includes(g) ? ' selected' : ''}>${esc(g)}</option>`).join('')}
         </select>
         <select id="ll-filter-alliance" class="transport-select" style="min-width:140px;" onchange="_llDebouncedRender(100)" aria-label="Filter by alliance" title="Show only players in this alliance">
             <option value="">All alliances</option>
@@ -12478,8 +12484,14 @@ function _llRenderFiltered() {
             const ffBadge = isFriendlyFire
                 ? ` <span class="ll-ff-badge" data-tip="Friendly fire: same guild looted a guild member's corpse" title="Friendly fire">🤝</span>`
                 : '';
+            const _fromAlliance = ev.looted_from_alliance || ev.lootedFrom?.alliance || '';
+            const _fromGuild = ev.looted_from_guild || ev.lootedFrom?.guild || '';
+            const _fromMeta = [
+                _fromAlliance ? `[${esc(_fromAlliance)}]` : '',
+                _fromGuild ? esc(_fromGuild) : ''
+            ].filter(Boolean).join(' ');
             const fromStr = ev.looted_from_name
-                ? `<span style="font-size:0.67rem; color:var(--text-muted); margin-left:0.2rem;">from ${esc(ev.looted_from_name)}${ffBadge}</span>`
+                ? `<span style="font-size:0.67rem; color:var(--text-muted); margin-left:0.2rem;">from ${_fromMeta ? _fromMeta + ' ' : ''}${esc(ev.looted_from_name)}${ffBadge}</span>`
                 : (ffBadge ? `<span style="margin-left:0.2rem;">${ffBadge}</span>` : '');
 
             // A5: top-value star — only if this row is the priciest AND the value is meaningful (> 10k)
