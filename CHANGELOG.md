@@ -2,6 +2,11 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-06-16 — Outage fix: backup starvation + price_analytics retention
+
+- Root-caused a site-wide outage: the twice-daily `sqlite3 .backup` cron took 3+ hours at 90% CPU on a 31 GB DB, starving the single Node process and wedging the event loop (every route, including static, timed out). Recovered by killing the stuck backup (the live DB is untouched — `.backup` only reads the source) and restarting the service. Disabled the backup cron pending a hardened (throttled, stream-to-gzip) version.
+- `maintenance_compaction.js` now prunes `price_analytics`, which previously had **no retention** and grew unbounded since analytics writes were disabled on 2026-05-20 — the primary cause of the DB bloat. Retention defaults to 14 days (`COMPACTION_ANALYTICS_RETENTION_DAYS`); the backlog drains in larger chunks (`COMPACTION_ANALYTICS_CHUNK`, default 1000) under a dedicated per-run sub-budget (`COMPACTION_ANALYTICS_MAX_MS`, default 4 min) so it clears without starving the core price rollups. The isolated compaction timer applies it gradually.
+
 ### 2026-06-16 — Loot Logger is now upload-first
 
 - Removed the live-session recording toolbar and the saved-sessions browser from the Loot Logger tab. The workflow is now: save a log with the Coldtouch client at the end of your content, then upload the `.txt`. The tab opens directly in Upload mode with the same report viewer and Accountability check as before. Loot Logger now has two modes: **Upload File** (default) and **Accountability**.

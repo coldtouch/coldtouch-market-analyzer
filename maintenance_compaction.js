@@ -20,6 +20,14 @@ const PRICE_HOURLY_RETENTION_DAYS = Number(process.env.COMPACTION_HOURLY_RETENTI
 const DAILY_RETENTION_DAYS = Number(process.env.COMPACTION_DAILY_RETENTION_DAYS || 90);
 const SPREAD_RETENTION_DAYS = Number(process.env.COMPACTION_SPREAD_RETENTION_DAYS || 14);
 const CONTRIBUTION_RETENTION_DAYS = Number(process.env.COMPACTION_CONTRIBUTION_RETENTION_DAYS || 60);
+// price_analytics previously had NO retention and grew unbounded (it was a primary cause of
+// the 2026-06-16 31GB-DB / backup-starvation outage; analytics writes were disabled 2026-05-20).
+// computed_at is an ISO-8601 string, so its cutoff must be a string (lexical == chronological).
+// Larger chunk + a dedicated per-run sub-budget so this one-time backlog drains in reasonable
+// time without starving the core price rollups.
+const ANALYTICS_RETENTION_DAYS = Number(process.env.COMPACTION_ANALYTICS_RETENTION_DAYS || 14);
+const ANALYTICS_CHUNK = Number(process.env.COMPACTION_ANALYTICS_CHUNK || 1000);
+const ANALYTICS_MAX_MS = Number(process.env.COMPACTION_ANALYTICS_MAX_MS || 4 * 60 * 1000);
 
 const CHUNK = Number(process.env.COMPACTION_CHUNK || 250);
 const ITEM_BATCH_SLEEP_MS = Number(process.env.COMPACTION_SLEEP_MS || 150);
@@ -296,11 +304,11 @@ async function prunePriceAveragesDaily(db, dailyCutoff, deadline, totals) {
   }
 }
 
-async function pruneSimpleTable(db, table, column, cutoff, deadline, label) {
+async function pruneSimpleTable(db, table, column, cutoff, deadline, label, chunkSize = CHUNK) {
   let deleted = 0;
   const stmt = db.prepare(`DELETE FROM ${table} WHERE rowid IN (SELECT rowid FROM ${table} WHERE ${column} < ? LIMIT ?)`);
   while (assertBudget(deadline)) {
-    const info = stmt.run(cutoff, CHUNK);
+    const info = stmt.run(cutoff, chunkSize);
     if (!info.changes) break;
     deleted += info.changes;
     await sleep(ITEM_BATCH_SLEEP_MS);
@@ -340,10 +348,23 @@ async function main() {
       hourlyDeleted: 0,
       dailyDeleted: 0,
       spreadDeleted: 0,
-      contributionDeleted: 0
+      contributionDeleted: 0,
+      analyticsDeleted: 0
     };
 
     const itemIds = loadMarketItemIds(db);
+
+    // Drain the unbounded price_analytics backlog FIRST, under its own sub-budget, so it always
+    // makes progress even when the core price rollups would otherwise consume the whole run.
+    if (assertBudget(deadline)) {
+      try {
+        const analyticsCutoffStr = new Date(now - ANALYTICS_RETENTION_DAYS * 86400000).toISOString();
+        const analyticsDeadline = Math.min(deadline, started + ANALYTICS_MAX_MS);
+        totals.analyticsDeleted = await pruneSimpleTable(db, 'price_analytics', 'computed_at', analyticsCutoffStr, analyticsDeadline, 'price_analytics rows', ANALYTICS_CHUNK);
+      } catch (err) {
+        log(`price_analytics prune skipped: ${err.message}`);
+      }
+    }
 
     await rollHourlyToDaily(db, hourlyCutoffStr, itemIds, deadline, totals);
 
@@ -384,7 +405,7 @@ async function main() {
 
     const after = getDbStats(db);
     const elapsed = ((Date.now() - started) / 1000).toFixed(1);
-    log(`complete in ${elapsed}s rawMigrated=${totals.rawMigrated} rawDeleted=${totals.rawDeleted} dailyRows=${totals.dailyRows} hourlyDeleted=${totals.hourlyDeleted} dailyDeleted=${totals.dailyDeleted} dbLive=${after.usedGB.toFixed(1)}GB total=${after.totalGB.toFixed(1)}GB freePages=${after.freeGB.toFixed(1)}GB rss=${rssMB()}MB stopped=${!assertBudget(deadline)}`);
+    log(`complete in ${elapsed}s rawMigrated=${totals.rawMigrated} rawDeleted=${totals.rawDeleted} dailyRows=${totals.dailyRows} hourlyDeleted=${totals.hourlyDeleted} dailyDeleted=${totals.dailyDeleted} spreadDeleted=${totals.spreadDeleted} analyticsDeleted=${totals.analyticsDeleted} dbLive=${after.usedGB.toFixed(1)}GB total=${after.totalGB.toFixed(1)}GB freePages=${after.freeGB.toFixed(1)}GB rss=${rssMB()}MB stopped=${!assertBudget(deadline)}`);
   } finally {
     db.close();
     releaseJsLock();
