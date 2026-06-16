@@ -2,6 +2,11 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-06-16 — Loot upload Share chunking
+
+- Manual Loot Logger file uploads now save to the backend in bounded chunks instead of sending the whole file in one request, so larger logs can still create a server session for Share.
+- If a server save chunk fails, the uploaded report still stays usable locally for Accountability and the UI shows a clearer save-failure message.
+
 ### 2026-06-14 — Albion item catalog refresh
 
 - Refreshed Loot Logger item maps and weights from the 2026-05-26 `ao-bin-dumps` data so numeric loot IDs resolve to the current Albion item strings and names.

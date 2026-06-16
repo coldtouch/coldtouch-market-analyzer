@@ -12728,6 +12728,77 @@ function parseLootLines(text) {
     return { events, lines: allLines };
 }
 
+const LL_UPLOAD_CHUNK_MAX_LINES = 4500;
+const LL_UPLOAD_CHUNK_MAX_CHARS = 1500 * 1024;
+
+function _llBuildUploadChunks(lines) {
+    const chunks = [];
+    let current = [];
+    let currentChars = 0;
+    for (const line of lines || []) {
+        const lineChars = (line || '').length;
+        const wouldExceedLines = current.length >= LL_UPLOAD_CHUNK_MAX_LINES;
+        const wouldExceedChars = current.length > 0 && (currentChars + lineChars) > LL_UPLOAD_CHUNK_MAX_CHARS;
+        if (wouldExceedLines || wouldExceedChars) {
+            chunks.push(current);
+            current = [];
+            currentChars = 0;
+        }
+        current.push(line);
+        currentChars += lineChars;
+    }
+    if (current.length) chunks.push(current);
+    return chunks;
+}
+
+function _llFriendlyUploadSaveError(err) {
+    const msg = err && err.message ? String(err.message) : 'Unknown error';
+    if (/Failed to fetch/i.test(msg)) {
+        return 'Network request failed while saving upload';
+    }
+    return msg;
+}
+
+async function _llPostUploadChunk(lines, sessionId) {
+    const payload = { lines };
+    if (sessionId) payload.sessionId = sessionId;
+    const res = await fetch(`${VPS_BASE}/api/loot-upload`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify(payload)
+    });
+    if (!res.ok) {
+        let message = `HTTP ${res.status}`;
+        try {
+            const errData = await res.json();
+            if (errData && errData.error) message = errData.error;
+        } catch {}
+        throw new Error(message);
+    }
+    return await res.json();
+}
+
+async function _llSaveUploadedLootLines(lines, statusEl, baseStatusText) {
+    const chunks = _llBuildUploadChunks(lines);
+    if (!chunks.length) throw new Error('No loot data provided.');
+    let sessionId = '';
+    let imported = 0;
+    let reResolved = 0;
+    for (let i = 0; i < chunks.length; i++) {
+        if (statusEl) {
+            const chunkNote = chunks.length > 1 ? ` — saving chunk ${i + 1}/${chunks.length} for Share...` : ' — saving for Share / Accountability...';
+            statusEl.textContent = `${baseStatusText}${chunkNote}`;
+        }
+        const data = await _llPostUploadChunk(chunks[i], sessionId);
+        const nextSessionId = data.sessionId || data.session_id || sessionId;
+        if (!nextSessionId) throw new Error('Upload saved but no session id was returned.');
+        sessionId = nextSessionId;
+        imported += parseInt(data.eventsImported, 10) || 0;
+        reResolved += parseInt(data.reResolved, 10) || 0;
+    }
+    return { sessionId, eventsImported: imported, reResolved, chunks: chunks.length };
+}
+
 // Handle .txt file upload (supports multiple files)
 async function handleLootFileUpload(input) {
     const files = Array.from(input.files);
@@ -12789,53 +12860,40 @@ async function processLootFiles(files) {
         return;
     }
 
-    status.textContent += ' — saving for Share / Accountability...';
+    const baseStatusText = status.textContent;
 
     // Background upload for accountability use
     try {
-        const res = await fetch(`${VPS_BASE}/api/loot-upload`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', ...authHeaders() },
-            body: JSON.stringify({ lines: allLines })
-        });
-        if (!res.ok) {
-            let message = `HTTP ${res.status}`;
-            try {
-                const errData = await res.json();
-                if (errData && errData.error) message = errData.error;
-            } catch {}
-            throw new Error(message);
-        }
-        if (res.ok) {
-            const data = await res.json();
-            status.textContent += ` — saved (${data.eventsImported} events)`;
-            // Remember the just-uploaded session_id so the Accountability dropdown can
-            // highlight it and auto-select when the user switches to that tab.
-            if (data.sessionId || data.session_id) {
-                const sid = data.sessionId || data.session_id;
-                window._justUploadedSessionId = sid;
-                window._justUploadedAt = Date.now();
-                // Auto-stamp the session name to the first file uploaded (user can rename later).
-                if (typeof setSavedSessionName === 'function' && fileNames.length > 0) {
-                    setSavedSessionName(sid, fileNames[0].replace(/\.txt$/i, ''));
-                }
-                _llInstallSavedUploadActions(sid);
-                if (typeof populateAccountabilityDropdowns === 'function') {
-                    await populateAccountabilityDropdowns();
-                }
-            } else {
-                _llUploadSaveState = 'error';
-                _llUploadSaveMessage = 'Upload saved but no session id was returned; Share unavailable.';
-                status.textContent += ` — ${_llUploadSaveMessage}`;
-                _llRenderFiltered();
+        const data = await _llSaveUploadedLootLines(allLines, status, baseStatusText);
+        const chunkSuffix = data.chunks > 1 ? ` in ${data.chunks} chunks` : '';
+        status.textContent = `${baseStatusText} — saved (${data.eventsImported} events${chunkSuffix})`;
+        // Remember the just-uploaded session_id so the Accountability dropdown can
+        // highlight it and auto-select when the user switches to that tab.
+        if (data.sessionId || data.session_id) {
+            const sid = data.sessionId || data.session_id;
+            window._justUploadedSessionId = sid;
+            window._justUploadedAt = Date.now();
+            // Auto-stamp the session name to the first file uploaded (user can rename later).
+            if (typeof setSavedSessionName === 'function' && fileNames.length > 0) {
+                setSavedSessionName(sid, fileNames[0].replace(/\.txt$/i, ''));
             }
+            _llInstallSavedUploadActions(sid);
+            if (typeof populateAccountabilityDropdowns === 'function') {
+                await populateAccountabilityDropdowns();
+            }
+        } else {
+            _llUploadSaveState = 'error';
+            _llUploadSaveMessage = 'Upload saved but no session id was returned; Share unavailable.';
+            status.textContent = `${baseStatusText} — ${_llUploadSaveMessage}`;
+            _llRenderFiltered();
         }
     } catch (e) {
+        const friendly = _llFriendlyUploadSaveError(e);
         _llUploadSaveState = 'error';
-        _llUploadSaveMessage = `Share unavailable: ${e.message}. Accountability still works locally.`;
-        status.textContent += ` — server save failed (${e.message})`;
+        _llUploadSaveMessage = `Share unavailable: ${friendly}. Accountability still works locally.`;
+        status.textContent = `${baseStatusText} — server save failed (${friendly})`;
         _llRenderFiltered();
-        showToast(`Upload preview loaded, but server save failed: ${e.message}`, 'warning');
+        showToast(`Upload preview loaded, but server save failed: ${friendly}`, 'warning');
     }
 }
 

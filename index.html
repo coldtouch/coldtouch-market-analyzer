@@ -2342,6 +2342,14 @@
                     <div id="changelog-wrapper" style="max-height: 500px; overflow-y: auto; position: relative;">
                     <div class="changelog-list">
                         <div class="changelog-entry">
+                            <div class="changelog-date">June 16, 2026</div>
+                            <div class="changelog-title">Loot Logger upload Share reliability</div>
+                            <ul>
+                                <li>Manual loot-log uploads now save in bounded chunks instead of one oversized request, so larger files can still create a server session for Share.</li>
+                                <li>If server save still fails, the uploaded report remains available for local Accountability with a clearer status message.</li>
+                            </ul>
+                        </div>
+                        <div class="changelog-entry">
                             <div class="changelog-date">May 28, 2026</div>
                             <div class="changelog-title">Accountability chest scan timestamps</div>
                             <ul>
