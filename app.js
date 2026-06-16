@@ -1018,7 +1018,7 @@ function initTabs() {
             if (currentTab === 'live-flips') initLiveFlipsTab();
             if (currentTab === 'profile') initProfileTab();
             if (currentTab === 'loot-buyer') { renderLootCaptures(); loadTrackedTabs(); loadRecentSales(); initLootCombineBar(); }
-            if (currentTab === 'loot-logger') { showLootLoggerMode('live'); }
+            if (currentTab === 'loot-logger') { showLootLoggerMode('upload'); }
             if (currentTab === 'crafting') {
                 if (window._craftLastData && window._craftLastRecipe && window._craftLastItemId) {
                     document.getElementById('craft-settings').style.display = 'flex';
@@ -10316,7 +10316,7 @@ async function confirmDeleteTab(tabId) {
 
 // ====== LOOT LOGGER TAB ======
 
-let lootLoggerMode = 'live';
+let lootLoggerMode = 'upload';
 let lootSessions = [];
 let liveLootEvents = []; // real-time events from current WS session
 let liveSessionActive = false; // whether we are actively recording live events
@@ -11056,26 +11056,19 @@ function _updateLootLoggerModePillCounts() {
 }
 
 function showLootLoggerMode(mode) {
+    // Live recording + saved-session browsing were retired 2026-06-16. Modes are now
+    // 'upload' (default) and 'accountability'; coerce any stale 'live' value to upload.
+    if (mode === 'live') mode = 'upload';
     lootLoggerMode = mode;
     document.querySelectorAll('.loot-log-mode').forEach(el => el.style.display = 'none');
-    document.getElementById('loot-log-live').style.display = mode === 'live' ? '' : 'none';
     document.getElementById('loot-log-upload').style.display = mode === 'upload' ? '' : 'none';
     document.getElementById('loot-log-accountability').style.display = mode === 'accountability' ? '' : 'none';
     // D2: Pill active class
-    for (const [id, m] of [['loot-log-live-btn', 'live'], ['loot-log-upload-btn', 'upload'], ['loot-log-acc-btn', 'accountability']]) {
+    for (const [id, m] of [['loot-log-upload-btn', 'upload'], ['loot-log-acc-btn', 'accountability']]) {
         const el = document.getElementById(id);
         if (el) el.classList.toggle('active', mode === m);
     }
     _updateLootLoggerModePillCounts();
-    if (mode === 'live') {
-        const token = localStorage.getItem('albion_auth_token');
-        if (!token && !discordUser) {
-            const list = document.getElementById('loot-sessions-list');
-            if (list) list.innerHTML = `<div class="empty-state"><p>Log in with Discord to view saved sessions.<br><span style="font-size:0.78rem; color:var(--text-muted);">Upload mode works without login.</span></p></div>`;
-            return;
-        }
-        loadLootSessions();
-    }
     if (mode === 'accountability') {
         // E2: lootBuyerCaptures IS window._chestCaptures — no seeding needed
         populateAccountabilityDropdowns();
@@ -19099,7 +19092,10 @@ async function _handlePublicShareLoad() {
             _renderPublicAccountabilityView(data);
             return;
         }
-        const res = await fetch(`${VPS_BASE}/api/public/loot-session/${encodeURIComponent(sessionToken)}`);
+        // Send auth headers when logged in so the backend can tell us whether the
+        // viewer owns this share (or is admin) and may delete it. Stays public for
+        // anonymous viewers — authHeaders() is empty when not logged in.
+        const res = await fetch(`${VPS_BASE}/api/public/loot-session/${encodeURIComponent(sessionToken)}`, { headers: authHeaders() });
         if (!res.ok) {
             const data = await res.json();
             _renderPublicShareError(data.error || 'Failed to load shared session');
@@ -19300,10 +19296,16 @@ async function _renderPublicShareView(data) {
         const banner = document.createElement('div');
         banner.id = 'shared-session-banner';
         banner.style.cssText = 'background:linear-gradient(90deg, rgba(88,101,242,0.14), rgba(88,101,242,0.06)); border:1px solid rgba(88,101,242,0.35); border-radius:8px; padding:0.55rem 0.9rem; margin:0.5rem 0 0.75rem; font-size:0.82rem; color:#c7d2ff; display:flex; gap:0.5rem; align-items:center; flex-wrap:wrap;';
+        // Owner/admin can delete the share from the link itself (data.canDelete set
+        // by the backend when the request carried a matching auth token).
+        const delBtn = data.canDelete
+            ? `<button class="btn-small" style="margin-left:0.5rem; background:rgba(220,80,80,0.18); color:#ffb3b3; border:1px solid rgba(220,80,80,0.45);" onclick="_deleteSharedSession('${esc(data.token || '')}')" title="Delete this share link — it stops working for everyone (your loot data is kept)">🗑 Delete this share</button>`
+            : '';
         banner.innerHTML = `
             <span>🔗</span>
             <span><strong>Shared loot session</strong>${when ? ` · shared ${esc(when)}` : ''}</span>
-            <span style="margin-left:auto; color:var(--text-muted); font-size:0.72rem;">Read-only view — ${(data.events || []).length} events</span>`;
+            <span style="margin-left:auto; color:var(--text-muted); font-size:0.72rem;">Read-only view — ${(data.events || []).length} events</span>
+            ${delBtn}`;
         uploadPane.insertBefore(banner, uploadPane.firstChild);
     }
 
@@ -19316,6 +19318,29 @@ async function _renderPublicShareView(data) {
     if (!target) return;
     renderLootSessionEvents(data.events || [], target, null).catch(e => {
         target.innerHTML = `<div class="empty-state"><p>Failed to render shared session: ${esc(e.message)}</p></div>`;
+    });
+}
+
+// Owner/admin: delete a share link from the shared-session view. Stops the link
+// working for everyone; the underlying loot data is kept (owner can re-share later).
+async function _deleteSharedSession(token) {
+    if (!token) return;
+    showConfirm('Delete this share link? It will stop working for everyone. Your loot data is kept — you can re-share it later.', async () => {
+        try {
+            const res = await fetch(`${VPS_BASE}/api/loot-session/share/${encodeURIComponent(token)}/delete`, {
+                method: 'POST',
+                headers: authHeaders()
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) throw new Error(data.error || 'Delete failed');
+            showToast('Share link deleted', 'success');
+            const banner = document.getElementById('shared-session-banner');
+            if (banner) banner.innerHTML = `<span>🗑</span> <span><strong>Share deleted.</strong> This link no longer works.</span>`;
+            const target = document.getElementById('loot-upload-result');
+            if (target) target.innerHTML = `<div class="empty-state"><p>This shared session has been deleted by its owner.</p></div>`;
+        } catch (e) {
+            showToast('Failed to delete share: ' + e.message, 'error');
+        }
     });
 }
 

@@ -2956,6 +2956,25 @@ app.post('/api/loot-session/:sessionId/unshare', requireAuth, (req, res) => {
     });
 });
 
+// 2026-06-16: Delete a share by its public token (owner or admin). Powers the
+// "Delete this share" button on the shared-session view, where the viewer knows
+// the token but not necessarily the session id. Loot data is left untouched.
+app.post('/api/loot-session/share/:token/delete', requireAuth, (req, res) => {
+  const token = req.params.token;
+  if (!token || token.length < 8 || token.length > 64) return res.status(400).json({ error: 'Invalid token.' });
+  let share;
+  try { share = readDb.prepare(`SELECT user_id FROM loot_session_shares WHERE public_token = ?`).get(token); }
+  catch (err) { return res.status(500).json({ error: 'An internal error occurred.' }); }
+  if (!share) return res.status(404).json({ error: 'Share not found.' });
+  if (req.user.id !== share.user_id && req.user.id !== ADMIN_DISCORD_ID) {
+    return res.status(403).json({ error: 'You do not have permission to delete this share.' });
+  }
+  db.run(`DELETE FROM loot_session_shares WHERE public_token = ?`, [token], function(err) {
+    if (err) return res.status(500).json({ error: 'An internal error occurred.' });
+    res.json({ success: true, deleted: this.changes });
+  });
+});
+
 // C4: Crafter aggregation — top crafters across all tracked tabs.
 app.get('/api/crafter-stats', requireAuth, (req, res) => {
   let rows;
@@ -3156,13 +3175,18 @@ app.get('/api/public/loot-session/:token', (req, res) => {
   try {
     share = readDb.prepare(`SELECT session_id, user_id, created_at FROM loot_session_shares WHERE public_token = ?`).get(token);
     if (!share) return res.status(404).json({ error: 'Session not found or no longer shared.' });
-    // SEC-M3: expire shares after 30 days
-    if (Date.now() - share.created_at > 30 * 24 * 60 * 60 * 1000) return res.status(410).json({ error: 'Share link has expired.' });
+    // 2026-06-16: share links no longer expire (the old SEC-M3 30-day cutoff is gone).
+    // The owner (or admin) can delete a link explicitly from the shared view via
+    // POST /api/loot-session/share/:token/delete; otherwise it stays valid forever.
+    // The underlying loot_events data is never age-pruned, so old links keep working.
     rows = readDb.prepare(`SELECT timestamp, looted_by_name, looted_by_guild, looted_by_alliance,
       looted_from_name, looted_from_guild, looted_from_alliance, item_id, numeric_id, quantity, weight, equipment_json, location
       FROM loot_events WHERE session_id = ? AND user_id = ? ORDER BY timestamp ASC LIMIT 5000`).all(share.session_id, share.user_id);
   } catch (err) { return res.status(500).json({ error: 'An internal error occurred.' }); }
-  res.json({ sessionId: share.session_id, sharedAt: share.created_at, events: rows || [] });
+  // resolveUser middleware populates req.user when a valid bearer token is sent
+  // (stays anonymous-friendly otherwise). Owner or admin may delete this share.
+  const canDelete = !!(req.user && (req.user.id === share.user_id || req.user.id === ADMIN_DISCORD_ID));
+  res.json({ sessionId: share.session_id, sharedAt: share.created_at, events: rows || [], token, canDelete });
 });
 
 // Get all events for a specific session

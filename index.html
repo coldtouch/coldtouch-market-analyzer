@@ -2343,6 +2343,16 @@
                     <div class="changelog-list">
                         <div class="changelog-entry">
                             <div class="changelog-date">June 16, 2026</div>
+                            <div class="changelog-title">Loot Logger is now upload-first</div>
+                            <ul>
+                                <li>Retired the live-session recording toolbar and the saved-sessions browser. The workflow is now: save a log with the Coldtouch client at the end of your content, then upload the <code>.txt</code> — the tab opens straight into Upload mode with the same report viewer and Accountability check.</li>
+                                <li>Loot Logger now has two modes: <strong>Upload File</strong> (default) and <strong>Accountability</strong>.</li>
+                                <li><strong>Share links never expire.</strong> A shared loot-session link used to stop working after 30 days; shared links are now permanent (the loot data was always kept indefinitely).</li>
+                                <li>Added a <strong>Delete this share</strong> button on the shared-session page, shown to the link's owner (or an admin). Deleting revokes the link for everyone while keeping the loot data, so you can re-share later.</li>
+                            </ul>
+                        </div>
+                        <div class="changelog-entry">
+                            <div class="changelog-date">June 16, 2026</div>
                             <div class="changelog-title">Loot Logger upload Share reliability</div>
                             <ul>
                                 <li>Manual loot-log uploads now save in bounded chunks instead of one oversized request, so larger files can still create a server session for Share.</li>
@@ -4384,44 +4394,15 @@
                     </span>
                 </h2>
                 <p style="color:var(--text-secondary); font-size:0.82rem; margin:0 0 1rem;">
-                    Track who looted what during PvP/PvE. Start a live session with the Coldtouch client, or upload a log file.
-                    Run the Accountability Check to cross-reference pickups against chest deposits.
+                    Track who looted what during PvP/PvE. Save a log with the Coldtouch client at the end of your content, then upload the <code>.txt</code> here.
+                    Run the Accountability Check to cross-reference pickups against chest deposits, or Share a read-only link to the report.
                 </p>
 
-                <!-- Live Session Toolbar -->
-                <div class="ll-toolbar">
-                    <button id="ll-live-toggle-btn" class="ll-live-toggle" onclick="toggleLiveSession()">
-                        <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="10"/></svg>
-                        Start Live Session
-                    </button>
-                    <button id="ll-save-btn" class="btn-small" onclick="saveLiveSession()" disabled>Save Session</button>
-                    <button id="ll-reset-btn" class="btn-small" onclick="resetLiveSession()" disabled>New Session</button>
-                    <button class="btn-small" onclick="openWhitelistModal()" title="Filter live sessions by player/guild/alliance">Whitelist</button>
-                    <label class="ll-autosave-label" title="Save a local draft every 5 minutes so you don't lose data if the tab crashes">
-                        <input type="checkbox" id="ll-autosave-toggle" onchange="toggleLiveAutosave(this.checked)"> Auto-save draft
-                    </label>
-                    <div id="ll-live-indicator" class="ll-live-indicator hidden">
-                        <span class="ll-pulse-dot"></span>
-                        LIVE &mdash; <span id="ll-event-count">0</span> events, <span id="ll-player-count">0</span> players
-                    </div>
-                </div>
-                <!-- Session name field -->
-                <div class="ll-session-name-row">
-                    <label for="ll-session-name-input" class="ll-session-name-label">Session label:</label>
-                    <input type="text" id="ll-session-name-input" class="ll-session-name-input" placeholder="e.g. Dungeon run with Alpha 2026-04-15" maxlength="80" oninput="onSessionNameInput(this.value)">
-                    <button class="btn-small" onclick="applySessionNameSuggestion()" title="Auto-fill based on this session's primary guild, enemy, and date">&#128161; Auto-name</button>
-                    <span id="ll-autosave-status" class="ll-autosave-status"></span>
-                </div>
-
                 <!-- Mode tabs -->
-                <!-- D2: Mode pills with badge counts -->
+                <!-- D2: Mode pills with badge counts. Live recording + saved-session browsing were
+                     retired 2026-06-16 — the workflow is save-with-client then upload. -->
                 <div class="ll-mode-pills" role="tablist">
-                    <button class="ll-mode-pill active" role="tab" onclick="showLootLoggerMode('live')" id="loot-log-live-btn" title="View live + saved loot sessions">
-                        <span class="ll-mode-icon">📋</span>
-                        <span class="ll-mode-label">Sessions</span>
-                        <span class="ll-mode-count" id="ll-mode-count-live"></span>
-                    </button>
-                    <button class="ll-mode-pill" role="tab" onclick="showLootLoggerMode('upload')" id="loot-log-upload-btn" title="Upload a .txt log file from the ao-loot-logger or Go client">
+                    <button class="ll-mode-pill active" role="tab" onclick="showLootLoggerMode('upload')" id="loot-log-upload-btn" title="Upload a .txt log file from the ao-loot-logger or Coldtouch client">
                         <span class="ll-mode-icon">📥</span>
                         <span class="ll-mode-label">Upload File</span>
                     </button>
@@ -4432,16 +4413,8 @@
                     </button>
                 </div>
 
-                <!-- SESSIONS MODE -->
-                <div id="loot-log-live" class="loot-log-mode">
-                    <div id="loot-sessions-list" style="margin-bottom:1rem;">
-                        <div class="empty-state"><p>Loading sessions...</p></div>
-                    </div>
-                    <div id="loot-session-detail" style="display:none;"></div>
-                </div>
-
-                <!-- UPLOAD MODE -->
-                <div id="loot-log-upload" class="loot-log-mode" style="display:none;">
+                <!-- UPLOAD MODE (default) -->
+                <div id="loot-log-upload" class="loot-log-mode">
                     <div style="background:var(--bg-card); border:1px solid var(--border-color); border-radius:var(--radius); padding:1rem; margin-bottom:1rem;">
                         <p style="color:var(--text-secondary); font-size:0.82rem; margin:0 0 0.75rem;">
                             Upload a <code>.txt</code> file from the <a href="https://github.com/matheussampaio/ao-loot-logger" target="_blank" rel="noopener noreferrer" style="color:var(--accent);">ao-loot-logger</a>.

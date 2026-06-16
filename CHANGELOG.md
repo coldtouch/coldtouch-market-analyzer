@@ -2,6 +2,13 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-06-16 — Loot Logger is now upload-first
+
+- Removed the live-session recording toolbar and the saved-sessions browser from the Loot Logger tab. The workflow is now: save a log with the Coldtouch client at the end of your content, then upload the `.txt`. The tab opens directly in Upload mode with the same report viewer and Accountability check as before. Loot Logger now has two modes: **Upload File** (default) and **Accountability**.
+- The Go-client live-relay code is left intact server-side (only its UI was removed), so nothing in the capture pipeline breaks and live could be re-surfaced later.
+- **Share links no longer expire.** Previously a shared loot-session link returned "expired" after 30 days (SEC-M3); shared links are now permanent. The underlying loot data was already kept indefinitely, so old links keep working.
+- Added a **Delete this share** button on the shared-session view, visible to the link's owner (or an admin). It revokes the link for everyone (`POST /api/loot-session/share/:token/delete`) while leaving the loot data intact, so the owner can re-share later. Requires a backend deploy.
+
 ### 2026-06-16 — Loot upload Share chunking
 
 - Manual Loot Logger file uploads now save to the backend in bounded chunks instead of sending the whole file in one request, so larger logs can still create a server session for Share.
