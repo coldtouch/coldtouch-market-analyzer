@@ -2,6 +2,12 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-06-16 — Accountability: multi-guild friendly perspective
+
+- The Accountability **"Friendly guilds" selector is now multi-select** (Ctrl/Cmd-click). Use case: a capped main guild plus a second guild in the same alliance can both be held accountable for deposits in a single check, so loot thieves in either guild surface together. Selecting nothing reverts to auto-detect; selecting a single guild behaves exactly as before.
+- The Accountability results' guild **display filter** is multi-select too (show players from any of the chosen guilds).
+- Internals: the single `primaryGuild` override became a `friendlyGuilds` set behind one `isFriendly()` predicate (0/1-guild behavior is byte-for-byte unchanged); `lootlogger-core.js` death categorization takes an optional `friendlyGuilds` list (absent = unchanged). Added unit tests for the multi-guild case plus a single-guild backward-compatibility guard.
+
 ### 2026-06-16 — Loot Logger viewer: multi-guild filter, source guild/alliance, death zones
 
 - The loot report's **guild filter is now multi-select** — Ctrl/Cmd-click to show players from several guilds at once; no selection still means all guilds.

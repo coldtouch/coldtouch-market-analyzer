@@ -13401,19 +13401,27 @@ async function shareAccountability(sessionId, btnEl) {
 // Empty string = revert to auto-detect. Persisted per-session in localStorage so
 // reopening the same session keeps the override; reruns the full check so the
 // math (isGuildMember everywhere) reflects the new perspective.
-function _accSetGuildPerspective(guildName) {
+function _accSetGuildPerspective(arg) {
     const ctx = window._llAccGuildContext;
     if (!ctx) return;
     const key = `acc-guild-override-${ctx.sessionId}`;
+    // arg is the <select multiple> element on change, or '' from the Reset button.
+    let guilds = [];
+    if (arg && typeof arg === 'object' && arg.selectedOptions) {
+        guilds = Array.from(arg.selectedOptions).map(o => o.value).filter(Boolean);
+    } else if (typeof arg === 'string' && arg) {
+        guilds = [arg];
+    }
     try {
-        if (!guildName || guildName === ctx.autoPrimaryGuild) {
-            // Reset, OR explicitly picking the auto-detected guild — drop the override.
+        // No selection, or exactly the auto-detected guild alone, reverts to auto-detect.
+        const isJustAuto = guilds.length === 1 && guilds[0] === ctx.autoPrimaryGuild;
+        if (!guilds.length || isJustAuto) {
             localStorage.removeItem(key);
         } else {
-            localStorage.setItem(key, guildName);
+            localStorage.setItem(key, JSON.stringify(guilds));
         }
     } catch { /* localStorage may be disabled — non-fatal, just no persistence */ }
-    // Rerun the check so isGuildMember math reflects the new primaryGuild.
+    // Rerun the check so the friendly/accountable math reflects the new perspective.
     runAccountabilityCheck();
 }
 
@@ -13421,7 +13429,8 @@ function _accSetGuildPerspective(guildName) {
 // Works by toggling .ll-hidden-by-filter on each .ll-player-card based on dataset attrs.
 function _accApplyFilter() {
     const search = (document.getElementById('acc-result-search')?.value || '').toLowerCase().trim();
-    const guild = (document.getElementById('acc-result-guild')?.value || '').toLowerCase();
+    const _accGuildSel = document.getElementById('acc-result-guild');
+    const guilds = _accGuildSel ? Array.from(_accGuildSel.selectedOptions).map(o => o.value.toLowerCase()).filter(Boolean) : [];
     const alliance = (document.getElementById('acc-result-alliance')?.value || '').toLowerCase();
     const player = (document.getElementById('acc-result-player')?.value || '').toLowerCase();
     const cards = document.querySelectorAll('#accountability-result .ll-player-card');
@@ -13432,7 +13441,7 @@ function _accApplyFilter() {
         const a = c.getAttribute('data-player-alliance') || '';
         let show = true;
         if (search) show = show && (n.includes(search) || g.includes(search) || a.includes(search));
-        if (guild) show = show && (g === guild);
+        if (guilds.length) show = show && guilds.includes(g);
         if (alliance) show = show && (a === alliance);
         if (player) show = show && (n === player);
         c.style.display = show ? '' : 'none';
@@ -13765,24 +13774,44 @@ async function runAccountabilityCheck() {
     // Per-session override: when the user picks a different guild as "friendly"
     // (e.g. their guild is in the minority of captured events), persist + apply it.
     // Falls back to auto-detect when the override guild isn't in this session.
-    const guildOverride = (() => {
-        try { return localStorage.getItem(`acc-guild-override-${sessionId}`) || ''; }
-        catch { return ''; }
+    // Friendly-guild override (multi-guild since 2026-06-16). Stored as a JSON array;
+    // a legacy plain-string value is read as a single-element list. Only guilds that
+    // actually appear in this session are honored — the rest fall back to auto-detect.
+    // Use case: a capped main guild + a second guild in the same alliance, both checked
+    // for loot accountability at once.
+    const friendlyGuilds = (() => {
+        let raw = '';
+        try { raw = localStorage.getItem(`acc-guild-override-${sessionId}`) || ''; } catch { return []; }
+        if (!raw) return [];
+        let arr;
+        try { const p = JSON.parse(raw); arr = Array.isArray(p) ? p : [String(p)]; }
+        catch { arr = [raw]; } // legacy single-guild string
+        return arr.filter(g => g && guildCounts[g]);
     })();
-    if (guildOverride && guildCounts[guildOverride]) {
-        primaryGuild = guildOverride;
-        // Clear alliance so guild-only matching kicks in — the user explicitly
-        // picked a single guild; pulling in the whole alliance would be surprising.
+    if (friendlyGuilds.length) {
+        // Explicit guild selection wins over alliance auto-detect (same as the old
+        // single-guild override, which cleared primaryAlliance). primaryGuild is kept as
+        // the first selected guild for the few single-value displays/snapshots.
+        primaryGuild = friendlyGuilds[0];
         primaryAlliance = '';
     }
+    // Single source of truth for "is this player on our side (held accountable)?".
+    // friendlyGuilds empty => exact original auto-detect logic (alliance-or-primaryGuild),
+    // so 0/1-guild behavior is byte-for-byte unchanged.
+    const isFriendly = (data) => {
+        if (friendlyGuilds.length) {
+            return (data.guild && friendlyGuilds.indexOf(data.guild) !== -1) || !data.guild;
+        }
+        return primaryAlliance && data.alliance
+            ? data.alliance === primaryAlliance
+            : (!primaryGuild || data.guild === primaryGuild || !data.guild);
+    };
 
     // Proportional deposit allocation — fair regardless of player order
     // Step 1: Sum total looted per item across all guild members
     const totalLootedPerItem = {};
     for (const [name, data] of Object.entries(lootedByPlayer)) {
-        const isGuildMember = primaryAlliance && data.alliance
-            ? data.alliance === primaryAlliance
-            : (!primaryGuild || data.guild === primaryGuild || !data.guild);
+        const isGuildMember = isFriendly(data);
         if (!isGuildMember) continue;
         for (const [itemId, qty] of Object.entries(data.items)) {
             const lostQty = lostByDeath[name]?.[itemId] || 0;
@@ -13794,9 +13823,7 @@ async function runAccountabilityCheck() {
     // Cross-reference — proportional matching for guild members
     const playerResults = [];
     for (const [name, data] of Object.entries(lootedByPlayer)) {
-        const isGuildMember = primaryAlliance && data.alliance
-            ? data.alliance === primaryAlliance
-            : (!primaryGuild || data.guild === primaryGuild || !data.guild);
+        const isGuildMember = isFriendly(data);
         let totalLooted = 0, totalDeposited = 0;
         const itemResults = [];
 
@@ -13933,7 +13960,8 @@ async function runAccountabilityCheck() {
         guildCounts,
         autoPrimaryGuild,
         currentPrimaryGuild: primaryGuild,
-        overrideActive: !!(guildOverride && guildCounts[guildOverride]),
+        selectedGuilds: friendlyGuilds.slice(),
+        overrideActive: friendlyGuilds.length > 0,
     };
 
     let html = '';
@@ -14032,7 +14060,7 @@ async function runAccountabilityCheck() {
         const deathPriceMap = priceMap;
         const deathByPlayer = {};
         for (const [n, d] of Object.entries(lootedByPlayer)) deathByPlayer[n] = { ...d, items: Object.entries(d.items).map(([id, q]) => ({ item_id: id, quantity: q, timestamp: 0 })) };
-        const deaths = buildDeathTimeline(lootEvents, deathByPlayer, deathPriceMap, primaryGuild, primaryAlliance);
+        const deaths = buildDeathTimeline(lootEvents, deathByPlayer, deathPriceMap, primaryGuild, primaryAlliance, undefined, friendlyGuilds);
         if (deaths && deaths.length > 0) {
             // Stash so renderDeathsSection can use _llPriceMap for tooltips
             _llPriceMap = deathPriceMap;
@@ -14054,14 +14082,14 @@ async function runAccountabilityCheck() {
     const accGuilds = [...new Set(playerResults.map(p => p.guild).filter(Boolean))].sort();
     const accAlliances = [...new Set(playerResults.map(p => p.alliance).filter(Boolean))].sort();
     const accPlayers = playerResults.map(p => p.name).sort();
-    const savedAccGuild = document.getElementById('acc-result-guild')?.value || '';
+    const _accGuildSelEl = document.getElementById('acc-result-guild');
+    const savedAccGuilds = _accGuildSelEl ? Array.from(_accGuildSelEl.selectedOptions).map(o => o.value).filter(Boolean) : [];
     const savedAccAlliance = document.getElementById('acc-result-alliance')?.value || '';
     const savedAccPlayer = document.getElementById('acc-result-player')?.value || '';
     html += `<div class="ll-filter-bar" style="margin-bottom:0.5rem;">
         <input type="text" id="acc-result-search" class="transport-select" placeholder="Search player / guild / alliance…" value="${esc(document.getElementById('acc-result-search')?.value || '')}" style="min-width:180px; flex:1;" oninput="_accApplyFilter()">
-        <select id="acc-result-guild" class="transport-select" style="min-width:140px;" onchange="_accApplyFilter()" title="Show only players in this guild">
-            <option value="">All guilds</option>
-            ${accGuilds.map(g => `<option value="${esc(g)}"${savedAccGuild === g ? ' selected' : ''}>${esc(g)}</option>`).join('')}
+        <select id="acc-result-guild" class="transport-select" multiple size="3" style="min-width:140px; min-height:2.4rem;" onchange="_accApplyFilter()" title="Show players in any of the selected guilds — Ctrl/Cmd-click to pick several; none = all">
+            ${accGuilds.map(g => `<option value="${esc(g)}"${savedAccGuilds.includes(g) ? ' selected' : ''}>${esc(g)}</option>`).join('')}
         </select>
         <select id="acc-result-alliance" class="transport-select" style="min-width:140px;" onchange="_accApplyFilter()" title="Show only players in this alliance">
             <option value="">All alliances</option>
@@ -14077,10 +14105,11 @@ async function runAccountabilityCheck() {
     // for accountability when auto-detect chose wrong (e.g. their guild is in the
     // minority of captured events). Persisted per-session in localStorage.
     const ctx = window._llAccGuildContext;
+    const _selSet = new Set(ctx.selectedGuilds || []);
     const guildOptions = Object.entries(ctx.guildCounts)
         .sort((a, b) => b[1] - a[1])
         .map(([g, c]) => {
-            const sel = g === ctx.currentPrimaryGuild ? ' selected' : '';
+            const sel = _selSet.has(g) ? ' selected' : '';
             const isAuto = g === ctx.autoPrimaryGuild ? ' (auto)' : '';
             return `<option value="${esc(g)}"${sel}>${esc(g)} · ${c} item${c !== 1 ? 's' : ''}${isAuto}</option>`;
         }).join('');
@@ -14088,8 +14117,8 @@ async function runAccountabilityCheck() {
         ? `Friendly perspective overridden — auto-detect picked ${esc(ctx.autoPrimaryGuild) || 'none'}`
         : 'Pick which guild is "friendly" — overrides the auto-detected primary guild';
     html += `<div class="ll-guild-perspective" style="display:flex; align-items:center; gap:0.5rem; margin-bottom:0.5rem; padding:0.45rem 0.65rem; background:var(--bg-elevated); border:1px solid var(--border-color); border-radius:6px; flex-wrap:wrap;" title="${perspectiveTitle}">
-        <span style="font-size:0.72rem; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.04em; font-weight:600;">Friendly guild</span>
-        <select id="acc-guild-perspective" class="transport-select" style="min-width:200px;" onchange="_accSetGuildPerspective(this.value)">
+        <span style="font-size:0.72rem; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.04em; font-weight:600;">Friendly guilds</span>
+        <select id="acc-guild-perspective" class="transport-select" multiple size="3" style="min-width:200px; min-height:2.4rem;" onchange="_accSetGuildPerspective(this)" title="Pick one or more friendly guilds — Ctrl/Cmd-click to select several; none selected = auto-detect">
             ${guildOptions || '<option value="">(no guilds detected)</option>'}
         </select>
         ${ctx.overrideActive ? `<button class="btn-small" onclick="_accSetGuildPerspective('')" title="Revert to auto-detected primary guild">Reset</button>` : ''}

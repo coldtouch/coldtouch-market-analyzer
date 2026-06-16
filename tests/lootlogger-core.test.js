@@ -53,3 +53,39 @@ test('death websocket normalization preserves metadata needed by live saves', ()
     assert.equal(normalized.looted_by_alliance, 'ENEMY');
     assert.equal(normalized.equipmentAtDeath[0].itemId, 'T6_MAIN_FROSTSTAFF');
 });
+
+test('multi-guild friendly perspective marks any selected guild as friendly', () => {
+    const t0 = Date.UTC(2026, 5, 16, 20, 0, 0);
+    const events = [
+        { timestamp: t0, item_id: '__DEATH__', looted_from_name: 'AllyMain', looted_from_guild: 'GuildA', looted_by_name: 'Enemy' },
+        { timestamp: t0 + 1000, item_id: '__DEATH__', looted_from_name: 'AllySecond', looted_from_guild: 'GuildB', looted_by_name: 'Enemy' },
+        { timestamp: t0 + 2000, item_id: '__DEATH__', looted_from_name: 'Outsider', looted_from_guild: 'GuildC', looted_by_name: 'Friend' },
+    ];
+    const byPlayer = {
+        AllyMain: { guild: 'GuildA', alliance: 'ALLY' },
+        AllySecond: { guild: 'GuildB', alliance: 'ALLY' },
+        Outsider: { guild: 'GuildC', alliance: 'OTHER' },
+    };
+    // Both of our guilds selected as friendly (capped-main + second guild use case).
+    const deaths = core.buildDeathTimeline(events, byPlayer, {}, 'GuildA', '', undefined, ['GuildA', 'GuildB']);
+    const friendlyByVictim = Object.fromEntries(deaths.map(d => [d.victim, d.wasFriendly]));
+    assert.equal(friendlyByVictim['AllyMain'], true);
+    assert.equal(friendlyByVictim['AllySecond'], true);   // second guild is now friendly too
+    assert.equal(friendlyByVictim['Outsider'], false);    // a different guild stays enemy
+});
+
+test('omitting friendlyGuilds preserves single-guild behavior', () => {
+    const t0 = Date.UTC(2026, 5, 16, 20, 0, 0);
+    const events = [
+        { timestamp: t0, item_id: '__DEATH__', looted_from_name: 'AllyMain', looted_from_guild: 'GuildA', looted_by_name: 'Enemy' },
+        { timestamp: t0 + 1000, item_id: '__DEATH__', looted_from_name: 'AllySecond', looted_from_guild: 'GuildB', looted_by_name: 'Enemy' },
+    ];
+    const byPlayer = {
+        AllyMain: { guild: 'GuildA', alliance: '' },
+        AllySecond: { guild: 'GuildB', alliance: '' },
+    };
+    const deaths = core.buildDeathTimeline(events, byPlayer, {}, 'GuildA', '');
+    const friendlyByVictim = Object.fromEntries(deaths.map(d => [d.victim, d.wasFriendly]));
+    assert.equal(friendlyByVictim['AllyMain'], true);
+    assert.equal(friendlyByVictim['AllySecond'], false);  // only GuildA friendly when single-guild
+});

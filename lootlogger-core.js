@@ -57,13 +57,21 @@
         return null;
     }
 
-    function friendlyVictim(byPlayer, victim, ev, primaryGuild, primaryAlliance) {
+    function friendlyVictim(byPlayer, victim, ev, primaryGuild, primaryAlliance, friendlyGuilds) {
         const victimData = byPlayer?.[victim];
         const victimGuild = victimData?.guild || ev.looted_from_guild || '';
         const victimAlliance = victimData?.alliance || ev.looted_from_alliance || '';
-        const wasFriendly = primaryAlliance && victimAlliance
-            ? victimAlliance === primaryAlliance
-            : (primaryGuild && victimGuild === primaryGuild);
+        let wasFriendly;
+        if (friendlyGuilds && friendlyGuilds.length) {
+            // Explicit multi-guild friendly perspective — friendly iff the victim's guild is
+            // one of the selected guilds. Mirrors the single-guild override path (which bypasses
+            // alliance matching). Omitting friendlyGuilds preserves the original behavior.
+            wasFriendly = victimGuild && friendlyGuilds.indexOf(victimGuild) !== -1;
+        } else {
+            wasFriendly = primaryAlliance && victimAlliance
+                ? victimAlliance === primaryAlliance
+                : (primaryGuild && victimGuild === primaryGuild);
+        }
         return { victimGuild, victimAlliance, wasFriendly: !!wasFriendly };
     }
 
@@ -136,7 +144,7 @@
         return clusters;
     }
 
-    function buildDeathTimeline(events, byPlayer, priceMap, primaryGuild, primaryAlliance, options) {
+    function buildDeathTimeline(events, byPlayer, priceMap, primaryGuild, primaryAlliance, options, friendlyGuilds) {
         const deaths = [];
         const lootByVictim = new Map();
         const deathByVictim = new Map();
@@ -162,7 +170,7 @@
                 const ev = sortedDeaths[i];
                 const lootedItems = assignments[i] || [];
                 const summary = aggregateDeathLoot(lootedItems, priceMap);
-                const side = friendlyVictim(byPlayer || {}, victim, ev, primaryGuild || '', primaryAlliance || '');
+                const side = friendlyVictim(byPlayer || {}, victim, ev, primaryGuild || '', primaryAlliance || '', friendlyGuilds);
                 deaths.push({
                     victim,
                     victimGuild: side.victimGuild,
@@ -191,7 +199,7 @@
             for (const cluster of clusterCorpseLoots(corpseLoots, options)) {
                 const firstEv = cluster[0];
                 const summary = aggregateDeathLoot(cluster, priceMap);
-                const side = friendlyVictim(byPlayer || {}, victim, firstEv, primaryGuild || '', primaryAlliance || '');
+                const side = friendlyVictim(byPlayer || {}, victim, firstEv, primaryGuild || '', primaryAlliance || '', friendlyGuilds);
                 deaths.push({
                     victim,
                     victimGuild: side.victimGuild,
