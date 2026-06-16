@@ -1,7 +1,7 @@
 // Service Worker for Coldtouch Market Analyzer (PWA app shell caching)
-// v149: Refresh Albion item maps/weights from ao-bin-dumps 20260526 so loot
-// logger numeric IDs resolve to the current game items.
-const CACHE_NAME = 'coldtouch-v150';
+// v151: manual loot uploads keep local Accountability available even when
+// server save/share fails; loot/accountability filters include alliance.
+const CACHE_NAME = 'coldtouch-v151';
 const IS_GITHUB_PAGES = self.location.hostname === 'coldtouch.github.io';
 const APP_SHELL = [
     '/',

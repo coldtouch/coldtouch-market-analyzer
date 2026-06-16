@@ -10349,12 +10349,51 @@ let _llPrimaryAlliance = '';        // most-common alliance
 let _llDeathFilterVictim = null;    // when set, restricts view to that death's chain
 let _llCurrentSessionId = null;     // session_id when viewing a saved session, null for live
 let _llPlayerTrends = {};           // G6: per-player cross-session stats, keyed by name
+const LL_UPLOAD_SESSION_ID = '__upload__';
+let _llUploadedEvents = [];         // last manually-uploaded file, usable for local accountability before server save
+let _llUploadedSessionLabel = '';
+let _llUploadedSavedSessionId = null;
+let _llUploadSaveState = 'idle';    // idle | saving | saved | error
+let _llUploadSaveMessage = '';
 // Phase 5 item filter chips (multi-select) — hydrated from localStorage so user choices persist
 let _llActiveChips = new Set((() => {
     try { return JSON.parse(localStorage.getItem('albion_ll_chips') || '[]'); } catch { return []; }
 })());
 function _persistChips() {
     try { localStorage.setItem('albion_ll_chips', JSON.stringify(Array.from(_llActiveChips))); } catch {}
+}
+
+function _llIsUploadReportTarget() {
+    return _llTargetEl && _llTargetEl.id === 'loot-upload-result';
+}
+
+function _llUploadShareSlotHtml() {
+    const msg = esc(_llUploadSaveMessage || '');
+    if (_llUploadSaveState === 'saving') {
+        return `<span id="ll-report-share-slot" style="font-size:0.72rem; color:var(--text-muted); align-self:center;">Saving upload for Share…</span>`;
+    }
+    if (_llUploadSaveState === 'error') {
+        return `<span id="ll-report-share-slot" style="font-size:0.72rem; color:#fbbf24; align-self:center;" title="${msg}">${msg || 'Share unavailable until upload is saved'}</span>`;
+    }
+    return '<span id="ll-report-share-slot"></span>';
+}
+
+function _llInstallSavedUploadActions(sessionId) {
+    if (!sessionId) return;
+    _llUploadedSavedSessionId = sessionId;
+    _llCurrentSessionId = sessionId;
+    _llUploadSaveState = 'saved';
+    _llUploadSaveMessage = '';
+    if (_llIsUploadReportTarget()) {
+        _llRenderFiltered();
+        return;
+    }
+    const slot = document.getElementById('ll-report-share-slot');
+    if (slot) {
+        const safeSid = esc(sessionId);
+        slot.outerHTML = `<button class="btn-small-accent" onclick="openShareSessionModal('${safeSid}', null)" title="Generate a public link — anyone with it can view this session">🔗 Share</button>
+            <button class="btn-small-accent" onclick="runAccountabilityForSession('${safeSid}')" title="Cross-reference this session against chest deposits">✓ Accountability</button>`;
+    }
 }
 
 // --- Session naming, whitelist, auto-save ---
@@ -11272,6 +11311,13 @@ function clearLootUpload() {
     // Dropping the uploaded session — clear the id so the in-report Share button
     // can't be wired to a stale session on a subsequent render.
     _llCurrentSessionId = null;
+    _llUploadedEvents = [];
+    _llUploadedSessionLabel = '';
+    _llUploadedSavedSessionId = null;
+    _llUploadSaveState = 'idle';
+    _llUploadSaveMessage = '';
+    window._justUploadedSessionId = '';
+    window._justUploadedAt = 0;
 }
 
 // === DEATH TIMELINE (Phase 2) ===
@@ -12017,6 +12063,11 @@ function _llRenderFiltered() {
     if (guildFilter) {
         entries = entries.filter(([, data]) => (data.guild || '') === guildFilter);
     }
+    // Alliance filter (dropdown)
+    const allianceFilter = document.getElementById('ll-filter-alliance')?.value || '';
+    if (allianceFilter) {
+        entries = entries.filter(([, data]) => (data.alliance || '') === allianceFilter);
+    }
     // Single-player filter (dropdown)
     const playerFilter = document.getElementById('ll-filter-player')?.value || '';
     if (playerFilter) {
@@ -12128,6 +12179,10 @@ function _llRenderFiltered() {
         const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60);
         return h > 0 ? `${h}h ${m}m` : `${m}m ${s % 60}s`;
     };
+    const isUploadReport = _llIsUploadReportTarget();
+    const uploadActionsHtml = isUploadReport && !window._sharedSessionViewActive
+        ? `<button class="btn-small-accent" onclick="runAccountabilityForSession('${LL_UPLOAD_SESSION_ID}')" title="Cross-reference this uploaded file against chest deposits">✓ Accountability</button>${_llUploadShareSlotHtml()}`
+        : '<span id="ll-report-share-slot"></span>';
 
     // Summary stat strip (new, above existing viewer header)
     let html = `<div class="ll-summary-strip">
@@ -12174,7 +12229,7 @@ function _llRenderFiltered() {
             ${_llCurrentSessionId && !window._sharedSessionViewActive
                 ? `<button class="btn-small-accent" onclick="openShareSessionModal('${esc(_llCurrentSessionId)}', null)" title="Generate a public link — anyone with it can view this session">🔗 Share</button>
                    <button class="btn-small-accent" onclick="runAccountabilityForSession('${esc(_llCurrentSessionId)}')" title="Cross-reference this session against chest deposits">✓ Accountability</button>`
-                : (window._sharedSessionViewActive ? '' : '<span id="ll-report-share-slot"></span>')}
+                : (window._sharedSessionViewActive ? '' : uploadActionsHtml)}
             ${isDetail ? `<button class="btn-small" onclick="hideLootSessionDetail()">&#x2190; Back</button>` : ''}
         </div>
     </div>`;
@@ -12197,17 +12252,23 @@ function _llRenderFiltered() {
     // Build a sorted list of unique guilds + players for dedicated dropdowns.
     // Much faster than typing a name into the freeform search when sessions have many players.
     const uniqueGuilds = [...new Set(Object.values(byPlayer).map(d => d.guild).filter(Boolean))].sort();
+    const uniqueAlliances = [...new Set(Object.values(byPlayer).map(d => d.alliance).filter(Boolean))].sort();
     const uniquePlayers = [...Object.keys(byPlayer)].sort();
     const selectedGuild = document.getElementById('ll-filter-guild')?.value || '';
+    const selectedAlliance = document.getElementById('ll-filter-alliance')?.value || '';
     const selectedPlayer = document.getElementById('ll-filter-player')?.value || '';
     html += `<div class="ll-filter-bar">
         <div class="search-input-wrapper" style="flex:1; min-width:160px;">
             <span class="search-icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg></span>
-            <input type="text" id="ll-search" placeholder="Search player, guild, or item..." value="${esc(searchVal)}" oninput="_llDebouncedRender(300)" aria-label="Search players, guilds, or items">
+            <input type="text" id="ll-search" placeholder="Search player, guild, alliance, or item..." value="${esc(searchVal)}" oninput="_llDebouncedRender(300)" aria-label="Search players, guilds, alliances, or items">
         </div>
         <select id="ll-filter-guild" class="transport-select" style="min-width:140px;" onchange="_llDebouncedRender(100)" aria-label="Filter by guild" title="Show only players in this guild">
             <option value="">All guilds</option>
             ${uniqueGuilds.map(g => `<option value="${esc(g)}"${selectedGuild === g ? ' selected' : ''}>${esc(g)}</option>`).join('')}
+        </select>
+        <select id="ll-filter-alliance" class="transport-select" style="min-width:140px;" onchange="_llDebouncedRender(100)" aria-label="Filter by alliance" title="Show only players in this alliance">
+            <option value="">All alliances</option>
+            ${uniqueAlliances.map(a => `<option value="${esc(a)}"${selectedAlliance === a ? ' selected' : ''}>${esc(a)}</option>`).join('')}
         </select>
         <select id="ll-filter-player" class="transport-select" style="min-width:140px;" onchange="_llDebouncedRender(100)" aria-label="Filter to single player" title="Jump straight to one player's loot">
             <option value="">All players</option>
@@ -12548,7 +12609,7 @@ function _llRenderFiltered() {
             trendLine = `<div class="ll-player-trend" title="Aggregated across all of your saved loot sessions">📊 ${parts.join(' · ')}</div>`;
         }
 
-        return guildHeader + `<div class="${cardClass}">
+        return guildHeader + `<div class="${cardClass}" data-player-name="${esc(name.toLowerCase())}" data-player-guild="${esc((data.guild || '').toLowerCase())}" data-player-alliance="${esc((data.alliance || '').toLowerCase())}">
             <div class="ll-player-header" onclick="this.closest('.ll-player-card').classList.toggle('expanded')">
                 <button class="ll-remove-player" onclick="event.stopPropagation();_llRemovedPlayers.add('${esc(name)}');_llRenderFiltered()" title="Remove player from view" aria-label="Remove ${esc(name)} from view">&times;</button>
                 <div class="ll-player-info">
@@ -12687,6 +12748,16 @@ async function processLootFiles(files) {
     const resultEl = document.getElementById('loot-upload-result');
     const clearBtn = document.getElementById('ll-upload-clear-btn');
     status.textContent = `Reading ${files.length} file${files.length > 1 ? 's' : ''}…`;
+    // Manual uploads render before the server save returns. Clear any previous
+    // saved-session id so the action row never points at a stale session.
+    _llCurrentSessionId = null;
+    _llUploadedEvents = [];
+    _llUploadedSessionLabel = '';
+    _llUploadedSavedSessionId = null;
+    _llUploadSaveState = 'saving';
+    _llUploadSaveMessage = '';
+    window._justUploadedSessionId = '';
+    window._justUploadedAt = 0;
 
     let allParsed = [];
     let allLines = [];
@@ -12703,21 +12774,18 @@ async function processLootFiles(files) {
 
     status.textContent = `${allParsed.length} events from ${fileNames.join(', ')}`;
     if (clearBtn) clearBtn.style.display = '';
+    _llUploadedEvents = allParsed.slice();
+    _llUploadedSessionLabel = fileNames.join(', ');
     _llRemovedPlayers.clear();
     await renderLootSessionEvents(allParsed, resultEl);
-
-    const actionSlot = document.getElementById('ll-report-share-slot');
-    if (actionSlot) {
-        actionSlot.outerHTML = `<span id="ll-report-share-slot" style="display:inline-flex; align-items:center; gap:0.35rem;">
-            <button class="btn-small" disabled title="Saving this upload so Share and Accountability can use it">Saving...</button>
-        </span>`;
-    }
+    _llUploadedEvents = _llCurrentEvents.slice();
 
     const canSaveUpload = !!localStorage.getItem('albion_auth_token') || (typeof discordUser !== 'undefined' && !!discordUser);
     if (!canSaveUpload) {
-        status.textContent += ' — preview only (log in to save, share, or run accountability)';
-        const slot = document.getElementById('ll-report-share-slot');
-        if (slot) slot.innerHTML = `<span style="font-size:0.72rem; color:var(--text-muted);">Log in to enable Share / Accountability</span>`;
+        _llUploadSaveState = 'error';
+        _llUploadSaveMessage = 'Log in to save/share this upload. Accountability still works locally.';
+        status.textContent += ' — preview only (log in to save/share)';
+        _llRenderFiltered();
         return;
     }
 
@@ -12751,28 +12819,22 @@ async function processLootFiles(files) {
                 if (typeof setSavedSessionName === 'function' && fileNames.length > 0) {
                     setSavedSessionName(sid, fileNames[0].replace(/\.txt$/i, ''));
                 }
-                // Report row was rendered before upload completed, so _llCurrentSessionId was
-                // null and the Share/Accountability buttons weren't emitted. Populate the
-                // placeholder slot now that we know the session_id — also cross-link to the
-                // Accountability action so the user can verify against chest logs in one click.
-                _llCurrentSessionId = sid;
-                const slot = document.getElementById('ll-report-share-slot');
-                if (slot) {
-                    const safeSid = esc(sid);
-                    slot.outerHTML = `<button class="btn-small-accent" onclick="openShareSessionModal('${safeSid}', null)" title="Generate a public link — anyone with it can view this session">🔗 Share</button>
-                        <button class="btn-small-accent" onclick="runAccountabilityForSession('${safeSid}')" title="Cross-reference this session against chest deposits">✓ Accountability</button>`;
-                }
+                _llInstallSavedUploadActions(sid);
                 if (typeof populateAccountabilityDropdowns === 'function') {
                     await populateAccountabilityDropdowns();
                 }
+            } else {
+                _llUploadSaveState = 'error';
+                _llUploadSaveMessage = 'Upload saved but no session id was returned; Share unavailable.';
+                status.textContent += ` — ${_llUploadSaveMessage}`;
+                _llRenderFiltered();
             }
         }
     } catch (e) {
+        _llUploadSaveState = 'error';
+        _llUploadSaveMessage = `Share unavailable: ${e.message}. Accountability still works locally.`;
         status.textContent += ` — server save failed (${e.message})`;
-        const slot = document.getElementById('ll-report-share-slot');
-        if (slot) {
-            slot.innerHTML = `<span style="font-size:0.72rem; color:var(--loss-red);">Save failed: Share / Accountability unavailable</span>`;
-        }
+        _llRenderFiltered();
         showToast(`Upload preview loaded, but server save failed: ${e.message}`, 'warning');
     }
 }
@@ -12786,6 +12848,31 @@ function populateAccountabilityDropdowns() {
     const sessionSel = document.getElementById('acc-session-select');
     const captureSel = document.getElementById('acc-capture-select');
     if (!sessionSel || !captureSel) return Promise.resolve();
+
+    const priorSessionValue = sessionSel.value || '';
+    const applySessionPreselect = () => {
+        const desired = window._llPreselectAccountabilitySessionId || priorSessionValue;
+        if (desired && Array.from(sessionSel.options).some(o => o.value === desired)) {
+            sessionSel.value = desired;
+        }
+    };
+    const renderLocalSessionOptions = () => {
+        let opts = '<option value="">-- Select session --</option>';
+        if (liveLootEvents.length > 0) opts += `<option value="__live__">🔴 LIVE — ${liveLootEvents.length} events</option>`;
+        if (_llUploadedEvents.length > 0) {
+            const uploadPlayers = new Set(_llUploadedEvents
+                .filter(e => e.item_id !== '__DEATH__')
+                .map(e => e.looted_by_name || '')
+                .filter(Boolean)).size;
+            const label = _llUploadedSessionLabel
+                ? `📥 Current upload: ${_llUploadedSessionLabel}`
+                : '📥 Current upload';
+            opts += `<option value="${LL_UPLOAD_SESSION_ID}">${esc(label)} — ${_llUploadedEvents.length} events · ${uploadPlayers} players</option>`;
+        }
+        return opts;
+    };
+    sessionSel.innerHTML = renderLocalSessionOptions();
+    applySessionPreselect();
 
     const sessionsPromise = fetch(`${VPS_BASE}/api/loot-sessions`, { headers: authHeaders() })
         .then(r => r.json())
@@ -12820,8 +12907,7 @@ function populateAccountabilityDropdowns() {
 
             const recentUploadWindow = 24 * 60 * 60 * 1000; // 24h — survives a browser refresh
 
-            let opts = '<option value="">-- Select session --</option>';
-            if (liveLootEvents.length > 0) opts += `<option value="__live__">🔴 LIVE — ${liveLootEvents.length} events</option>`;
+            let opts = renderLocalSessionOptions();
 
             const now = Date.now();
             const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0);
@@ -12903,9 +12989,10 @@ function populateAccountabilityDropdowns() {
             }
 
             sessionSel.innerHTML = opts;
+            applySessionPreselect();
 
             // Auto-select the newly-uploaded session if present
-            if (justUploaded && recentUpload) {
+            if (justUploaded && recentUpload && !window._llPreselectAccountabilitySessionId) {
                 sessionSel.value = justUploaded;
                 // Visual cue: flash the select briefly
                 sessionSel.style.boxShadow = '0 0 0 2px var(--accent)';
@@ -12925,7 +13012,10 @@ function populateAccountabilityDropdowns() {
             } else if (dupBar) {
                 dupBar.remove();
             }
-        }).catch(() => {});
+        }).catch(() => {
+            sessionSel.innerHTML = renderLocalSessionOptions();
+            applySessionPreselect();
+        });
 
     // E2: lootBuyerCaptures IS window._chestCaptures — no seeding needed
     const captures = window._chestCaptures;
@@ -13155,6 +13245,14 @@ async function _accDeleteDuplicates() {
 // can render the breakdown without needing access to live capture data.
 async function shareAccountability(sessionId, btnEl) {
     if (!sessionId) { showToast('No session selected', 'warn'); return; }
+    if (sessionId === LL_UPLOAD_SESSION_ID) {
+        if (_llUploadedSavedSessionId) {
+            sessionId = _llUploadedSavedSessionId;
+        } else {
+            showToast('This upload must be saved before it can be shared. Accountability still works locally.', 'warning');
+            return;
+        }
+    }
 
     const useLastRun = window._llAccShareContext && window._llAccShareContext.sessionId === sessionId;
     let selectedCaptures = useLastRun ? (window._llAccShareContext.captures || []) : null;
@@ -13261,15 +13359,18 @@ function _accSetGuildPerspective(guildName) {
 function _accApplyFilter() {
     const search = (document.getElementById('acc-result-search')?.value || '').toLowerCase().trim();
     const guild = (document.getElementById('acc-result-guild')?.value || '').toLowerCase();
+    const alliance = (document.getElementById('acc-result-alliance')?.value || '').toLowerCase();
     const player = (document.getElementById('acc-result-player')?.value || '').toLowerCase();
     const cards = document.querySelectorAll('#accountability-result .ll-player-card');
     let visible = 0;
     cards.forEach(c => {
         const n = c.getAttribute('data-player-name') || '';
         const g = c.getAttribute('data-player-guild') || '';
+        const a = c.getAttribute('data-player-alliance') || '';
         let show = true;
-        if (search) show = show && (n.includes(search) || g.includes(search));
+        if (search) show = show && (n.includes(search) || g.includes(search) || a.includes(search));
         if (guild) show = show && (g === guild);
+        if (alliance) show = show && (a === alliance);
         if (player) show = show && (n === player);
         c.style.display = show ? '' : 'none';
         if (show) visible++;
@@ -13302,11 +13403,15 @@ async function _accShowEventView(sessionId) {
             looted_by_guild: e.looted_by_guild || e.lootedBy?.guild || '',
             looted_by_alliance: e.looted_by_alliance || e.lootedBy?.alliance || '',
             looted_from_name: e.looted_from_name || e.lootedFrom?.name || '',
+            looted_from_guild: e.looted_from_guild || e.lootedFrom?.guild || '',
+            looted_from_alliance: e.looted_from_alliance || e.lootedFrom?.alliance || '',
             item_id: e.item_id || e.itemId || '',
             quantity: e.quantity || 1,
             timestamp: e.timestamp,
             weight: e.weight || 0
         }));
+    } else if (sessionId === LL_UPLOAD_SESSION_ID && _llUploadedEvents.length > 0) {
+        events = _llUploadedEvents.map(e => ({ ...e }));
     } else {
         try {
             const res = await fetch(`${VPS_BASE}/api/loot-session/${encodeURIComponent(sessionId)}`, { headers: authHeaders() });
@@ -13327,6 +13432,7 @@ async function _accShowEventView(sessionId) {
 }
 
 async function runAccountabilityForSession(sessionId) {
+    window._llPreselectAccountabilitySessionId = sessionId;
     showLootLoggerMode('accountability');
     // Ensure dropdown has the session as an option, then select it
     const sel = document.getElementById('acc-session-select');
@@ -13342,6 +13448,17 @@ async function runAccountabilityForSession(sessionId) {
             }
             has = Array.from(sel.options).some(o => o.value === sessionId);
         }
+        if (sessionId === LL_UPLOAD_SESSION_ID && !has) {
+            const uploadPlayers = new Set(_llUploadedEvents
+                .filter(e => e.item_id !== '__DEATH__')
+                .map(e => e.looted_by_name || '')
+                .filter(Boolean)).size;
+            const opt = document.createElement('option');
+            opt.value = LL_UPLOAD_SESSION_ID;
+            opt.textContent = `📥 Current upload — ${_llUploadedEvents.length} events · ${uploadPlayers} players`;
+            sel.appendChild(opt);
+            has = true;
+        }
         if (!has) {
             showToast('Session is still saving. Try Accountability again in a moment.', 'warning');
             return;
@@ -13350,6 +13467,11 @@ async function runAccountabilityForSession(sessionId) {
         // Scroll into view so the user sees they're in the right mode
         sel.scrollIntoView({ behavior: 'smooth', block: 'center' });
         showToast('Session pre-selected. Choose chest captures and click "Run Check".', 'info');
+        setTimeout(() => {
+            if (window._llPreselectAccountabilitySessionId === sessionId) {
+                window._llPreselectAccountabilitySessionId = '';
+            }
+        }, 5000);
     }
 }
 
@@ -13396,6 +13518,10 @@ async function runAccountabilityCheck() {
         // Shared accountability view — events come from /api/accountability/public/:token (in memory).
         // No auth fetch needed; skip straight to the compare logic.
         lootEvents = window._sharedAccountabilityEvents;
+    } else if (sessionId === LL_UPLOAD_SESSION_ID && _llUploadedEvents.length > 0) {
+        // Manual upload that has not necessarily been saved server-side yet.
+        // Accountability can run fully client-side against the parsed file.
+        lootEvents = _llUploadedEvents.map(e => ({ ...e }));
     } else {
         try {
             const res = await fetch(`${VPS_BASE}/api/loot-session/${encodeURIComponent(sessionId)}`, { headers: authHeaders() });
@@ -13662,7 +13788,7 @@ async function runAccountabilityCheck() {
         if (itemResults.length === 0) continue;
         const pct = isGuildMember && totalLooted > 0 ? Math.round(totalDeposited / totalLooted * 100) : -1;
         playerResults.push({
-            name, guild: data.guild, totalLooted, totalDeposited,
+            name, guild: data.guild, alliance: data.alliance, totalLooted, totalDeposited,
             totalMissing: isGuildMember ? totalLooted - totalDeposited : 0,
             pct, items: itemResults, isEnemy: !isGuildMember,
             died: deathVictims.has(name)
@@ -13679,6 +13805,7 @@ async function runAccountabilityCheck() {
             playerResults.push({
                 name: selfName,
                 guild: primaryGuild || '',
+                alliance: primaryAlliance || '',
                 totalLooted: 0,
                 totalDeposited: 0,
                 totalMissing: 0,
@@ -13862,14 +13989,20 @@ async function runAccountabilityCheck() {
 
     // Filter bar for Accountability — lets user drill into a guild or single player quickly.
     const accGuilds = [...new Set(playerResults.map(p => p.guild).filter(Boolean))].sort();
+    const accAlliances = [...new Set(playerResults.map(p => p.alliance).filter(Boolean))].sort();
     const accPlayers = playerResults.map(p => p.name).sort();
     const savedAccGuild = document.getElementById('acc-result-guild')?.value || '';
+    const savedAccAlliance = document.getElementById('acc-result-alliance')?.value || '';
     const savedAccPlayer = document.getElementById('acc-result-player')?.value || '';
     html += `<div class="ll-filter-bar" style="margin-bottom:0.5rem;">
-        <input type="text" id="acc-result-search" class="transport-select" placeholder="Search player / guild…" value="${esc(document.getElementById('acc-result-search')?.value || '')}" style="min-width:180px; flex:1;" oninput="_accApplyFilter()">
+        <input type="text" id="acc-result-search" class="transport-select" placeholder="Search player / guild / alliance…" value="${esc(document.getElementById('acc-result-search')?.value || '')}" style="min-width:180px; flex:1;" oninput="_accApplyFilter()">
         <select id="acc-result-guild" class="transport-select" style="min-width:140px;" onchange="_accApplyFilter()" title="Show only players in this guild">
             <option value="">All guilds</option>
             ${accGuilds.map(g => `<option value="${esc(g)}"${savedAccGuild === g ? ' selected' : ''}>${esc(g)}</option>`).join('')}
+        </select>
+        <select id="acc-result-alliance" class="transport-select" style="min-width:140px;" onchange="_accApplyFilter()" title="Show only players in this alliance">
+            <option value="">All alliances</option>
+            ${accAlliances.map(a => `<option value="${esc(a)}"${savedAccAlliance === a ? ' selected' : ''}>${esc(a)}</option>`).join('')}
         </select>
         <select id="acc-result-player" class="transport-select" style="min-width:140px;" onchange="_accApplyFilter()" title="Filter to one player">
             <option value="">All players</option>
@@ -13935,7 +14068,7 @@ async function runAccountabilityCheck() {
                     </div>
                 </div>`
                 : '';
-            return `<div class="ll-player-card ll-card-self-untracked" style="border-left:3px solid #5865f2; background:rgba(88,101,242,0.06);" data-player-name="${esc(p.name.toLowerCase())}" data-player-guild="${esc((p.guild || '').toLowerCase())}">
+            return `<div class="ll-player-card ll-card-self-untracked" style="border-left:3px solid #5865f2; background:rgba(88,101,242,0.06);" data-player-name="${esc(p.name.toLowerCase())}" data-player-guild="${esc((p.guild || '').toLowerCase())}" data-player-alliance="${esc((p.alliance || '').toLowerCase())}">
                 <div class="ll-player-header" style="display:flex; align-items:center; gap:0.6rem; padding:0.6rem 0.8rem;">
                     <div style="width:36px; height:36px; border-radius:50%; background:#5865f2; color:#fff; display:flex; align-items:center; justify-content:center; font-weight:700; font-size:0.82rem;">${esc(p.name.substring(0, 2).toUpperCase())}</div>
                     <div style="flex:1; min-width:0;">
@@ -14093,7 +14226,7 @@ async function runAccountabilityCheck() {
             </div>`
             : '';
 
-        return `<div class="ll-player-card" style="${enemyBorder}" data-player-name="${esc(p.name.toLowerCase())}" data-player-guild="${esc((p.guild || '').toLowerCase())}">
+        return `<div class="ll-player-card" style="${enemyBorder}" data-player-name="${esc(p.name.toLowerCase())}" data-player-guild="${esc((p.guild || '').toLowerCase())}" data-player-alliance="${esc((p.alliance || '').toLowerCase())}">
             <div class="ll-player-header" onclick="this.closest('.ll-player-card').classList.toggle('expanded')">
                 <div class="ll-player-avatar">${esc(initials)}</div>
                 <div class="ll-player-info">
