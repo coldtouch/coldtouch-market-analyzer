@@ -1,0 +1,31 @@
+version: 2
+updates:
+  # Production backend dependencies — the committed lockfile the VPS deploys from
+  # via `npm ci`. Dependabot proposes reviewed, lockfile-pinned version bumps so
+  # security/maintenance updates land through PRs instead of silent drift.
+  - package-ecosystem: "npm"
+    directory: "/server"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "backend"
+
+  # Root dev/test tooling (ws + the node:test runner).
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 3
+    labels:
+      - "dependencies"
+
+  # GitHub Actions pinned in the CI workflow.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    labels:
+      - "dependencies"
+      - "ci"

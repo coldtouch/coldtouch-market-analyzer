@@ -75,3 +75,44 @@ jobs:
               if asset not in html:
                   raise SystemExit(f'index.html does not reference {asset}')
           PY
+
+  backend-deps:
+    name: Backend deps (reproducible install + audit)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      # `npm ci` fails if server/package.json and server/package-lock.json are out
+      # of sync — this is the same command the VPS deploy runs, so CI guarantees a
+      # deployable, lockfile-pinned dependency tree on every push/PR.
+      - name: Install backend deps from lockfile (npm ci)
+        run: npm ci --omit=dev --no-audit --no-fund
+        working-directory: server
+
+      # Gate on high+ severity production advisories. Fails the build if a
+      # vulnerable dependency is locked, forcing a reviewed bump before deploy.
+      - name: Audit backend production dependencies
+        run: npm audit --omit=dev --audit-level=high
+        working-directory: server
+
+  secret-scan:
+    name: Secret scan (gitleaks)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # Scans the commits in the triggering push/PR for committed secrets
+      # (API keys, tokens, private keys). Free for public / personal repos.
+      - name: Run gitleaks
+        uses: gitleaks/gitleaks-action@v2

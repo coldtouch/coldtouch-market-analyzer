@@ -2,6 +2,14 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-06-18 — Reproducible backend builds + dependency security (audit remediation, Phase 1)
+
+- **Production dependencies are now reproducible.** The backend's `package.json` is no longer generated as an inline string inside `deploy_saas.py`; it lives in a committed `server/package.json` with a committed `server/package-lock.json`, and the deploy installs with **`npm ci`** (exact, lockfile-pinned) instead of `npm install` (which could pull a different transitive tree on every deploy). The lockfile is the single source of truth.
+- **Security fix surfaced by the new audit:** the locked `nodemailer` was on the vulnerable 6.x line (high-severity SMTP command injection, CRLF header injection, SSRF, and arbitrary-file-read advisories) and is upgraded to **9.0.1** (audits clean). The API used (`createTransport` / `verify` / `sendMail`) is unchanged across the major bump, so verification emails behave identically — **takes effect on the next backend deploy** and should be sanity-checked with one test verification email afterward.
+- **CI hardened:** new `backend-deps` job runs `npm ci` (fails on an out-of-sync lockfile — the same install the VPS does) and `npm audit --omit=dev --audit-level=high` (fails the build on high+ production advisories). New `secret-scan` job runs gitleaks on pushed commits.
+- **Dependabot** added for `/server` npm deps, root tooling, and GitHub Actions — version bumps now arrive as reviewed PRs instead of silent drift.
+- Note for maintainers: to change a backend dependency, edit `server/package.json`, run `npm install` in `server/` to refresh the lockfile, run `npm audit`, and commit both files. No user-facing behavior changes.
+
 ### 2026-06-16 — Accountability: multi-guild friendly perspective
 
 - The Accountability **"Friendly guilds" selector is now multi-select** (Ctrl/Cmd-click). Use case: a capped main guild plus a second guild in the same alliance can both be held accountable for deposits in a single check, so loot thieves in either guild surface together. Selecting nothing reverts to auto-detect; selecting a single guild behaves exactly as before.

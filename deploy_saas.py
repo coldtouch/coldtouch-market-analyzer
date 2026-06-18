@@ -178,29 +178,34 @@ def main():
     run_wait("systemctl disable --now albion-proxy || true")
     run_wait("apt-get update && apt-get install -y build-essential python3")
     
-    pkg_json = """{
-  "name": "albion-saas",
-  "version": "1.0.0",
-  "main": "backend.js",
-  "dependencies": {
-    "discord.js": "^14.14.1",
-    "express": "^4.18.2",
-    "express-rate-limit": "^7.1.5",
-    "better-sqlite3": "^12.9.0",
-    "nats": "^2.19.0",
-    "ws": "^8.16.0",
-    "cors": "^2.8.5",
-    "jsonwebtoken": "^9.0.2",
-    "helmet": "^7.1.0",
-    "bcryptjs": "^2.4.3",
-    "nodemailer": "^6.9.8"
-  }
-}"""
-    b64_pkg = base64.b64encode(pkg_json.encode()).decode()
-    run_wait(f"echo '{b64_pkg}' | base64 -d > /opt/albion-saas/package.json")
-    
-    print("Installing NPM packages (this will take a minute)...")
-    run_wait("cd /opt/albion-saas && npm install")
+    # PHASE 1 (2026-06-18): reproducible production builds. Dependencies now come
+    # from the committed server/package.json + server/package-lock.json (the single
+    # source of truth) and install via `npm ci` — an exact, lockfile-pinned install
+    # with no version drift between deploys — instead of an inline package.json
+    # string + `npm install`. To change a dependency: edit server/package.json, run
+    # `npm install` inside server/ to refresh the lockfile, run `npm audit`, then
+    # commit BOTH files. The lockfile (not the caret ranges) is the guarantee.
+    pkg_json_path = os.path.join(REPO_ROOT, 'server', 'package.json')
+    pkg_lock_path = os.path.join(REPO_ROOT, 'server', 'package-lock.json')
+    for _required in (pkg_json_path, pkg_lock_path):
+        if not os.path.isfile(_required):
+            print(f"[deploy] FATAL: missing {_required} — cannot run a reproducible npm ci install. Aborting.")
+            ssh.close()
+            sys.exit(1)
+    # SFTP (not base64 echo) — robust for the lockfile, which grows toward the
+    # ~100KB echo-truncation limit; consistent with the backend.js / .env uploads.
+    pkg_sftp = ssh.open_sftp()
+    for _src, _dst in ((pkg_json_path, '/opt/albion-saas/package.json'),
+                       (pkg_lock_path, '/opt/albion-saas/package-lock.json')):
+        with open(_src, 'rb') as _sf:
+            _data = _sf.read()
+        with pkg_sftp.file(_dst, 'wb') as _df:
+            _df.write(_data)
+        print(f"[deploy] Uploaded {os.path.basename(_src)} ({len(_data)} bytes via SFTP)")
+    pkg_sftp.close()
+
+    print("Installing NPM packages from lockfile (npm ci — exact, reproducible)...")
+    run_wait("cd /opt/albion-saas && npm ci --omit=dev --no-audit --no-fund")
     
     # Reuse existing session secret (so logins survive deploys), or generate a new one
     import secrets

@@ -1,0 +1,20 @@
+{
+  "name": "albion-saas",
+  "version": "1.0.0",
+  "main": "backend.js",
+  "private": true,
+  "description": "Albion Market Analyzer production backend (deployed to /opt/albion-saas on the VPS by deploy_saas.py).",
+  "dependencies": {
+    "discord.js": "^14.14.1",
+    "express": "^4.18.2",
+    "express-rate-limit": "^7.1.5",
+    "better-sqlite3": "^12.9.0",
+    "nats": "^2.19.0",
+    "ws": "^8.16.0",
+    "cors": "^2.8.5",
+    "jsonwebtoken": "^9.0.2",
+    "helmet": "^7.1.0",
+    "bcryptjs": "^2.4.3",
+    "nodemailer": "^9.0.1"
+  }
+}
