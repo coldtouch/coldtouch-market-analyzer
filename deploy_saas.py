@@ -58,6 +58,7 @@ FRONTEND_STATIC_FILES = [
     'db.js',
     'zonemap.js',
     'lootlogger-core.js',
+    'crafting-core.js',
     'sw.js',
     'manifest.json',
     'items.json',
@@ -7669,33 +7670,79 @@ WantedBy=timers.target
     # New version runs twice daily, compresses with low-priority gzip, and keeps
     # only the latest 2 compressed snapshots. Live DB + 2 compressed local copies
     # is a sane ceiling until backups are moved off-box.
+    # 2026-06-18 hardening (Phase 0 audit remediation) after the 2026-06-16 outage where an
+    # unthrottled backup on a ~30 GB DB ran 3h+ and wedged the single Node process.
+    #
+    # KEY FIX — method change from `.backup` to `VACUUM INTO`:
+    #   The SQLite online-backup API (`.backup`) RESTARTS from scratch whenever the source DB
+    #   is written by another connection. On this continuously-written DB (NATS flush every
+    #   ~30-60s) the page copy never settles — observed live on 2026-06-18 looping 17+ min with
+    #   a frozen temp — which is why the 2026-06-15 afternoon run took 3.5h vs 18 min at 03:17.
+    #   A streaming `.dump` avoids the restart but text-serialises 100M+ rows at ~0.4 MB/s
+    #   (~4h, also measured live). `VACUUM INTO` takes ONE consistent snapshot that concurrent
+    #   writes do NOT restart and writes a compact BINARY copy via fast page I/O, then we
+    #   stream-compress that copy. Restore is a plain file (no SQL replay).
+    #
+    # Other hardening:
+    #   - Idle priority (nice -n19 + ionice -c3) so the backup yields CPU/disk to the live process.
+    #   - Pre-prune to the single most-recent existing snapshot to free headroom, plus a disk
+    #     guard (free >= DB size + 8 GB) so the transient binary copy can never fill the disk.
+    #   - SQLITE_TMPDIR pinned to the backups dir so VACUUM sort temp goes to disk, not a small tmpfs.
+    #   - Atomic: write copy to .tmp, gzip to .part, then mv to final; clean up on any failure.
+    #   - Retention prune runs ALWAYS (not gated behind a successful backup), keep last 2.
+    #
+    # Restore:  gunzip -c /opt/albion-saas/backups/db-STAMP.sqlite.gz > /path/to/restored.sqlite
     backup_script = """#!/bin/bash
-set -u
+set -uo pipefail
 DB=/opt/albion-saas/database.sqlite
 BACKUP_DIR=/opt/albion-saas/backups
 LOCK=/tmp/albion-db-maintenance.lock
+export SQLITE_TMPDIR="$BACKUP_DIR"
 mkdir -p "$BACKUP_DIR"
+# Clean stale partials from any prior interrupted run.
 find "$BACKUP_DIR" -name 'db-*.sqlite-journal' -type f -delete
 find "$BACKUP_DIR" -name 'db-*.tmp' -type f -delete
+find "$BACKUP_DIR" -name 'db-*.bak.tmp' -type f -delete
+find "$BACKUP_DIR" -name 'db-*.part' -type f -delete
+# Shared lock with the compaction worker — never run a heavy DB job concurrently.
 exec 9>"$LOCK"
 if ! flock -n 9; then
-  echo "$(date -Is) another DB maintenance job is already running"
+  echo "$(date -Is) another DB maintenance job is already running; skipping backup"
   exit 0
 fi
 stamp=$(date +%Y%m%d-%H)
-tmp="$BACKUP_DIR/db-$stamp.sqlite.tmp"
+tmp="$BACKUP_DIR/db-$stamp.sqlite.bak.tmp"
+part="$BACKUP_DIR/db-$stamp.sqlite.gz.part"
 out="$BACKUP_DIR/db-$stamp.sqlite.gz"
-if [ ! -f "$out" ]; then
-  echo "$(date -Is) starting sqlite backup to $out"
-  nice -n 10 ionice -c2 -n7 sqlite3 "$DB" ".backup '$tmp'"
-  nice -n 10 ionice -c2 -n7 gzip -1 -f "$tmp"
-  mv "$tmp.gz" "$out"
-  echo "$(date -Is) backup complete $(du -h "$out" | cut -f1)"
+if [ -f "$out" ]; then
+  echo "$(date -Is) backup $out already exists; skipping"
+else
+  # Free headroom: keep only the most-recent existing snapshot before writing the new copy.
+  ls -t "$BACKUP_DIR"/db-*.sqlite.gz 2>/dev/null | tail -n +2 | xargs -r rm -f
+  db_bytes=$(stat -c %s "$DB")
+  free_bytes=$(df -PB1 "$BACKUP_DIR" | awk 'NR==2{print $4}')
+  margin=$((8 * 1024 * 1024 * 1024))
+  if [ "$free_bytes" -lt $((db_bytes + margin)) ]; then
+    echo "$(date -Is) ABORT: free=${free_bytes}B < db=${db_bytes}B + 8GB margin — not enough disk for a safe backup"
+    exit 1
+  fi
+  echo "$(date -Is) starting idle-priority VACUUM INTO -> $out (db=$((db_bytes/1073741824))GB free=$((free_bytes/1073741824))GB)"
+  if nice -n 19 ionice -c3 sqlite3 "$DB" ".timeout 60000" "VACUUM INTO '$tmp'"; then
+    if nice -n 19 ionice -c3 gzip -1 -c "$tmp" > "$part"; then
+      rm -f "$tmp"
+      mv "$part" "$out"
+      echo "$(date -Is) backup complete $(du -h "$out" | cut -f1)"
+    else
+      echo "$(date -Is) ERROR: gzip failed; cleaning up"; rm -f "$tmp" "$part"; exit 1
+    fi
+  else
+    echo "$(date -Is) ERROR: VACUUM INTO failed; cleaning up"; rm -f "$tmp" "$part"; exit 1
+  fi
 fi
+# Retention: keep only the latest 2 compressed snapshots (runs even if the backup was skipped).
 ls -t "$BACKUP_DIR"/db-*.sqlite.gz 2>/dev/null | tail -n +3 | xargs -r rm -f
-if ls "$BACKUP_DIR"/db-*.sqlite.gz >/dev/null 2>&1; then
-  ls "$BACKUP_DIR"/db-*.sqlite 2>/dev/null | xargs -r rm -f
-fi
+# Drop any stray uncompressed copies.
+ls "$BACKUP_DIR"/db-*.sqlite 2>/dev/null | grep -vE '\\.gz$' | xargs -r rm -f
 """
     b64_backup_script = base64.b64encode(backup_script.encode()).decode()
     run_wait(f"echo '{b64_backup_script}' | base64 -d > /usr/local/sbin/albion-db-backup.sh && chmod 755 /usr/local/sbin/albion-db-backup.sh")

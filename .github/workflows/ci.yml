@@ -30,6 +30,7 @@ jobs:
         run: |
           node --check app.js
           node --check lootlogger-core.js
+          node --check crafting-core.js
           node --check sw.js
           node --check db.js
 
@@ -51,6 +52,7 @@ jobs:
               'db.js',
               'zonemap.js',
               'lootlogger-core.js',
+              'crafting-core.js',
               'sw.js',
               'manifest.json',
               'items.json',
@@ -71,7 +73,7 @@ jobs:
               raise SystemExit('sw.js CACHE_NAME pattern missing')
 
           html = Path('index.html').read_text(encoding='utf-8')
-          for asset in ('app.js', 'style.css', 'db.js', 'lootlogger-core.js'):
+          for asset in ('app.js', 'style.css', 'db.js', 'lootlogger-core.js', 'crafting-core.js'):
               if asset not in html:
                   raise SystemExit(f'index.html does not reference {asset}')
           PY

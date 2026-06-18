@@ -184,8 +184,11 @@ function stationFeePerCraft(itemId, silverPer100Nutrition) {
 // efficiency = masteryLevel × 30 + mainSpecLevel × 250 + otherSpecLevels × 30
 // Food buffs (Pork +18%, Avalonian +30%) multiply efficiency by 1.18 / 1.30.
 function calculateFocusCostV2(baseCost, mainSpecLevel, masteryLevel, otherSpecLevels = 0, foodBuff = null) {
-    if (!baseCost || baseCost <= 0) return 0;
     const buff = foodBuff || CraftConfig.foodBuff || 'none';
+    if (typeof CraftingCore !== 'undefined' && CraftingCore.focusCostV2) {
+        return CraftingCore.focusCostV2(baseCost, mainSpecLevel, masteryLevel, otherSpecLevels, buff);
+    }
+    if (!baseCost || baseCost <= 0) return 0;
     const buffMult = buff === 'avalonian' ? 1.30 : (buff === 'pork' ? 1.18 : 1.0);
     const efficiency = (masteryLevel * 30 + mainSpecLevel * 250 + otherSpecLevels * 30) * buffMult;
     return Math.max(1, Math.ceil(baseCost * Math.pow(0.5, efficiency / 10000)));
@@ -196,6 +199,9 @@ function calculateFocusCostV2(baseCost, mainSpecLevel, masteryLevel, otherSpecLe
 // Each +100 quality points from spec/city/food = 1 re-roll. Maxed ≈ 50% Outstanding+.
 const QUALITY_BASE_DIST = [0.689, 0.250, 0.050, 0.010, 0.001];
 function qualityDistribution(qualityPoints = 0) {
+    if (typeof CraftingCore !== 'undefined' && CraftingCore.qualityDistribution) {
+        return CraftingCore.qualityDistribution(qualityPoints);
+    }
     // qualityPoints divided by 100 = rerolls (keep best). Approximation: shift mass rightward.
     const rerolls = Math.max(0, Math.min(5, qualityPoints / 100));
     const dist = QUALITY_BASE_DIST.slice();
@@ -224,6 +230,9 @@ function qualityDistribution(qualityPoints = 0) {
 }
 function qualityEVPrice(pricesByQuality, qualityPoints = 0) {
     // pricesByQuality: { 1: price, 2: price, 3: price, 4: price, 5: price }
+    if (typeof CraftingCore !== 'undefined' && CraftingCore.qualityEVPrice) {
+        return CraftingCore.qualityEVPrice(pricesByQuality, qualityPoints);
+    }
     if (!pricesByQuality) return 0;
     const dist = qualityDistribution(qualityPoints);
     let ev = 0;
@@ -254,6 +263,9 @@ function baseFocusForItem(itemId, activity /* 'crafting' | 'refining' */) {
 
 // --- Effective tax rate helper ---
 function effectiveTaxRate(sellMode /* 'instant' | 'order' */) {
+    if (typeof CraftingCore !== 'undefined' && CraftingCore.effectiveTaxRate) {
+        return CraftingCore.effectiveTaxRate(sellMode, TAX_RATE, SETUP_FEE);
+    }
     return sellMode === 'instant' ? TAX_RATE : (TAX_RATE + SETUP_FEE);
 }
 
@@ -2670,6 +2682,9 @@ async function doCompare() {
 
 function calculateRRR(useFocus, cityBonusPct, activity = 'crafting') {
     const basePB = activity === 'refining' ? CraftConfig.refiningBasePB : CraftConfig.craftingBasePB;
+    if (typeof CraftingCore !== 'undefined' && CraftingCore.rrr) {
+        return CraftingCore.rrr(useFocus, cityBonusPct, basePB);
+    }
     const focusPB = useFocus ? 59 : 0;
     const totalPB = basePB + (cityBonusPct || 0) + focusPB;
     return 1 - 1 / (1 + totalPB / 100);

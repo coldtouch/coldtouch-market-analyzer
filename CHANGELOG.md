@@ -2,6 +2,20 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-06-18 — Hardened DB backup, re-enabled (audit remediation, Phase 0)
+
+- **Automated DB backups are running again** (the cron was disabled after the 2026-06-16 starvation outage). The backup method is rewritten to fix the root cause:
+  - **`VACUUM INTO` instead of `.backup`.** SQLite's online-backup API restarts from scratch whenever the source DB is written by another connection — on this continuously-written ~30 GB DB it never settled (observed looping 17+ min live; it's why the 2026-06-15 afternoon run took 3.5h vs 18 min at 03:17). A streaming `.dump` avoids the restart but text-serialises 100M+ rows at ~0.4 MB/s (~4h, also measured). `VACUUM INTO` takes one consistent snapshot that concurrent writes don't restart and writes a compact binary copy, which is then stream-compressed.
+  - **Idle priority** (`nice -n19` + `ionice -c3`) so the backup yields CPU/disk to the live process — verified: the live service stayed responsive (NRestarts=0, `/healthz` ok) throughout a full backup.
+  - **Disk-fill guard** (free ≥ DB size + 8 GB) + pre-prune to one prior snapshot, so the transient copy can never fill the disk; atomic temp→final rename; retention keeps the last 2.
+  - Verified end-to-end: a manual run produced a 5.4 GB snapshot that passes `gzip -t`. Restore: `gunzip -c db-STAMP.sqlite.gz > restored.sqlite`.
+- Known follow-up: the backup takes ~2h and transiently grows the WAL (it self-recovers) purely because the DB is ~30 GB. Reducing price-history retention to shrink the DB would make backups fast and cheap — tracked separately.
+
+### 2026-06-18 — Extract crafting math into a tested module (audit remediation, Phase 2)
+
+- Pure crafting/economy math (effective tax rate, resource return rate, focus cost, quality distribution, quality-weighted expected price) moved out of the 20k-line `app.js` into a new `crafting-core.js`, with a unit-test suite (`tests/crafting-core.test.js`). Same dual-export pattern as `lootlogger-core.js` — one source of truth used by both the browser and Node tests.
+- `app.js` now delegates to the shared module (with an inline fallback, so nothing breaks if the script fails to load); behavior is identical (verified in-browser: RRR, tax, focus, and quality calcs return the same values). First step of the incremental `app.js` modularization from the audit.
+
 ### 2026-06-18 — Reproducible backend builds + dependency security (audit remediation, Phase 1)
 
 - **Production dependencies are now reproducible.** The backend's `package.json` is no longer generated as an inline string inside `deploy_saas.py`; it lives in a committed `server/package.json` with a committed `server/package-lock.json`, and the deploy installs with **`npm ci`** (exact, lockfile-pinned) instead of `npm install` (which could pull a different transitive tree on every deploy). The lockfile is the single source of truth.
