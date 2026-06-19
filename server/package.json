@@ -13,7 +13,7 @@
     "ws": "^8.16.0",
     "cors": "^2.8.5",
     "jsonwebtoken": "^9.0.2",
-    "helmet": "^7.1.0",
+    "helmet": "^8.2.0",
     "bcryptjs": "^2.4.3",
     "nodemailer": "^9.0.1"
   },
