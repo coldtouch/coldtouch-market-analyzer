@@ -1,7 +1,7 @@
 // Service Worker for Coldtouch Market Analyzer (PWA app shell caching)
 // v151: manual loot uploads keep local Accountability available even when
 // server save/share fails; loot/accountability filters include alliance.
-const CACHE_NAME = 'coldtouch-v158';
+const CACHE_NAME = 'coldtouch-v159';
 const IS_GITHUB_PAGES = self.location.hostname === 'coldtouch.github.io';
 const APP_SHELL = [
     '/',

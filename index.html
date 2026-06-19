@@ -2342,6 +2342,15 @@
                     <div id="changelog-wrapper" style="max-height: 500px; overflow-y: auto; position: relative;">
                     <div class="changelog-list">
                         <div class="changelog-entry">
+                            <div class="changelog-date">June 20, 2026</div>
+                            <div class="changelog-title">Behind the scenes: reliability, security &amp; maintenance</div>
+                            <ul>
+                                <li><strong>Hardened the automated database backup.</strong> Reworked how the nightly backup runs so it no longer risks slowing the site, and moved it to a single off-peak run — part of an ongoing reliability push.</li>
+                                <li><strong>Security update.</strong> Patched the email/account dependency stack (closes several advisories) and switched to reproducible, audited builds with automated dependency + secret scanning on every change.</li>
+                                <li><strong>Code quality.</strong> Started extracting core calculations (crafting/economy math) into a dedicated, unit-tested module — no change to any result you see, just a cleaner foundation for future features.</li>
+                            </ul>
+                        </div>
+                        <div class="changelog-entry">
                             <div class="changelog-date">June 16, 2026</div>
                             <div class="changelog-title">Accountability: check multiple guilds at once</div>
                             <ul>
