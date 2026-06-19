@@ -2,6 +2,11 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-06-20 — Dependency hygiene: merged safe Dependabot bumps + patched undici advisory
+
+- Merged the low-risk Dependabot PRs: CI runner actions (checkout v7, setup-node v6, setup-python v6, gitleaks-action v3) and `ws` 8.20→8.21. The backend majors (express 5, helmet 8, bcryptjs 3, express-rate-limit 8) are held pending review/testing — they only go live on a deploy, and CI doesn't yet exercise the backend against them.
+- A newly-disclosed **HIGH advisory in `undici`** (GHSA-p88m-4jfj-68fv, Set-Cookie HTTP header injection) surfaced via the CI `npm audit` gate. `undici` is a transitive dep of `discord.js` (pinned by `@discordjs/rest` to 6.24.1); the suggested auto-fix would downgrade discord.js to 13.x. Instead added an npm `overrides` forcing `undici` to a patched **6.27.0** (same major → API-compatible). `npm audit` is clean again. Goes live on the next backend deploy.
+
 ### 2026-06-18 — Hardened DB backup, re-enabled (audit remediation, Phase 0)
 
 - **Automated DB backups are running again** (the cron was disabled after the 2026-06-16 starvation outage). The backup method is rewritten to fix the root cause:
