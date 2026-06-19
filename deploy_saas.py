@@ -7747,8 +7747,13 @@ ls "$BACKUP_DIR"/db-*.sqlite 2>/dev/null | grep -vE '\\.gz$' | xargs -r rm -f
     b64_backup_script = base64.b64encode(backup_script.encode()).decode()
     run_wait(f"echo '{b64_backup_script}' | base64 -d > /usr/local/sbin/albion-db-backup.sh && chmod 755 /usr/local/sbin/albion-db-backup.sh")
 
-    backup_cron = """# Albion SaaS DB backup — twice daily, keep last 2 compressed snapshots. Managed by deploy_saas.py.
-17 3,15 * * * root /usr/local/sbin/albion-db-backup.sh >>/var/log/albion-backup.log 2>&1
+    # 2026-06-19: reduced to ONCE daily at 03:17 (deep-night EU, lowest traffic). On the current
+    # ~30 GB DB the 2h VACUUM-INTO backup grows the WAL to ~5 GB; checkpointing that WAL afterward
+    # can block the single Node event loop (a 97s block tripped the watchdog on 2026-06-19). Until
+    # WAL checkpointing is moved off the request event loop (Phase 4 worker isolation), keep the
+    # backup to one low-traffic run/day. Restore twice-daily once Phase 4 makes checkpoints non-blocking.
+    backup_cron = """# Albion SaaS DB backup — once daily (03:17 deep-night), keep last 2 compressed snapshots. Managed by deploy_saas.py.
+17 3 * * * root /usr/local/sbin/albion-db-backup.sh >>/var/log/albion-backup.log 2>&1
 """
     b64_cron = base64.b64encode(backup_cron.encode()).decode()
     run_wait(f"echo '{b64_cron}' | base64 -d > /etc/cron.d/albion-backup && chmod 644 /etc/cron.d/albion-backup")
