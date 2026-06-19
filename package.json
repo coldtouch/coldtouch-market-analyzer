@@ -3,6 +3,6 @@
     "test": "node --test tests/*.test.js"
   },
   "dependencies": {
-    "ws": "^8.20.0"
+    "ws": "^8.21.0"
   }
 }
