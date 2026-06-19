@@ -1,37 +1,60 @@
-# DISPATCH HANDOFF — Albion Market Analyzer: DB VACUUM + hardened backup
+# DISPATCH HANDOFF — Albion Market Analyzer: audit remediation
 
-> Created 2026-06-16. Self-contained for a cold/cloud agent (e.g. phone dispatch).
-> Pick up the open DB work below. Everything else from the 2026-06-16 session is shipped + live.
+> Updated 2026-06-19. Self-contained for a cold/cloud agent (e.g. phone dispatch).
+> Supersedes the 2026-06-16 "DB VACUUM" handoff — that plan is OBSOLETE (see "Key findings" below).
+> **Read first:** this file, then `AGENTS.md`, `CODEX_MEMORY_HANDOFF.md`, and `REMEDIATION_PLAN_2026-06-18.md`.
 
-## Context
+## Where we are
+A full audit (`FULL_AUDIT_2026-06-18.md`) produced an 8-phase plan (`REMEDIATION_PLAN_2026-06-18.md`). Shipped so far, all pushed to `origin/main`, CI green:
+- **Phase 1 — reproducible builds** (`16aef46`): backend deps now in committed `server/package.json` + `server/package-lock.json`, deploy installs via `npm ci`; CI has `backend-deps` (npm ci + `npm audit`) + `secret-scan` (gitleaks); Dependabot added. **nodemailer bumped 6.x→9.0.1** (cleared high-sev advisories).
+- **Phase 0 — hardened DB backup** (`be2688c`, `91570e1`): backup re-enabled. Method is now `VACUUM INTO`→gzip at idle priority (see findings). Cron reduced to **once-daily 03:17** as interim mitigation.
+- **Phase 2 — first module** (`be2688c`): pure crafting math extracted to `crafting-core.js` + `tests/crafting-core.test.js`; `app.js` delegates (verified in-browser).
+
+HEAD = `91570e1`. Working tree also has UNTRACKED docs (`FULL_AUDIT_*`, `REMEDIATION_PLAN_*`, `BETTER_SQLITE3_MIGRATION_PLAN.md`, `PROJECT_FEATURE_INVENTORY.md`, `design-mockups/`) — a fresh clone won't have the gitignored ones (`FULL_AUDIT_*`), but `REMEDIATION_PLAN_2026-06-18.md` is committed alongside this handoff.
+
+## Context / infra
 - Repo: `coldtouch/coldtouch-market-analyzer` (local `D:\Coding\albion_market_analyzer`).
-- Prod: https://albionaitool.xyz · VPS `5.189.189.71` (root) · systemd service `albion-saas` · app at `/opt/albion-saas` · Node backend is embedded in `deploy_saas.py` as `backend_js` · DB-compaction worker is `maintenance_compaction.js` (systemd `albion-db-compaction`).
-- HEAD at handoff: `62cd738`. **Read first:** `AGENTS.md`, `CODEX_MEMORY_HANDOFF.md`.
+- Prod: https://albionaitool.xyz · VPS `5.189.189.71` (root) · systemd `albion-saas` · app at `/opt/albion-saas`.
+- Backend is embedded in `deploy_saas.py` as the `backend_js` string (no `backend.js` in the repo). Frontend = `index.html`/`app.js`/`style.css`/`db.js`/`crafting-core.js`/`lootlogger-core.js`/`sw.js`.
+- Existing separate worker: `maintenance_compaction.js` (systemd `albion-db-compaction.timer`) — the model to copy for a new worker.
+- DB: `/opt/albion-saas/database.sqlite` ≈ 30 GB, WAL mode, better-sqlite3 (synchronous). `freelist_count=0` (all live pages).
 
-On 2026-06-16 a prod outage was caused by the twice-daily DB backup cron running `sqlite3 .backup` on a 29.7 GB DB for 3h+ at 90% CPU, starving the single Node process (event loop wedged). Recovered by killing the backup + restarting. The bloat cause — `price_analytics` had **no retention** and grew unbounded since analytics was disabled 2026-05-20 — was fixed: a 14-day retention prune was added to `maintenance_compaction.js` and is draining. **The backup cron is CURRENTLY DISABLED:** `/etc/cron.d/albion-backup.disabled` (reversible rename).
+## Hard rules (the harness enforces these)
+- **Every prod/VPS state-changing action needs EXPLICIT per-action user approval.** Read-only diagnostics first. "Do phase X" is NOT blanket approval for a specific prod write.
+- **Never print secrets.** Deploy secrets live OUTSIDE the repo at `D:\Coding\secrets\albion_market_analyzer.env` (loaded by `deploy_saas.py`'s `load_env()`; reuse `deploy_saas.ip/usr/password` for SSH). There is also a stray `New Text Document.env` on disk (gitignored) — do not delete without asking.
+- **Git:** plain `git -C <repo> add <files> && git -C <repo> commit -m … -m …`. NO `cd`, NO pipes, NO heredoc, NO `--no-verify` (the `block-no-verify` hook trips on those).
+- **Deploy:** `python -X utf8 deploy_saas.py` (full: restarts service, runs `npm ci`, regenerates cron). `--frontend-only` skips backend/restart. `rollback` restores `backend.js.bak`. Only deploy after explicit approval. A full deploy will ALSO ship Phase 1 (npm ci + nodemailer 9) — see "post-deploy checks".
+- **VPS kill commands:** do NOT use `pkill -f '<pattern>'` where `<pattern>` also appears in your own command text — it self-matches and kills your own SSH shell. Use `comm`-based matching: `ps -eo pid,comm | awk '$2=="sqlite3"{print $1}' | xargs -r kill`.
 
-## Goal of this dispatch
-1. Confirm `price_analytics` has drained.
-2. **VACUUM** the DB to physically shrink the ~29.7 GB file.
-3. **Harden the backup script and re-enable it.**
+## KEY FINDINGS from 2026-06-18/19 (why the old plan changed)
+1. **VACUUM-to-shrink is moot:** the 30 GB DB is all LIVE pages (`freelist_count=0`, steady-state delete/insert churn). VACUUM reclaims ~nothing.
+2. **`.backup` restarts on every concurrent write** → never completes on this busy DB (looped 17+ min live). This was the real 2026-06-16 outage cause, not just CPU.
+3. **`.dump` is too slow** (~0.4 MB/s on 100M+ rows → ~4h).
+4. **`VACUUM INTO` works** (single snapshot, not restarted) but takes ~2h and **grows the WAL to ~5 GB**; when the snapshot releases, the main Node process checkpoints that WAL **synchronously** → on 2026-06-19 it blocked the event loop **97s → watchdog abort → restart**. Idle priority does NOT help (it's a sync checkpoint, not CPU/IO starvation). **So the backup still wedges the site** — interim fix was reducing it to once-daily deep-night.
 
-## Hard rules
-- Every prod / VPS state-changing action needs **explicit user approval** (the harness blocks otherwise). Ask per-action.
-- **Never print secrets.** Deploy secrets: `D:\Coding\secrets\albion_market_analyzer.env`.
-- Read-only diagnostics first. **Never** run heavy DB ops in the web process, and **never let an SSH session time out mid-VACUUM** (a prior SSH timeout mid-transaction once corrupted the DB — use `nohup`/`screen`). Verify on albionaitool.xyz before calling anything done.
-- Git: commit with plain `git -C <repo> add … && git -C <repo> commit -m … -m …` (no `cd`, no pipes, no heredoc — the `block-no-verify` hook trips on those).
+## THE MAIN TASK — Phase 4: isolate WAL checkpointing (permanent backup fix)
+User CHOSE this over deleting history. Goal: the main request-serving Node process must NEVER do a large synchronous WAL checkpoint; a separate worker drains the WAL.
 
-## Steps
-1. **Confirm drain (read-only):** SSH and run
-   `journalctl -u albion-db-compaction --no-pager -n 50 | grep -E 'analyticsDeleted|dbLive'`
-   plus a read-only `freelist_count` / `page_count` probe. Expect `dbLive` dropping across runs and `analyticsDeleted` > 0.
-2. **VACUUM (off-peak, with approval):** prefer `VACUUM INTO '/opt/albion-saas/database.vacuumed.sqlite'`, then `systemctl stop albion-saas`, swap the file in, `systemctl start albion-saas`, verify `/healthz` + journal. (Or stop service then `VACUUM;` under `nohup`.) Check free disk first (~49 GB free after the 2026-06-16 cleanup). Restore point: `/opt/albion-saas/backups/db-20260616-03.sqlite.gz`.
-3. **Harden backup (with approval):** in `deploy_saas.py`, rewrite the `albion-db-backup.sh` generator to stream straight to gzip (NO 24 GB uncompressed `.tmp`) under `nice -n19` / `ionice -c3`, keep last 2. Then either a full `python -X utf8 deploy_saas.py` (regenerates + re-enables the cron with the hardened script) or `mv /etc/cron.d/albion-backup.disabled /etc/cron.d/albion-backup`. Confirm a manual backup run finishes fast WITHOUT spiking `[EventLoop]` delay in the journal.
+**Concrete steps (implement, then deploy with approval, then SOAK):**
+1. In `deploy_saas.py` `backend_js`:
+   - `db.pragma('wal_autocheckpoint = 0')` (currently `= 500` near `deploy_saas.py:337`) so writes never trigger an in-process checkpoint.
+   - Remove/neuter `runWalCheckpoint()` (`:6127`) + its `setInterval` (`:6137`), and the inline `wal_checkpoint(PASSIVE)` calls in PriceRefCache (`:4077`), SpreadStats (`:5931`), and embedded compaction (`:6456`). A PASSIVE checkpoint of a 5 GB WAL still blocks — the worker must own ALL checkpointing.
+2. New `wal_checkpoint_worker.js` (model on `maintenance_compaction.js`): long-running process, own better-sqlite3 connection, loop every ~120 s → `PRAGMA wal_checkpoint(TRUNCATE)`, log `busy/log/checkpointed`, `nice -n19`/`ionice -c3`. Add a systemd service (NOT just a timer — needs to run continuously; `Restart=always`) generated by `deploy_saas.py` like the compaction unit. Upload it in the SFTP block (add to `FRONTEND_STATIC_FILES`-style upload, and `chmod`).
+3. **Safety:** with `wal_autocheckpoint=0`, a dead worker → unbounded WAL → disk fill. Keep `[HEALTH] walMB` logging; consider an emergency in-process PASSIVE only if `walMB` exceeds e.g. 3 GB (rare, bounded). Confirm `Restart=always` + monitor.
+4. **Deploy + verify + SOAK 72h:** full `python -X utf8 deploy_saas.py`. Then watch `journalctl -u albion-saas | grep -E 'HEALTH|EventLoop'` — `walMB` should stay small in normal ops; the new worker's checkpoint logs should appear; and the next 03:17 backup must complete with NO `[EventLoop] ... >60000ms` line and NO `NRestarts` bump.
+5. After it's proven stable, optionally restore twice-daily backups (`17 3,15 * * *` in the `backup_cron` string) and later do the broader job migration (move spreadStats/analytics/compaction off the main process too).
 
-## Done when
-DB file ≪ 29.7 GB; `/healthz` 200; `NRestarts` flat; a backup runs in seconds without wedging the site; `CHANGELOG.md` updated; commit + push.
+**Acceptance:** a backup run produces NO multi-second `[EventLoop]` block and NO restart; `walMB` stays bounded in steady state; `/healthz` 200 throughout.
+
+## Also pending (smaller, independent)
+- **After the next full deploy:** send ONE test verification email (register a throwaway account) to confirm nodemailer 9 still sends. SMTP is Gmail app-password, already configured.
+- **Dependabot PRs #3–#9 are open.** Safe to merge: ws patch + the 4 GitHub-Actions bumps (also clears the Node-20 CI warnings). Review before merge: **#9 helmet 7→8** and **#7 bcryptjs 2→3** (majors — check CSP/header + hash API compat).
+- **Phase 2 continuation (safe, local, no deploy):** extract + unit-test more pure modules from `app.js` — `pricing-core` (tax/freshness/outlier), `transport-core` (haul packing), `portfolio-core` (FIFO P/L). Mirror `crafting-core.js` exactly (UMD IIFE → `window.X` + `module.exports`; wire into index.html + sw.js APP_SHELL + `FRONTEND_STATIC_FILES` + CI `node --check` list + required-assets list; app.js delegates with inline fallback).
+- **Optional alternative to Phase 4 (if priorities change):** shrink the DB via retention (`maintenance_compaction.js`: `price_hourly` 14→7d, `spread_stats` 14→7d, `price_averages` daily 90→30d) → drain → VACUUM. Makes backups fast/cheap but DELETES old history (all current 24h/7d/4w charts still work). Needs user OK on the numbers.
+- Later phases: 3 (extract backend out of the Python string), 5 (non-root systemd user + CSP enforce + ESLint/ruff), 6 (frontend modularization), 7 (repo hygiene).
 
 ## Deploy / verify reference
-- Frontend-only deploy: `python -X utf8 deploy_saas.py --frontend-only` (bumps `sw.js`, no restart, does NOT touch the backup cron). Full deploy: `python -X utf8 deploy_saas.py` (restarts service AND regenerates the backup cron).
-- After a frontend deploy, commit+push the `sw.js` bump.
-- Verify live: no-cache `Invoke-WebRequest` of `/sw.js` (CACHE_NAME) + `/app.js` (feature markers). Current live: `sw.js = coldtouch-v156`.
+- Post-deploy checks: `https://albionaitool.xyz/healthz` (expect `{"status":"ok"}`), `systemctl status albion-saas`, `journalctl -u albion-saas` for first `[HEALTH]` heartbeat, `NRestarts` should stay flat.
+- Local validation before any deploy: `python -m py_compile deploy_saas.py`; extract `backend_js` to a temp file and `node --check` it; `npm test` (root, runs the core tests); `node --check app.js crafting-core.js lootlogger-core.js sw.js db.js`.
+- Current live SW cache: `sw.js = coldtouch-v157`.
+- Reuse the connection pattern from `deploy_saas.py` for read-only VPS diagnostics (import it, use `D.ip/D.usr/D.password` with paramiko + `RejectPolicy`). The VPS throttles rapid reconnects — keep one connection per check.
