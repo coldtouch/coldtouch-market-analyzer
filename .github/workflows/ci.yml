@@ -107,6 +107,11 @@ jobs:
   secret-scan:
     name: Secret scan (gitleaks)
     runs-on: ubuntu-latest
+    # Skip on Dependabot PRs: they run with a read-only GITHUB_TOKEN that the gitleaks
+    # action can't operate under (it fails for permission reasons, not a real finding),
+    # and a version-bump PR can't introduce a secret. The scan still runs on every
+    # push and on human PRs.
+    if: github.actor != 'dependabot[bot]'
 
     steps:
       - name: Checkout
