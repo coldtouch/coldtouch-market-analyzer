@@ -12480,11 +12480,13 @@ function _llRenderFiltered() {
             const qty = ev.quantity || 1;
             const priceEntry = priceMap[ev.item_id];
             const valEach = priceEntry && priceEntry.price > 0 ? priceEntry.price : 0;
+            const pickup = { t: +new Date(ev.timestamp) || 0, n: ev.looted_from_name || '', g: ev.looted_from_guild || '', l: ev.location || '' };
             if (existing) {
                 existing.qty += qty;
                 existing.totalValue += valEach * qty;
+                existing.pickups.push(pickup);
             } else {
-                itemAgg.set(key, { itemId: ev.item_id, quality: q, qty, totalValue: valEach * qty });
+                itemAgg.set(key, { itemId: ev.item_id, quality: q, qty, totalValue: valEach * qty, pickups: [pickup] });
             }
         }
         // Sort by total value desc (most valuable first) so the header stripe leads with the big hits.
@@ -12493,7 +12495,13 @@ function _llRenderFiltered() {
             const valAttr = agg.totalValue > 0 ? ` data-tip-value="${Math.floor(agg.totalValue)}"` : '';
             const qtyBadge = agg.qty > 1 ? `<span class="ll-preview-qty-badge">${agg.qty}</span>` : '';
             const qLabel = agg.quality > 1 ? ` q${agg.quality}` : '';
-            return `<div class="ll-preview-slot" data-tip-item="${esc(agg.itemId)}" data-tip-source="loot" data-tip-qty="${agg.qty}"${valAttr}>
+            // Pickup info (when/from/where) for the rich tooltip — top 8 + "+N more".
+            const pTrim = (agg.pickups || []).slice(0, 8);
+            const pExtra = (agg.pickups || []).length - pTrim.length;
+            const pickupsAttr = pTrim.some(p => p.l || p.n)
+                ? ` data-tip-pickups="${esc(encodeURIComponent(JSON.stringify({ p: pTrim, more: Math.max(0, pExtra) })))}"`
+                : '';
+            return `<div class="ll-preview-slot" data-tip-item="${esc(agg.itemId)}" data-tip-source="loot" data-tip-qty="${agg.qty}"${valAttr}${pickupsAttr}>
                 <img src="https://render.albiononline.com/v1/item/${encodeURIComponent(agg.itemId)}.png?quality=${agg.quality}" class="ll-preview-icon" loading="lazy" onerror="this.style.display='none'" alt="${esc(getFriendlyName(agg.itemId) || agg.itemId)}${qLabel} x${agg.qty}">
                 ${qtyBadge}
             </div>`;
@@ -12623,7 +12631,14 @@ function _llRenderFiltered() {
 
             const unitVal = priceEntry && priceEntry.price > 0 ? Math.floor(priceEntry.price) : '';
             const valAttr = unitVal ? ` data-tip-value="${unitVal}"` : '';
-            return `<div class="ll-item-row ll-item-clickable ${rowClass}" onclick="event.stopPropagation(); switchToBrowser('${esc(iconId)}')" title="View in Market Browser" data-tip-item="${esc(iconId)}" data-tip-source="loot"${valAttr}>
+            // Pickup info for the rich tooltip — each row is one pickup, so the hover
+            // shows when/from whom/where (📍 zone) this item was looted. Same payload
+            // shape the accountability view uses (compact t/n/g/l field names).
+            const evPickup = { t: +new Date(ev.timestamp) || 0, n: ev.looted_from_name || '', g: ev.looted_from_guild || '', l: ev.location || '' };
+            const evPickupAttr = (ev.location || ev.looted_from_name)
+                ? ` data-tip-pickups="${esc(encodeURIComponent(JSON.stringify({ p: [evPickup], more: 0 })))}"`
+                : '';
+            return `<div class="ll-item-row ll-item-clickable ${rowClass}" onclick="event.stopPropagation(); switchToBrowser('${esc(iconId)}')" title="View in Market Browser" data-tip-item="${esc(iconId)}" data-tip-source="loot"${valAttr}${evPickupAttr}>
                 <img src="${iconUrl}" class="ll-item-icon" loading="lazy" onerror="this.style.display='none'" alt="">
                 <span class="ll-item-name">${esc(iName)}${starBadge}${favBadge}${soldBadge}${fromStr}</span>
                 <span class="ll-item-qty">&times;${ev.quantity || 1}</span>

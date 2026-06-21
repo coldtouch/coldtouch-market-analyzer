@@ -2,6 +2,10 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-06-22 — Loot Logger: per-item pickup location on hover
+
+- **Hovering an item now shows where it was picked up.** The item hover tooltip (both the expanded item rows and the collapsed icon strip) gained a "Pickups" section listing each pickup's time, who it was looted from, and the 📍 zone. Previously this pickup/zone detail only appeared in the Accountability view, not in the normal/shared session view — so the data was there but invisible on hover. Items looted multiple times list each location (top 8 + "+N more").
+
 ### 2026-06-22 — Loot Logger: looter zones shown + friendly guilds no longer tinted red
 
 - **Where each player looted now shows on their card.** The session view added a `📍 <zone>` line to every looter card (e.g. `📍 Glacierfall Canyon +3 zones`, with the full per-zone breakdown on hover) — previously loot locations weren't shown anywhere in the looter list, only on deaths.
