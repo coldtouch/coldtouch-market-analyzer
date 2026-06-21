@@ -11587,7 +11587,9 @@ function renderSessionTimeline(events, deaths) {
         deathsPerBucket[idx].push(d);
     }
     // Guild color palette (same hash function as player cards for consistency).
-    const guildPalette = ['#5b8def','#e06c75','#56b6c2','#c678dd','#e5c07b','#61afef','#98c379','#d19a66','#be5046','#7ec8e3'];
+    // No red tones: red reads as "enemy" in the loot logger, so a friendly guild
+    // must never be tinted red just because its name happens to hash there.
+    const guildPalette = ['#5b8def','#56b6c2','#c678dd','#e5c07b','#61afef','#98c379','#7ec8e3','#b388ff','#4db6ac','#f0b35b'];
     const guildColor = (g) => {
         if (!g) return 'var(--text-muted)';
         const hash = [...g].reduce((s, c) => s + c.charCodeAt(0), 0);
@@ -12412,7 +12414,9 @@ function _llRenderFiltered() {
     </div>`;
 
     // Guild color palette (muted, dark-theme friendly)
-    const guildPalette = ['#5b8def','#e06c75','#56b6c2','#c678dd','#e5c07b','#61afef','#98c379','#d19a66','#be5046','#7ec8e3'];
+    // No red tones: red reads as "enemy" in the loot logger, so a friendly guild
+    // must never be tinted red just because its name happens to hash there.
+    const guildPalette = ['#5b8def','#56b6c2','#c678dd','#e5c07b','#61afef','#98c379','#7ec8e3','#b388ff','#4db6ac','#f0b35b'];
     const guildColorMap = {};
     let guildIdx = 0;
     for (const [, data] of entries) {
@@ -12727,6 +12731,26 @@ function _llRenderFiltered() {
             trendLine = `<div class="ll-player-trend" title="Aggregated across all of your saved loot sessions">📊 ${parts.join(' · ')}</div>`;
         }
 
+        // Loot zones — where this player picked up items. Surfaced right in the card
+        // (not only on deaths) so locations are visible while scanning the looter list.
+        let lootZoneLine = '';
+        {
+            const zoneCounts = new Map();
+            for (const ev of data.items) {
+                if (!ev || !ev.location || ev.item_id === '__DEATH__') continue;
+                const z = formatZone(ev.location);
+                if (!z) continue;
+                zoneCounts.set(z, (zoneCounts.get(z) || 0) + (ev.quantity || 1));
+            }
+            if (zoneCounts.size > 0) {
+                const sorted = [...zoneCounts.entries()].sort((a, b) => b[1] - a[1]);
+                const primary = sorted[0][0];
+                const moreCount = sorted.length - 1;
+                const fullList = sorted.map(([z, c]) => `${z} (${c})`).join(', ');
+                lootZoneLine = `<div class="ll-player-loot-zone" title="Looted in: ${esc(fullList)}">📍 ${esc(primary)}${moreCount > 0 ? ` <span class="ll-loot-zone-more">+${moreCount} zone${moreCount !== 1 ? 's' : ''}</span>` : ''}</div>`;
+            }
+        }
+
         return guildHeader + `<div class="${cardClass}" data-player-name="${esc(name.toLowerCase())}" data-player-guild="${esc((data.guild || '').toLowerCase())}" data-player-alliance="${esc((data.alliance || '').toLowerCase())}">
             <div class="ll-player-header" onclick="this.closest('.ll-player-card').classList.toggle('expanded')">
                 <button class="ll-remove-player" onclick="event.stopPropagation();_llRemovedPlayers.add('${esc(name)}');_llRenderFiltered()" title="Remove player from view" aria-label="Remove ${esc(name)} from view">&times;</button>
@@ -12737,6 +12761,7 @@ function _llRenderFiltered() {
                     ${roleTag}
                     ${data.guild ? `<span class="ll-player-guild" style="color:${guildColorMap[data.guild]}">[${esc(data.guild)}]</span>` : ''}
                     ${trendLine}
+                    ${lootZoneLine}
                 </div>
                 <div class="ll-item-preview">${iconStripHtml}</div>
                 <div class="ll-player-stats">

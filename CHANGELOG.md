@@ -2,6 +2,11 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-06-22 — Loot Logger: looter zones shown + friendly guilds no longer tinted red
+
+- **Where each player looted now shows on their card.** The session view added a `📍 <zone>` line to every looter card (e.g. `📍 Glacierfall Canyon +3 zones`, with the full per-zone breakdown on hover) — previously loot locations weren't shown anywhere in the looter list, only on deaths.
+- **Friendly guilds are no longer tinted red.** The per-guild distinguishing color (guild name + group header + timeline) came from a hash palette that included red — and red reads as "enemy" in the loot logger. So two guilds in the *same* alliance could show one red and one blue (e.g. "Gold Dome" red, "Iron Dome" blue), which was misleading. Removed all red tones from the palette; guilds still get distinct colors, but a friendly guild can never look like an enemy.
+
 ### 2026-06-22 — Loot Logger: death location now shows on every dead player's card
 
 - **Where a player died is now visible on their card.** Previously the death time / zone / killer only rendered inside the "Died with" item block — so a player who died but whose corpse was never looted (or whose loot wasn't captured) showed a 💀 with **no location at all**. Now every player who died gets a death line on their expanded card (`💀 Died at 5:01 PM · 📍 Glacierfall Canyon — killed by …`), whether or not any corpse loot was attributed.

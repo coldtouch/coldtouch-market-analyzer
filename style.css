@@ -1223,6 +1223,19 @@ select:focus {
     line-height: 1.35;
     width: 100%;
 }
+/* Where a player looted — shown in the card so locations are visible in the list. */
+.ll-player-loot-zone {
+    display: block;
+    width: 100%;
+    font-size: 0.68rem;
+    color: var(--accent);
+    margin-top: 0.15rem;
+    line-height: 1.3;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.ll-loot-zone-more { color: var(--text-muted); }
 
 /* G4: Shared session badge + public-share overlay */
 .ll-session-shared-badge {
