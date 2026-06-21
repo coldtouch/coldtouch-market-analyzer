@@ -7100,6 +7100,18 @@ footer {
     margin-left: auto;
     text-align: right;
 }
+/* Visible death-location pin inside the died-with line. */
+.ll-died-with-loc {
+    color: var(--accent);
+    font-weight: 600;
+    white-space: nowrap;
+}
+/* When a player died but no corpse loot was captured, the line is the whole
+   header — keep it left-aligned next to the skull instead of pushed right. */
+.ll-died-with-noitems .ll-died-with-subtitle {
+    margin-left: 0.25rem;
+    text-align: left;
+}
 
 /* "Lost" stat value — total market value of items looted off this player's
    corpse. Red to echo the died-with visual language. */

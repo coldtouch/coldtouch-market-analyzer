@@ -12635,48 +12635,67 @@ function _llRenderFiltered() {
         // and prefixed by a small section header so it reads as a separate block
         // below the normal pickups.
         let diedWithRowsHtml = '';
-        if (diedWith && diedWith.items.size > 0) {
-            const diedItems = [...diedWith.items.values()].sort((a, b) => {
-                // Sort by value desc, then qty desc — matches the visual weight of the preview strip
-                const pA = priceMap[a.itemId];
-                const pB = priceMap[b.itemId];
-                const vA = (pA && pA.price > 0 ? pA.price : 0) * a.qty;
-                const vB = (pB && pB.price > 0 ? pB.price : 0) * b.qty;
-                if (vB !== vA) return vB - vA;
-                return b.qty - a.qty;
-            });
+        if (diedWith && diedWith.deaths && diedWith.deaths.length > 0) {
+            // Death meta is computed for EVERY player who died — so the location,
+            // time and killer show even when nobody looted the corpse (no items
+            // attributed). Previously this only rendered inside the "Died with"
+            // item block, so a death with no captured loot showed no location at all.
             const deathCount = diedWith.deaths.length;
             const latest = diedWith.deaths.reduce((a, b) => (a.ts > b.ts ? a : b), diedWith.deaths[0]);
             const whenStr = latest && latest.ts ? new Date(latest.ts).toLocaleTimeString() : 'unknown time';
-            const whereStr = latest && latest.location ? ` in ${formatZone(latest.location)}` : '';
+            const zoneName = latest && latest.location ? formatZone(latest.location) : '';
+            const whereStr = zoneName ? ` in ${zoneName}` : '';
             const killerStr = latest && latest.killer ? ` — killed by ${latest.killer}` : '';
             const inferredNote = latest && latest.inferred ? ' <span style="color:var(--text-muted); font-weight:400;" title="Death reconstructed from loot evidence — no __DEATH__ row in upload">(inferred)</span>' : '';
             const countPrefix = deathCount > 1 ? `Died ${deathCount}× — last at ${whenStr}` : `Died at ${whenStr}`;
             const headerTitle = `${countPrefix}${whereStr}${killerStr}`;
-            const rows = diedItems.map(it => {
-                const iName = getFriendlyName(it.itemId) || it.itemId;
-                const iconUrl = `https://render.albiononline.com/v1/item/${encodeURIComponent(it.itemId)}.png?quality=${it.quality}`;
-                const pe = priceMap[it.itemId];
-                const totalVal = pe && pe.price > 0 ? pe.price * it.qty : 0;
-                const iw = getItemWeight(it.itemId) * it.qty;
-                const titleAttr = `${iName}${it.quality > 1 ? ` q${it.quality}` : ''} × ${it.qty} — ${headerTitle}`;
-                return `<div class="ll-item-row ll-item-clickable ll-item-died" onclick="event.stopPropagation(); switchToBrowser('${esc(it.itemId)}')" title="${esc(titleAttr)}">
-                    <img src="${iconUrl}" class="ll-item-icon" loading="lazy" onerror="this.style.display='none'" alt="">
-                    <span class="ll-item-name">${esc(iName)}</span>
-                    <span class="ll-item-qty">&times;${it.qty}</span>
-                    <span class="ll-item-value">${totalVal > 0 ? formatSilver(totalVal) : '—'}</span>
-                    <span class="ll-item-weight">${iw > 0 ? iw.toFixed(1) + ' kg' : ''}</span>
-                    <span class="ll-item-status-dot ll-dot-died"></span>
-                </div>`;
-            }).join('');
-            diedWithRowsHtml = `
-                <div class="ll-died-with-section">
-                    <div class="ll-died-with-header" title="${esc(headerTitle)}">
-                        💀 Died with (${diedItems.length} item${diedItems.length !== 1 ? 's' : ''})${inferredNote}
-                        <span class="ll-died-with-subtitle">${esc(headerTitle)}</span>
-                    </div>
-                    ${rows}
-                </div>`;
+            // Visible zone pin so the death location is easy to spot, not just in a tooltip.
+            const locPin = zoneName ? `<span class="ll-died-with-loc">📍 ${esc(zoneName)}</span>` : '';
+            const deathLine = `${esc(countPrefix)}${locPin ? ` · ${locPin}` : ''}${esc(killerStr)}`;
+            if (diedWith.items.size > 0) {
+                const diedItems = [...diedWith.items.values()].sort((a, b) => {
+                    // Sort by value desc, then qty desc — matches the visual weight of the preview strip
+                    const pA = priceMap[a.itemId];
+                    const pB = priceMap[b.itemId];
+                    const vA = (pA && pA.price > 0 ? pA.price : 0) * a.qty;
+                    const vB = (pB && pB.price > 0 ? pB.price : 0) * b.qty;
+                    if (vB !== vA) return vB - vA;
+                    return b.qty - a.qty;
+                });
+                const rows = diedItems.map(it => {
+                    const iName = getFriendlyName(it.itemId) || it.itemId;
+                    const iconUrl = `https://render.albiononline.com/v1/item/${encodeURIComponent(it.itemId)}.png?quality=${it.quality}`;
+                    const pe = priceMap[it.itemId];
+                    const totalVal = pe && pe.price > 0 ? pe.price * it.qty : 0;
+                    const iw = getItemWeight(it.itemId) * it.qty;
+                    const titleAttr = `${iName}${it.quality > 1 ? ` q${it.quality}` : ''} × ${it.qty} — ${headerTitle}`;
+                    return `<div class="ll-item-row ll-item-clickable ll-item-died" onclick="event.stopPropagation(); switchToBrowser('${esc(it.itemId)}')" title="${esc(titleAttr)}">
+                        <img src="${iconUrl}" class="ll-item-icon" loading="lazy" onerror="this.style.display='none'" alt="">
+                        <span class="ll-item-name">${esc(iName)}</span>
+                        <span class="ll-item-qty">&times;${it.qty}</span>
+                        <span class="ll-item-value">${totalVal > 0 ? formatSilver(totalVal) : '—'}</span>
+                        <span class="ll-item-weight">${iw > 0 ? iw.toFixed(1) + ' kg' : ''}</span>
+                        <span class="ll-item-status-dot ll-dot-died"></span>
+                    </div>`;
+                }).join('');
+                diedWithRowsHtml = `
+                    <div class="ll-died-with-section">
+                        <div class="ll-died-with-header" title="${esc(headerTitle)}">
+                            💀 Died with (${diedItems.length} item${diedItems.length !== 1 ? 's' : ''})${inferredNote}
+                            <span class="ll-died-with-subtitle">${deathLine}</span>
+                        </div>
+                        ${rows}
+                    </div>`;
+            } else {
+                // Player died but no corpse loot was captured/attributed — still surface
+                // where/when/by whom they died (this is the case that was invisible before).
+                diedWithRowsHtml = `
+                    <div class="ll-died-with-section ll-died-with-noitems">
+                        <div class="ll-died-with-header" title="${esc(headerTitle)}">
+                            💀 <span class="ll-died-with-subtitle">${deathLine}</span>${inferredNote}
+                        </div>
+                    </div>`;
+            }
         }
 
         // Card class + role tag: enemy (red), friendly with known guild (green), unknown (grey)

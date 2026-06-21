@@ -2,6 +2,12 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-06-22 — Loot Logger: death location now shows on every dead player's card
+
+- **Where a player died is now visible on their card.** Previously the death time / zone / killer only rendered inside the "Died with" item block — so a player who died but whose corpse was never looted (or whose loot wasn't captured) showed a 💀 with **no location at all**. Now every player who died gets a death line on their expanded card (`💀 Died at 5:01 PM · 📍 Glacierfall Canyon — killed by …`), whether or not any corpse loot was attributed.
+- **The zone is a visible 📍 pin**, not just buried in a hover tooltip, so it's scannable. (On a real shared session this lifted the cards showing a death location from 190 → 267, with 265 now showing the zone pin.)
+- Unresolved numeric zone IDs fall back to `Zone <id>` via the existing zonemap, so the line is never blank when a death was recorded.
+
 ### 2026-06-21 — Loot Logger: dropdown guild picker, sticky Deaths collapse, recoverable upload Share
 
 - **Multi-guild selection is now a dropdown + chips, not Ctrl-click.** Both guild pickers — the loot session-view filter and the Accountability "Friendly guilds" perspective — replaced their `<select multiple>` (which required Ctrl/Cmd-click) with a clean control: pick a guild from a dropdown, and it becomes a removable chip; an "+ Add another guild…" dropdown lets you stack as many as you want, with a one-click **clear**. The selected guilds are viewed and compared **together as one group**. The Accountability picker treats them as a single combined friendly side for the who-picked-up-vs-who-deposited math, so multi-guild comparison needs no keyboard gymnastics.
