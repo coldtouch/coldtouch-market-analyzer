@@ -2410,6 +2410,102 @@ select:focus {
     padding: 0.4rem 0.5rem;
 }
 
+/* Multi-guild checkbox picker — replaces the old Ctrl+click <select multiple>.
+   Inline (not a popover) so it survives the loot view's frequent re-renders. */
+.ll-guild-picker {
+    display: flex;
+    flex-direction: column;
+    min-width: 168px;
+    max-width: 230px;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    overflow: hidden;
+}
+.ll-gp-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.4rem;
+    padding: 0.3rem 0.5rem;
+    border-bottom: 1px solid var(--border-color);
+    background: rgba(255, 255, 255, 0.03);
+}
+.ll-gp-summary {
+    font-size: 0.72rem;
+    font-weight: 600;
+    color: var(--text-muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.ll-gp-clear {
+    flex: none;
+    font-size: 0.66rem;
+    color: var(--accent);
+    background: none;
+    border: none;
+    cursor: pointer;
+    padding: 0.1rem 0.2rem;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+}
+.ll-gp-clear:hover { text-decoration: underline; }
+.ll-gp-list {
+    display: flex;
+    flex-direction: column;
+    max-height: 8.5rem;
+    overflow-y: auto;
+}
+.ll-gp-row {
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+    padding: 0.32rem 0.55rem;
+    font-size: 0.75rem;
+    cursor: pointer;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+}
+.ll-gp-row:last-child { border-bottom: none; }
+.ll-gp-row:hover { background: rgba(91, 141, 239, 0.1); }
+.ll-gp-row input[type="checkbox"] {
+    flex: none;
+    width: 15px;
+    height: 15px;
+    cursor: pointer;
+    accent-color: var(--accent);
+}
+.ll-gp-name {
+    flex: 1 1 auto;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.ll-gp-meta {
+    flex: none;
+    font-size: 0.66rem;
+    color: var(--text-muted);
+}
+.ll-gp-empty {
+    padding: 0.4rem 0.55rem;
+    font-size: 0.72rem;
+    color: var(--text-muted);
+    font-style: italic;
+}
+
+/* Upload Share-unavailable state: keep the action visible + retryable. */
+.ll-share-error {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    flex-wrap: wrap;
+}
+.ll-share-error-text {
+    font-size: 0.7rem;
+    color: #fbbf24;
+    max-width: 22rem;
+}
+
 @media (max-width: 600px) {
     .ll-player-stats { gap: 0.6rem; }
     .ll-player-stat:nth-child(n+3) { display: none; }
@@ -2418,6 +2514,7 @@ select:focus {
     .ll-item-weight { display: none; }
     .ll-filter-bar { flex-direction: column; align-items: stretch; }
     .ll-filter-bar .search-input-wrapper { min-width: unset; width: 100%; }
+    .ll-guild-picker { max-width: unset; min-width: 0; width: 100%; }
     /* Touch-friendly: always-visible remove button with bigger tap target */
     .ll-remove-player { opacity: 0.9; width: 32px; height: 32px; font-size: 1.2rem; }
     .ll-player-card:hover .ll-remove-player { opacity: 1; }

@@ -10370,6 +10370,56 @@ let _llUploadedSessionLabel = '';
 let _llUploadedSavedSessionId = null;
 let _llUploadSaveState = 'idle';    // idle | saving | saved | error
 let _llUploadSaveMessage = '';
+let _llLastUploadLines = null;      // raw .txt lines of last upload — kept so "Retry Share" can re-attempt the server save
+// Loot-view guild filter — checkbox picker. Set is the source of truth so the
+// selection survives the frequent full re-renders of the session view (no <select> DOM read).
+let _llGuildFilter = new Set();
+// Deaths section starts collapsed and remembers the user's toggle across filter
+// re-renders (and reloads). Default collapsed per user request: picking a guild /
+// alliance must not re-expand it.
+let _llDeathsExpanded = (() => { try { return localStorage.getItem('albion_ll_deaths_open') === '1'; } catch { return false; } })();
+function _llOnDeathsToggle(el) {
+    _llDeathsExpanded = !!(el && el.open);
+    try { localStorage.setItem('albion_ll_deaths_open', _llDeathsExpanded ? '1' : '0'); } catch {}
+}
+
+// Reusable multi-guild checkbox picker. Rendered inline (not a popover) so it
+// survives full re-renders without losing any open/close state. `selectedSet` is
+// the Set source-of-truth; `onToggle`/`onClear` are names of global functions
+// invoked as onToggle(value, checked) and onClear(). Optional `metaFn(g)` returns
+// pre-escaped trailing markup (e.g. item counts) shown after each guild name.
+function _llRenderGuildPicker(id, guilds, selectedSet, onToggle, onClear, metaFn) {
+    const count = selectedSet.size;
+    const rows = guilds.map(g => {
+        const checked = selectedSet.has(g) ? ' checked' : '';
+        const meta = metaFn ? metaFn(g) : '';
+        return `<label class="ll-gp-row"><input type="checkbox" value="${esc(g)}"${checked} onchange="${onToggle}(this.value, this.checked)"><span class="ll-gp-name">${esc(g)}</span>${meta}</label>`;
+    }).join('');
+    const summary = count ? `${count} selected` : 'All guilds';
+    return `<div class="ll-guild-picker" id="${id}" title="Tick one or more guilds to view them together as one group — no Ctrl-click needed">
+        <div class="ll-gp-head">
+            <span class="ll-gp-summary">🛡 ${summary}</span>
+            ${count ? `<button type="button" class="ll-gp-clear" onclick="${onClear}()" title="Clear guild selection">clear</button>` : ''}
+        </div>
+        <div class="ll-gp-list">${rows || '<span class="ll-gp-empty">No guilds</span>'}</div>
+    </div>`;
+}
+// Loot-view guild filter toggle/clear — update the Set, then re-render (debounced
+// so ticking several boxes quickly doesn't thrash the card list).
+function _llToggleGuildFilter(value, checked) {
+    if (checked) _llGuildFilter.add(value); else _llGuildFilter.delete(value);
+    _llDebouncedRender(200);
+}
+function _llClearGuildFilter() {
+    _llGuildFilter.clear();
+    _llDebouncedRender(60);
+}
+function _llTriggerLogin() {
+    const btn = document.getElementById('login-discord-btn');
+    if (btn) { btn.click(); return; }
+    window.location.href = 'https://albionaitool.xyz/auth/discord';
+}
+
 // Phase 5 item filter chips (multi-select) — hydrated from localStorage so user choices persist
 let _llActiveChips = new Set((() => {
     try { return JSON.parse(localStorage.getItem('albion_ll_chips') || '[]'); } catch { return []; }
@@ -10388,7 +10438,13 @@ function _llUploadShareSlotHtml() {
         return `<span id="ll-report-share-slot" style="font-size:0.72rem; color:var(--text-muted); align-self:center;">Saving upload for Share…</span>`;
     }
     if (_llUploadSaveState === 'error') {
-        return `<span id="ll-report-share-slot" style="font-size:0.72rem; color:#fbbf24; align-self:center;" title="${msg}">${msg || 'Share unavailable until upload is saved'}</span>`;
+        // Never silently drop the Share affordance: surface WHY it's unavailable and
+        // give a one-click recovery — log in if that's the blocker, else retry the save.
+        const needLogin = /log ?in/i.test(_llUploadSaveMessage || '');
+        const action = needLogin
+            ? `<button class="btn-small-accent" onclick="_llTriggerLogin()" title="Log in so this upload can be saved and shared">Log in to Share</button>`
+            : `<button class="btn-small-accent" onclick="_llRetryUploadSave()" title="Retry saving this upload to the server so you can share it">↻ Retry Share</button>`;
+        return `<span id="ll-report-share-slot" class="ll-share-error" title="${msg}">${action}<span class="ll-share-error-text">${msg || 'Share unavailable until upload is saved'}</span></span>`;
     }
     return '<span id="ll-report-share-slot"></span>';
 }
@@ -11738,7 +11794,7 @@ function renderDeathsSection(deaths) {
             <div class="ll-deaths-list">${enemyDeaths.map(renderDeathRow).join('')}</div>
         </details>` : '';
 
-    return `<details class="ll-deaths-section" open>
+    return `<details class="ll-deaths-section"${_llDeathsExpanded ? ' open' : ''} ontoggle="_llOnDeathsToggle(this)">
         <summary class="ll-deaths-summary">
             <span style="font-size:1.1rem;">☠</span>
             <span class="ll-deaths-title-text">Deaths</span>
@@ -11898,6 +11954,7 @@ async function renderLootSessionEvents(events, targetEl, depositedMap) {
     _llDepositedMap = depositedMap || null;
     _llTargetEl = detail;
     _llIsDetail = isDetail;
+    _llGuildFilter.clear();   // guild filter is per-session; don't carry a stale selection across loads
 
     // Detect primary guild and alliance (most common among looters = "our" side)
     const guildCounts = {};
@@ -12071,11 +12128,12 @@ function _llRenderFiltered() {
     if (minVal > 0) {
         entries = entries.filter(([, data]) => (data.totalValue || 0) >= minVal);
     }
-    // Guild filter (multi-select dropdown — no selection = all guilds)
-    const guildSelEl = document.getElementById('ll-filter-guild');
-    const guildFilters = guildSelEl ? Array.from(guildSelEl.selectedOptions).map(o => o.value).filter(Boolean) : [];
+    // Guild filter (checkbox picker — no selection = all guilds). _llGuildFilter is
+    // the source of truth so the selection survives re-renders.
+    const guildFilters = Array.from(_llGuildFilter);
     if (guildFilters.length) {
-        entries = entries.filter(([, data]) => guildFilters.includes(data.guild || ''));
+        const _gf = new Set(guildFilters);
+        entries = entries.filter(([, data]) => _gf.has(data.guild || ''));
     }
     // Alliance filter (dropdown)
     const allianceFilter = document.getElementById('ll-filter-alliance')?.value || '';
@@ -12268,8 +12326,8 @@ function _llRenderFiltered() {
     const uniqueGuilds = [...new Set(Object.values(byPlayer).map(d => d.guild).filter(Boolean))].sort();
     const uniqueAlliances = [...new Set(Object.values(byPlayer).map(d => d.alliance).filter(Boolean))].sort();
     const uniquePlayers = [...Object.keys(byPlayer)].sort();
-    const _selGuildEl = document.getElementById('ll-filter-guild');
-    const selectedGuilds = _selGuildEl ? Array.from(_selGuildEl.selectedOptions).map(o => o.value).filter(Boolean) : [];
+    // Drop any selected guilds that aren't in this session (e.g. after switching sessions).
+    for (const g of Array.from(_llGuildFilter)) { if (!uniqueGuilds.includes(g)) _llGuildFilter.delete(g); }
     const selectedAlliance = document.getElementById('ll-filter-alliance')?.value || '';
     const selectedPlayer = document.getElementById('ll-filter-player')?.value || '';
     html += `<div class="ll-filter-bar">
@@ -12277,9 +12335,7 @@ function _llRenderFiltered() {
             <span class="search-icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg></span>
             <input type="text" id="ll-search" placeholder="Search player, guild, alliance, or item..." value="${esc(searchVal)}" oninput="_llDebouncedRender(300)" aria-label="Search players, guilds, alliances, or items">
         </div>
-        <select id="ll-filter-guild" class="transport-select" multiple size="3" style="min-width:140px; min-height:2.4rem;" onchange="_llDebouncedRender(100)" aria-label="Filter by guild (select one or more; none = all)" title="Show players in any of the selected guilds — Ctrl/Cmd-click to pick several; none selected = all guilds">
-            ${uniqueGuilds.map(g => `<option value="${esc(g)}"${selectedGuilds.includes(g) ? ' selected' : ''}>${esc(g)}</option>`).join('')}
-        </select>
+        ${_llRenderGuildPicker('ll-filter-guild', uniqueGuilds, _llGuildFilter, '_llToggleGuildFilter', '_llClearGuildFilter')}
         <select id="ll-filter-alliance" class="transport-select" style="min-width:140px;" onchange="_llDebouncedRender(100)" aria-label="Filter by alliance" title="Show only players in this alliance">
             <option value="">All alliances</option>
             ${uniqueAlliances.map(a => `<option value="${esc(a)}"${selectedAlliance === a ? ' selected' : ''}>${esc(a)}</option>`).join('')}
@@ -12798,6 +12854,49 @@ async function _llPostUploadChunk(lines, sessionId) {
     return await res.json();
 }
 
+// Re-attempt the background server save for the last upload so the Share button
+// can appear. Used by the "↻ Retry Share" control when the first save failed
+// (expired token, transient network/server error, etc.).
+async function _llRetryUploadSave() {
+    if (!_llLastUploadLines || !_llLastUploadLines.length) {
+        showToast('Nothing to retry — re-upload the file.', 'warning');
+        return;
+    }
+    const canSaveUpload = !!localStorage.getItem('albion_auth_token') || (typeof discordUser !== 'undefined' && !!discordUser);
+    if (!canSaveUpload) {
+        _llUploadSaveState = 'error';
+        _llUploadSaveMessage = 'Log in to save/share this upload. Accountability still works locally.';
+        _llRenderFiltered();
+        return;
+    }
+    const status = document.getElementById('loot-log-file-status');
+    const baseStatusText = status ? status.textContent.replace(/ — .*$/, '') : 'Upload';
+    _llUploadSaveState = 'saving';
+    _llUploadSaveMessage = '';
+    _llRenderFiltered();
+    try {
+        const data = await _llSaveUploadedLootLines(_llLastUploadLines, status, baseStatusText);
+        const sid = data.sessionId || data.session_id;
+        if (sid) {
+            window._justUploadedSessionId = sid;
+            window._justUploadedAt = Date.now();
+            _llInstallSavedUploadActions(sid);
+            if (typeof populateAccountabilityDropdowns === 'function') await populateAccountabilityDropdowns();
+            showToast('Upload saved — Share is ready.', 'success');
+        } else {
+            _llUploadSaveState = 'error';
+            _llUploadSaveMessage = 'Upload saved but no session id was returned; Share unavailable.';
+            _llRenderFiltered();
+        }
+    } catch (e) {
+        const friendly = _llFriendlyUploadSaveError(e);
+        _llUploadSaveState = 'error';
+        _llUploadSaveMessage = `Share unavailable: ${friendly}. Accountability still works locally.`;
+        _llRenderFiltered();
+        showToast(`Retry failed: ${friendly}`, 'error');
+    }
+}
+
 async function _llSaveUploadedLootLines(lines, statusEl, baseStatusText) {
     const chunks = _llBuildUploadChunks(lines);
     if (!chunks.length) throw new Error('No loot data provided.');
@@ -12865,6 +12964,7 @@ async function processLootFiles(files) {
 
     status.textContent = `${allParsed.length} events from ${fileNames.join(', ')}`;
     if (clearBtn) clearBtn.style.display = '';
+    _llLastUploadLines = allLines.slice();   // keep raw lines so "Retry Share" can re-attempt the save
     _llUploadedEvents = allParsed.slice();
     _llUploadedSessionLabel = fileNames.join(', ');
     _llRemovedPlayers.clear();
@@ -13416,19 +13516,14 @@ async function shareAccountability(sessionId, btnEl) {
 // Empty string = revert to auto-detect. Persisted per-session in localStorage so
 // reopening the same session keeps the override; reruns the full check so the
 // math (isGuildMember everywhere) reflects the new perspective.
-function _accSetGuildPerspective(arg) {
+// Core: set the combined friendly-guild perspective to `guilds` (an array treated
+// as ONE side), persist per-session, and rerun the check so all friendly/accountable
+// math reflects it. Empty array (or just the auto-detected guild) = revert to auto.
+function _accApplyGuildPerspective(guilds) {
     const ctx = window._llAccGuildContext;
     if (!ctx) return;
     const key = `acc-guild-override-${ctx.sessionId}`;
-    // arg is the <select multiple> element on change, or '' from the Reset button.
-    let guilds = [];
-    if (arg && typeof arg === 'object' && arg.selectedOptions) {
-        guilds = Array.from(arg.selectedOptions).map(o => o.value).filter(Boolean);
-    } else if (typeof arg === 'string' && arg) {
-        guilds = [arg];
-    }
     try {
-        // No selection, or exactly the auto-detected guild alone, reverts to auto-detect.
         const isJustAuto = guilds.length === 1 && guilds[0] === ctx.autoPrimaryGuild;
         if (!guilds.length || isJustAuto) {
             localStorage.removeItem(key);
@@ -13438,6 +13533,27 @@ function _accSetGuildPerspective(arg) {
     } catch { /* localStorage may be disabled — non-fatal, just no persistence */ }
     // Rerun the check so the friendly/accountable math reflects the new perspective.
     runAccountabilityCheck();
+}
+// Tick/untick one guild in the combined friendly group (checkbox picker).
+function _accToggleGuildPerspective(value, checked) {
+    const ctx = window._llAccGuildContext;
+    if (!ctx) return;
+    const cur = new Set(ctx.selectedGuilds || []);
+    if (checked) cur.add(value); else cur.delete(value);
+    _accApplyGuildPerspective(Array.from(cur));
+}
+function _accResetGuildPerspective() {
+    _accApplyGuildPerspective([]);
+}
+// Back-compat shim: legacy callers may still pass a <select> element or a string.
+function _accSetGuildPerspective(arg) {
+    let guilds = [];
+    if (arg && typeof arg === 'object' && arg.selectedOptions) {
+        guilds = Array.from(arg.selectedOptions).map(o => o.value).filter(Boolean);
+    } else if (typeof arg === 'string' && arg) {
+        guilds = [arg];
+    }
+    _accApplyGuildPerspective(guilds);
 }
 
 // Apply the Accountability result filter controls (search, guild, player).
@@ -14120,23 +14236,20 @@ async function runAccountabilityCheck() {
     // for accountability when auto-detect chose wrong (e.g. their guild is in the
     // minority of captured events). Persisted per-session in localStorage.
     const ctx = window._llAccGuildContext;
-    const _selSet = new Set(ctx.selectedGuilds || []);
-    const guildOptions = Object.entries(ctx.guildCounts)
-        .sort((a, b) => b[1] - a[1])
-        .map(([g, c]) => {
-            const sel = _selSet.has(g) ? ' selected' : '';
-            const isAuto = g === ctx.autoPrimaryGuild ? ' (auto)' : '';
-            return `<option value="${esc(g)}"${sel}>${esc(g)} · ${c} item${c !== 1 ? 's' : ''}${isAuto}</option>`;
-        }).join('');
+    const _accSelSet = new Set(ctx.selectedGuilds || []);
+    const accGuildList = Object.entries(ctx.guildCounts).sort((a, b) => b[1] - a[1]).map(([g]) => g);
+    const accMetaFn = (g) => {
+        const c = ctx.guildCounts[g] || 0;
+        const isAuto = g === ctx.autoPrimaryGuild ? ' · auto' : '';
+        return `<span class="ll-gp-meta">${c} item${c !== 1 ? 's' : ''}${isAuto}</span>`;
+    };
     const perspectiveTitle = ctx.overrideActive
         ? `Friendly perspective overridden — auto-detect picked ${esc(ctx.autoPrimaryGuild) || 'none'}`
-        : 'Pick which guild is "friendly" — overrides the auto-detected primary guild';
+        : 'Tick the guilds that count as "friendly" — they are compared together as one group';
     html += `<div class="ll-guild-perspective" style="display:flex; align-items:center; gap:0.5rem; margin-bottom:0.5rem; padding:0.45rem 0.65rem; background:var(--bg-elevated); border:1px solid var(--border-color); border-radius:6px; flex-wrap:wrap;" title="${perspectiveTitle}">
         <span style="font-size:0.72rem; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.04em; font-weight:600;">Friendly guilds</span>
-        <select id="acc-guild-perspective" class="transport-select" multiple size="3" style="min-width:200px; min-height:2.4rem;" onchange="_accSetGuildPerspective(this)" title="Pick one or more friendly guilds — Ctrl/Cmd-click to select several; none selected = auto-detect">
-            ${guildOptions || '<option value="">(no guilds detected)</option>'}
-        </select>
-        ${ctx.overrideActive ? `<button class="btn-small" onclick="_accSetGuildPerspective('')" title="Revert to auto-detected primary guild">Reset</button>` : ''}
+        ${_llRenderGuildPicker('acc-guild-perspective', accGuildList, _accSelSet, '_accToggleGuildPerspective', '_accResetGuildPerspective', accMetaFn)}
+        ${ctx.overrideActive ? `<button class="btn-small" onclick="_accResetGuildPerspective()" title="Revert to auto-detected primary guild">Reset</button>` : ''}
         ${ctx.overrideActive ? `<span style="font-size:0.7rem; color:var(--accent);">overridden</span>` : ''}
     </div>`;
 

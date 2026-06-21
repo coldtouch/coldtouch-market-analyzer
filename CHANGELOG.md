@@ -2,6 +2,12 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-06-21 — Loot Logger: checkbox guild picker, sticky Deaths collapse, recoverable upload Share
+
+- **Multi-guild selection is now checkboxes, not Ctrl-click.** Both guild pickers — the loot session-view filter and the Accountability "Friendly guilds" perspective — replaced their `<select multiple>` (which required Ctrl/Cmd-click) with a clean inline checklist. Tick any number of guilds to view/compare them **together as one group**; a header shows "N selected" with a one-click **clear**. The Accountability picker already treats the ticked guilds as a single combined friendly side for the who-picked-up-vs-who-deposited math, so multi-guild comparison now needs no keyboard gymnastics.
+- **The Deaths section stays collapsed.** It now defaults to collapsed and **remembers your toggle** — picking a guild or alliance (or any other filter change) no longer re-expands it. Your choice persists across reloads (localStorage).
+- **Uploads never silently lose the Share button.** When a logged-in upload's background server-save fails (expired session, transient network/server error), the action row now shows a visible reason plus a **↻ Retry Share** button instead of just omitting Share; if you're logged out it shows **Log in to Share**. Previously a failed save left no Share affordance and the reason was buried in a status line.
+
 ### 2026-06-20 — Dependency hygiene: merged safe Dependabot bumps + patched undici advisory
 
 - Merged the low-risk Dependabot PRs: CI runner actions (checkout v7, setup-node v6, setup-python v6, gitleaks-action v3) and `ws` 8.20→8.21. The backend majors (express 5, helmet 8, bcryptjs 3, express-rate-limit 8) are held pending review/testing — they only go live on a deploy, and CI doesn't yet exercise the backend against them.
