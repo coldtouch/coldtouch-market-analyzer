@@ -2,10 +2,10 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
-### 2026-06-21 — Loot Logger: checkbox guild picker, sticky Deaths collapse, recoverable upload Share
+### 2026-06-21 — Loot Logger: dropdown guild picker, sticky Deaths collapse, recoverable upload Share
 
-- **Multi-guild selection is now checkboxes, not Ctrl-click.** Both guild pickers — the loot session-view filter and the Accountability "Friendly guilds" perspective — replaced their `<select multiple>` (which required Ctrl/Cmd-click) with a clean inline checklist. Tick any number of guilds to view/compare them **together as one group**; a header shows "N selected" with a one-click **clear**. The Accountability picker already treats the ticked guilds as a single combined friendly side for the who-picked-up-vs-who-deposited math, so multi-guild comparison now needs no keyboard gymnastics.
-- **The Deaths section stays collapsed.** It now defaults to collapsed and **remembers your toggle** — picking a guild or alliance (or any other filter change) no longer re-expands it. Your choice persists across reloads (localStorage).
+- **Multi-guild selection is now a dropdown + chips, not Ctrl-click.** Both guild pickers — the loot session-view filter and the Accountability "Friendly guilds" perspective — replaced their `<select multiple>` (which required Ctrl/Cmd-click) with a clean control: pick a guild from a dropdown, and it becomes a removable chip; an "+ Add another guild…" dropdown lets you stack as many as you want, with a one-click **clear**. The selected guilds are viewed and compared **together as one group**. The Accountability picker treats them as a single combined friendly side for the who-picked-up-vs-who-deposited math, so multi-guild comparison needs no keyboard gymnastics.
+- **The Deaths section (and its sub-lists) stay collapsed.** The Deaths panel and its **Friendly deaths** / **Enemy kills** sub-sections now each default to collapsed and **remember your toggle** — picking a guild or alliance (or any other filter change) no longer re-expands them. Choices persist across reloads (localStorage). (Fixes the Friendly-deaths list popping back open on every filter click.)
 - **Uploads never silently lose the Share button.** When a logged-in upload's background server-save fails (expired session, transient network/server error), the action row now shows a visible reason plus a **↻ Retry Share** button instead of just omitting Share; if you're logged out it shows **Log in to Share**. Previously a failed save left no Share affordance and the reason was buried in a status line.
 
 ### 2026-06-20 — Dependency hygiene: merged safe Dependabot bumps + patched undici advisory

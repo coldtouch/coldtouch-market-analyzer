@@ -2410,34 +2410,65 @@ select:focus {
     padding: 0.4rem 0.5rem;
 }
 
-/* Multi-guild checkbox picker — replaces the old Ctrl+click <select multiple>.
-   Inline (not a popover) so it survives the loot view's frequent re-renders. */
+/* Multi-guild picker — a dropdown to add a guild + a removable chip per selection.
+   Replaces the old Ctrl+click <select multiple>; selected guilds act as one group. */
 .ll-guild-picker {
     display: flex;
     flex-direction: column;
-    min-width: 168px;
-    max-width: 230px;
-    background: var(--bg-elevated);
-    border: 1px solid var(--border-color);
-    border-radius: 6px;
-    overflow: hidden;
+    gap: 0.35rem;
+    min-width: 170px;
+    max-width: 250px;
 }
-.ll-gp-head {
+.ll-gp-chips {
     display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 0.4rem;
-    padding: 0.3rem 0.5rem;
-    border-bottom: 1px solid var(--border-color);
-    background: rgba(255, 255, 255, 0.03);
+    flex-wrap: wrap;
+    gap: 0.3rem;
 }
-.ll-gp-summary {
+.ll-gp-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    padding: 0.18rem 0.3rem 0.18rem 0.5rem;
     font-size: 0.72rem;
     font-weight: 600;
+    color: var(--text);
+    background: rgba(91, 141, 239, 0.16);
+    border: 1px solid rgba(91, 141, 239, 0.4);
+    border-radius: 999px;
+    max-width: 100%;
+}
+.ll-gp-chip-x {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 16px;
+    height: 16px;
+    font-size: 0.85rem;
+    line-height: 1;
     color: var(--text-muted);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
+    background: none;
+    border: none;
+    border-radius: 50%;
+    cursor: pointer;
+}
+.ll-gp-chip-x:hover { color: #fff; background: rgba(224, 108, 117, 0.7); }
+.ll-gp-add-row {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+}
+.ll-gp-add {
+    flex: 1 1 auto;
+    min-width: 0;
+    font-size: 0.75rem;
+}
+.ll-gp-alladded {
+    flex: 1 1 auto;
+    font-size: 0.72rem;
+    color: var(--text-muted);
+    font-style: italic;
+    padding: 0.35rem 0.2rem;
 }
 .ll-gp-clear {
     flex: none;
@@ -2451,47 +2482,6 @@ select:focus {
     letter-spacing: 0.03em;
 }
 .ll-gp-clear:hover { text-decoration: underline; }
-.ll-gp-list {
-    display: flex;
-    flex-direction: column;
-    max-height: 8.5rem;
-    overflow-y: auto;
-}
-.ll-gp-row {
-    display: flex;
-    align-items: center;
-    gap: 0.45rem;
-    padding: 0.32rem 0.55rem;
-    font-size: 0.75rem;
-    cursor: pointer;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.04);
-}
-.ll-gp-row:last-child { border-bottom: none; }
-.ll-gp-row:hover { background: rgba(91, 141, 239, 0.1); }
-.ll-gp-row input[type="checkbox"] {
-    flex: none;
-    width: 15px;
-    height: 15px;
-    cursor: pointer;
-    accent-color: var(--accent);
-}
-.ll-gp-name {
-    flex: 1 1 auto;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-}
-.ll-gp-meta {
-    flex: none;
-    font-size: 0.66rem;
-    color: var(--text-muted);
-}
-.ll-gp-empty {
-    padding: 0.4rem 0.55rem;
-    font-size: 0.72rem;
-    color: var(--text-muted);
-    font-style: italic;
-}
 
 /* Upload Share-unavailable state: keep the action visible + retryable. */
 .ll-share-error {

@@ -10378,30 +10378,52 @@ let _llGuildFilter = new Set();
 // re-renders (and reloads). Default collapsed per user request: picking a guild /
 // alliance must not re-expand it.
 let _llDeathsExpanded = (() => { try { return localStorage.getItem('albion_ll_deaths_open') === '1'; } catch { return false; } })();
+// The Friendly/Enemy death subgroups also remember their own collapse state, so a
+// filter re-render never forces them back open. Default collapsed for both.
+let _llDeathsFriendlyExpanded = (() => { try { return localStorage.getItem('albion_ll_deaths_friendly_open') === '1'; } catch { return false; } })();
+let _llDeathsEnemyExpanded = (() => { try { return localStorage.getItem('albion_ll_deaths_enemy_open') === '1'; } catch { return false; } })();
 function _llOnDeathsToggle(el) {
     _llDeathsExpanded = !!(el && el.open);
     try { localStorage.setItem('albion_ll_deaths_open', _llDeathsExpanded ? '1' : '0'); } catch {}
 }
+function _llOnDeathsSubToggle(el, which) {
+    const open = !!(el && el.open);
+    if (which === 'friendly') { _llDeathsFriendlyExpanded = open; try { localStorage.setItem('albion_ll_deaths_friendly_open', open ? '1' : '0'); } catch {} }
+    else if (which === 'enemy') { _llDeathsEnemyExpanded = open; try { localStorage.setItem('albion_ll_deaths_enemy_open', open ? '1' : '0'); } catch {} }
+}
 
-// Reusable multi-guild checkbox picker. Rendered inline (not a popover) so it
-// survives full re-renders without losing any open/close state. `selectedSet` is
-// the Set source-of-truth; `onToggle`/`onClear` are names of global functions
-// invoked as onToggle(value, checked) and onClear(). Optional `metaFn(g)` returns
-// pre-escaped trailing markup (e.g. item counts) shown after each guild name.
+// Reusable multi-guild picker: a dropdown to add a guild, plus a removable chip
+// per selected guild — the selected guilds are treated together as one group.
+// `selectedSet` is the Set source-of-truth (survives re-renders); `onToggle`/`onClear`
+// are names of global functions invoked as onToggle(value, checked) and onClear().
+// Optional `metaFn(g)` returns a short plain-text suffix (e.g. item counts) shown in
+// the dropdown options. Values are read from the DOM (this.value / data-val) so guild
+// names with quotes/specials can't break the inline handlers.
 function _llRenderGuildPicker(id, guilds, selectedSet, onToggle, onClear, metaFn) {
-    const count = selectedSet.size;
-    const rows = guilds.map(g => {
-        const checked = selectedSet.has(g) ? ' checked' : '';
-        const meta = metaFn ? metaFn(g) : '';
-        return `<label class="ll-gp-row"><input type="checkbox" value="${esc(g)}"${checked} onchange="${onToggle}(this.value, this.checked)"><span class="ll-gp-name">${esc(g)}</span>${meta}</label>`;
-    }).join('');
-    const summary = count ? `${count} selected` : 'All guilds';
-    return `<div class="ll-guild-picker" id="${id}" title="Tick one or more guilds to view them together as one group — no Ctrl-click needed">
-        <div class="ll-gp-head">
-            <span class="ll-gp-summary">🛡 ${summary}</span>
-            ${count ? `<button type="button" class="ll-gp-clear" onclick="${onClear}()" title="Clear guild selection">clear</button>` : ''}
+    const selected = guilds.filter(g => selectedSet.has(g));
+    const available = guilds.filter(g => !selectedSet.has(g));
+    const chips = selected.map(g =>
+        `<span class="ll-gp-chip">${esc(g)}<button type="button" class="ll-gp-chip-x" data-val="${esc(g)}" onclick="${onToggle}(this.getAttribute('data-val'), false)" title="Remove ${esc(g)}" aria-label="Remove ${esc(g)}">×</button></span>`
+    ).join('');
+    let addControl;
+    if (available.length) {
+        const opts = available.map(g => {
+            const meta = metaFn ? metaFn(g) : '';
+            return `<option value="${esc(g)}">${esc(g)}${meta ? ' — ' + esc(meta) : ''}</option>`;
+        }).join('');
+        const placeholder = selected.length ? '+ Add another guild…' : 'Select guild…';
+        addControl = `<select class="ll-gp-add transport-select" onchange="if(this.value){const v=this.value;this.value='';${onToggle}(v, true);}" aria-label="Add a guild to the selection">
+            <option value="">${placeholder}</option>${opts}
+        </select>`;
+    } else {
+        addControl = `<span class="ll-gp-alladded">all guilds added</span>`;
+    }
+    return `<div class="ll-guild-picker" id="${id}" title="Add one or more guilds — they're viewed and compared together as one group">
+        ${selected.length ? `<div class="ll-gp-chips">${chips}</div>` : ''}
+        <div class="ll-gp-add-row">
+            ${addControl}
+            ${selected.length ? `<button type="button" class="ll-gp-clear" onclick="${onClear}()" title="Clear guild selection">clear</button>` : ''}
         </div>
-        <div class="ll-gp-list">${rows || '<span class="ll-gp-empty">No guilds</span>'}</div>
     </div>`;
 }
 // Loot-view guild filter toggle/clear — update the Set, then re-render (debounced
@@ -11770,19 +11792,20 @@ function renderDeathsSection(deaths) {
         </div>`;
 
     const friendlyHtml = friendlyDeaths.length > 0 ? `
-        <details class="ll-deaths-subgroup ll-deaths-subgroup-friendly" open>
+        <details class="ll-deaths-subgroup ll-deaths-subgroup-friendly"${_llDeathsFriendlyExpanded ? ' open' : ''} ontoggle="_llOnDeathsSubToggle(this,'friendly')">
             <summary class="ll-deaths-subgroup-summary">
                 <span class="ll-deaths-subgroup-icon">🛡️</span>
                 <span class="ll-deaths-subgroup-title">Friendly deaths</span>
                 <span class="ll-deaths-subgroup-count">${friendlyDeaths.length}</span>
                 ${friendlyValue > 0 ? `<span class="ll-deaths-subgroup-value">${formatSilver(friendlyValue)} lost</span>` : ''}
+                <span class="ll-deaths-subgroup-hint">click to expand</span>
             </summary>
             ${columnsHeader}
             <div class="ll-deaths-list">${friendlyDeaths.map(renderDeathRow).join('')}</div>
         </details>` : '';
 
     const enemyHtml = enemyDeaths.length > 0 ? `
-        <details class="ll-deaths-subgroup ll-deaths-subgroup-enemy">
+        <details class="ll-deaths-subgroup ll-deaths-subgroup-enemy"${_llDeathsEnemyExpanded ? ' open' : ''} ontoggle="_llOnDeathsSubToggle(this,'enemy')">
             <summary class="ll-deaths-subgroup-summary">
                 <span class="ll-deaths-subgroup-icon">💀</span>
                 <span class="ll-deaths-subgroup-title">Enemy kills</span>
@@ -14241,7 +14264,7 @@ async function runAccountabilityCheck() {
     const accMetaFn = (g) => {
         const c = ctx.guildCounts[g] || 0;
         const isAuto = g === ctx.autoPrimaryGuild ? ' · auto' : '';
-        return `<span class="ll-gp-meta">${c} item${c !== 1 ? 's' : ''}${isAuto}</span>`;
+        return `${c} item${c !== 1 ? 's' : ''}${isAuto}`;
     };
     const perspectiveTitle = ctx.overrideActive
         ? `Friendly perspective overridden — auto-detect picked ${esc(ctx.autoPrimaryGuild) || 'none'}`
