@@ -1,7 +1,7 @@
 // Service Worker for Coldtouch Market Analyzer (PWA app shell caching)
 // v161: Loot Logger guild pickers use a dropdown + chips (view + accountability);
 // Deaths section AND its friendly/enemy sub-lists stay collapsed; upload Share retryable.
-const CACHE_NAME = 'coldtouch-v164';
+const CACHE_NAME = 'coldtouch-v165';
 const IS_GITHUB_PAGES = self.location.hostname === 'coldtouch.github.io';
 const APP_SHELL = [
     '/',
