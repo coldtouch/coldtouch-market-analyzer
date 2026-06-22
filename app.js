@@ -10361,6 +10361,8 @@ let _llDeaths = [];                 // computed death timeline for current sessi
 let _llDiedWithByVictim = {};       // { victimName: { items: [{itemId,quality,qty}], deaths: [{ts,location,killer,lootedBy[]}] } } — used by player-card "died with" preview section
 let _llPrimaryGuild = '';           // most-common guild among looters (= "our" side)
 let _llPrimaryAlliance = '';        // most-common alliance
+let _llAutoPrimaryGuild = '';       // the auto-detected primary guild (before any user override)
+let _llGuildOverride = '';          // user-chosen "my guild" perspective ('' = use auto-detect)
 let _llDeathFilterVictim = null;    // when set, restricts view to that death's chain
 let _llCurrentSessionId = null;     // session_id when viewing a saved session, null for live
 let _llPlayerTrends = {};           // G6: per-player cross-session stats, keyed by name
@@ -11925,7 +11927,7 @@ function _dedupeLootEvents(events) {
     return out;
 }
 
-async function renderLootSessionEvents(events, targetEl, depositedMap) {
+async function renderLootSessionEvents(events, targetEl, depositedMap, _keepPerspective) {
     // One-stop sanitize: dedupe, drop empty item_ids, drop special internals
     // (SILVER, GOLD, etc.), normalize UNKNOWN_<n> → real IDs. Keeps this
     // path aligned with runAccountabilityCheck so both views attribute the
@@ -11979,7 +11981,7 @@ async function renderLootSessionEvents(events, targetEl, depositedMap) {
     _llDepositedMap = depositedMap || null;
     _llTargetEl = detail;
     _llIsDetail = isDetail;
-    _llGuildFilter.clear();   // guild filter is per-session; don't carry a stale selection across loads
+    if (!_keepPerspective) _llGuildFilter.clear();   // guild filter is per-session; don't carry a stale selection across loads
 
     // Detect primary guild and alliance (most common among looters = "our" side)
     const guildCounts = {};
@@ -11991,6 +11993,27 @@ async function renderLootSessionEvents(events, targetEl, depositedMap) {
     const primaryGuild = Object.entries(guildCounts).sort((a, b) => b[1] - a[1])[0]?.[0] || '';
     const primaryAlliance = Object.entries(allianceCounts).sort((a, b) => b[1] - a[1])[0]?.[0] || '';
 
+    // Guild perspective override: auto-detect picks the most common guild, but the user
+    // can switch it to "their" guild via the summary-strip dropdown. On a fresh load,
+    // hydrate any saved override for this session; on a perspective re-run keep the current one.
+    _llAutoPrimaryGuild = primaryGuild;
+    if (!_keepPerspective) {
+        _llGuildOverride = '';
+        try {
+            const sid = _llCurrentSessionId;
+            if (sid) { const v = localStorage.getItem('ll-guild-persp-' + sid); if (v && guildCounts[v]) _llGuildOverride = v; }
+        } catch {}
+    }
+    let usedGuild = primaryGuild, usedAlliance = primaryAlliance;
+    if (_llGuildOverride && guildCounts[_llGuildOverride]) {
+        usedGuild = _llGuildOverride;
+        // Friendly alliance = the chosen guild's own most-common alliance (so allies stay
+        // friendly); blank if it has no alliance (then only that guild reads as friendly).
+        const aCount = {};
+        for (const [, d] of Object.entries(byPlayer)) if (d.guild === usedGuild && d.alliance) aCount[d.alliance] = (aCount[d.alliance] || 0) + 1;
+        usedAlliance = Object.entries(aCount).sort((a, b) => b[1] - a[1])[0]?.[0] || '';
+    }
+
     // Compute player values and mark guild/enemy status (alliance-aware for multi-guild ZvZ)
     for (const [name, data] of Object.entries(byPlayer)) {
         data.totalValue = data.items.reduce((s, ev) => {
@@ -11999,18 +12022,17 @@ async function renderLootSessionEvents(events, targetEl, depositedMap) {
         }, 0);
         // isEnemy: player is a loot SOURCE (enemy who died), not a guild member doing the looting
         const isLootSource = data.items.length > 0 && data.items.every(ev => ev.looted_from_name === name);
-        // Alliance-based matching: if player's alliance matches primary alliance, they're friendly
-        // Falls back to guild matching when alliance is empty
-        const isFriendly = primaryAlliance && data.alliance
-            ? data.alliance === primaryAlliance
-            : (!primaryGuild || data.guild === primaryGuild || !data.guild);
+        // Friendly if in the chosen perspective's alliance (fallback: same guild / no guild)
+        const isFriendly = usedAlliance && data.alliance
+            ? data.alliance === usedAlliance
+            : (!usedGuild || data.guild === usedGuild || !data.guild);
         data.isEnemy = isLootSource || !isFriendly;
     }
 
     // Compute death timeline for this session (used by _llRenderFiltered)
-    _llPrimaryGuild = primaryGuild;
-    _llPrimaryAlliance = primaryAlliance;
-    _llDeaths = buildDeathTimeline(events, byPlayer, priceMap, primaryGuild, primaryAlliance);
+    _llPrimaryGuild = usedGuild;
+    _llPrimaryAlliance = usedAlliance;
+    _llDeaths = buildDeathTimeline(events, byPlayer, priceMap, usedGuild, usedAlliance);
     // Build per-victim "died-with" lookup — aggregates items looted off their
     // corpse across ALL deaths this session, so the player card preview can
     // surface the items they died with (greyed out + red border). A player may
@@ -12090,12 +12112,30 @@ async function renderLootSessionEvents(events, targetEl, depositedMap) {
         })
         .catch(() => { /* silent — card just won't show trends */ });
     }
-    // Reset filters when loading a new session
-    _llDeathFilterVictim = null;
-    window._llShowAllCards = false; // E5: reset card batch on session change
+    // Reset filters when loading a new session (keep them on a perspective re-run)
+    if (!_keepPerspective) {
+        _llDeathFilterVictim = null;
+        window._llShowAllCards = false; // E5: reset card batch on session change
+    }
 
     // Render header + search/sort bar + cards
     _llRenderFiltered();
+}
+
+// Switch which guild is treated as "yours" (friendly) in the session view. '' = auto.
+// Persists per session, then re-renders so friendly/enemy colors + the deaths split
+// recompute from the chosen guild's side. Keeps the current filter/view state.
+function _llSetGuildPerspective(guild) {
+    _llGuildOverride = guild || '';
+    try {
+        if (_llCurrentSessionId) {
+            const k = 'll-guild-persp-' + _llCurrentSessionId;
+            if (_llGuildOverride) localStorage.setItem(k, _llGuildOverride);
+            else localStorage.removeItem(k);
+        }
+    } catch {}
+    if (!_llCurrentEvents || !_llCurrentEvents.length) return;
+    renderLootSessionEvents(_llCurrentEvents, _llIsDetail ? null : _llTargetEl, _llDepositedMap, true);
 }
 
 // Re-render player cards based on current search/sort (no async, no price refetch)
@@ -12307,10 +12347,21 @@ function _llRenderFiltered() {
             <div class="ll-summary-label">Duration</div>
             <div class="ll-summary-value">${fmtDuration(durMs)}</div>
         </div>
-        ${_llPrimaryGuild ? `<div class="ll-summary-stat" title="Most common guild among looters">
-            <div class="ll-summary-label">Guild</div>
-            <div class="ll-summary-value" style="font-size:0.78rem;">${esc(_llPrimaryGuild)}</div>
-        </div>` : ''}
+        ${(() => {
+            const _gc = {};
+            for (const d of Object.values(byPlayer)) { if (d.guild) _gc[d.guild] = (_gc[d.guild] || 0) + (d.items ? d.items.length : 0); }
+            const _gl = Object.keys(_gc).sort((a, b) => _gc[b] - _gc[a]);
+            if (!_gl.length) return '';
+            const _isOver = _llGuildOverride && _gc[_llGuildOverride];
+            const _opts = _gl.map(g => `<option value="${esc(g)}"${g === _llPrimaryGuild ? ' selected' : ''}>${esc(g)} (${_gc[g]})</option>`).join('');
+            return `<div class="ll-summary-stat ll-summary-guild" title="Whose loot you're reviewing — the 'friendly' guild. Auto picks the most common looter guild; change it to your guild to recolor friendly/enemy and the deaths split from your side.">
+                <div class="ll-summary-label">Guild${_isOver ? ` <span class='ll-guild-custom'>custom</span>` : ''}</div>
+                <select class="ll-summary-guild-select" onchange="_llSetGuildPerspective(this.value)" aria-label="Choose which guild is yours">
+                    <option value="">⚙ Auto${_llAutoPrimaryGuild ? ` · ${esc(_llAutoPrimaryGuild)}` : ''}</option>
+                    ${_opts}
+                </select>
+            </div>`;
+        })()}
         <div class="ll-summary-actions">
             <div class="ll-discord-dropdown">
                 <button class="btn-small" onclick="this.nextElementSibling.classList.toggle('open')" title="Copy session to Discord">📋 Discord ▾</button>

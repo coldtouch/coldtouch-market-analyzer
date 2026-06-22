@@ -1907,6 +1907,24 @@ select:focus {
 }
 .ll-summary-value.accent { color: var(--accent); }
 .ll-summary-value.loss { color: var(--loss-red); }
+/* Guild-perspective picker in the summary strip — pick whose loot you're reviewing. */
+.ll-summary-guild-select {
+    margin-top: 0.1rem;
+    max-width: 160px;
+    font-size: 0.78rem;
+    font-weight: 600;
+    color: var(--text-primary);
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    padding: 0.15rem 0.3rem;
+    cursor: pointer;
+}
+.ll-summary-guild .ll-guild-custom {
+    font-size: 0.58rem;
+    color: var(--accent);
+    letter-spacing: 0.03em;
+}
 .ll-summary-actions {
     display: flex;
     gap: 0.4rem;

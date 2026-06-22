@@ -2,7 +2,10 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
-### 2026-06-22 — Loot Logger: per-item pickup location on hover
+### 2026-06-22 — Loot Logger: choose which guild is "yours" in the session view
+
+- **The "Guild" stat is now a picker.** The session view auto-detects the most common looter guild as "yours" (e.g. it picked "Avoid_Me"), but you can now switch it to your guild from a dropdown in the summary strip. Changing it recolors friendly/enemy on every card and re-splits the Friendly/Enemy deaths from your side. Pick **⚙ Auto** to go back to auto-detect. Your choice is remembered per session (localStorage). The friendly alliance is derived from the chosen guild, so alliance-mates stay friendly; a guild with no alliance makes only that guild friendly.
+- Note: detecting the log-runner's guild automatically (so it defaults to you) needs the Go client to tag who ran the log — a planned follow-up; the manual picker covers it for now.
 
 - **Hovering an item now shows where it was picked up.** The item hover tooltip (both the expanded item rows and the collapsed icon strip) gained a "Pickups" section listing each pickup's time, who it was looted from, and the 📍 zone. Previously this pickup/zone detail only appeared in the Accountability view, not in the normal/shared session view — so the data was there but invisible on hover. Items looted multiple times list each location (top 8 + "+N more").
 
