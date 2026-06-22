@@ -1925,6 +1925,23 @@ select:focus {
     color: var(--accent);
     letter-spacing: 0.03em;
 }
+.ll-summary-guild-row {
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+}
+.ll-my-guild-star {
+    flex: none;
+    background: none;
+    border: none;
+    cursor: pointer;
+    font-size: 1rem;
+    line-height: 1;
+    padding: 0 0.1rem;
+    color: var(--text-muted);
+}
+.ll-my-guild-star:hover { color: var(--accent); }
+.ll-my-guild-star.active { color: #f5c542; }
 .ll-summary-actions {
     display: flex;
     gap: 0.4rem;

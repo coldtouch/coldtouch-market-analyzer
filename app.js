@@ -11995,13 +11995,20 @@ async function renderLootSessionEvents(events, targetEl, depositedMap, _keepPers
 
     // Guild perspective override: auto-detect picks the most common guild, but the user
     // can switch it to "their" guild via the summary-strip dropdown. On a fresh load,
-    // hydrate any saved override for this session; on a perspective re-run keep the current one.
+    // resolve the perspective in priority order: (1) a per-session override the user set,
+    // (2) their global "my guild" default if it appears in this session, (3) auto-detect.
+    // On a perspective re-run keep the current one.
     _llAutoPrimaryGuild = primaryGuild;
     if (!_keepPerspective) {
         _llGuildOverride = '';
         try {
             const sid = _llCurrentSessionId;
-            if (sid) { const v = localStorage.getItem('ll-guild-persp-' + sid); if (v && guildCounts[v]) _llGuildOverride = v; }
+            let v = sid ? (localStorage.getItem('ll-guild-persp-' + sid) || '') : '';
+            if (!v) {
+                const myGuild = localStorage.getItem('albion_ll_my_guild') || '';
+                if (myGuild && guildCounts[myGuild]) v = myGuild;  // global default, when present here
+            }
+            if (v && guildCounts[v]) _llGuildOverride = v;
         } catch {}
     }
     let usedGuild = primaryGuild, usedAlliance = primaryAlliance;
@@ -12136,6 +12143,24 @@ function _llSetGuildPerspective(guild) {
     } catch {}
     if (!_llCurrentEvents || !_llCurrentEvents.length) return;
     renderLootSessionEvents(_llCurrentEvents, _llIsDetail ? null : _llTargetEl, _llDepositedMap, true);
+}
+
+// Toggle the currently-selected perspective guild as your GLOBAL default (★). Once set,
+// every session you open auto-starts from that guild's perspective (when it's present),
+// so you never have to re-pick it. Stored globally (not per-session). The per-session
+// dropdown still overrides it. Clicking again on your default clears it.
+function _llToggleMyGuild() {
+    const cur = _llPrimaryGuild;
+    if (!cur) { showToast('Pick a guild first, then ★ to make it your default.', 'info'); return; }
+    let my = '';
+    try { my = localStorage.getItem('albion_ll_my_guild') || ''; } catch {}
+    const clearing = my === cur;
+    try {
+        if (clearing) localStorage.removeItem('albion_ll_my_guild');
+        else localStorage.setItem('albion_ll_my_guild', cur);
+    } catch {}
+    showToast(clearing ? 'Default guild cleared' : `"${cur}" is now your default guild`, 'success');
+    _llRenderFiltered();  // refresh the ★ state (perspective is already on `cur`, no recompute needed)
 }
 
 // Re-render player cards based on current search/sort (no async, no price refetch)
@@ -12354,12 +12379,20 @@ function _llRenderFiltered() {
             if (!_gl.length) return '';
             const _isOver = _llGuildOverride && _gc[_llGuildOverride];
             const _opts = _gl.map(g => `<option value="${esc(g)}"${g === _llPrimaryGuild ? ' selected' : ''}>${esc(g)} (${_gc[g]})</option>`).join('');
-            return `<div class="ll-summary-stat ll-summary-guild" title="Whose loot you're reviewing — the 'friendly' guild. Auto picks the most common looter guild; change it to your guild to recolor friendly/enemy and the deaths split from your side.">
+            let _myGuild = ''; try { _myGuild = localStorage.getItem('albion_ll_my_guild') || ''; } catch {}
+            const _isMyDefault = _myGuild && _myGuild === _llPrimaryGuild;
+            const _starTitle = _isMyDefault
+                ? `"${esc(_llPrimaryGuild)}" is your default guild — every session starts from its perspective. Click to clear.`
+                : (_llPrimaryGuild ? `Set "${esc(_llPrimaryGuild)}" as your default guild so every session you open starts from its perspective.` : 'Pick a guild first');
+            return `<div class="ll-summary-stat ll-summary-guild" title="Whose loot you're reviewing — the 'friendly' guild. Auto picks the most common looter guild; change it to your guild to recolor friendly/enemy and the deaths split from your side. Use ★ to make your pick the default for every session.">
                 <div class="ll-summary-label">Guild${_isOver ? ` <span class='ll-guild-custom'>custom</span>` : ''}</div>
-                <select class="ll-summary-guild-select" onchange="_llSetGuildPerspective(this.value)" aria-label="Choose which guild is yours">
-                    <option value="">⚙ Auto${_llAutoPrimaryGuild ? ` · ${esc(_llAutoPrimaryGuild)}` : ''}</option>
-                    ${_opts}
-                </select>
+                <div class="ll-summary-guild-row">
+                    <select class="ll-summary-guild-select" onchange="_llSetGuildPerspective(this.value)" aria-label="Choose which guild is yours">
+                        <option value="">⚙ Auto${_llAutoPrimaryGuild ? ` · ${esc(_llAutoPrimaryGuild)}` : ''}</option>
+                        ${_opts}
+                    </select>
+                    <button class="ll-my-guild-star${_isMyDefault ? ' active' : ''}" onclick="_llToggleMyGuild()" title="${_starTitle}" aria-label="Set as my default guild">${_isMyDefault ? '★' : '☆'}</button>
+                </div>
             </div>`;
         })()}
         <div class="ll-summary-actions">

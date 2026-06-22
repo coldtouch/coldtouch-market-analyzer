@@ -2,7 +2,10 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
-### 2026-06-22 — Loot Logger: choose which guild is "yours" in the session view
+### 2026-06-22 — Loot Logger: remember your guild as the default perspective
+
+- **Set your guild once, and every session opens from your side.** Next to the guild picker there's now a **★** — click it to make the selected guild your default. From then on, any session you open (upload, saved, or a shared link) auto-starts from that guild's perspective when it's present, instead of the biggest looter guild. Click ★ again to clear it. The per-session dropdown still overrides for one-offs.
+- Resolution order is: per-session pick → your ★ default (if in this session) → auto-detect. Works on all existing sessions immediately — no client update needed.
 
 - **The "Guild" stat is now a picker.** The session view auto-detects the most common looter guild as "yours" (e.g. it picked "Avoid_Me"), but you can now switch it to your guild from a dropdown in the summary strip. Changing it recolors friendly/enemy on every card and re-splits the Friendly/Enemy deaths from your side. Pick **⚙ Auto** to go back to auto-detect. Your choice is remembered per session (localStorage). The friendly alliance is derived from the chosen guild, so alliance-mates stay friendly; a guild with no alliance makes only that guild friendly.
 - Note: detecting the log-runner's guild automatically (so it defaults to you) needs the Go client to tag who ran the log — a planned follow-up; the manual picker covers it for now.
