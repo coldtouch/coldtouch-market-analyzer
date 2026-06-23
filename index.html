@@ -2343,6 +2343,14 @@
                     <div class="changelog-list">
                         <div class="changelog-entry">
                             <div class="changelog-date">June 23, 2026</div>
+                            <div class="changelog-title">Accountability: paste a chest log manually — no client needed</div>
+                            <ul>
+                                <li><strong>Copy your chest Log in-game and paste it in.</strong> New box in the Chest Log Captures card: open the chest <strong>Log</strong> tab → Copy to clipboard → paste. It cross-checks against your loot session just like a client capture — no client, no capture, no officer-permission caveat. Paste several (different tabs/chests) and they add up.</li>
+                                <li><strong>Deposit vs withdraw is read from the +/&minus; amount</strong>, so it's exact — someone who pulled loot <em>out</em> isn't mistaken for someone who deposited.</li>
+                            </ul>
+                        </div>
+                        <div class="changelog-entry">
+                            <div class="changelog-date">June 23, 2026</div>
                             <div class="changelog-title">Accountability: chest-log deposits now count (no more false "missing")</div>
                             <ul>
                                 <li><strong>If the chest log shows someone deposited, they're credited — not flagged missing.</strong> Client-captured deposit logs weren't being counted (they were treated as "unconfirmed"), so players who actually deposited still showed as missing. They now count, including items that were deposited and later moved back out of the chest.</li>
@@ -4576,6 +4584,17 @@
                         <div id="ll-chestlog-chips" class="ll-capture-chips">
                             <span style="font-size:0.75rem; color:var(--text-muted);">No chest log captures yet</span>
                         </div>
+                        <details class="ll-chestlog-paste" style="margin-top:0.6rem; border-top:1px solid var(--border-color); padding-top:0.5rem;">
+                            <summary style="cursor:pointer; font-size:0.8rem; color:#9fb4e8; font-weight:600;">📋 Or paste a chest log manually (no client needed)</summary>
+                            <div style="margin-top:0.5rem;">
+                                <p style="margin:0 0 0.4rem; font-size:0.74rem; color:var(--text-secondary);">In-game, open the chest <strong>Log</strong> tab → <strong>Copy to clipboard</strong> → paste below. Deposit vs withdraw is read from the <strong>+/&minus; amount</strong>, so it's exact — no client, no filter, no permission caveats. Add as many logs as you want (different tabs or chests); they cross-check alongside any captures and are filtered to the session's time window.</p>
+                                <textarea id="acc-chestlog-paste" rows="5" placeholder='Paste here — tab-separated: "Date" "Player" "Item" "Enchantment" "Quality" "Amount"' style="width:100%; font-family:monospace; font-size:0.72rem; resize:vertical; box-sizing:border-box;"></textarea>
+                                <div style="display:flex; gap:0.5rem; align-items:center; margin-top:0.4rem; flex-wrap:wrap;">
+                                    <button class="btn-small-accent" onclick="addPastedChestLog()">➕ Add pasted log</button>
+                                    <span id="acc-chestlog-paste-status" style="font-size:0.72rem; color:var(--text-muted);"></span>
+                                </div>
+                            </div>
+                        </details>
                     </div>
 
                     <!-- Compare Panel -->

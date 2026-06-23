@@ -13464,11 +13464,14 @@ function populateAccountabilityDropdowns() {
                 const action = b.action || 'unknown';
                 const icon = action === 'deposit' ? '📥' : action === 'withdraw' ? '📤' : '❔';
                 const count = (b.entries || []).length;
-                const confidence = b.actionMappingVerified === true ? '' : ' · mapping unverified';
+                // Pasted logs read direction from the +/- amount sign, so the mapping is exact —
+                // never show the "unverified" caveat for them.
+                const confidence = (b._pasted || b.actionMappingVerified === true) ? '' : ' · mapping unverified';
+                const sourceTag = b._pasted ? ' · 📋 pasted' : '';
                 // Before user interacts: auto-select everything.
                 // After they manually click: preserve prior selection (only).
                 const shouldSelect = userInteracted ? priorSelected.has(String(i)) : true;
-                return `<option value="${i}"${shouldSelect ? ' selected' : ''}>${icon} ${esc(action)} — ${count} entries · ${rel}${abs ? ' (' + abs + ')' : ''}${confidence}</option>`;
+                return `<option value="${i}"${shouldSelect ? ' selected' : ''}>${icon} ${esc(action)} — ${count} entries · ${rel}${abs ? ' (' + abs + ')' : ''}${sourceTag}${confidence}</option>`;
             }).join('');
         }
     }
@@ -15579,6 +15582,122 @@ function _chestLogContentSig(b) {
         .map(e => `${e.playerName || ''}~${e.itemId || ''}~${e.quantity || 1}~${e.timestamp || ''}`)
         .sort();
     return `${action}#${entries.length}#${entries.join('|')}`;
+}
+
+// ── Manual chest-log paste ──────────────────────────────────────────────────
+// The in-game chest "Log" tab has a "Copy to clipboard" button that produces a
+// quoted, tab-separated table:
+//   "Date"  "Player"  "Item"  "Enchantment"  "Quality"  "Amount"
+// The AMOUNT IS SIGNED: positive = deposit (added to chest), negative = withdraw
+// (removed). This is the authoritative per-row direction — unlike the packet
+// capture, which infers direction from a per-view filter code and can't see the
+// sign. So a pasted log is MORE accurate than a captured one, and needs no client.
+//
+// We resolve the display name → item id via ITEM_NAMES reversed (id→name) plus the
+// Enchantment column (id@N). Verified against real logs: gear, resources, mounts,
+// consumables, furniture and "Trash" all resolve.
+let _itemNameToIdMap = null;
+function _getItemNameToId() {
+    if (_itemNameToIdMap) return _itemNameToIdMap;
+    const m = {};
+    try {
+        for (const uid in ITEM_NAMES) {
+            const nm = (ITEM_NAMES[uid] || '').trim().toLowerCase();
+            if (!nm) continue;
+            const base = uid.split('@')[0]; // strip enchant; the paste has its own column
+            if (!(nm in m)) m[nm] = base;   // first wins (~1% display-name collisions)
+        }
+    } catch { /* ITEM_NAMES not ready — caller awaits loadData() first */ }
+    _itemNameToIdMap = m;
+    return m;
+}
+function _resolvePastedItemId(displayName, enchant) {
+    const base = _getItemNameToId()[(displayName || '').trim().toLowerCase()];
+    if (!base) return null;
+    const e = parseInt(enchant, 10) || 0;
+    return e > 0 ? `${base}@${e}` : base;
+}
+// Parse the pasted clipboard text into deposit/withdraw entry arrays (same shape
+// as captured chest-log entries: {playerName, itemId, numericId, quantity, timestamp}).
+function _parseChestLogPasteText(text) {
+    const out = { deposits: [], withdraws: [], parsed: 0, unresolved: 0, skipped: 0 };
+    if (!text || typeof text !== 'string') return out;
+    for (const raw of text.split(/\r?\n/)) {
+        const line = raw.trim();
+        if (!line) continue;
+        // Pull quoted fields; fall back to a tab split if the paste lost its quotes.
+        let fields = [];
+        const re = /"([^"]*)"/g; let mm;
+        while ((mm = re.exec(line)) !== null) fields.push(mm[1]);
+        if (fields.length < 6) {
+            const parts = line.split('\t').map(s => s.replace(/^"|"$/g, '').trim());
+            if (parts.length >= 6) fields = parts;
+        }
+        if (fields.length < 6) { out.skipped++; continue; }
+        const [dateStr, player, item, enchant, , amountStr] = fields;
+        if (/^date$/i.test((dateStr || '').trim())) continue; // header row
+        const amount = parseInt(amountStr, 10);
+        if (!player || !item || !Number.isFinite(amount) || amount === 0) { out.skipped++; continue; }
+        const itemId = _resolvePastedItemId(item, enchant);
+        if (!itemId) { out.unresolved++; continue; }
+        // "MM/DD/YYYY HH:MM:SS" — in-game log is UTC (matches the client's Z timestamps).
+        let ts = 0;
+        const dm = (dateStr || '').match(/(\d{1,2})\/(\d{1,2})\/(\d{4})\s+(\d{1,2}):(\d{2}):(\d{2})/);
+        if (dm) ts = Date.UTC(+dm[3], +dm[1] - 1, +dm[2], +dm[4], +dm[5], +dm[6]);
+        const entry = { playerName: player, itemId, numericId: 0, quantity: Math.abs(amount), timestamp: ts || Date.now() };
+        out.parsed++;
+        (amount > 0 ? out.deposits : out.withdraws).push(entry);
+    }
+    return out;
+}
+// Add the pasted log as deposit + withdraw batches into the same store the captured
+// logs use, so it flows through the dropdown, the session-window filter, and the merge.
+async function addPastedChestLog() {
+    const ta = document.getElementById('acc-chestlog-paste');
+    const statusEl = document.getElementById('acc-chestlog-paste-status');
+    const text = ta ? ta.value : '';
+    if (!text || !text.trim()) { showToast('Paste a chest log first', 'warn'); return; }
+    if (!ITEM_NAMES || Object.keys(ITEM_NAMES).length === 0) {
+        try { await loadData(); } catch { /* resolver will just miss — handled below */ }
+    }
+    const r = _parseChestLogPasteText(text);
+    if (r.parsed === 0) {
+        const msg = r.unresolved > 0
+            ? `No rows matched (${r.unresolved} item names not recognized). Paste the chest Log "Copy to clipboard" text.`
+            : 'No valid rows found. In-game: open the chest Log tab → Copy to clipboard → paste here.';
+        showToast(msg, 'error');
+        if (statusEl) statusEl.textContent = msg;
+        return;
+    }
+    window._chestLogBatches = window._chestLogBatches || [];
+    const now = Date.now();
+    let added = 0;
+    const pushBatch = (action, entries) => {
+        if (!entries.length) return;
+        const batch = { action, entries, capturedAt: now, actionMappingVerified: true, _pasted: true, filterValue: action === 'deposit' ? 28 : 1 };
+        const sig = _chestLogContentSig(batch);
+        if (window._chestLogBatches.some(b => _chestLogContentSig(b) === sig)) return; // re-paste dedup
+        window._chestLogBatches.push(batch);
+        added++;
+    };
+    pushBatch('deposit', r.deposits);
+    pushBatch('withdraw', r.withdraws);
+    if (window._chestLogBatches.length > 40) window._chestLogBatches = window._chestLogBatches.slice(-40);
+    if (added === 0) {
+        showToast('That log was already added', 'info');
+        if (statusEl) statusEl.textContent = 'Already added (duplicate).';
+        return;
+    }
+    if (ta) ta.value = '';
+    const parts = [];
+    if (r.deposits.length) parts.push(`${r.deposits.length} deposits`);
+    if (r.withdraws.length) parts.push(`${r.withdraws.length} withdrawals`);
+    let msg = `Added ${parts.join(' + ')}`;
+    if (r.unresolved > 0) msg += ` · ${r.unresolved} unrecognized skipped`;
+    showToast(msg + ' — auto-selected. Add another or Run Check.', 'success');
+    if (statusEl) statusEl.textContent = msg + '. Paste another log, or Run Check.';
+    populateAccountabilityDropdowns();
+    if (typeof renderChestLogChips === 'function') renderChestLogChips();
 }
 
 function _ingestChestLogBatch(batch) {
