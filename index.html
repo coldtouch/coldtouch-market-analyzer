@@ -2342,6 +2342,15 @@
                     <div id="changelog-wrapper" style="max-height: 500px; overflow-y: auto; position: relative;">
                     <div class="changelog-list">
                         <div class="changelog-entry">
+                            <div class="changelog-date">June 23, 2026</div>
+                            <div class="changelog-title">Accountability: one guild picker, shareable log-only checks, no duplicate chest logs</div>
+                            <ul>
+                                <li><strong>One guild selector.</strong> The accountability result had two stacked guild controls (a display filter and the "Friendly guilds" perspective picker) that conflicted. Removed the redundant filter — the "Friendly guilds" picker is now the single guild control, and you can still filter by guild name in the search box.</li>
+                                <li><strong>Share works after a log-only check.</strong> Running accountability from chest logs alone (no chest capture) left the 🔗 Share button dead. You can now share a log-only result.</li>
+                                <li><strong>No more duplicate chest logs.</strong> Opening a guild chest's different storage tabs re-captured the same shared deposit/withdraw log, showing identical-looking duplicate entries that double-counted deposits. Identical logs are now collapsed into one.</li>
+                            </ul>
+                        </div>
+                        <div class="changelog-entry">
                             <div class="changelog-date">June 22, 2026</div>
                             <div class="changelog-title">Loot Logger: remember your guild</div>
                             <ul>

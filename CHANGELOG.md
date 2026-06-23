@@ -2,6 +2,14 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-06-23 — Accountability: single guild picker, shareable log-only checks, chest-log dedup (3 dispatch fixes)
+
+Three follow-up fixes from the June 22 dispatch handoff (the dispatched session hit a usage limit before working them):
+
+- **Duplicate guild picker removed.** The accountability result rendered two guild controls back-to-back: the older `<select multiple>` display filter (`acc-result-guild`) and the newer "Friendly guilds" perspective chip picker. They overlapped and conflicted. Removed the display-filter `<select>` — the "Friendly guilds" picker is now the single guild selector (it drives the friendly/enemy math), and guild text filtering remains available via the result search box, which already matches guild names. Alliance and player filters are unchanged.
+- **Share now works after a log-only accountability check.** With the new log-only mode (run accountability from chest logs with no chest capture), the result has zero captures, so `shareAccountability()` bailed at `selectedCaptures.length === 0` ("Selected captures no longer available") and the backend `/api/accountability/share` rejected the request ("At least one capture required"). Both now accept a share when there is at least one chest capture **or** at least one chest-log batch. The frontend gate is combined (captures OR logs), and the backend serializes an empty captures array safely (the public viewer already renders from chest logs alone).
+- **Duplicate chest logs no longer double-count.** The in-game chest "Log" is shared across all of a chest's storage tabs, so switching tabs (or a WebSocket reconnect replay) re-captures the same deposit/withdraw history with a fresh `capturedAt`. The dedup signature keyed on `capturedAt` + the first entry, so it treated those identical re-captures as distinct batches — they showed as two identical-looking logs in the picker and double-counted deposits when both were selected (auto-select-all is the default). Dedup now keys on full content (`action` + the sorted set of all entries) via a new `_chestLogContentSig()` helper, so identical logs collapse into one regardless of capture time.
+
 ### 2026-06-23 — Accountability: multi-guild friendly side + withdrawal audit
 
 - **Adding a second guild no longer drops your main guild from "friendly".** When the user picks an additional guild via the "Friendly guilds" chip picker, the auto-detected primary guild is now implicitly included as the starting base. Previously, selecting GuildB as the first chip would make GuildA members show as enemy — the picker now starts from [autoPrimaryGuild] so adding GuildB results in both being friendly. The auto-detected guild also now shows as an implicit chip so you can see the full current selection before adding more.

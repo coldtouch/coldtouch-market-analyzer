@@ -2829,8 +2829,12 @@ app.get('/api/loot-sessions', requireAuth, (req, res) => {
 app.post('/api/accountability/share', requireAuth, (req, res) => {
     const { sessionId, captures, sessionName, chestLogs } = req.body || {};
     if (!sessionId || typeof sessionId !== 'string') return res.status(400).json({ error: 'sessionId required' });
-    if (!Array.isArray(captures) || captures.length === 0) return res.status(400).json({ error: 'At least one capture required' });
-    if (captures.length > 20) return res.status(400).json({ error: 'Too many captures (max 20)' });
+    // A share needs EITHER chest captures OR chest-log batches. Log-only
+    // accountability (chest logs, no capture) is a valid, shareable result.
+    const _hasCaptures = Array.isArray(captures) && captures.length > 0;
+    const _hasChestLogs = Array.isArray(chestLogs) && chestLogs.length > 0;
+    if (!_hasCaptures && !_hasChestLogs) return res.status(400).json({ error: 'At least one chest capture or chest log required' });
+    if (Array.isArray(captures) && captures.length > 20) return res.status(400).json({ error: 'Too many captures (max 20)' });
 
     // Verify the session belongs to this user (live session is handled by resolving __live__ to the latest ws.lootSessionId at share time)
     const resolvedSessionId = sessionId === '__live__' ? null : sessionId;
@@ -2842,8 +2846,10 @@ app.post('/api/accountability/share', requireAuth, (req, res) => {
         if (err) return res.status(500).json({ error: 'An internal error occurred.' });
         if (!row) return res.status(404).json({ error: 'Session not found' });
         const finalSessionId = resolvedSessionId || row.session_id;
-        // Serialize captures (trim to essentials + cap item count per capture for size safety)
-        const trimmedCaptures = captures.map((c, i) => ({
+        // Serialize captures (trim to essentials + cap item count per capture for size safety).
+        // captures may be empty for a log-only share — that's fine, the viewer renders
+        // from chest logs alone in that case.
+        const trimmedCaptures = (Array.isArray(captures) ? captures : []).map((c, i) => ({
             tabName: (c.tabName || `Capture ${i + 1}`).slice(0, 80),
             capturedAt: c.capturedAt || 0,
             containerId: c.containerId || '',

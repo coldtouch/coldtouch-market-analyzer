@@ -13648,7 +13648,6 @@ async function shareAccountability(sessionId, btnEl) {
         const selectedIdxs = captureSel
             ? Array.from(captureSel.selectedOptions).map(o => parseInt(o.value)).filter(v => !isNaN(v))
             : [];
-        if (selectedIdxs.length === 0) { showToast('Run the accountability check first so Share can use that exact result', 'warn'); return; }
         const captures = window._chestCaptures || [];
         selectedCaptures = selectedIdxs.map(i => captures[i]).filter(Boolean);
         // Fallback for older rendered results: use the dropdown state only if we do
@@ -13665,7 +13664,16 @@ async function shareAccountability(sessionId, btnEl) {
         }
     }
 
-    if (selectedCaptures.length === 0) { showToast('Selected captures no longer available', 'warn'); return; }
+    // A share needs EITHER chest captures OR chest-log batches. Log-only
+    // accountability (chest logs, no capture) is a valid result, so don't block
+    // Share just because captures is empty — that was killing Share after every
+    // log-only check.
+    if ((selectedCaptures || []).length === 0 && (batchesForShare || []).length === 0) {
+        showToast('Run the accountability check first so Share can use that exact result', 'warn');
+        return;
+    }
+    selectedCaptures = selectedCaptures || [];
+    batchesForShare = batchesForShare || [];
 
     // Get the session name from saved names if available.
     let sessionName = '';
@@ -14471,18 +14479,17 @@ async function runAccountabilityCheck() {
     </div>`;
 
     // Filter bar for Accountability — lets user drill into a guild or single player quickly.
-    const accGuilds = [...new Set(playerResults.map(p => p.guild).filter(Boolean))].sort();
     const accAlliances = [...new Set(playerResults.map(p => p.alliance).filter(Boolean))].sort();
     const accPlayers = playerResults.map(p => p.name).sort();
-    const _accGuildSelEl = document.getElementById('acc-result-guild');
-    const savedAccGuilds = _accGuildSelEl ? Array.from(_accGuildSelEl.selectedOptions).map(o => o.value).filter(Boolean) : [];
     const savedAccAlliance = document.getElementById('acc-result-alliance')?.value || '';
     const savedAccPlayer = document.getElementById('acc-result-player')?.value || '';
+    // NOTE: the per-guild display <select> that used to sit here was removed — it
+    // duplicated the "Friendly guilds" perspective picker rendered just below, so
+    // the result showed two stacked guild controls that conflicted. Guild text
+    // filtering is still available through the search box (it matches guild names),
+    // and the perspective picker is now the single guild selector.
     html += `<div class="ll-filter-bar" style="margin-bottom:0.5rem;">
         <input type="text" id="acc-result-search" class="transport-select" placeholder="Search player / guild / alliance…" value="${esc(document.getElementById('acc-result-search')?.value || '')}" style="min-width:180px; flex:1;" oninput="_accApplyFilter()">
-        <select id="acc-result-guild" class="transport-select" multiple size="3" style="min-width:140px; min-height:2.4rem;" onchange="_accApplyFilter()" title="Show players in any of the selected guilds — Ctrl/Cmd-click to pick several; none = all">
-            ${accGuilds.map(g => `<option value="${esc(g)}"${savedAccGuilds.includes(g) ? ' selected' : ''}>${esc(g)}</option>`).join('')}
-        </select>
         <select id="acc-result-alliance" class="transport-select" style="min-width:140px;" onchange="_accApplyFilter()" title="Show only players in this alliance">
             <option value="">All alliances</option>
             ${accAlliances.map(a => `<option value="${esc(a)}"${savedAccAlliance === a ? ' selected' : ''}>${esc(a)}</option>`).join('')}
@@ -15516,6 +15523,19 @@ function handleLootLoggerWsMessage(msg) {
     }
 }
 
+// Stable content signature for a chest-log batch: same action + same set of
+// (player, item, qty, timestamp) entries => same capture, regardless of when it
+// was captured. Used to dedup re-views of the shared per-chest log (see
+// _ingestChestLogBatch). Entries are sorted so capture order doesn't matter.
+function _chestLogContentSig(b) {
+    if (!b) return '';
+    const action = b.action || '';
+    const entries = (b.entries || [])
+        .map(e => `${e.playerName || ''}~${e.itemId || ''}~${e.quantity || 1}~${e.timestamp || ''}`)
+        .sort();
+    return `${action}#${entries.length}#${entries.join('|')}`;
+}
+
 function _ingestChestLogBatch(batch) {
     if (!batch || !Array.isArray(batch.entries) || batch.entries.length === 0) return;
     if (!chestLogCaptureActive && lootLoggerMode !== 'accountability') {
@@ -15530,9 +15550,14 @@ function _ingestChestLogBatch(batch) {
         }
     }
     window._chestLogBatches = window._chestLogBatches || [];
-    // Dedup on (capturedAt, action, first entry signature) — WS reconnects can replay the same batch
-    const sig = `${batch.capturedAt}|${batch.action}|${batch.entries[0]?.playerName || ''}|${batch.entries[0]?.itemId || ''}|${batch.entries[0]?.timestamp || ''}`;
-    if (window._chestLogBatches.some(b => `${b.capturedAt}|${b.action}|${b.entries[0]?.playerName || ''}|${b.entries[0]?.itemId || ''}|${b.entries[0]?.timestamp || ''}` === sig)) return;
+    // Dedup on full CONTENT (action + the whole entry set), not capturedAt. The
+    // in-game chest "Log" is shared across all of a chest's storage tabs, so
+    // switching tabs (or a WS reconnect replay) re-captures the SAME deposit/
+    // withdraw history with a fresh capturedAt. The old (capturedAt + first-entry)
+    // signature treated those as distinct batches → two identical-looking logs in
+    // the picker that double-counted deposits when both were selected.
+    const sig = _chestLogContentSig(batch);
+    if (window._chestLogBatches.some(b => _chestLogContentSig(b) === sig)) return;
     window._chestLogBatches.push(batch);
     if (window._chestLogBatches.length > 40) window._chestLogBatches.shift();
     showToast(`Chest log received: ${batch.entries.length} ${batch.action} entries`, 'success');
