@@ -120,7 +120,25 @@
 
 ## Recent Session History
 
-### June 23 — Loot Logger bug fixes + VPS crash loop fix (cold-cache NATS block) — Latest
+### June 23 (continued) — Accountability: multi-guild chip, enemy-color fix, withdrawal audit — Latest
+
+**Commit `f168fad`, SW v175, server `20260623-031559`:**
+
+1. **Multi-guild chip in accountability** — Ported the guild chip selector from loot logger viewer into the accountability action bar. `_accToggleGuildPerspective` was starting from an empty set, so adding GuildB would silently replace GuildA (auto-detected) as the only friendly guild. Fixed: when no override is active, the function seeds from `[ctx.autoPrimaryGuild]` so adding GuildB results in both being friendly. The auto-detected guild now shows as an implicit checked chip even before any override, so officers can see the full selection and add alliance guilds. The picker title also now reads "add more guilds to include them as friendly (e.g. main + second guild in same alliance)".
+
+2. **"Enemy Loot" label no longer green** — The per-item status label for enemy-loot player cards was rendering green (profit-green CSS var) because the ternary `dotClass === 'll-dot-missing' ? red : dotClass === 'll-dot-partial' ? amber : green` fell through to green for `dotClass === ''` (enemy). Fixed with explicit `|| it.inChest === -1` on the red case and added `dotClass === 'll-dot-died' ? muted` arm.
+
+3. **Withdrawal audit** — When selected chest logs contain withdrawal records in the session window:
+   - Each verified-deposited item that also appears in withdrawal records shows a `📤 moved by [Player]` inline annotation in the expanded player card.
+   - A collapsible "📤 Withdrawal audit — N items moved out of chest during session" section appears at the bottom of the accountability result, grouped by player with per-item silver values.
+   - Officers can now distinguish "deposited ✓ then redistributed" from "never deposited / stolen".
+   - Works with multiple chest logs simultaneously (the same merge loop that collects deposits now also collects withdrawals into `chestLogWithdrawals[itemId]`).
+
+4. **Upload save auto-retry** (`commit dbbd728`) — `_llPostUploadChunk` now catches network-level errors and automatically retries once after 3 seconds. Prevents the intermittent "Retry Share" situation caused by the VPS cold-startup event-loop blocking window. No backend changes.
+
+**VPS issue during this session:** `npm ci` failed when the first background deploy left better-sqlite3's build directory partially written, causing the second deploy's gyp rebuild to fail on a missing `.d.raw` file. Fixed by SSHing in and `rm -rf node_modules/better-sqlite3/build`, then rerunning the deploy successfully.
+
+### June 23 — Loot Logger bug fixes + VPS crash loop fix (cold-cache NATS block)
 
 **Frontend fixes (committed to main, deployed SW v172→v173):**
 1. **Share button invisible after upload** — `_llUploadShareSlotHtml()` was missing the `'saved'` case, returning empty span instead of the Share button after a successful upload save.
@@ -650,6 +668,7 @@ End-to-end pipeline live since April 9, with continuous polish through April 28.
 - **SMTP is already configured and working** — Gmail app password (yuvalvilensky4), verification emails sending
 - **Git identity:** `Coldtouch <coldtouch@users.noreply.github.com>`
 - **Always update 3 things after work:** CHANGELOG.md + in-website changelog in About tab (index.html) + features-grid if new feature. User had to remind about this when it was missed during Transport release
+- **`npm ci` fails with gyp ENOENT after a partial better-sqlite3 install** — if a deploy aborts mid-`npm ci` (e.g. paramiko timeout), the next run leaves the `better-sqlite3/build` directory in a partially-written state. gyp then fails on a missing `.d.raw` dependency file. Fix: `rm -rf /opt/albion-saas/node_modules/better-sqlite3/build` via SSH, then rerun the deploy. Do NOT delete all of `node_modules` — that forces a full recompile of every native addon.
 
 ## Agent Coding Principles (Karpathy-inspired)
 
