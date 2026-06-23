@@ -2,6 +2,13 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-06-23 — Server: fix cold-cache 190s event-loop blocks on price_averages
+
+- **NATS writes no longer wedge the event loop after restart.** The `price_averages` table has grown to ~34 GB (170M+ rows) due to compaction being disabled. On cold-cache (every restart), each `writeNatsBatch.immediate(300 rows)` had to traverse a 34 GB B-tree with VPS-storage I/O latency of ~150 ms per random read — total blocking time ~190 seconds, triggering the event-loop watchdog and `process.abort()`, causing recurring systemd restarts and all-HTTP-down windows.
+- **Fix:** NATS flushes are now blocked until `recordSnapshots` completes its first write (which warms the page cache for the current hour's B-tree pages). The first `recordSnapshots` fires ~3 minutes after startup; once it finishes, NATS flushes are re-enabled and run on warm pages. A 10-minute hard fallback allows flushes even if the API scan fails.
+- **Also:** `db` page cache increased from 32 MB to 64 MB to reduce B-tree cache misses.
+- **Note:** The underlying `price_averages` bloat still needs an offline cleanup (same bulk-copy + VACUUM as May 4). This fix stops crashes; cleanup brings write latency back to normal.
+
 ### 2026-06-23 — Loot Logger: fix misleading "choose chest captures" toast
 
 - **"Session pre-selected" toast now correctly says chest captures or chest logs are optional.** The toast shown after clicking the Accountability button from an uploaded session still said "Choose chest captures and click Run Check", implying captures are required. Updated to "Select chest captures or chest logs, then click Run Check."

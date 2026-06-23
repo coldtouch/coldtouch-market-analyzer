@@ -328,7 +328,7 @@ const db = new Better('/opt/albion-saas/database.sqlite', { fileMustExist: false
 db.pragma('journal_mode = WAL');
 db.pragma('synchronous = NORMAL');
 db.pragma(`busy_timeout = ${SQLITE_BUSY_TIMEOUT_MS}`);
-db.pragma('cache_size = -32000');         // 32MB page cache
+db.pragma('cache_size = -65536');         // 64MB page cache (was 32MB — doubled to reduce B-tree cache misses on the large price_averages table)
 db.pragma('mmap_size = 0');               // disable mmap to prevent RSS inflation
 // 2026-05-04: lowered 1000 → 500. With heavy writers (NATS every 30s,
 // priceRefCache 87k upserts every 10min, snapshot ingest, compaction),
@@ -5864,6 +5864,12 @@ function recordSnapshots(allPrices) {
         console.log(`[Snapshots] Rejected outliers sell=${rejectedSell} buy=${rejectedBuy}${rejectedExamples.length ? ` examples=${rejectedExamples.join('; ')}` : ''}`);
       }
       console.log(`[Snapshots] Recorded ${count} prices into price_averages (hourly)`);
+      // Signal that the current hour's B-tree pages are now in the page cache so
+      // NATS flushes can proceed without cold-cache 190s blocks (2026-06-23 fix).
+      if (!_pricePageCacheWarmed) {
+        _pricePageCacheWarmed = true;
+        console.log('[Snapshots] Page cache warmed — NATS flushes now enabled');
+      }
     }
   }
   writeBatch();
@@ -7116,6 +7122,20 @@ const NATS_FLUSH_CHUNK_SIZE = 300; // Bound sync SQLite work; 5k+ bursts caused 
 const NATS_FLUSH_YIELD_MS = 5;
 let natsFlushRunning = false;
 let natsFlushRunToken = 0;
+// 2026-06-23: On a large price_averages table (34GB+), writing to a cold B-tree
+// cache causes 190-second event-loop blocks that kill the process. The cold-cache
+// window is the first ~3 minutes after startup, before recordSnapshots has had a
+// chance to touch the current hour's rows and warm those pages. We block NATS
+// flushes until recordSnapshots signals that the cache is warmed, falling back to
+// a 10-minute hard timeout so a slow/failed scan doesn't block flushes forever.
+let _pricePageCacheWarmed = false;
+const _NATS_CACHE_WARM_TIMEOUT_MS = 10 * 60 * 1000;
+setTimeout(() => {
+  if (!_pricePageCacheWarmed) {
+    _pricePageCacheWarmed = true;
+    console.log('[NATS] Cache warm timeout elapsed — NATS flushes now enabled (recordSnapshots may not have run yet)');
+  }
+}, _NATS_CACHE_WARM_TIMEOUT_MS);
 
 // Hoisted prepared statement for the NATS upsert hot path (~30s flush cadence).
 const stmt_natsBatchUpsert = db.prepare(`INSERT INTO price_averages (item_id, quality, city, avg_sell, avg_buy, min_sell, max_buy, sample_count, period_type, period_start)
@@ -7155,6 +7175,9 @@ const writeNatsBatch = db.transaction((batch, hourStart) => {
 function flushNatsBuffer(options = {}) {
   const sync = options && options.sync === true;
   if (natsFlushRunning && !sync) return;
+  // Cold-cache guard: block normal flushes until recordSnapshots has warmed the
+  // B-tree pages for the current hour. Sync flushes on shutdown are always allowed.
+  if (!_pricePageCacheWarmed && !sync) return;
   const keys = Object.keys(natsSnapshotMap);
   if (keys.length === 0 || dbBusy) return;
   if (isDbMaintenanceActive()) {
