@@ -13493,8 +13493,15 @@ async function rerunAccountabilityCheck() {
     const captureSel = document.getElementById('acc-capture-select');
     if (!sessionSel || !captureSel) return;
     if (!sessionSel.value) { showToast('Select a session first', 'warn'); return; }
-    const anySelected = Array.from(captureSel.selectedOptions).some(o => o.value !== '');
-    if (!anySelected) { showToast('Select at least one chest capture first', 'warn'); return; }
+    const anyCaptureSelected = Array.from(captureSel.selectedOptions).some(o => o.value !== '');
+    const chestLogSel = document.getElementById('acc-chestlog-select');
+    const anyLogSelected = chestLogSel
+        ? Array.from(chestLogSel.selectedOptions).some(o => o.value !== '')
+        : false;
+    if (!anyCaptureSelected && !anyLogSelected) {
+        showToast('Select at least one chest capture or chest log first', 'warn');
+        return;
+    }
     // Refresh the dropdown so the timestamps update.
     populateAccountabilityDropdowns();
     // Brief pause to let DOM update the dropdown (selection may shift).

@@ -2,6 +2,10 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-06-23 — Loot Logger: fix Re-run Check still requiring chest capture
+
+- **"🔄 Re-run Check" now works with chest logs only (no capture selected).** The original log-only fix only updated `runAccountabilityCheck()` (the "Run Check" button). `rerunAccountabilityCheck()` — called by the "🔄 Re-run Check" button — was missed and still had the old hard block `'Select at least one chest capture first'`. Updated it with the same combined check: allows log-only, capture-only, or both; only blocks when neither is selected.
+
 ### 2026-06-23 — Loot Logger: fix Share button invisible after file upload
 
 - **Share button now appears after uploading a loot log file.** After a successful upload save the "🔗 Share" button was silently missing — clicking "↻ Retry Share" also had no effect. Root cause: `_llUploadShareSlotHtml()` had cases for `'saving'` and `'error'` but fell through to an empty span for the `'saved'` state, so every re-render after save wiped the button. Added the missing `'saved'` case to render the share button directly using the saved session ID.

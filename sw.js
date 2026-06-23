@@ -1,6 +1,6 @@
 // Service Worker for Coldtouch Market Analyzer (PWA app shell caching)
-// v169: Fix Share button missing after upload save (missing 'saved' case in slot renderer).
-const CACHE_NAME = 'coldtouch-v169';
+// v170: Fix Re-run Check blocking when no capture selected (log-only accountability).
+const CACHE_NAME = 'coldtouch-v170';
 const IS_GITHUB_PAGES = self.location.hostname === 'coldtouch.github.io';
 const APP_SHELL = [
     '/',
