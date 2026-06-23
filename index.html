@@ -2343,6 +2343,13 @@
                     <div class="changelog-list">
                         <div class="changelog-entry">
                             <div class="changelog-date">June 23, 2026</div>
+                            <div class="changelog-title">Accountability: chest-log deposits now count (no more false "missing")</div>
+                            <ul>
+                                <li><strong>If the chest log shows someone deposited, they're credited — not flagged missing.</strong> Client-captured deposit logs weren't being counted (they were treated as "unconfirmed"), so players who actually deposited still showed as missing. They now count, including items that were deposited and later moved back out of the chest.</li>
+                            </ul>
+                        </div>
+                        <div class="changelog-entry">
+                            <div class="changelog-date">June 23, 2026</div>
                             <div class="changelog-title">Accountability: instant guild re-tag, enemies hidden by default, sturdier Share</div>
                             <ul>
                                 <li><strong>Adding a guild is instant now.</strong> Adding or removing a "Friendly guild" used to re-analyze and re-download the whole session (slow, and it could fail to fetch). It now re-tags friendly/enemy instantly from data already loaded — no refetch.</li>

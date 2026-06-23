@@ -14084,10 +14084,17 @@ async function runAccountabilityCheck(opts = {}) {
             continue;
         }
         if (b.action !== 'deposit') continue;
-        if (b.actionMappingVerified !== true) {
-            mergedLogMeta.unverifiedDepositEntries += b.entries.length;
-            continue;
-        }
+        // A batch is only tagged "deposit" when the request's filter code matched the
+        // known deposit value (28). Confirmed live on 2026-06-23: filter=28 → real
+        // deposits, and withdrawals carry a different code/tag. The actionMappingVerified
+        // flag only records whether that code→label mapping was confirmed by a controlled
+        // in-game check; it defaults false. We USED to skip unverified deposit batches,
+        // which meant client-captured deposits never counted — so players who actually
+        // deposited got flagged "missing". Trust "deposit"-tagged batches; just note when
+        // the mapping was unconfirmed (for an optional UI caveat). If a future update ever
+        // changes the deposit code, deposits get tagged "filter_unknown" (not "deposit")
+        // and this loop simply won't run, so trusting the tag stays safe.
+        if (b.actionMappingVerified !== true) mergedLogMeta.unverifiedDepositEntries += b.entries.length;
         mergedLogMeta.deposits += b.entries.length;
         for (const e of b.entries) {
             if (!e.playerName || !e.itemId) continue;

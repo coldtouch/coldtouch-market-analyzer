@@ -2,6 +2,11 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-06-23 — Accountability: chest-log deposits now actually count (don't false-flag depositors)
+
+- **Players who deposited per the chest log are no longer flagged "missing".** The merge skipped any deposit batch whose `actionMappingVerified` flag wasn't explicitly set true — and that flag defaults to false on the client, so client-captured deposits effectively never counted: people who deposited their loot still showed as missing. A live packet capture on 2026-06-23 confirmed the in-game chest-Log deposit request uses filter code `28` and is correctly tagged `action=deposit` (withdrawals carry a different code), so trusting "deposit"-tagged batches is safe. The merge now credits deposit batches regardless of the verified flag; unverified ones are still counted in `unverifiedDepositEntries` for an optional caveat. Combined with the existing chest-log-over-snapshot rule, an item that was deposited (per the log) — even if later withdrawn/redistributed and no longer in the current tab — is correctly credited, not flagged as theft.
+- Note: if a future game update changes the deposit filter code, deposits would be tagged `filter_unknown` (not `deposit`) and simply wouldn't count — so this trust is self-protecting.
+
 ### 2026-06-23 — Accountability: instant guild re-tag (no refetch), enemies hidden by default, resilient Share
 
 Four fixes to the live accountability flow:
