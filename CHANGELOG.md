@@ -2,6 +2,15 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-06-23 — Accountability: instant guild re-tag (no refetch), enemies hidden by default, resilient Share
+
+Four fixes to the live accountability flow:
+
+- **Adding/removing a friendly guild no longer re-fetches or "fails to fetch".** `_accApplyGuildPerspective` called the full `runAccountabilityCheck()`, which re-fetched the session's loot events from the backend on every guild-chip change — slow, and it errored outright while the backend was in its cold-cache window. A guild-perspective change only re-tags friendly/enemy; it doesn't change the loot data. `runAccountabilityCheck` now caches the sanitized events per session (`window._accEventCache`) and accepts `{ reuseEvents: true }`; the guild toggle uses it, so re-tagging is instant and never hits the network.
+- **Enemy / other-guild players are hidden by default.** The result listed enemy looters (sorted to the bottom) even though they're not accountable to the guild. Enemy cards now get a `ll-acc-enemy` class and are hidden by default behind a "▸ Show N enemy players" toggle in the filter bar. Searching or filtering by alliance/player still reveals matching enemies (so a deliberate lookup works), and clearing the filter re-hides them. `_accApplyFilter` enforces the rule; the dead `acc-result-guild` filter reference (removed earlier today) is gone.
+- **Share survives a failed re-run.** `runAccountabilityCheck` nulled `window._llAccShareContext` at the very top of every run, so if a run failed (e.g. a slow-backend fetch error) the Share button had no context and failed too. The context is no longer nulled up-front — it's overwritten only on a successful run, so a failed re-run keeps the last good shareable result.
+- Combined effect: adding a second guild (e.g. Iron Dome + Gold Dome) re-tags instantly with no network call, the list stays scoped to your side, and Share keeps working.
+
 ### 2026-06-23 — Accountability: single guild picker, shareable log-only checks, chest-log dedup (3 dispatch fixes)
 
 Three follow-up fixes from the June 22 dispatch handoff (the dispatched session hit a usage limit before working them):

@@ -13746,8 +13746,10 @@ function _accApplyGuildPerspective(guilds) {
             localStorage.setItem(key, JSON.stringify(guilds));
         }
     } catch { /* localStorage may be disabled — non-fatal, just no persistence */ }
-    // Rerun the check so the friendly/accountable math reflects the new perspective.
-    runAccountabilityCheck();
+    // Recompute friendly/accountable tagging from the CACHED events — no network
+    // refetch. A guild-perspective change doesn't alter the loot data, only who
+    // counts as friendly, so this is instant and can't "fail to fetch".
+    runAccountabilityCheck({ reuseEvents: true });
 }
 // Tick/untick one guild in the combined friendly group (checkbox picker).
 // When no override is active, treat autoPrimaryGuild as the implicit base so
@@ -13775,14 +13777,18 @@ function _accSetGuildPerspective(arg) {
     _accApplyGuildPerspective(guilds);
 }
 
-// Apply the Accountability result filter controls (search, guild, player).
-// Works by toggling .ll-hidden-by-filter on each .ll-player-card based on dataset attrs.
+// Apply the Accountability result filter controls (search, alliance, player) and
+// the enemy-visibility rule. Toggles each .ll-player-card's display.
 function _accApplyFilter() {
+    const resultEl = document.getElementById('accountability-result');
     const search = (document.getElementById('acc-result-search')?.value || '').toLowerCase().trim();
-    const _accGuildSel = document.getElementById('acc-result-guild');
-    const guilds = _accGuildSel ? Array.from(_accGuildSel.selectedOptions).map(o => o.value.toLowerCase()).filter(Boolean) : [];
     const alliance = (document.getElementById('acc-result-alliance')?.value || '').toLowerCase();
     const player = (document.getElementById('acc-result-player')?.value || '').toLowerCase();
+    // Enemy / other-guild players are NOT accountable to the guild, so they're hidden
+    // by default. They appear only when the user explicitly toggles them on, OR when
+    // any text/alliance/player filter is active (so a deliberate search can find them).
+    const showEnemies = resultEl?.dataset.showEnemies === '1';
+    const anyFilter = !!(search || alliance || player);
     const cards = document.querySelectorAll('#accountability-result .ll-player-card');
     let visible = 0;
     cards.forEach(c => {
@@ -13791,15 +13797,29 @@ function _accApplyFilter() {
         const a = c.getAttribute('data-player-alliance') || '';
         let show = true;
         if (search) show = show && (n.includes(search) || g.includes(search) || a.includes(search));
-        if (guilds.length) show = show && guilds.includes(g);
         if (alliance) show = show && (a === alliance);
         if (player) show = show && (n === player);
+        if (c.classList.contains('ll-acc-enemy') && !showEnemies && !anyFilter) show = false;
         c.style.display = show ? '' : 'none';
         if (show) visible++;
     });
     // Also add a small count badge to the right of the filter bar
     const badge = document.getElementById('acc-result-filter-count');
     if (badge) badge.textContent = `${visible} / ${cards.length}`;
+}
+
+// Show/hide enemy / other-guild player cards in the accountability result.
+function _accToggleEnemies() {
+    const resultEl = document.getElementById('accountability-result');
+    if (!resultEl) return;
+    const on = resultEl.dataset.showEnemies === '1';
+    resultEl.dataset.showEnemies = on ? '0' : '1';
+    const btn = document.getElementById('acc-show-enemies-btn');
+    if (btn) {
+        const n = document.querySelectorAll('#accountability-result .ll-acc-enemy').length;
+        btn.textContent = `${on ? '▸ Show' : '▾ Hide'} ${n} enemy player${n !== 1 ? 's' : ''}`;
+    }
+    _accApplyFilter();
 }
 
 // Show accountability results in the same per-player event layout used by the normal session view,
@@ -13897,7 +13917,7 @@ async function runAccountabilityForSession(sessionId) {
     }
 }
 
-async function runAccountabilityCheck() {
+async function runAccountabilityCheck(opts = {}) {
     const sessionId = document.getElementById('acc-session-select').value;
     const captureSel = document.getElementById('acc-capture-select');
     const selectedIdxs = Array.from(captureSel.selectedOptions).map(o => parseInt(o.value)).filter(v => !isNaN(v));
@@ -13927,13 +13947,22 @@ async function runAccountabilityCheck() {
     }
 
     resultEl.innerHTML = '<div class="empty-state"><p>Analyzing…</p></div>';
-    window._llAccShareContext = null;
+    // NOTE: do NOT null window._llAccShareContext here. If this run fails (e.g. the
+    // backend is slow and the fetch errors), nulling it would also break the Share
+    // button for the previous good result. The context is overwritten on success below.
     const lastRunLabel = document.getElementById('acc-last-run');
     if (lastRunLabel) lastRunLabel.textContent = `Running check at ${new Date().toLocaleTimeString()}…`;
 
-    // Fetch loot events
+    // Fetch loot events. A guild-perspective change (adding/removing a friendly
+    // guild) only re-tags friendly/enemy — it does NOT change the loot data, so it
+    // must NOT trigger a fresh network fetch. When opts.reuseEvents is set we reuse
+    // the cached events from the last run of this session, making the recompute
+    // instant and immune to the "failed to fetch" a full re-run hits on a slow backend.
     let lootEvents;
-    if (sessionId === '__live__') {
+    if (opts.reuseEvents && window._accEventCache && window._accEventCache.sessionId === sessionId
+        && Array.isArray(window._accEventCache.events)) {
+        lootEvents = window._accEventCache.events;
+    } else if (sessionId === '__live__') {
         lootEvents = liveLootEvents.map(e => ({
             timestamp: e.timestamp || e.ts || 0, // preserved for death-window attribution
             looted_by_name: e.looted_by_name || e.lootedBy?.name || '',
@@ -13967,6 +13996,10 @@ async function runAccountabilityCheck() {
     // Sanitize: dedupe, drop empty item_ids, drop special internals (SILVER,
     // GOLD, etc.), normalize UNKNOWN_<n> → real IDs. See sanitizeLootEvents.
     lootEvents = sanitizeLootEvents(lootEvents);
+    // Cache the sanitized events so a guild-perspective change can recompute
+    // instantly without re-fetching (see opts.reuseEvents above). Sanitize is
+    // idempotent, so reusing an already-sanitized cache is safe.
+    window._accEventCache = { sessionId, events: lootEvents };
 
     // Compute the session's actual time window from loot events — used to
     // filter chest-log entries to the right date range. In-game chest logs
@@ -14481,6 +14514,7 @@ async function runAccountabilityCheck() {
     // Filter bar for Accountability — lets user drill into a guild or single player quickly.
     const accAlliances = [...new Set(playerResults.map(p => p.alliance).filter(Boolean))].sort();
     const accPlayers = playerResults.map(p => p.name).sort();
+    const enemyCount = playerResults.filter(p => p.isEnemy).length;
     const savedAccAlliance = document.getElementById('acc-result-alliance')?.value || '';
     const savedAccPlayer = document.getElementById('acc-result-player')?.value || '';
     // NOTE: the per-guild display <select> that used to sit here was removed — it
@@ -14494,6 +14528,7 @@ async function runAccountabilityCheck() {
             <option value="">All alliances</option>
             ${accAlliances.map(a => `<option value="${esc(a)}"${savedAccAlliance === a ? ' selected' : ''}>${esc(a)}</option>`).join('')}
         </select>
+        ${enemyCount > 0 ? `<button type="button" id="acc-show-enemies-btn" class="btn-small" onclick="_accToggleEnemies()" title="Enemy / other-guild players aren't accountable to your guild, so they're hidden by default. Click to show them; searching or filtering also reveals them.">▸ Show ${enemyCount} enemy player${enemyCount !== 1 ? 's' : ''}</button>` : ''}
         <select id="acc-result-player" class="transport-select" style="min-width:140px;" onchange="_accApplyFilter()" title="Filter to one player">
             <option value="">All players</option>
             ${accPlayers.map(p => `<option value="${esc(p)}"${savedAccPlayer === p ? ' selected' : ''}>${esc(p)}</option>`).join('')}
@@ -14728,7 +14763,7 @@ async function runAccountabilityCheck() {
             </div>`
             : '';
 
-        return `<div class="ll-player-card" style="${enemyBorder}" data-player-name="${esc(p.name.toLowerCase())}" data-player-guild="${esc((p.guild || '').toLowerCase())}" data-player-alliance="${esc((p.alliance || '').toLowerCase())}">
+        return `<div class="ll-player-card${p.isEnemy ? ' ll-acc-enemy' : ''}" style="${enemyBorder}" data-player-name="${esc(p.name.toLowerCase())}" data-player-guild="${esc((p.guild || '').toLowerCase())}" data-player-alliance="${esc((p.alliance || '').toLowerCase())}">
             <div class="ll-player-header" onclick="this.closest('.ll-player-card').classList.toggle('expanded')">
                 <div class="ll-player-avatar">${esc(initials)}</div>
                 <div class="ll-player-info">
@@ -14797,6 +14832,9 @@ async function runAccountabilityCheck() {
     }
 
     resultEl.innerHTML = html;
+    // Enemy / other-guild players start hidden; _accApplyFilter() applies the rule.
+    resultEl.dataset.showEnemies = '0';
+    _accApplyFilter();
     resultEl.querySelectorAll('[data-action="copy-player-missing"]').forEach(btn => {
         btn.addEventListener('click', (e) => {
             e.preventDefault();
