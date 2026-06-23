@@ -13024,11 +13024,22 @@ function _llFriendlyUploadSaveError(err) {
 async function _llPostUploadChunk(lines, sessionId) {
     const payload = { lines };
     if (sessionId) payload.sessionId = sessionId;
-    const res = await fetch(`${VPS_BASE}/api/loot-upload`, {
+    const body = JSON.stringify(payload);
+    const doFetch = () => fetch(`${VPS_BASE}/api/loot-upload`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...authHeaders() },
-        body: JSON.stringify(payload)
+        body,
     });
+    let res;
+    try {
+        res = await doFetch();
+    } catch (networkErr) {
+        // Transient network/event-loop block (e.g. server busy at startup).
+        // One automatic retry after 3 s — catches the cold-startup blocking window
+        // so the user doesn't have to manually click Retry every time.
+        await new Promise(r => setTimeout(r, 3000));
+        res = await doFetch(); // let any second network error propagate naturally
+    }
     if (!res.ok) {
         let message = `HTTP ${res.status}`;
         try {
