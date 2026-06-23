@@ -1,6 +1,6 @@
 // Service Worker for Coldtouch Market Analyzer (PWA app shell caching)
 // v171: Fix misleading "choose chest captures" toast for log-only accountability flow.
-const CACHE_NAME = 'coldtouch-v176';
+const CACHE_NAME = 'coldtouch-v177';
 const IS_GITHUB_PAGES = self.location.hostname === 'coldtouch.github.io';
 const APP_SHELL = [
     '/',
