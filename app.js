@@ -14468,7 +14468,7 @@ async function runAccountabilityCheck(opts = {}) {
             ? ` <span style="color:#fbbf24;" title="These deposits happened outside the session time window (±buffer) and were excluded from verification">${mergedLogMeta.depositsOutOfWindow} deposit${mergedLogMeta.depositsOutOfWindow !== 1 ? 's' : ''} outside window dropped</span>.`
             : '';
         const mappingWarning = mergedLogMeta.unverifiedDepositEntries > 0
-            ? ` <span style="color:#fbbf24;" title="The client has not marked the chest-log deposit/withdraw filter mapping as verified, so these rows are not used as per-player ground truth">${mergedLogMeta.unverifiedDepositEntries} deposit-like row${mergedLogMeta.unverifiedDepositEntries !== 1 ? 's' : ''} held until mapping is verified</span>.`
+            ? ` <span style="color:#fbbf24;" title="The client hasn't run a controlled deposit/withdraw mapping check, so direction is inferred from the in-game filter code (28 = deposit). These rows ARE counted as deposits — flagged only so you know the mapping is inferred, not formally confirmed.">${mergedLogMeta.unverifiedDepositEntries} counted via inferred deposit mapping</span>.`
             : '';
         html += `<div class="ll-verify-banner">
             <span class="ll-verify-icon">✓</span>
