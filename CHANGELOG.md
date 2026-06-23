@@ -2,6 +2,12 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-06-23 — Accountability: "deposited by anyone" mode + wider deposit window (fixes loot-master false-flagging)
+
+- **New default "🏦 Deposited by anyone" matching mode.** The check used to credit a player only for loot **they personally** deposited (`deposits[player][item]`). In guilds with centralized loot — where a few loot-masters bank everyone's gear — that flagged the original looters as 0% deposited even though their loot reached the chest. The new mode treats a looted item as accounted-for if it reached the chest at all (deposited by **any** member, in-window), allocated proportionally across everyone who looted that item type (pool = chest-log deposits by item, or the capture snapshot, whichever is larger). A **"👤 Per-player deposits"** toggle in the result restores the strict each-deposits-their-own rule. Measured on a real 3900-item ZvZ log: verified item-lines went **37 → 398** (per-player → deposited-by-anyone). Recompute is instant (reuses cached events, no refetch).
+- **Deposit window widened from session +24h to +72h.** Guilds bank loot over the following days (carriers, mail, loot-masters depositing in batches); the 24h cap was dropping legitimate late deposits. The −1h pre-cutoff is unchanged, so older unrelated deposits of the same item types from the chest's 4-week history still don't get credited.
+- Diagnosed from a live shared report: of 3246 deposit rows only 610 were in the old ±24h window, and (looter == depositor) matches collapsed from 163 (all-time) to 37 — both filters now relaxed.
+
 ### 2026-06-23 — Accountability: paste an in-game chest log manually (no client needed)
 
 - **New "📋 Or paste a chest log manually" box** in the Chest Log Captures card. In-game, open the chest **Log** tab → **Copy to clipboard** → paste the text in. It parses the quoted-TSV (`Date / Player / Item / Enchantment / Quality / Amount`), resolves each display name to its item id via the reverse of `ITEM_NAMES` plus the Enchantment column (`id@N`), and feeds the rows into the same pipeline as captured logs — so it cross-checks against chest captures, respects the session time window, and shows in the chest-log selector (tagged `📋 pasted`). You can paste multiple logs (different tabs/chests) and they accumulate.

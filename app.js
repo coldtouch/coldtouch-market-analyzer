@@ -13769,6 +13769,13 @@ function _accToggleGuildPerspective(value, checked) {
 function _accResetGuildPerspective() {
     _accApplyGuildPerspective([]);
 }
+// Toggle how chest-log deposits are credited: 'anyone' (loot counts if it reached the
+// chest, whoever deposited — fits centralized loot-master banking) vs 'self' (strict:
+// each player must deposit their own loot). Recomputes from cached events — no refetch.
+function _accToggleDepositMode() {
+    window._accDepositMode = (window._accDepositMode === 'self') ? 'anyone' : 'self';
+    runAccountabilityCheck({ reuseEvents: true });
+}
 // Back-compat shim: legacy callers may still pass a <select> element or a string.
 function _accSetGuildPerspective(arg) {
     let guilds = [];
@@ -14015,9 +14022,12 @@ async function runAccountabilityCheck(opts = {}) {
     const sessionStart = _allTs.length ? Math.min(..._allTs) : 0;
     const sessionEnd = _allTs.length ? Math.max(..._allTs) : 0;
     // Time buffer: 1h before (people often deposit "seeds" before the fight starts)
-    // and 24h after (late deposits — loot trickling back from carriers/mail).
+    // and 72h after — guilds often bank loot over the following days (carriers, mail,
+    // loot-masters depositing in batches), so a 24h cap was dropping legitimate late
+    // deposits. The -1h pre-cutoff still excludes older unrelated deposits of the same
+    // item types from the chest's 4-week history.
     const SESSION_PRE_BUFFER = 60 * 60 * 1000;
-    const SESSION_POST_BUFFER = 24 * 60 * 60 * 1000;
+    const SESSION_POST_BUFFER = 72 * 60 * 60 * 1000;
     const chestLogWindowStart = sessionStart > 0 ? sessionStart - SESSION_PRE_BUFFER : 0;
     const chestLogWindowEnd = sessionEnd > 0 ? sessionEnd + SESSION_POST_BUFFER : Infinity;
 
@@ -14056,6 +14066,12 @@ async function runAccountabilityCheck(opts = {}) {
         : [];
     const selectedChestLogsForShare = chestLogIdxs.map(i => (window._chestLogBatches || [])[i]).filter(Boolean);
     const chestLogDeposits = {};
+    // Item-level deposit pool (any depositor) for the "deposited by anyone" mode —
+    // sums in-window chest-log deposits by itemId regardless of who deposited, so loot
+    // banked by a loot-master still counts toward the original looters. Default mode is
+    // 'anyone'; 'self' restores the strict "each player deposits their own loot" rule.
+    const chestLogDepositsByItem = {};
+    const _accDepositMode = window._accDepositMode === 'self' ? 'self' : 'anyone';
     // Withdrawal audit map: { itemId: [{playerName, qty, ts}] } — used in B to surface
     // "deposited then moved" items rather than flagging them as stolen.
     const chestLogWithdrawals = {};
@@ -14111,6 +14127,7 @@ async function runAccountabilityCheck(opts = {}) {
             mergedLogMeta.depositsInWindow++;
             if (!chestLogDeposits[e.playerName]) chestLogDeposits[e.playerName] = {};
             chestLogDeposits[e.playerName][e.itemId] = (chestLogDeposits[e.playerName][e.itemId] || 0) + (e.quantity || 1);
+            chestLogDepositsByItem[e.itemId] = (chestLogDepositsByItem[e.itemId] || 0) + (e.quantity || 1);
         }
     }
     window._llChestLogMerged = mergedLogMeta;
@@ -14270,30 +14287,41 @@ async function runAccountabilityCheck(opts = {}) {
             totalLooted += effectiveQty;
 
             if (isGuildMember && effectiveQty > 0) {
-                // Chest-log verification: if this player has a deposit record for this item
-                // in the selected chest logs, mark the row as ✓ verified — the icon gets a
-                // green ring + tooltip explaining the evidence.
-                const verifiedQty = chestLogDeposits[name] ? (chestLogDeposits[name][itemId] || 0) : 0;
-                const verified = verifiedQty > 0;
-                const fullyVerified = verifiedQty >= effectiveQty;
+                // This player's own in-window deposits of this item (per-player ground truth).
+                const selfQty = chestLogDeposits[name] ? (chestLogDeposits[name][itemId] || 0) : 0;
+                let inChest, verified, fullyVerified, verifiedQty, verifiedByTeam = false;
 
-                // Deposit attribution — chest log is ground truth (per-player rows). The
-                // chest CAPTURE is just a point-in-time snapshot of what was in the chest
-                // when the user opened it; deposits made after the snapshot, or items
-                // withdrawn/redeposited, can leave the capture out of sync. When we have
-                // an authoritative chest-log row for this (player, item), use that count
-                // directly. Only fall back to the proportional capture-based share when
-                // the chest log doesn't cover this item — eliminates the case where a row
-                // showed BOTH ✗ missing and ✓ verified simultaneously.
-                let inChest;
-                if (verifiedQty > 0) {
-                    inChest = Math.min(effectiveQty, verifiedQty);
+                if (_accDepositMode === 'self') {
+                    // Strict per-player: only loot YOU deposited counts. Chest-log self-row is
+                    // authoritative; otherwise fall back to the proportional capture snapshot.
+                    verifiedQty = selfQty;
+                    if (selfQty > 0) {
+                        inChest = Math.min(effectiveQty, selfQty);
+                    } else {
+                        const totalForItem = totalLootedPerItem[itemId] || 0;
+                        const depositedForItem = deposited[itemId] || 0;
+                        const share = totalForItem > 0 ? (effectiveQty / totalForItem) * depositedForItem : 0;
+                        inChest = Math.min(effectiveQty, Math.round(share));
+                    }
+                    verified = selfQty > 0;
+                    fullyVerified = selfQty >= effectiveQty;
                 } else {
+                    // "Deposited by anyone" (default): loot counts as accounted-for if it reached
+                    // the chest at all. Pool for this item = chest-log deposits by ANY player
+                    // (in window) OR the capture snapshot, whichever is larger — allocated
+                    // proportionally across everyone who looted that item. Fits centralized loot
+                    // where a loot-master banks everyone's gear.
                     const totalForItem = totalLootedPerItem[itemId] || 0;
-                    const depositedForItem = deposited[itemId] || 0;
-                    const share = totalForItem > 0 ? (effectiveQty / totalForItem) * depositedForItem : 0;
+                    const poolDeposited = Math.max(deposited[itemId] || 0, chestLogDepositsByItem[itemId] || 0);
+                    const share = totalForItem > 0 ? (effectiveQty / totalForItem) * Math.min(poolDeposited, totalForItem) : 0;
                     inChest = Math.min(effectiveQty, Math.round(share));
+                    const byTeamPool = (chestLogDepositsByItem[itemId] || 0) > 0;
+                    verified = selfQty > 0 || (byTeamPool && inChest > 0);
+                    verifiedByTeam = verified && selfQty === 0; // credited via a teammate's deposit
+                    verifiedQty = selfQty > 0 ? Math.min(effectiveQty, selfQty) : inChest;
+                    fullyVerified = verified && inChest >= effectiveQty;
                 }
+
                 const missing = effectiveQty - inChest;
                 totalDeposited += inChest;
                 // Withdrawal annotation: if item was deposited (verified) but there are
@@ -14302,7 +14330,7 @@ async function runAccountabilityCheck(opts = {}) {
                 const withdrawnBy = (verified && chestLogWithdrawals[itemId]) ? chestLogWithdrawals[itemId] : null;
                 itemResults.push({
                     itemId, looted: effectiveQty, inChest, missing,
-                    verified, verifiedQty, fullyVerified,
+                    verified, verifiedQty, fullyVerified, verifiedByTeam,
                     pickupEvs: evsByPlayerItem[name]?.[itemId] || [],
                     withdrawnBy,
                 });
@@ -14568,8 +14596,9 @@ async function runAccountabilityCheck(opts = {}) {
         ${ctx.overrideActive ? `<span style="font-size:0.7rem; color:var(--accent);">overridden</span>` : ''}
     </div>`;
 
-    // Action buttons: view switcher + Share + Expand/Collapse + Discord + Export
+    // Action buttons: deposit-mode toggle + view switcher + Share + Expand/Collapse + Discord + Export
     html += `<div style="display:flex; gap:0.4rem; margin-bottom:0.5rem; flex-wrap:wrap;">
+        <button class="btn-small" onclick="_accToggleDepositMode()" title="${_accDepositMode === 'self' ? 'Per-player: a player is only credited for loot THEY personally deposited. Click for ‘deposited by anyone’ (counts loot a loot-master banked for them).' : 'Deposited by anyone: loot counts if it reached the chest, whoever deposited it (fits a loot-master / centralized bank). Click for strict per-player.'}">${_accDepositMode === 'self' ? '👤 Per-player deposits' : '🏦 Deposited by anyone'}</button>
         <button class="btn-small btn-small-accent" onclick="_accShowEventView('${esc(sessionId)}')" title="See the same per-player event layout as the session detail view, with deposit-status colors overlaid on each item">📋 Event View</button>
         <button class="btn-small" onclick="shareAccountability('${esc(sessionId)}', this)" title="Create a public link from this exact accountability result">🔗 Share</button>
         <button class="btn-small" onclick="document.querySelectorAll('#accountability-result .ll-player-card').forEach(c=>c.classList.add('expanded'))">Expand All</button>
