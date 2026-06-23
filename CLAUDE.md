@@ -120,7 +120,21 @@
 
 ## Recent Session History
 
-### May 4 (afternoon) — Hardening after first clean overnight: split transient errors, raise compaction threshold, add event-loop watchdog — Latest
+### June 23 — Loot Logger bug fixes + VPS crash loop fix (cold-cache NATS block) — Latest
+
+**Frontend fixes (committed to main, deployed SW v172→v173):**
+1. **Share button invisible after upload** — `_llUploadShareSlotHtml()` was missing the `'saved'` case, returning empty span instead of the Share button after a successful upload save.
+2. **Re-run Check still blocked without chest capture** — The log-only accountability fix from earlier in the day only patched `runAccountabilityCheck()`. `rerunAccountabilityCheck()` (🔄 button) was missed and still had the old hard block. Fixed with the same combined check.
+3. **Misleading "choose chest captures" toast** — Updated to reflect that both captures and logs are optional.
+
+**Backend fix — VPS crash loop every ~90 minutes:**
+- **Root cause:** `price_averages` has grown from 11.7 GB (May 4 cleanup) to 34.8 GB (~170M+ rows) with `ENABLE_COMPACTION` disabled since May 4. At startup, `setInterval(flushNatsBuffer, 30s)` fires exactly 30 seconds after service start with a cold B-tree cache. With VPS shared-storage I/O latency of ~150ms, one `writeNatsBatch.immediate(300 rows)` requires ~1200 random page reads = ~190 seconds of event-loop blocking. The `monitorEventLoopDelay` watchdog fires PANIC at 60s and schedules `process.abort()`, but it can't execute until the native sync call returns at ~190s. Process restarts → cold cache → crash again every ~90 minutes.
+- **Fix shipped (commit `75aec33`, SW v173):** Block all non-sync NATS flushes via `_pricePageCacheWarmed = false` flag. The flag is set by `recordSnapshots()` on first completion (~7 min after startup), after it has touched the current hour's B-tree pages and warmed the 64 MB cache. 10-minute hard timeout fallback if API scan fails. Also raised `db` cache_size from 32 MB → 64 MB.
+- **Still needed (offline cleanup):** `price_averages` must be bulk-copy pruned (same as May 4 — keep `period_type='daily' OR period_start >= now-7d`, DROP old table, VACUUM). This brings DB from 34.8 GB back to ~2 GB. Until then, `recordSnapshots` first run after restart will be slow (each 50-row batch triggers WARN at >5s) but won't abort the process.
+
+**Also cleaned up 4 temporary `tmp_vps_check*.py` diagnostic scripts from working directory.**
+
+### May 4 (afternoon) — Hardening after first clean overnight: split transient errors, raise compaction threshold, add event-loop watchdog
 
 Reviewed the journal after the May 3-4 emergency fix held clean (NRestarts=0 across 12.5h uptime, all 7 scheduled compaction cycles ran without wedging, 1.4M rows migrated). Fixed the loose ends from yesterday's TODO list.
 
@@ -143,6 +157,7 @@ Reviewed the journal after the May 3-4 emergency fix held clean (NRestarts=0 acr
 - Discord webhook alert on `dbMB > 15000` or `rssMB > 2000` — webhook plumbing TBD; `[HEALTH]` is grep-able for now
 - `price_hourly` 30d retention is structurally large (240M-row steady state at current ingest); options are (a) reduce retention, (b) skip price_hourly, (c) prune low-traffic items
 - Daily `price_averages` retention cap (90d) — modest growth, not urgent
+- **URGENT (June 23): `price_averages` offline cleanup** — DB at 34.8 GB (~170M rows). The cold-cache NATS crash-loop is now fixed (commit `75aec33`), but `recordSnapshots` after a restart will still be slow until the table is pruned. Same procedure as May 4: stop service, `INSERT INTO price_averages_new SELECT * FROM price_averages WHERE period_type='daily' OR period_start >= strftime('%s','now','-7 days')*1000`, DROP old, RENAME, recreate indexes, VACUUM, restart. Expected: 34.8 GB → ~2 GB, 170M rows → ~5M rows. Takes ~40 min offline. Also: consider enabling `ENABLE_COMPACTION=1` in .env after cleanup.
 
 ### May 3-4 (overnight) — Site-down emergency: event-loop wedge on synchronous compaction → root-cause fix
 
@@ -631,6 +646,7 @@ End-to-end pipeline live since April 9, with continuous polish through April 28.
 - **Go client GUID matching is fragile** — falls back to sequential tab index when matching fails
 - **VPS debugging: check CPU first** — don't chase symptoms (OAuth failures, timeouts). Run `ps aux | grep node` first. Multiple sessions were wasted investigating code that wasn't broken when the real issue was 100% CPU from computeSpreadStats
 - **Never run destructive SQLite ops over raw SSH** — use `nohup`/`screen`. SSH timeout mid-transaction corrupted 4GB DB, lost 3.1M rows of price_averages
+- **Cold-cache NATS writes on a large price_averages table cause 190s event-loop blocks** — with VPS shared-storage I/O latency at ~150ms, writing 300 rows to a 170M-row table with 4 indexes requires ~1200 random B-tree page reads = ~190 seconds. The monitorEventLoopDelay watchdog fires at 60s but can't abort until the native call returns. Fix: delay NATS flushes until `recordSnapshots` warms the page cache (~7 min after startup). Any time `price_averages` grows beyond ~10M rows, both `recordSnapshots` and NATS writes will be noticeably slow on cold cache.
 - **SMTP is already configured and working** — Gmail app password (yuvalvilensky4), verification emails sending
 - **Git identity:** `Coldtouch <coldtouch@users.noreply.github.com>`
 - **Always update 3 things after work:** CHANGELOG.md + in-website changelog in About tab (index.html) + features-grid if new feature. User had to remind about this when it was missed during Transport release
