@@ -1,7 +1,6 @@
 // Service Worker for Coldtouch Market Analyzer (PWA app shell caching)
-// v168: Fix tab names in accountability (use vaultTabs name); alliance-aware friendly
-// check so second-guild allies aren't tagged enemy; accountability works with logs only.
-const CACHE_NAME = 'coldtouch-v168';
+// v169: Fix Share button missing after upload save (missing 'saved' case in slot renderer).
+const CACHE_NAME = 'coldtouch-v169';
 const IS_GITHUB_PAGES = self.location.hostname === 'coldtouch.github.io';
 const APP_SHELL = [
     '/',

@@ -10461,6 +10461,14 @@ function _llUploadShareSlotHtml() {
     if (_llUploadSaveState === 'saving') {
         return `<span id="ll-report-share-slot" style="font-size:0.72rem; color:var(--text-muted); align-self:center;">Saving upload for Share…</span>`;
     }
+    if (_llUploadSaveState === 'saved' && _llUploadedSavedSessionId) {
+        // Upload saved successfully — render the live Share button.
+        // Previously fell through to the empty-span case, making the Share button invisible
+        // after a successful save (the direct-DOM patch in _llInstallSavedUploadActions only
+        // fires when _llIsUploadReportTarget() is false, which never happens for uploads).
+        const safeSid = esc(_llUploadedSavedSessionId);
+        return `<button class="btn-small-accent" id="ll-report-share-slot" onclick="openShareSessionModal('${safeSid}', null)" title="Generate a public link — anyone with it can view this session">🔗 Share</button>`;
+    }
     if (_llUploadSaveState === 'error') {
         // Never silently drop the Share affordance: surface WHY it's unavailable and
         // give a one-click recovery — log in if that's the blocker, else retry the save.

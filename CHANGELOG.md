@@ -2,6 +2,10 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-06-23 — Loot Logger: fix Share button invisible after file upload
+
+- **Share button now appears after uploading a loot log file.** After a successful upload save the "🔗 Share" button was silently missing — clicking "↻ Retry Share" also had no effect. Root cause: `_llUploadShareSlotHtml()` had cases for `'saving'` and `'error'` but fell through to an empty span for the `'saved'` state, so every re-render after save wiped the button. Added the missing `'saved'` case to render the share button directly using the saved session ID.
+
 ### 2026-06-23 — Loot Logger: three accountability/session bug fixes
 
 - **Tab names now show correctly in accountability.** Chest captures from vault/guild-vault tabs were showing as "Capture 1", "Capture 2", etc. in the selector and result header instead of the real tab name (e.g. "Loot Tab 3"). The name-resolution logic now checks `vaultTabs[tabIndex].name` before falling back, matching how the Loot Buyer displays them.
