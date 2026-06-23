@@ -2,6 +2,13 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-06-23 — Accountability: multi-guild friendly side + withdrawal audit
+
+- **Adding a second guild no longer drops your main guild from "friendly".** When the user picks an additional guild via the "Friendly guilds" chip picker, the auto-detected primary guild is now implicitly included as the starting base. Previously, selecting GuildB as the first chip would make GuildA members show as enemy — the picker now starts from [autoPrimaryGuild] so adding GuildB results in both being friendly. The auto-detected guild also now shows as an implicit chip so you can see the full current selection before adding more.
+- **"Enemy Loot" label no longer renders in green.** The per-item status label for enemy-loot items (players not on the friendly side) showed in green text because the color ternary had no explicit case for the empty dot class. Fixed: enemy = red, died = muted, deposited = green.
+- **Withdrawal audit section.** When chest logs are selected and they contain withdrawal records within the session window, a collapsible "📤 Withdrawal audit" section now appears at the bottom of the accountability result. It shows which players moved items out of the chest (redistribution), broken down by player and item with silver values. This answers "where did the missing items go?" — deposited-then-redistributed items are explicitly distinguished from theft.
+- **Per-item "📤 moved by" annotation.** On items that were deposited (log-verified, green ✓) but also appear in withdrawal records, a small "📤 moved by [Player]" note is shown inline in the expanded player card.
+
 ### 2026-06-23 — Server: fix cold-cache 190s event-loop blocks on price_averages
 
 - **NATS writes no longer wedge the event loop after restart.** The `price_averages` table has grown to ~34 GB (170M+ rows) due to compaction being disabled. On cold-cache (every restart), each `writeNatsBatch.immediate(300 rows)` had to traverse a 34 GB B-tree with VPS-storage I/O latency of ~150 ms per random read — total blocking time ~190 seconds, triggering the event-loop watchdog and `process.abort()`, causing recurring systemd restarts and all-HTTP-down windows.

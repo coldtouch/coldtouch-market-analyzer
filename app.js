@@ -13731,10 +13731,14 @@ function _accApplyGuildPerspective(guilds) {
     runAccountabilityCheck();
 }
 // Tick/untick one guild in the combined friendly group (checkbox picker).
+// When no override is active, treat autoPrimaryGuild as the implicit base so
+// adding a second guild doesn't drop the primary from "friendly". Without this,
+// selecting GuildB when GuildA is auto-detected would make GuildA enemy.
 function _accToggleGuildPerspective(value, checked) {
     const ctx = window._llAccGuildContext;
     if (!ctx) return;
-    const cur = new Set(ctx.selectedGuilds || []);
+    const base = ctx.overrideActive ? ctx.selectedGuilds : (ctx.autoPrimaryGuild ? [ctx.autoPrimaryGuild] : []);
+    const cur = new Set(base);
     if (checked) cur.add(value); else cur.delete(value);
     _accApplyGuildPerspective(Array.from(cur));
 }
@@ -13997,6 +14001,9 @@ async function runAccountabilityCheck() {
         : [];
     const selectedChestLogsForShare = chestLogIdxs.map(i => (window._chestLogBatches || [])[i]).filter(Boolean);
     const chestLogDeposits = {};
+    // Withdrawal audit map: { itemId: [{playerName, qty, ts}] } — used in B to surface
+    // "deposited then moved" items rather than flagging them as stolen.
+    const chestLogWithdrawals = {};
     const mergedLogMeta = {
         batches: 0,
         deposits: 0,
@@ -14012,11 +14019,19 @@ async function runAccountabilityCheck() {
         const b = _logBatches[idx];
         if (!b || !Array.isArray(b.entries)) continue;
         mergedLogMeta.batches++;
-        // Only deposits count for verification. Withdrawals tracked for the badge count only.
-        if (b.action !== 'deposit') {
-            if (b.action === 'withdraw') mergedLogMeta.withdrawals += b.entries.length;
+        if (b.action === 'withdraw') {
+            mergedLogMeta.withdrawals += b.entries.length;
+            // Parse withdrawal details so we can show who moved items out of the chest.
+            for (const e of b.entries) {
+                if (!e.playerName || !e.itemId) continue;
+                const entryTs = +new Date(e.timestamp) || 0;
+                if (chestLogWindowStart > 0 && (entryTs < chestLogWindowStart || entryTs > chestLogWindowEnd)) continue;
+                if (!chestLogWithdrawals[e.itemId]) chestLogWithdrawals[e.itemId] = [];
+                chestLogWithdrawals[e.itemId].push({ playerName: e.playerName, qty: e.quantity || 1, ts: entryTs });
+            }
             continue;
         }
+        if (b.action !== 'deposit') continue;
         if (b.actionMappingVerified !== true) {
             mergedLogMeta.unverifiedDepositEntries += b.entries.length;
             continue;
@@ -14219,10 +14234,15 @@ async function runAccountabilityCheck() {
                 }
                 const missing = effectiveQty - inChest;
                 totalDeposited += inChest;
+                // Withdrawal annotation: if item was deposited (verified) but there are
+                // also withdrawal records for it in the session window, surface who moved
+                // it out so officers can distinguish redistribution from theft.
+                const withdrawnBy = (verified && chestLogWithdrawals[itemId]) ? chestLogWithdrawals[itemId] : null;
                 itemResults.push({
                     itemId, looted: effectiveQty, inChest, missing,
                     verified, verifiedQty, fullyVerified,
                     pickupEvs: evsByPlayerItem[name]?.[itemId] || [],
+                    withdrawnBy,
                 });
             } else if (effectiveQty > 0) {
                 // Enemy loot source — don't check deposits, just list items
@@ -14466,16 +14486,18 @@ async function runAccountabilityCheck() {
     // for accountability when auto-detect chose wrong (e.g. their guild is in the
     // minority of captured events). Persisted per-session in localStorage.
     const ctx = window._llAccGuildContext;
-    const _accSelSet = new Set(ctx.selectedGuilds || []);
+    // Show the auto-detected guild as an implicit chip even before override is active,
+    // so users can see which guild is currently "friendly" and just click + to add more.
+    const _accSelSet = new Set(ctx.overrideActive ? ctx.selectedGuilds : (ctx.autoPrimaryGuild ? [ctx.autoPrimaryGuild] : []));
     const accGuildList = Object.entries(ctx.guildCounts).sort((a, b) => b[1] - a[1]).map(([g]) => g);
     const accMetaFn = (g) => {
         const c = ctx.guildCounts[g] || 0;
-        const isAuto = g === ctx.autoPrimaryGuild ? ' · auto' : '';
+        const isAuto = g === ctx.autoPrimaryGuild && !ctx.overrideActive ? ' · auto' : '';
         return `${c} item${c !== 1 ? 's' : ''}${isAuto}`;
     };
     const perspectiveTitle = ctx.overrideActive
         ? `Friendly perspective overridden — auto-detect picked ${esc(ctx.autoPrimaryGuild) || 'none'}`
-        : 'Tick the guilds that count as "friendly" — they are compared together as one group';
+        : `Auto-detected friendly guild: ${esc(ctx.autoPrimaryGuild) || 'none'} — add more guilds to include them as friendly (e.g. main + second guild in same alliance)`;
     html += `<div class="ll-guild-perspective" style="display:flex; align-items:center; gap:0.5rem; margin-bottom:0.5rem; padding:0.45rem 0.65rem; background:var(--bg-elevated); border:1px solid var(--border-color); border-radius:6px; flex-wrap:wrap;" title="${perspectiveTitle}">
         <span style="font-size:0.72rem; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.04em; font-weight:600;">Friendly guilds</span>
         ${_llRenderGuildPicker('acc-guild-perspective', accGuildList, _accSelSet, '_accToggleGuildPerspective', '_accResetGuildPerspective', accMetaFn)}
@@ -14576,6 +14598,17 @@ async function runAccountabilityCheck() {
                     return `<span class="ll-missing-tooltip"><strong>Picked up by:</strong> ${esc(p.name)}${guildPart}<br>${lines.join('<br>')}</span>`;
                 })()
                 : '';
+            // Withdrawal annotation: item was deposited (log-verified) but also appears in
+            // withdrawal records — it was moved out of the chest after the session (redistribution).
+            // Shows who moved it so officers can distinguish this from theft.
+            const withdrawNote = (it.withdrawnBy && it.withdrawnBy.length > 0 && rowClass !== 'll-item-missing')
+                ? (() => {
+                    const byPlayer = {};
+                    for (const w of it.withdrawnBy) byPlayer[w.playerName] = (byPlayer[w.playerName] || 0) + w.qty;
+                    const parts = Object.entries(byPlayer).map(([n, q]) => `${esc(n)}${q > 1 ? ` ×${q}` : ''}`).join(', ');
+                    return `<span style="font-size:0.63rem; color:var(--accent); margin-left:0.25rem; flex-shrink:0;" title="This item was moved out of the chest by: ${esc(parts)} — it was deposited ✓ then redistributed, not stolen">📤 moved by ${parts}</span>`;
+                })()
+                : '';
             return `<div class="ll-item-row ${rowClass} ${verifiedClass}${missingTooltipHtml ? ' ll-has-tooltip' : ''}">
                 <img src="${iconUrl}" class="ll-item-icon ${it.verified ? 'll-icon-verified' : ''}" loading="lazy" onerror="this.style.display='none'" title="${esc(verifiedTitle)}">
                 <span class="ll-item-name">${esc(iName)}${it.verified ? ' <span class="ll-verified-check" title="'+esc(verifiedTitle)+'">✓</span>' : ''}</span>
@@ -14583,7 +14616,8 @@ async function runAccountabilityCheck() {
                 <span class="ll-item-value">${totalVal > 0 ? formatSilver(totalVal) : '—'}</span>
                 <span class="ll-item-weight">${weightStr}</span>
                 <span class="ll-item-status-dot ${dotClass}" title="${statusLabel}"></span>
-                <span style="font-size:0.67rem; flex-shrink:0; color:${dotClass === 'll-dot-missing' ? 'var(--loss-red)' : dotClass === 'll-dot-partial' ? '#fbbf24' : 'var(--profit-green)'};">${statusLabel}</span>
+                <span style="font-size:0.67rem; flex-shrink:0; color:${dotClass === 'll-dot-missing' || it.inChest === -1 ? 'var(--loss-red)' : dotClass === 'll-dot-partial' ? '#fbbf24' : dotClass === 'll-dot-died' ? 'var(--text-muted)' : 'var(--profit-green)'};">${statusLabel}</span>
+                ${withdrawNote}
                 ${missingTooltipHtml}
             </div>`;
         }).join('');
@@ -14708,6 +14742,41 @@ async function runAccountabilityCheck() {
             <div class="ll-player-items">${itemsHtml}</div>
         </div>`;
     }).join('');
+
+    // Withdrawal audit section — shown when the selected chest logs contain withdrawal records
+    // in the session window. Lets officers confirm that "missing from tabs" items were
+    // legitimately redistributed rather than stolen. Grouped by player + item.
+    const withdrawalEntries = Object.entries(chestLogWithdrawals);
+    if (withdrawalEntries.length > 0) {
+        // Aggregate: { playerName: { itemId: totalQty } }
+        const wByPlayer = {};
+        for (const [itemId, recs] of withdrawalEntries) {
+            for (const r of recs) {
+                if (!wByPlayer[r.playerName]) wByPlayer[r.playerName] = {};
+                wByPlayer[r.playerName][itemId] = (wByPlayer[r.playerName][itemId] || 0) + r.qty;
+            }
+        }
+        const wPlayerRows = Object.entries(wByPlayer).sort((a, b) => a[0].localeCompare(b[0])).map(([name, items]) => {
+            const itemChips = Object.entries(items).map(([id, qty]) => {
+                const n = getFriendlyName(id) || id;
+                const pe = priceMap[id];
+                const val = pe ? ` · ${formatSilver(pe.price * qty)}` : '';
+                return `<span style="font-size:0.7rem; background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.1); border-radius:4px; padding:0.1rem 0.35rem; white-space:nowrap;">${esc(n)}${qty > 1 ? ` ×${qty}` : ''}${val}</span>`;
+            }).join(' ');
+            return `<div style="display:flex; gap:0.5rem; align-items:flex-start; flex-wrap:wrap; padding:0.3rem 0; border-bottom:1px solid rgba(255,255,255,0.04);">
+                <span style="font-size:0.78rem; font-weight:600; min-width:130px; flex-shrink:0; padding-top:0.05rem;">${esc(name)}</span>
+                <div style="display:flex; flex-wrap:wrap; gap:0.25rem;">${itemChips}</div>
+            </div>`;
+        }).join('');
+        const totalWithdrawals = Object.values(chestLogWithdrawals).reduce((s, r) => s + r.reduce((ss, e) => ss + e.qty, 0), 0);
+        html += `<details style="margin-top:0.75rem; background:rgba(91,141,239,0.05); border:1px solid rgba(91,141,239,0.2); border-radius:8px; padding:0.5rem 0.75rem;">
+            <summary style="cursor:pointer; font-size:0.78rem; font-weight:600; color:var(--accent); list-style:none; display:flex; align-items:center; gap:0.4rem;">
+                📤 Withdrawal audit — ${totalWithdrawals} item${totalWithdrawals !== 1 ? 's' : ''} moved out of chest during session
+                <span style="font-size:0.68rem; color:var(--text-muted); font-weight:400;">(deposited ✓ then redistributed — not stolen)</span>
+            </summary>
+            <div style="margin-top:0.5rem;">${wPlayerRows}</div>
+        </details>`;
+    }
 
     resultEl.innerHTML = html;
     resultEl.querySelectorAll('[data-action="copy-player-missing"]').forEach(btn => {
