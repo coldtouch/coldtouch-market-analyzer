@@ -12021,6 +12021,16 @@ async function renderLootSessionEvents(events, targetEl, depositedMap, _keepPers
         usedAlliance = Object.entries(aCount).sort((a, b) => b[1] - a[1])[0]?.[0] || '';
     }
 
+    // Build a set of guilds known to share usedAlliance — catches players whose
+    // alliance field is empty in the log (e.g. captured before they joined, or
+    // older client versions) but whose guild is clearly on the friendly side.
+    const knownFriendlyGuilds = new Set(usedGuild ? [usedGuild] : []);
+    if (usedAlliance) {
+        for (const [, d] of Object.entries(byPlayer)) {
+            if (d.alliance === usedAlliance && d.guild) knownFriendlyGuilds.add(d.guild);
+        }
+    }
+
     // Compute player values and mark guild/enemy status (alliance-aware for multi-guild ZvZ)
     for (const [name, data] of Object.entries(byPlayer)) {
         data.totalValue = data.items.reduce((s, ev) => {
@@ -12029,10 +12039,11 @@ async function renderLootSessionEvents(events, targetEl, depositedMap, _keepPers
         }, 0);
         // isEnemy: player is a loot SOURCE (enemy who died), not a guild member doing the looting
         const isLootSource = data.items.length > 0 && data.items.every(ev => ev.looted_from_name === name);
-        // Friendly if in the chosen perspective's alliance (fallback: same guild / no guild)
+        // Friendly if in the chosen perspective's alliance; fall back to knownFriendlyGuilds
+        // (handles players whose alliance field is empty but whose guild is known-friendly)
         const isFriendly = usedAlliance && data.alliance
             ? data.alliance === usedAlliance
-            : (!usedGuild || data.guild === usedGuild || !data.guild);
+            : (data.guild && knownFriendlyGuilds.has(data.guild)) || (!usedGuild || !data.guild);
         data.isEnemy = isLootSource || !isFriendly;
     }
 
@@ -12093,9 +12104,10 @@ async function renderLootSessionEvents(events, targetEl, depositedMap, _keepPers
             // Victim-only players aren't "enemies" in the ZvZ sense — they're
             // just someone who showed up in a death. Classify by their own
             // alliance/guild the same way regular players are classified.
-            const isFriendly = primaryAlliance && byPlayer[victim].alliance
-                ? byPlayer[victim].alliance === primaryAlliance
-                : (!primaryGuild || byPlayer[victim].guild === primaryGuild || !byPlayer[victim].guild);
+            const vd = byPlayer[victim];
+            const isFriendly = usedAlliance && vd.alliance
+                ? vd.alliance === usedAlliance
+                : (vd.guild && knownFriendlyGuilds.has(vd.guild)) || (!usedGuild || !vd.guild);
             byPlayer[victim].isEnemy = !isFriendly;
         }
         byPlayer[victim].died = true;
@@ -13374,7 +13386,10 @@ function populateAccountabilityDropdowns() {
             return tb - ta;
         });
         captureSel.innerHTML = indexed.map(({ c: cap, i }) => {
-            const name = cap.tabName || `Capture ${i + 1}`;
+            const name = cap.customName
+                || (cap.vaultTabs && typeof cap.tabIndex === 'number' && cap.vaultTabs[cap.tabIndex]?.name)
+                || cap.tabName
+                || `Capture ${i + 1}`;
             const count = cap.items ? cap.items.length : 0;
             const tw = cap.items ? cap.items.reduce((s, it) => s + getItemWeight(it.itemId) * (it.quantity || 1), 0) : 0;
             const weightStr = tw > 0 ? ` · ${tw.toFixed(1)} kg` : '';
@@ -13851,7 +13866,17 @@ async function runAccountabilityCheck() {
     const resultEl = document.getElementById('accountability-result');
 
     if (!sessionId) { showToast('Select a loot session first', 'warning'); return; }
-    if (selectedIdxs.length === 0) { showToast('Select at least one chest capture', 'warning'); return; }
+    // Allow running with no chest captures as long as chest logs are selected.
+    // Math works correctly in that mode: verified items get inChest=verifiedQty,
+    // unverified items show as missing. Enforce that at least ONE source is present.
+    const _earlyChestLogSel = document.getElementById('acc-chestlog-select');
+    const _earlyChestLogCount = _earlyChestLogSel
+        ? Array.from(_earlyChestLogSel.selectedOptions).filter(o => o.value !== '').length
+        : 0;
+    if (selectedIdxs.length === 0 && _earlyChestLogCount === 0) {
+        showToast('Select at least one chest capture or chest log first', 'warning');
+        return;
+    }
 
     // Make sure NUMERIC_ITEM_MAP / ITEM_NAMES are loaded BEFORE we try to normalize
     // UNKNOWN_<n> item IDs below — otherwise the lookup is a silent no-op and
@@ -13934,7 +13959,10 @@ async function runAccountabilityCheck() {
         // Re-normalize capture items now that loadData is guaranteed to have
         // finished — share-view injection may have happened before the map loaded.
         normalizeChestCaptureInPlace(cap);
-        const tabName = cap.tabName || `Tab ${idx + 1}`;
+        const tabName = cap.customName
+            || (cap.vaultTabs && typeof cap.tabIndex === 'number' && cap.vaultTabs[cap.tabIndex]?.name)
+            || cap.tabName
+            || `Tab ${idx + 1}`;
         selectedTabNames.push(tabName);
         selectedCaptureLabels.push(_formatChestCaptureLabel(cap, tabName));
         for (const item of cap.items) {
@@ -14092,12 +14120,31 @@ async function runAccountabilityCheck() {
         primaryGuild = friendlyGuilds[0];
         primaryAlliance = '';
     }
+    // When friendlyGuilds is explicitly set, extend alliance-awareness so that
+    // guild-mates in allied guilds (same alliance as any friendly guild) aren't
+    // mistakenly tagged as enemy loot.
+    const _friendlyAllianceSet = new Set();
+    const _knownFriendlyGuildsAcc = new Set(friendlyGuilds);
+    if (friendlyGuilds.length) {
+        for (const [, d] of Object.entries(lootedByPlayer)) {
+            if (d.alliance && friendlyGuilds.indexOf(d.guild) !== -1) _friendlyAllianceSet.add(d.alliance);
+        }
+        if (_friendlyAllianceSet.size > 0) {
+            for (const [, d] of Object.entries(lootedByPlayer)) {
+                if (d.guild && d.alliance && _friendlyAllianceSet.has(d.alliance)) _knownFriendlyGuildsAcc.add(d.guild);
+            }
+        }
+    }
+
     // Single source of truth for "is this player on our side (held accountable)?".
     // friendlyGuilds empty => exact original auto-detect logic (alliance-or-primaryGuild),
     // so 0/1-guild behavior is byte-for-byte unchanged.
     const isFriendly = (data) => {
         if (friendlyGuilds.length) {
-            return (data.guild && friendlyGuilds.indexOf(data.guild) !== -1) || !data.guild;
+            if (!data.guild) return true;
+            if (_knownFriendlyGuildsAcc.has(data.guild)) return true;
+            if (data.alliance && _friendlyAllianceSet.has(data.alliance)) return true;
+            return false;
         }
         return primaryAlliance && data.alliance
             ? data.alliance === primaryAlliance
@@ -14267,6 +14314,8 @@ async function runAccountabilityCheck() {
             .map(n => `<strong>${esc(n)}</strong>`)
             .join(', ');
         html += `<div style="font-size:0.78rem; color:var(--text-muted); margin-bottom:0.75rem;">Comparing against: ${captureList}</div>`;
+    } else if (mergedLogMeta.batches > 0) {
+        html += `<div style="font-size:0.78rem; color:var(--text-muted); background:rgba(251,191,36,0.08); border:1px solid rgba(251,191,36,0.25); border-radius:5px; padding:0.4rem 0.6rem; margin-bottom:0.75rem;">No chest capture selected — verification from chest log only. Items not in the log show as missing.</div>`;
     }
 
     // Legacy-session banner: newer clients can infer local pickups from loot-container

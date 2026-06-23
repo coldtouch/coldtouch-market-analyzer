@@ -2,6 +2,12 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-06-23 — Loot Logger: three accountability/session bug fixes
+
+- **Tab names now show correctly in accountability.** Chest captures from vault/guild-vault tabs were showing as "Capture 1", "Capture 2", etc. in the selector and result header instead of the real tab name (e.g. "Loot Tab 3"). The name-resolution logic now checks `vaultTabs[tabIndex].name` before falling back, matching how the Loot Buyer displays them.
+- **Alliance/second-guild members no longer tagged as enemy.** When a second guild in the same alliance looted items, they were sometimes shown with a red "enemy loot" border — both in the session player-cards and in the accountability result. Root cause: the friendly check fell back to strict guild matching when a player's alliance field was empty in the log, or when the "friendly guilds" override was active. Fix: build a set of all guilds known to share the perspective alliance, and use that as the fallback; accountability's explicit-guild mode now also extends to alliance-mates.
+- **Accountability now works with chest logs only (no chest capture required).** Previously the check required at least one chest capture, blocking users who want to verify purely from chest-log data. Now you can select chest-log batches with no capture and run the check — verified items show their deposit count, unverified items show as missing. A yellow notice appears at the top of the result clarifying that it's running in log-only mode.
+
 ### 2026-06-22 — Loot Logger: remember your guild as the default perspective
 
 - **Set your guild once, and every session opens from your side.** Next to the guild picker there's now a **★** — click it to make the selected guild your default. From then on, any session you open (upload, saved, or a shared link) auto-starts from that guild's perspective when it's present, instead of the biggest looter guild. Click ★ again to clear it. The per-session dropdown still overrides for one-offs.
