@@ -2,6 +2,10 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-06-23 — Loot Logger: fix misleading "choose chest captures" toast
+
+- **"Session pre-selected" toast now correctly says chest captures or chest logs are optional.** The toast shown after clicking the Accountability button from an uploaded session still said "Choose chest captures and click Run Check", implying captures are required. Updated to "Select chest captures or chest logs, then click Run Check."
+
 ### 2026-06-23 — Loot Logger: fix Re-run Check still requiring chest capture
 
 - **"🔄 Re-run Check" now works with chest logs only (no capture selected).** The original log-only fix only updated `runAccountabilityCheck()` (the "Run Check" button). `rerunAccountabilityCheck()` — called by the "🔄 Re-run Check" button — was missed and still had the old hard block `'Select at least one chest capture first'`. Updated it with the same combined check: allows log-only, capture-only, or both; only blocks when neither is selected.

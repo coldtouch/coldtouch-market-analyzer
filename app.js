@@ -13865,7 +13865,7 @@ async function runAccountabilityForSession(sessionId) {
         sel.value = sessionId;
         // Scroll into view so the user sees they're in the right mode
         sel.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        showToast('Session pre-selected. Choose chest captures and click "Run Check".', 'info');
+        showToast('Session pre-selected. Select chest captures or chest logs, then click "Run Check".', 'info');
         setTimeout(() => {
             if (window._llPreselectAccountabilitySessionId === sessionId) {
                 window._llPreselectAccountabilitySessionId = '';
