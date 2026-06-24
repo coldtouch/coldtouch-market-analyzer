@@ -759,6 +759,23 @@ db.exec(`CREATE TABLE IF NOT EXISTS accountability_shares (
 )`);
 db.exec(`CREATE INDEX IF NOT EXISTS idx_acc_shares_user ON accountability_shares(user_id)`);
 tryExec(`ALTER TABLE accountability_shares ADD COLUMN chest_logs_json TEXT DEFAULT NULL`);
+// Editable shares (Option B): an editor token grants update rights without an
+// account, so the creator can hand a trusted officer an "editor link" while the
+// plain view link stays read-only. updated_at/update_count track refreshes.
+tryExec(`ALTER TABLE accountability_shares ADD COLUMN edit_token TEXT`);
+tryExec(`ALTER TABLE accountability_shares ADD COLUMN updated_at INTEGER`);
+tryExec(`ALTER TABLE accountability_shares ADD COLUMN update_count INTEGER DEFAULT 0`);
+db.exec(`CREATE INDEX IF NOT EXISTS idx_acc_shares_edit ON accountability_shares(edit_token)`);
+// Keep the last few pre-overwrite snapshots per token so a bad/accidental update
+// is recoverable (pruned to 5 on each update).
+db.exec(`CREATE TABLE IF NOT EXISTS accountability_share_versions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  token TEXT NOT NULL,
+  captures_json TEXT,
+  chest_logs_json TEXT,
+  replaced_at INTEGER NOT NULL
+)`);
+db.exec(`CREATE INDEX IF NOT EXISTS idx_acc_share_versions_token ON accountability_share_versions(token, replaced_at)`);
 
 db.exec(`CREATE TABLE IF NOT EXISTS price_analytics (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1506,6 +1523,7 @@ const batchPricesLimiter = rateLimit({ windowMs: 60 * 1000, max: 10, standardHea
 // SEC-H1: tight limit on the O(n²) transport-routes-live endpoint (5 req/min per IP)
 const transportLiveLimiter = rateLimit({ windowMs: 60 * 1000, max: 5, standardHeaders: true, legacyHeaders: false, message: { error: 'Too many transport-routes requests. Slow down.' } });
 const routineReportLimiter = rateLimit({ windowMs: 60 * 1000, max: 30, standardHeaders: true, legacyHeaders: false, message: { error: 'Too many routine reports. Slow down.' } });
+const accShareUpdateLimiter = rateLimit({ windowMs: 60 * 1000, max: 20, standardHeaders: true, legacyHeaders: false, message: { error: 'Too many share updates. Slow down.' } });
 let _transportLiveCache = null; // { ts, params, routes } — 30s cache to avoid repeated O(n²) builds
 let _transportLiveCacheTs = 0;
 
@@ -2826,6 +2844,38 @@ app.get('/api/loot-sessions', requireAuth, (req, res) => {
 // Create a public share link for an accountability check. Snapshot the selected
 // chest captures into the row (they're ephemeral in the Go client otherwise).
 // Viewers get session events + captures and can toggle before/after views.
+// Shared trimming for accountability share snapshots (used by create + update) so
+// the size caps and field whitelist stay identical on both paths.
+function _trimSharedCaptures(captures) {
+    return (Array.isArray(captures) ? captures : []).map((c, i) => ({
+        tabName: (c.tabName || `Capture ${i + 1}`).slice(0, 80),
+        capturedAt: c.capturedAt || 0,
+        containerId: c.containerId || '',
+        truncated: Array.isArray(c.items) && c.items.length > 500,
+        items: Array.isArray(c.items) ? c.items.slice(0, 500).map(it => ({
+            itemId: (it.itemId || '').slice(0, 80),
+            quality: parseInt(it.quality) || 1,
+            quantity: parseInt(it.quantity) || 1,
+        })) : [],
+    }));
+}
+function _trimSharedChestLogs(chestLogs) {
+    return (Array.isArray(chestLogs) ? chestLogs : []).map(b => ({
+        capturedAt: b.capturedAt || 0,
+        action: (b.action || '').slice(0, 20),
+        filterValue: typeof b.filterValue === 'number' ? b.filterValue : 0,
+        actionMappingVerified: b.actionMappingVerified === true,
+        truncated: Array.isArray(b.entries) && b.entries.length > 400,
+        entries: Array.isArray(b.entries) ? b.entries.slice(0, 400).map(e => ({
+            playerName: (e.playerName || '').slice(0, 80),
+            itemId: (e.itemId || '').slice(0, 80),
+            numericId: parseInt(e.numericId) || 0,
+            quantity: parseInt(e.quantity) || 1,
+            timestamp: e.timestamp || null,
+        })) : [],
+    }));
+}
+
 app.post('/api/accountability/share', requireAuth, (req, res) => {
     const { sessionId, captures, sessionName, chestLogs } = req.body || {};
     if (!sessionId || typeof sessionId !== 'string') return res.status(400).json({ error: 'sessionId required' });
@@ -2849,18 +2899,7 @@ app.post('/api/accountability/share', requireAuth, (req, res) => {
         // Serialize captures (trim to essentials + cap item count per capture for size safety).
         // captures may be empty for a log-only share — that's fine, the viewer renders
         // from chest logs alone in that case.
-        const trimmedCaptures = (Array.isArray(captures) ? captures : []).map((c, i) => ({
-            tabName: (c.tabName || `Capture ${i + 1}`).slice(0, 80),
-            capturedAt: c.capturedAt || 0,
-            containerId: c.containerId || '',
-            truncated: Array.isArray(c.items) && c.items.length > 500,
-            items: Array.isArray(c.items) ? c.items.slice(0, 500).map(it => ({
-                itemId: (it.itemId || '').slice(0, 80),
-                quality: parseInt(it.quality) || 1,
-                quantity: parseInt(it.quantity) || 1,
-            })) : [],
-        }));
-        const capturesJson = JSON.stringify(trimmedCaptures);
+        const capturesJson = JSON.stringify(_trimSharedCaptures(captures));
         if (capturesJson.length > 500000) return res.status(400).json({ error: 'Captures payload too large (max 500KB)' });
 
         // Serialize chest-log batches (opcode 157 deposit/withdraw ground truth).
@@ -2871,32 +2910,74 @@ app.post('/api/accountability/share', requireAuth, (req, res) => {
         let chestLogsJson = null;
         if (Array.isArray(chestLogs) && chestLogs.length > 0) {
             if (chestLogs.length > 40) return res.status(400).json({ error: 'Too many chest-log batches (max 40)' });
-            const trimmedLogs = chestLogs.map(b => ({
-                capturedAt: b.capturedAt || 0,
-                action: (b.action || '').slice(0, 20),
-                filterValue: typeof b.filterValue === 'number' ? b.filterValue : 0,
-                actionMappingVerified: b.actionMappingVerified === true,
-                truncated: Array.isArray(b.entries) && b.entries.length > 400,
-                entries: Array.isArray(b.entries) ? b.entries.slice(0, 400).map(e => ({
-                    playerName: (e.playerName || '').slice(0, 80),
-                    itemId: (e.itemId || '').slice(0, 80),
-                    numericId: parseInt(e.numericId) || 0,
-                    quantity: parseInt(e.quantity) || 1,
-                    timestamp: e.timestamp || null,
-                })) : [],
-            }));
-            chestLogsJson = JSON.stringify(trimmedLogs);
+            chestLogsJson = JSON.stringify(_trimSharedChestLogs(chestLogs));
             if (chestLogsJson.length > 500000) return res.status(400).json({ error: 'Chest-log payload too large (max 500KB)' });
         }
 
         const token = require('crypto').randomBytes(24).toString('base64url');
-        db.run(`INSERT INTO accountability_shares (token, user_id, session_id, captures_json, session_name, created_at, chest_logs_json) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-            [token, req.user.id, finalSessionId, capturesJson, (sessionName || '').slice(0, 120), Date.now(), chestLogsJson],
+        const editToken = require('crypto').randomBytes(24).toString('base64url');
+        const _now = Date.now();
+        db.run(`INSERT INTO accountability_shares (token, user_id, session_id, captures_json, session_name, created_at, chest_logs_json, edit_token, updated_at, update_count) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
+            [token, req.user.id, finalSessionId, capturesJson, (sessionName || '').slice(0, 120), _now, chestLogsJson, editToken, _now],
             function(iErr) {
                 if (iErr) return res.status(500).json({ error: 'An internal error occurred.' });
-                res.json({ token, url: `${SITE_URL}/accountability/${token}` });
+                res.json({
+                    token,
+                    editToken,
+                    url: `${SITE_URL}/accountability/${token}`,
+                    editUrl: `${SITE_URL}/accountability/${token}#edit=${editToken}`,
+                });
             });
     });
+});
+
+// Update an existing share's chest snapshot (Option B editable shares). No account
+// required — the editor token IS the authorization, so a trusted officer the creator
+// handed the editor link to can refresh the report as late deposits land. The loot
+// events are NOT touched (they stay read from the owner's session); only the captures
+// + chest logs are overwritten, and the prior snapshot is kept for recovery.
+app.post('/api/accountability/share/:token/update', accShareUpdateLimiter, (req, res) => {
+    const token = req.params.token;
+    const { editToken, captures, chestLogs } = req.body || {};
+    if (!token || !/^[A-Za-z0-9_-]{20,40}$/.test(token)) return res.status(400).json({ error: 'Invalid token' });
+    if (!editToken || typeof editToken !== 'string') return res.status(403).json({ error: 'Editor token required' });
+    const _hasCaptures = Array.isArray(captures) && captures.length > 0;
+    const _hasChestLogs = Array.isArray(chestLogs) && chestLogs.length > 0;
+    if (!_hasCaptures && !_hasChestLogs) return res.status(400).json({ error: 'At least one chest capture or chest log required' });
+    if (Array.isArray(captures) && captures.length > 20) return res.status(400).json({ error: 'Too many captures (max 20)' });
+    if (Array.isArray(chestLogs) && chestLogs.length > 40) return res.status(400).json({ error: 'Too many chest-log batches (max 40)' });
+
+    let row;
+    try { row = readDb.prepare(`SELECT edit_token, captures_json, chest_logs_json, created_at FROM accountability_shares WHERE token = ?`).get(token); }
+    catch (e) { return res.status(500).json({ error: 'An internal error occurred.' }); }
+    if (!row) return res.status(404).json({ error: 'Share not found or revoked' });
+    if (!row.edit_token) return res.status(403).json({ error: 'This share has no editor link — re-share the report to get one.' });
+    const _a = Buffer.from(String(editToken));
+    const _b = Buffer.from(String(row.edit_token));
+    if (_a.length !== _b.length || !require('crypto').timingSafeEqual(_a, _b)) return res.status(403).json({ error: 'Invalid editor token' });
+    if (Date.now() - row.created_at > 30 * 24 * 60 * 60 * 1000) return res.status(410).json({ error: 'Share link has expired.' });
+
+    const capturesJson = JSON.stringify(_trimSharedCaptures(captures));
+    if (capturesJson.length > 500000) return res.status(400).json({ error: 'Captures payload too large (max 500KB)' });
+    let chestLogsJson = null;
+    if (_hasChestLogs) {
+        chestLogsJson = JSON.stringify(_trimSharedChestLogs(chestLogs));
+        if (chestLogsJson.length > 500000) return res.status(400).json({ error: 'Chest-log payload too large (max 500KB)' });
+    }
+
+    const now = Date.now();
+    try {
+        // Keep the pre-overwrite snapshot, then prune to the last 5 for this token.
+        db.run(`INSERT INTO accountability_share_versions (token, captures_json, chest_logs_json, replaced_at) VALUES (?, ?, ?, ?)`,
+            [token, row.captures_json, row.chest_logs_json, now]);
+        db.run(`DELETE FROM accountability_share_versions WHERE token = ? AND id NOT IN (SELECT id FROM accountability_share_versions WHERE token = ? ORDER BY replaced_at DESC LIMIT 5)`, [token, token]);
+        db.run(`UPDATE accountability_shares SET captures_json = ?, chest_logs_json = ?, updated_at = ?, update_count = COALESCE(update_count, 0) + 1 WHERE token = ?`,
+            [capturesJson, chestLogsJson, now, token],
+            function(uErr) {
+                if (uErr) return res.status(500).json({ error: 'An internal error occurred.' });
+                res.json({ ok: true, updatedAt: now });
+            });
+    } catch (e) { return res.status(500).json({ error: 'An internal error occurred.' }); }
 });
 
 // Public — no auth. Viewer fetches session events + captures from the share token.
@@ -2905,7 +2986,7 @@ app.get('/api/accountability/public/:token', (req, res) => {
     if (!token || !/^[A-Za-z0-9_-]{20,40}$/.test(token)) return res.status(400).json({ error: 'Invalid token' });
     let row, events;
     try {
-        row = readDb.prepare(`SELECT user_id, session_id, captures_json, session_name, created_at, chest_logs_json FROM accountability_shares WHERE token = ?`).get(token);
+        row = readDb.prepare(`SELECT user_id, session_id, captures_json, session_name, created_at, chest_logs_json, updated_at, update_count FROM accountability_shares WHERE token = ?`).get(token);
         if (!row) return res.status(404).json({ error: 'Share not found or revoked' });
         // SEC-M3: expire shares after 30 days
         if (Date.now() - row.created_at > 30 * 24 * 60 * 60 * 1000) return res.status(410).json({ error: 'Share link has expired.' });
@@ -2920,6 +3001,8 @@ app.get('/api/accountability/public/:token', (req, res) => {
     res.json({
         sessionName: row.session_name || '',
         createdAt: row.created_at,
+        updatedAt: row.updated_at || null,
+        updateCount: row.update_count || 0,
         events: events || [],
         captures,
         chestLogs,

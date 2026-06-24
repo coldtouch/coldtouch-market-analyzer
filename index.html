@@ -2343,6 +2343,15 @@
                     <div class="changelog-list">
                         <div class="changelog-entry">
                             <div class="changelog-date">June 25, 2026</div>
+                            <div class="changelog-title">Accountability: editable shares — refresh a report as deposits land</div>
+                            <ul>
+                                <li><strong>Sharing now gives you two links.</strong> A <strong>👁 view link</strong> (read-only, for anyone) and a private <strong>✏️ editor link</strong> for trusted officers.</li>
+                                <li><strong>Officers can update the report later.</strong> Open the editor link → paste/capture the newer in-game chest log → Re-run check → <strong>⟳ Update this share</strong>, and the same view link now shows the latest deposits for everyone. No account needed.</li>
+                                <li><strong>The fight stays locked</strong> — only chest deposits/captures get refreshed, never who looted what. Each update keeps a backup of the previous version.</li>
+                            </ul>
+                        </div>
+                        <div class="changelog-entry">
+                            <div class="changelog-date">June 25, 2026</div>
                             <div class="changelog-title">Accountability: exact guild filter, chest-log tiebreaker, cleaner state</div>
                             <ul>
                                 <li><strong>Picked guilds are now exact.</strong> Selecting specific guilds in the Friendly-guilds control holds <em>only</em> those guilds accountable. It used to silently widen the pick to every guild in the same alliance, so an alliance-mate guild you didn't choose leaked in as friendly and wasn't hidden. Players with no captured guild aren't auto-friendly anymore either.</li>
@@ -4909,7 +4918,7 @@
     <script src="/zonemap.js"></script>
     <script src="/lootlogger-core.js"></script>
     <script src="/crafting-core.js"></script>
-    <script src="/app.js?v=148"></script>
+    <script src="/app.js?v=149"></script>
     <script>if('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js', {scope: '/', updateViaCache: 'none'}).catch(()=>{});</script><!-- FE-H3 -->
 </body>
 

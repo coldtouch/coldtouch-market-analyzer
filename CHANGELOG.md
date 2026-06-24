@@ -2,6 +2,12 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-06-25 — Accountability: editable shares (Option B — editor link)
+
+- **A shared report can now be refreshed as late deposits land.** Sharing a report now produces **two** links: a **👁 view link** (read-only, share with anyone) and a private **✏️ editor link** (give only to trusted officers). Opening the editor link puts the report in **Editor mode** — the officer pastes/captures the newer in-game chest log, hits Re-run check, then **⟳ Update this share**, and the *same* view link now shows the latest deposits for everyone. No account needed: the edit token in the link is the authorization.
+- **The fight data stays locked.** Only the chest captures + chest logs are overwritten; the loot events (who looted what) are always read from the owner's session, so an editor can refresh deposits but can't rewrite the fight.
+- **Safe by design.** Each update keeps the previous snapshot (last 5 per link) for recovery, the edit token rides in the URL hash (never sent to the server in request logs), validation is constant-time, and the update endpoint is rate-limited (20/min). A "created / updated" timestamp shows in the report banner.
+
 ### 2026-06-25 — Accountability: exact guild filter, chest-log tiebreaker, cleaner state
 
 - **Guild selection is now exact.** When you pick specific guilds in the Friendly-guilds control, only players in *exactly* those guilds are held accountable. Previously the pick was silently auto-expanded to every guild in the same **alliance**, so an alliance-mate guild you didn't select (e.g. an "avoid" guild sharing your alliance) leaked into the result as friendly and wasn't hidden. Players with **no captured guild** are no longer auto-treated as friendly either — an explicit pick means "these guilds and no one else." (Diagnosed from a live report where Iron Dome + Gold Dome were selected but Avoid_Me — 214 loot events, same `IDF` alliance — showed at the top.)

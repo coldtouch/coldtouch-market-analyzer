@@ -13238,7 +13238,9 @@ async function processLootFiles(files) {
 function populateAccountabilityDropdowns() {
     // Shared-accountability viewer commandeers the dropdowns with a synthetic session +
     // pre-selected captures; don't overwrite them when the user's own session list loads.
-    if (window._sharedAccountabilityActive) return Promise.resolve();
+    // Exception: an EDITOR-link viewer needs the dropdowns to refresh so chest logs they
+    // paste/capture after load show up and can be included in "Update this share".
+    if (window._sharedAccountabilityActive && !window._accShareEditToken) return Promise.resolve();
     const sessionSel = document.getElementById('acc-session-select');
     const captureSel = document.getElementById('acc-capture-select');
     if (!sessionSel || !captureSel) return Promise.resolve();
@@ -13728,13 +13730,8 @@ async function shareAccountability(sessionId, btnEl) {
         if (!res.ok) { showToast('Share failed: ' + (data.error || res.status), 'error'); return; }
         if (!data.token) { showToast('Share failed: response did not include a link token', 'error'); return; }
         const fullUrl = `${getPublicAppOrigin()}/accountability/${encodeURIComponent(data.token)}`;
-        // Open the existing copy-preview modal if present, else show a toast with the link.
-        if (typeof openCopyPreview === 'function') {
-            openCopyPreview('Accountability share link', fullUrl, 'Link copied — share with anyone');
-        } else {
-            navigator.clipboard.writeText(fullUrl);
-            showToast(`Link copied to clipboard: ${fullUrl}`, 'success');
-        }
+        const editUrl = data.editToken ? `${fullUrl}#edit=${encodeURIComponent(data.editToken)}` : '';
+        _showAccShareLinksModal(fullUrl, editUrl);
     } catch (e) {
         const msg = e.name === 'TimeoutError'
             ? 'Share timed out while creating the snapshot. Try again, or reduce selected chest captures.'
@@ -13746,6 +13743,81 @@ async function shareAccountability(sessionId, btnEl) {
             btnEl.classList.remove('is-loading');
             btnEl.innerHTML = originalHtml || '🔗 Share';
         }
+    }
+}
+
+// Show the two links produced when an accountability report is shared: a read-only
+// view link (for anyone) and a private editor link (for trusted officers who may
+// refresh the report as late deposits land). The view link is auto-copied.
+function _showAccShareLinksModal(viewUrl, editUrl) {
+    try { navigator.clipboard.writeText(viewUrl); } catch {}
+    document.getElementById('acc-share-links-modal')?.remove();
+    const row = (label, hint, url, accent) => `
+        <div style="margin-top:0.7rem;">
+            <div style="font-size:0.8rem; font-weight:600; color:${accent};">${label}</div>
+            <div style="font-size:0.72rem; color:var(--text-muted); margin:0.15rem 0 0.3rem;">${hint}</div>
+            <div style="display:flex; gap:0.4rem;">
+                <input type="text" readonly value="${esc(url)}" onclick="this.select()" style="flex:1; min-width:0; background:var(--bg-primary); border:1px solid var(--border-color); border-radius:4px; padding:0.4rem 0.5rem; color:var(--text-primary); font-family:ui-monospace,monospace; font-size:0.72rem;">
+                <button class="btn-small-accent" data-copy="${esc(url)}">Copy</button>
+            </div>
+        </div>`;
+    const modal = document.createElement('div');
+    modal.id = 'acc-share-links-modal';
+    modal.style.cssText = 'position:fixed; inset:0; background:rgba(0,0,0,0.6); z-index:9999; display:flex; align-items:flex-start; justify-content:center; padding:6vh 1rem; overflow-y:auto;';
+    modal.innerHTML = `
+        <div style="background:var(--bg-secondary); border:1px solid var(--border-color); border-radius:12px; padding:1.1rem 1.3rem; max-width:560px; width:100%;">
+            <div style="display:flex; align-items:center; justify-content:space-between;">
+                <h3 style="margin:0; font-size:1.05rem; color:var(--text-primary);">🔗 Accountability share links</h3>
+                <button onclick="document.getElementById('acc-share-links-modal').remove()" style="background:none; border:none; color:var(--text-muted); font-size:1.3rem; line-height:1; cursor:pointer;">&times;</button>
+            </div>
+            ${row('👁 View link (read-only)', 'Share with anyone — they see the report but cannot change it.', viewUrl, 'var(--text-primary)')}
+            ${editUrl ? row('✏️ Editor link (keep private)', 'Give ONLY to trusted officers. They can add updated chest logs / captures and refresh the report for everyone with the view link.', editUrl, 'var(--accent)') : ''}
+            <p style="margin:0.85rem 0 0; font-size:0.72rem; color:var(--text-muted);">View link copied to clipboard.${editUrl ? ' The editor link holds a secret — only send it to people allowed to update this report.' : ''}</p>
+        </div>`;
+    modal.addEventListener('click', (e) => {
+        if (e.target === modal) { modal.remove(); return; }
+        const btn = e.target.closest('[data-copy]');
+        if (btn) navigator.clipboard.writeText(btn.getAttribute('data-copy')).then(() => showToast('Copied', 'success')).catch(() => {});
+    });
+    document.body.appendChild(modal);
+}
+
+// Editor-link viewers: overwrite the shared report's chest snapshot with the data
+// currently selected (captures + chest logs), so late deposits show up for everyone
+// on the same link. The loot events are untouched (server keeps reading them from
+// the owner's session). Authorized by the edit token from the URL hash.
+async function updateThisShare(btnEl) {
+    const token = window._accShareViewToken;
+    const editToken = window._accShareEditToken;
+    if (!token || !editToken) { showToast('No editor permission for this share', 'warning'); return; }
+    const captureSel = document.getElementById('acc-capture-select');
+    const capIdxs = captureSel ? Array.from(captureSel.selectedOptions).map(o => parseInt(o.value)).filter(v => !isNaN(v)) : [];
+    const captures = capIdxs.map(i => (window._chestCaptures || [])[i]).filter(Boolean);
+    const chestLogSel = document.getElementById('acc-chestlog-select');
+    const logIdxs = chestLogSel ? Array.from(chestLogSel.selectedOptions).map(o => parseInt(o.value)).filter(v => !isNaN(v)) : [];
+    const chestLogs = logIdxs.map(i => (window._chestLogBatches || [])[i]).filter(Boolean);
+    if (captures.length === 0 && chestLogs.length === 0) {
+        showToast('Add/select at least one chest capture or chest log first', 'warning');
+        return;
+    }
+    const orig = btnEl ? btnEl.innerHTML : '';
+    if (btnEl) { btnEl.disabled = true; btnEl.innerHTML = 'Updating…'; }
+    try {
+        const res = await fetch(`${VPS_BASE}/api/accountability/share/${encodeURIComponent(token)}/update`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            signal: AbortSignal.timeout(45000),
+            body: JSON.stringify({ editToken, captures, chestLogs }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) { showToast('Update failed: ' + (data.error || res.status), 'error'); return; }
+        showToast('Share updated — the link now shows the latest deposits', 'success');
+        const lbl = document.getElementById('shared-acc-updated-label');
+        if (lbl) lbl.textContent = ' · updated just now';
+    } catch (e) {
+        showToast('Update failed: ' + (e.name === 'TimeoutError' ? 'timed out' : e.message), 'error');
+    } finally {
+        if (btnEl) { btnEl.disabled = false; btnEl.innerHTML = orig || '⟳ Update this share'; }
     }
 }
 
@@ -19817,6 +19889,12 @@ async function _handlePublicShareLoad() {
     if (!sessionToken && !accToken) return;
     try {
         if (accToken) {
+            // Editor link (Option B): the edit token rides in the URL hash (never sent to
+            // the server in the request line / referrer). Its presence flips the shared
+            // view into editor mode and authorizes "Update this share".
+            window._accShareViewToken = accToken;
+            try { window._accShareEditToken = new URLSearchParams((window.location.hash || '').replace(/^#/, '')).get('edit') || ''; }
+            catch { window._accShareEditToken = ''; }
             const res = await fetch(`${VPS_BASE}/api/accountability/public/${encodeURIComponent(accToken)}`);
             if (!res.ok) {
                 const data = await res.json();
@@ -19941,22 +20019,30 @@ async function _renderPublicAccountabilityView(data) {
         createdAt: data.createdAt || 0,
     };
 
-    // 7. Add a thin banner above the accountability pane so the recipient knows it's a share.
+    // 7. Add a thin banner above the accountability pane so the recipient knows it's a
+    //    share. Editor-link viewers also get the "Update this share" control + a green
+    //    accent so it's obvious the report is editable.
     const pane = document.getElementById('pane-loot-logger');
     if (pane && !document.getElementById('shared-acc-banner')) {
+        const isEditor = !!window._accShareEditToken;
         const when = data.createdAt ? new Date(data.createdAt).toLocaleString() : '';
+        const updatedWhen = data.updatedAt ? new Date(data.updatedAt).toLocaleString() : '';
         const truncatedCaptures = (data.captures || []).filter(c => c.truncated).length;
         const truncatedLogs = sharedChestLogs.filter(b => b.truncated).length;
         const truncationNote = (truncatedCaptures || truncatedLogs)
             ? ` · shared data trimmed (${truncatedCaptures} capture${truncatedCaptures !== 1 ? 's' : ''}, ${truncatedLogs} log batch${truncatedLogs !== 1 ? 'es' : ''})`
             : '';
+        const countsLabel = `${(data.events || []).length} events · ${(data.captures || []).length} chest capture${(data.captures || []).length !== 1 ? 's' : ''}${sharedChestLogs.length > 0 ? ` · ${sharedChestLogs.length} log batch${sharedChestLogs.length !== 1 ? 'es' : ''}` : ''}${truncationNote}`;
+        const rgb = isEditor ? '34,197,94' : '88,101,242';
         const banner = document.createElement('div');
         banner.id = 'shared-acc-banner';
-        banner.style.cssText = 'background:linear-gradient(90deg, rgba(88,101,242,0.14), rgba(88,101,242,0.06)); border:1px solid rgba(88,101,242,0.35); border-radius:8px; padding:0.55rem 0.9rem; margin:0.5rem 0 0.75rem; font-size:0.82rem; color:#c7d2ff; display:flex; gap:0.5rem; align-items:center; flex-wrap:wrap;';
+        banner.style.cssText = `background:linear-gradient(90deg, rgba(${rgb},0.14), rgba(${rgb},0.06)); border:1px solid rgba(${rgb},0.35); border-radius:8px; padding:0.55rem 0.9rem; margin:0.5rem 0 0.75rem; font-size:0.82rem; color:${isEditor ? '#bbf7d0' : '#c7d2ff'}; display:flex; gap:0.5rem; align-items:center; flex-wrap:wrap;`;
         banner.innerHTML = `
-            <span>🔗</span>
-            <span><strong>Shared accountability check</strong>${data.sessionName ? ` — "${esc(data.sessionName)}"` : ''}${when ? ` · created ${esc(when)}` : ''}</span>
-            <span style="margin-left:auto; color:var(--text-muted); font-size:0.72rem;">Read-only view — ${(data.events || []).length} events · ${(data.captures || []).length} chest capture${(data.captures || []).length !== 1 ? 's' : ''}${sharedChestLogs.length > 0 ? ` · ${sharedChestLogs.length} log batch${sharedChestLogs.length !== 1 ? 'es' : ''}` : ''}${truncationNote}</span>`;
+            <span>${isEditor ? '✏️' : '🔗'}</span>
+            <span><strong>${isEditor ? 'Editor mode' : 'Shared accountability check'}</strong>${data.sessionName ? ` — "${esc(data.sessionName)}"` : ''}${when ? ` · created ${esc(when)}` : ''}<span id="shared-acc-updated-label" style="color:var(--text-muted);">${updatedWhen ? ` · updated ${esc(updatedWhen)}` : ''}</span></span>
+            ${isEditor
+                ? `<button id="acc-update-share-btn" class="btn-small-accent" onclick="updateThisShare(this)" title="Paste or capture the latest chest log below, hit Re-run check, then click here to refresh the report for everyone who has the link." style="margin-left:auto;">⟳ Update this share</button>`
+                : `<span style="margin-left:auto; color:var(--text-muted); font-size:0.72rem;">Read-only view — ${countsLabel}</span>`}`;
         // Insert right at the top of the accountability mode container.
         const accMode = document.getElementById('loot-log-accountability');
         if (accMode) accMode.insertBefore(banner, accMode.firstChild);
