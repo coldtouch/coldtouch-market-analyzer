@@ -11172,11 +11172,27 @@ function showLootLoggerMode(mode) {
         if (el) el.classList.toggle('active', mode === m);
     }
     _updateLootLoggerModePillCounts();
+    // Leaving accountability (or landing back on the tab, which resets to 'upload')
+    // wipes any prior result so it doesn't linger as stale state. No-op for shared
+    // public reports (those render in accountability mode with the flag set).
+    if (mode === 'upload') _resetAccountabilityResult();
     if (mode === 'accountability') {
         // E2: lootBuyerCaptures IS window._chestCaptures — no seeding needed
         populateAccountabilityDropdowns();
         renderCaptureChips();
     }
+}
+
+// Clear a rendered accountability result + its cached events so a previous run
+// doesn't survive a new upload or a navigate-away-and-back. Skipped while a shared
+// public report is being viewed (that view owns the element).
+function _resetAccountabilityResult() {
+    if (window._sharedAccountabilityActive) return;
+    const el = document.getElementById('accountability-result');
+    if (el) { el.innerHTML = ''; el.dataset.showEnemies = '0'; }
+    window._accEventCache = null;
+    const lastRun = document.getElementById('acc-last-run');
+    if (lastRun) lastRun.textContent = '';
 }
 
 async function loadLootSessions() {
@@ -13145,6 +13161,9 @@ async function processLootFiles(files) {
     _llUploadSaveMessage = '';
     window._justUploadedSessionId = '';
     window._justUploadedAt = 0;
+    // A new upload is a new dataset — drop any prior accountability result/cache so
+    // the last session's check doesn't linger when the user switches to the tab.
+    _resetAccountabilityResult();
 
     let allParsed = [];
     let allLines = [];
@@ -14229,31 +14248,20 @@ async function runAccountabilityCheck(opts = {}) {
         primaryGuild = friendlyGuilds[0];
         primaryAlliance = '';
     }
-    // When friendlyGuilds is explicitly set, extend alliance-awareness so that
-    // guild-mates in allied guilds (same alliance as any friendly guild) aren't
-    // mistakenly tagged as enemy loot.
-    const _friendlyAllianceSet = new Set();
-    const _knownFriendlyGuildsAcc = new Set(friendlyGuilds);
-    if (friendlyGuilds.length) {
-        for (const [, d] of Object.entries(lootedByPlayer)) {
-            if (d.alliance && friendlyGuilds.indexOf(d.guild) !== -1) _friendlyAllianceSet.add(d.alliance);
-        }
-        if (_friendlyAllianceSet.size > 0) {
-            for (const [, d] of Object.entries(lootedByPlayer)) {
-                if (d.guild && d.alliance && _friendlyAllianceSet.has(d.alliance)) _knownFriendlyGuildsAcc.add(d.guild);
-            }
-        }
-    }
+    // Explicit guild selection is AUTHORITATIVE: when the user picks specific guilds
+    // in the Friendly-guilds control, only players in exactly those guilds are held
+    // accountable. We deliberately do NOT auto-expand to allied guilds — an alliance-
+    // mate guild the user didn't pick (e.g. an "avoid" guild that happens to share the
+    // alliance) must stay an enemy. Unguilded players are not auto-friendly either:
+    // an explicit pick means "these guilds and no one else".
+    const _selectedGuildSet = new Set(friendlyGuilds);
 
     // Single source of truth for "is this player on our side (held accountable)?".
     // friendlyGuilds empty => exact original auto-detect logic (alliance-or-primaryGuild),
     // so 0/1-guild behavior is byte-for-byte unchanged.
     const isFriendly = (data) => {
         if (friendlyGuilds.length) {
-            if (!data.guild) return true;
-            if (_knownFriendlyGuildsAcc.has(data.guild)) return true;
-            if (data.alliance && _friendlyAllianceSet.has(data.alliance)) return true;
-            return false;
+            return _selectedGuildSet.has(data.guild);
         }
         return primaryAlliance && data.alliance
             ? data.alliance === primaryAlliance
@@ -14270,6 +14278,31 @@ async function runAccountabilityCheck(opts = {}) {
             const lostQty = lostByDeath[name]?.[itemId] || 0;
             const effective = Math.max(0, qty - lostQty);
             if (effective > 0) totalLootedPerItem[itemId] = (totalLootedPerItem[itemId] || 0) + effective;
+        }
+    }
+
+    // Step 1b (per-player 'self' mode): the capture snapshot is a COUNT with no
+    // attribution, so when the chest log already credits a specific depositor for an
+    // item, those units must NOT also be split proportionally onto someone else.
+    // Pre-compute, per item: how many units the log has already claimed for a looter
+    // (loggedCreditPerItem) and how much loot is held by looters the log doesn't cover
+    // (unloggedLootedPerItem). The self-mode fallback below then splits only the
+    // capture's UNCLAIMED remainder across only the unlogged looters — so a teammate's
+    // logged deposit can't double-cover a non-depositor for the same physical item.
+    const loggedCreditPerItem = {};
+    const unloggedLootedPerItem = {};
+    for (const [name, data] of Object.entries(lootedByPlayer)) {
+        if (!isFriendly(data)) continue;
+        for (const [itemId, qty] of Object.entries(data.items)) {
+            const lostQty = lostByDeath[name]?.[itemId] || 0;
+            const effective = Math.max(0, qty - lostQty);
+            if (effective <= 0) continue;
+            const selfQty = chestLogDeposits[name] ? (chestLogDeposits[name][itemId] || 0) : 0;
+            if (selfQty > 0) {
+                loggedCreditPerItem[itemId] = (loggedCreditPerItem[itemId] || 0) + Math.min(effective, selfQty);
+            } else {
+                unloggedLootedPerItem[itemId] = (unloggedLootedPerItem[itemId] || 0) + effective;
+            }
         }
     }
 
@@ -14293,14 +14326,19 @@ async function runAccountabilityCheck(opts = {}) {
 
                 if (_accDepositMode === 'self') {
                     // Strict per-player: only loot YOU deposited counts. Chest-log self-row is
-                    // authoritative; otherwise fall back to the proportional capture snapshot.
+                    // authoritative; otherwise fall back to the capture snapshot — but only the
+                    // units the chest log hasn't already credited to a specific depositor, split
+                    // across only the looters the log doesn't cover. This makes the chest log the
+                    // tiebreaker: if a teammate's logged deposit accounts for the item in the
+                    // chest, a non-depositor who also looted it is correctly flagged missing
+                    // instead of being covered by the same physical item.
                     verifiedQty = selfQty;
                     if (selfQty > 0) {
                         inChest = Math.min(effectiveQty, selfQty);
                     } else {
-                        const totalForItem = totalLootedPerItem[itemId] || 0;
-                        const depositedForItem = deposited[itemId] || 0;
-                        const share = totalForItem > 0 ? (effectiveQty / totalForItem) * depositedForItem : 0;
+                        const leftoverCapture = Math.max(0, (deposited[itemId] || 0) - (loggedCreditPerItem[itemId] || 0));
+                        const unloggedTotal = unloggedLootedPerItem[itemId] || 0;
+                        const share = unloggedTotal > 0 ? (effectiveQty / unloggedTotal) * Math.min(leftoverCapture, unloggedTotal) : 0;
                         inChest = Math.min(effectiveQty, Math.round(share));
                     }
                     verified = selfQty > 0;

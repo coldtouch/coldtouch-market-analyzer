@@ -2342,6 +2342,15 @@
                     <div id="changelog-wrapper" style="max-height: 500px; overflow-y: auto; position: relative;">
                     <div class="changelog-list">
                         <div class="changelog-entry">
+                            <div class="changelog-date">June 25, 2026</div>
+                            <div class="changelog-title">Accountability: exact guild filter, chest-log tiebreaker, cleaner state</div>
+                            <ul>
+                                <li><strong>Picked guilds are now exact.</strong> Selecting specific guilds in the Friendly-guilds control holds <em>only</em> those guilds accountable. It used to silently widen the pick to every guild in the same alliance, so an alliance-mate guild you didn't choose leaked in as friendly and wasn't hidden. Players with no captured guild aren't auto-friendly anymore either.</li>
+                                <li><strong>Chest log breaks the tie in 👤 Per-player mode.</strong> When two players loot the same item and only one deposits, the capture snapshot (just a count) used to credit both. Now a logged deposit is matched to its actual depositor first, and only the leftover is shared across un-logged looters — so the depositor is ✓ verified and the slacker is correctly flagged missing.</li>
+                                <li><strong>Cleaner state.</strong> Uploading a new file, or leaving the Loot Logger tab and coming back, now clears the previous accountability result instead of leaving it lingering.</li>
+                            </ul>
+                        </div>
+                        <div class="changelog-entry">
                             <div class="changelog-date">June 23, 2026</div>
                             <div class="changelog-title">Accountability: "deposited by anyone" mode + wider deposit window</div>
                             <ul>
@@ -4900,7 +4909,7 @@
     <script src="/zonemap.js"></script>
     <script src="/lootlogger-core.js"></script>
     <script src="/crafting-core.js"></script>
-    <script src="/app.js?v=147"></script>
+    <script src="/app.js?v=148"></script>
     <script>if('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js', {scope: '/', updateViaCache: 'none'}).catch(()=>{});</script><!-- FE-H3 -->
 </body>
 
