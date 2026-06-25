@@ -7856,19 +7856,27 @@ ls -t "$BACKUP_DIR"/db-*.sqlite.gz 2>/dev/null | tail -n +3 | xargs -r rm -f
 # Drop any stray uncompressed copies.
 ls "$BACKUP_DIR"/db-*.sqlite 2>/dev/null | grep -vE '\\.gz$' | xargs -r rm -f
 """
-    b64_backup_script = base64.b64encode(backup_script.encode()).decode()
-    run_wait(f"echo '{b64_backup_script}' | base64 -d > /usr/local/sbin/albion-db-backup.sh && chmod 755 /usr/local/sbin/albion-db-backup.sh")
+    if os.environ.get("ENABLE_DB_BACKUP_CRON") == "1":
+        b64_backup_script = base64.b64encode(backup_script.encode()).decode()
+        run_wait(f"echo '{b64_backup_script}' | base64 -d > /usr/local/sbin/albion-db-backup.sh && chmod 755 /usr/local/sbin/albion-db-backup.sh")
 
-    # 2026-06-19: reduced to ONCE daily at 03:17 (deep-night EU, lowest traffic). On the current
-    # ~30 GB DB the 2h VACUUM-INTO backup grows the WAL to ~5 GB; checkpointing that WAL afterward
-    # can block the single Node event loop (a 97s block tripped the watchdog on 2026-06-19). Until
-    # WAL checkpointing is moved off the request event loop (Phase 4 worker isolation), keep the
-    # backup to one low-traffic run/day. Restore twice-daily once Phase 4 makes checkpoints non-blocking.
-    backup_cron = """# Albion SaaS DB backup — once daily (03:17 deep-night), keep last 2 compressed snapshots. Managed by deploy_saas.py.
+        # 2026-06-19: reduced to ONCE daily at 03:17 (deep-night EU, lowest traffic). On the current
+        # ~30 GB DB the 2h VACUUM-INTO backup grows the WAL to ~5 GB; checkpointing that WAL afterward
+        # can block the single Node event loop (a 97s block tripped the watchdog on 2026-06-19). Until
+        # WAL checkpointing is moved off the request event loop (Phase 4 worker isolation), keep the
+        # backup to one low-traffic run/day. Restore twice-daily once Phase 4 makes checkpoints non-blocking.
+        backup_cron = """# Albion SaaS DB backup — once daily (03:17 deep-night), keep last 2 compressed snapshots. Managed by deploy_saas.py.
 17 3 * * * root /usr/local/sbin/albion-db-backup.sh >>/var/log/albion-backup.log 2>&1
 """
-    b64_cron = base64.b64encode(backup_cron.encode()).decode()
-    run_wait(f"echo '{b64_cron}' | base64 -d > /etc/cron.d/albion-backup && chmod 644 /etc/cron.d/albion-backup")
+        b64_cron = base64.b64encode(backup_cron.encode()).decode()
+        run_wait(f"echo '{b64_cron}' | base64 -d > /etc/cron.d/albion-backup && chmod 644 /etc/cron.d/albion-backup")
+    else:
+        # 2026-06-25: Contabo Auto Backup (off-box, daily, keeps 10 snapshots) is now the backup of
+        # record, so the local VACUUM-INTO backup cron is retired. On the bloated DB its post-backup
+        # WAL checkpoint was itself a nightly event-loop wedge trigger. Deploy removes the cron file.
+        # Set ENABLE_DB_BACKUP_CRON=1 to restore the local backup.
+        run_wait("rm -f /etc/cron.d/albion-backup", check=False)
+        print("Local DB backup cron disabled — Contabo Auto Backup is the backup of record. Set ENABLE_DB_BACKUP_CRON=1 to re-enable.")
 
     run_wait("systemctl daemon-reload")
     run_wait("systemctl enable albion-saas")
