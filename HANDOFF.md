@@ -33,11 +33,14 @@ All were already fixed in commit `3296a97` (June 23) but that deploy never reach
 2. Share broken after log-only check → gate loosened
 3. Chest-log item count duplicates → dedup by content signature (`_chestLogContentSig`)
 
-### Pending actions
-- [ ] **Delete `database.sqlite.bloated`** (37 GB) — awaiting user OK
-- [ ] **Delete `db-20260622` backup** (5.8 GB) — optional, user's call
-- [ ] **Raise `COMPACTION_EMERG_GB` to 28 GB** — prevents permanent emergency mode on healthy DB
-- [ ] **Clean up `backend.js.bak*` files** (May–Jun, ~3 MB total) — trivial
+### Actions taken (2026-06-27 ~06:10 CEST)
+- [x] **Deleted `database.sqlite.bloated`** (37 GB freed) — prune rollback no longer available
+- [x] **Deleted `db-20260622` backup** (5.8 GB freed) — Jun 24 backup retained
+- [x] **Raised `COMPACTION_EMERG_GB` from 20 → 28** — set in VPS `.env` + local secrets `.env`; takes effect next janitor run (~06:46 CEST), no service restart needed
+- **Disk after cleanup: 37 GB / 96 GB = 38%** (was 79 GB / 82%)
+
+### Still pending
+- [ ] **Clean up `backend.js.bak*` files** (May–Jun, ~3 MB total) — trivial, deferred
 
 ---
 
