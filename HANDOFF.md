@@ -1,12 +1,47 @@
 # Albion Market Analyzer — Project Handoff
 
-> **Last updated:** 2026-04-18
+> **Last updated:** 2026-06-27
 > **Author:** Coldtouch (yuvalvilensky@gmail.com)
 > **Purpose:** Everything a new session needs to continue development without re-discovering context.
 
 ---
 
-## 0. Latest Session — April 18, 2026 — User request batch (Live Flips + Market Browser + Loot Logger redesign)
+## 0. Latest Session — 2026-06-27 — DB prune + full deploy + disk health investigation
+
+### What happened
+- **Site was DOWN** because `prune_averages.sh` (the DB janitor) had stopped `albion-saas` at 21:00 CEST for offline compaction. Process completed at 23:35 CEST (quick_check=ok, atomic swap done). Service restarted.
+- **37-version deploy gap discovered**: VPS was running `v145` (May 21). All accountability bug fixes committed June 23–25 were never deployed. Ran `python deploy_saas.py` → now on `v149` / SW `v184`.
+- **DB compacted**: `price_averages` 139M → 89M rows, 37 GB → 22 GB. Original preserved as `database.sqlite.bloated` (37 GB) for rollback — **NOT YET DELETED**.
+
+### Current disk state (as of 2026-06-27 ~06:00 CEST)
+- `/` filesystem: **79 GB / 96 GB used (82%)**
+- Disk breakdown in `/opt/albion-saas/`:
+  - `database.sqlite.bloated` — **37 GB** ← **primary cause of disk alert; safe to delete, user confirmation pending**
+  - `database.sqlite` — 23 GB (live, growing at ~3.5M rows/day, normal)
+  - `backups/` — 12 GB (db-20260622 = 5.8 GB, db-20260624 = 6.2 GB)
+  - WAL — 64 MB (healthy)
+- **Deleting `database.sqlite.bloated` alone frees 37 GB → disk drops to ~44%**
+
+### Janitor (albion-db-compaction.timer) status
+- Running on schedule ✅ — fires every 2h, 3 successful runs since midnight (status=0 each)
+- Currently deleting very little per run (100–300 rows) because the 90-day daily cap hasn't kicked in yet (service < 90 days old; April data ages out ~July 1)
+- **Known issue:** `COMPACTION_EMERG_GB` defaults to 20 GB but compact DB is naturally 22 GB — janitor runs in permanent "emergency mode" (1-day raw retention instead of 7-day). Harmless today but threshold should be raised to ~28 GB.
+
+### Three accountability bugs (original task — resolved by deploy)
+All were already fixed in commit `3296a97` (June 23) but that deploy never reached the VPS:
+1. Duplicate guild selector → removed `acc-result-guild` select
+2. Share broken after log-only check → gate loosened
+3. Chest-log item count duplicates → dedup by content signature (`_chestLogContentSig`)
+
+### Pending actions
+- [ ] **Delete `database.sqlite.bloated`** (37 GB) — awaiting user OK
+- [ ] **Delete `db-20260622` backup** (5.8 GB) — optional, user's call
+- [ ] **Raise `COMPACTION_EMERG_GB` to 28 GB** — prevents permanent emergency mode on healthy DB
+- [ ] **Clean up `backend.js.bak*` files** (May–Jun, ~3 MB total) — trivial
+
+---
+
+## 1. Previous Session — April 18, 2026 — User request batch (Live Flips + Market Browser + Loot Logger redesign)
 
 Processed the user's list of 12 items from the Loot Logger / Market Browser / Live Flips area. All CRITICAL items shipped.
 
