@@ -2,6 +2,10 @@
 
 All notable changes to the Coldtouch Market Analyzer will be documented in this file.
 
+### 2026-06-29 — Item-map refresh for the June 29 game update (item-ID drift fix)
+
+- **Corrected item-ID → name resolution after the 2026-06-29 game patch.** The patch added 9 new (untradeable cosmetic) items and inserted GvG season-30 avatars mid-list, which shifted ~1,200 high-index entries (dungeon tokens, hellgate/corrupted maps, GvG avatars). All real gear, armor, resources, food, potions, artifacts and mounts (item indices 1–10604) were **unchanged** — this was a content patch, not a protocol/ID reshuffle like the April update. Regenerated `itemmap.json` (11,178 entries) and `weightmap.json` (10,689 entries) against the new dump; `itemweights.json` is name-keyed and needed no change. Deployed to the VPS so the backend's canonical re-resolution fixes naming for **all** clients regardless of their local map version. Opcode/packet capture unaffected (verified separately).
+
 ### 2026-06-25 — Accountability: editable shares (Option B — editor link)
 
 - **A shared report can now be refreshed as late deposits land.** Sharing a report now produces **two** links: a **👁 view link** (read-only, share with anyone) and a private **✏️ editor link** (give only to trusted officers). Opening the editor link puts the report in **Editor mode** — the officer pastes/captures the newer in-game chest log, hits Re-run check, then **⟳ Update this share**, and the *same* view link now shows the latest deposits for everyone. No account needed: the edit token in the link is the authorization.

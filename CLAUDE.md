@@ -120,7 +120,17 @@
 
 ## Recent Session History
 
-### June 23 (continued) — Accountability: multi-guild chip, enemy-color fix, withdrawal audit — Latest
+### June 29 — Game-update audit: item-ID drift fix + deploy (opcode check deferred) — Latest
+
+User: "there was a game update… check the opcodes and our capturing work and nothing else broke." Audited the 2026-06-29 patch.
+
+- **Diagnosis: content patch, NOT a protocol patch.** Diffed `ao-bin-dumps/formatted/items.txt` old (20260504) vs new (`202606029`, pulled today). **Item indices 1–10604 are byte-identical** — every weapon/armor/resource/food/potion/artifact/mount unchanged. Only the cosmetic tail (≥10605) changed: 9 new items (all untradeable `UNIQUE_UNLOCK_SKIN_*_2026` / `_TELLAFRIEND` / GvG season-30 avatars, already filtered by `IsNonTradeableItem`), plus ~1,200 dungeon-token / hellgate-map / corrupted-map entries shifted a few positions by the avatar inserts. Nothing like the April Protocol18 "75% shifted +1" disaster.
+- **Maps regenerated (safe transform):** kept the shipped itemmap's exact 11,178-key set + order (preserving its idiosyncratic ~900-line filter), swapped each value to the live dump's name; rebuilt `weightmap.json` from the verified invariant `weightmap[i] == itemweights[itemmap[i]]` (10,689 keys). `itemweights.json` is name-keyed → immune, untouched. Validation: 0 itemmap mismatches vs live game, 0 weightmap invariant violations, client==site itemmap (md5). Scripts in scratchpad (`regen_maps.py` / `validate_maps.py`). Go client `go build ./...` + `go test ./client/` clean (incl. the uncommitted sign-based chest-log WIP).
+- **Deployed** `20260629-135608`: backend syntax OK, corrected itemmap (384,546 B) + weightmap (119,744 B) live at `/opt/albion-saas/` for canonical re-resolution → fixes naming for ALL clients regardless of their local map. Verified served itemmap md5-matches local; leaderboard + homepage HTTP 200 post-restart.
+- **Committed** itemmap.json + CHANGELOG.md + CLAUDE.md (website), itemmap.json + weightmap.json (client). Left the unrelated mid-June client WIP (`operation_get_chest_logs.go`, `trade_tracker.go`, `zone_debug.go`) untouched.
+- **Deferred (user will do later): in-game opcode confirm** — see "In-Game Testing Required". Opcodes very likely fine (content patch), but unverifiable offline.
+
+### June 23 (continued) — Accountability: multi-guild chip, enemy-color fix, withdrawal audit
 
 **Commit `f168fad`, SW v175, server `20260623-031559`:**
 
@@ -629,6 +639,7 @@ The structural fix the May 1 perma-fix was a band-aid for. The May 1 work mitiga
   - **All context preserved**: code in working tree (untracked files survive indefinitely), reasoning in `2026-04-26-trade-recon-session.tmp` (full reverse-engineering session), test logs in `D:\Coding\albiondata-client-custom\logs\trade-debug-*.log`.
 
 ### In-Game Testing Required
+- [ ] **⏳ REMINDER (2026-06-29, user will do later): confirm opcodes after the June 29 game update.** Item-ID drift was already checked + fixed + deployed (content patch, indices 1–10604 unchanged; itemmap/weightmap regenerated). Opcodes almost certainly did NOT shift (content patch, not a protocol bump — the April Protocol18 +6 ops / +2 events handling in `decode.go` should still hold), but this needs a live confirm: run `run-discover.bat` (as admin), do one loot pickup + open a chest's **Log** tab, then check `logs/` — capture should still fire and nothing should land in `logs/unknown-events-*.log`. If capture goes silent → protocol bumped → re-shift opcodes in `client/decode.go`.
 - [ ] **Device Auth end-to-end test** — device code flow from Go client to browser approval
 - [ ] **Verify negative item ID mappings** — IDs -1 to -9 are guesses. Also discovered IDs far beyond -9: -54, -57, -60, etc.
 - [ ] **Castle chest + Outpost chest capture** — test whether existing chest capture handlers (BankVaultInfo / GuildVaultInfo / container events) fire for castle and outpost chests, or if those use different opcodes. If they don't fire, capture the relevant opcodes with Wireshark/debug logging and add handlers.
