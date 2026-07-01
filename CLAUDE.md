@@ -1,4 +1,4 @@
-# Coldtouch Market Analyzer — Project Context
+# Albion Market Analyzer — Project Context (formerly "Coldtouch Market Analyzer", rebranded 2026-07-02)
 
 > **Purpose:** This file gives any new Claude session instant context about the project.
 > **INSTRUCTIONS FOR EVERY SESSION:**
@@ -88,7 +88,7 @@
 
 ### Trading Group
 - **Transport Routes** — bulk haul planner with weight/slots/budget, live + historical modes, sell strategy toggle, freshness filter, copy shopping list
-- **Live Flips** — real-time flip detection via NATS, city/type filters, sound + desktop notifications
+- **Live Flips** — BENCHED 2026-07-02 (unused; nav entry commented out, code kept; live-sync WS unaffected). Was: real-time flip detection via NATS, city/type filters, sound + desktop notifications
 - **Portfolio Tracker** — FIFO cost basis, realized P/L, CSV export (localStorage)
 - **Loot Buyer** — 3-phase system:
   - Phase 1: Buy Decision Helper (verdict: buy/maybe/skip, risk badges, margin %)
@@ -120,7 +120,18 @@
 
 ## Recent Session History
 
-### June 29 — Game-update audit: item-ID drift fix + deploy (opcode check deferred) — Latest
+### July 2 — Rebrand to "Albion Market Analyzer" + new header, Live Flips benched, full dual-repo audit — Latest
+
+User asked for: full audit (client + website), rebrand header from "Coldtouch Market Analyzer" to "Albion Market Analyzer" with a nice design, crafting/refining overhaul assessment with web inspiration, retire the unused Live Flips tracker, and UX improvement ideas.
+
+- **Rebrand shipped.** New header: gold shield-and-rising-chart logo mark (SVG, also the new favicon), left-aligned brand lockup — "ALBION" in animated gold gradient + "MARKET ANALYZER" white, tagline "Live market intelligence for Albion Online", login/profile on the right (`.brand-*` classes replace `.sleek-title`/`.header-subtitle`). Updated: title/OG/Twitter/JSON-LD metadata, manifest.json (name + theme_color #0a0a0f), landing logo+title, footer, app.js dynamic tab title, deploy_saas.py brand strings (Discord embed footers, email subjects, SMTP_FROM). Kept: repo name, Discord bot name, `coldtouch-` SW cache prefix (cleanup is name-based, safe). **Follow-up: og-image.png (OG card + PWA icon) still has old branding — needs raster regen.**
+- **Live Flips benched** (same pattern as Mounts/Community Builds): nav button commented out in index.html, JSON-LD featureList entry removed, landing "live snipes" copy replaced. Code kept for revival; `initLiveSync` WS is shared with price sync and unaffected; flip broadcasts degrade safely (null-guarded tab lookup).
+- **Audit (delta since June 18) → `FULL_AUDIT_2026-07-02.md`.** All green: 11/11 tests, CI green, npm audit clean, Go client build/vet/test clean. Still open from June plan: single-process (wal_autocheckpoint=500 still in main, Phase 4 worker never shipped — severity down since local backup cron retired), root systemd user, CSP report-only, backend in Python string, 4 Dependabot majors open since June 18 (hold express 5 until route tests exist; helmet/bcryptjs/express-rate-limit reviewable). innerHTML sites 308→313.
+- **Crafting/refining assessment:** feature work from CRAFTING_PLAN.md is ~done through Phase 4 (Top-N, Refining Lab 3-mode, heatmap, sub-recipe tree, inverse calc, Quality EV all live). Gap vs competitors (AFM, Albion Codex) is workflow: recommended order — (1) shared Crafter Profile across all 6 tabs, (2) merge Profits/Top-N/Refining into one "Craft Studio" (mockup 04 direction), (3) journal income in profit math, (4) Discover→Plan→Craft Run pipeline, (5) price-source strategy toggle, (6) selling list. Data gate: mace/hammer recipes.json audit still needs in-game confirm.
+- **UX backlog** (in audit doc): nav diet (Game Tools has 1 tab), first-load perf, Ctrl-K global item search, command-center dashboard (mockup 01), first-run tour, og-image refresh.
+- **Deployed + committed** (index.html, style.css, app.js, sw.js, manifest.json, deploy_saas.py, CHANGELOG.md, CLAUDE.md, FULL_AUDIT_2026-07-02.md).
+
+### June 29 — Game-update audit: item-ID drift fix + deploy (opcode check deferred)
 
 User: "there was a game update… check the opcodes and our capturing work and nothing else broke." Audited the 2026-06-29 patch.
 

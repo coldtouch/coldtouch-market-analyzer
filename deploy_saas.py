@@ -296,7 +296,7 @@ const SMTP_PORT = parseInt(process.env.SMTP_PORT || '587');
 const SMTP_USER = process.env.SMTP_USER || '';
 const SMTP_PASS = process.env.SMTP_PASS || '';
 const SMTP_FROM_RAW = process.env.SMTP_FROM || 'noreply@albionaitool.xyz';
-const SMTP_FROM = SMTP_FROM_RAW.includes('<') ? SMTP_FROM_RAW : '"Coldtouch Market Analyzer" <' + SMTP_FROM_RAW + '>';
+const SMTP_FROM = SMTP_FROM_RAW.includes('<') ? SMTP_FROM_RAW : '"Albion Market Analyzer" <' + SMTP_FROM_RAW + '>';
 
 let mailTransporter = null;
 if (SMTP_HOST && SMTP_USER) {
@@ -1099,7 +1099,7 @@ client.on('interactionCreate', async interaction => {
           title: 'Registration Required',
           color: 0xffa500,
           description: 'You need a registered account on the website to use alerts.\\n\\n**How to set up:**\\n1. Visit [albionaitool.xyz](https://albionaitool.xyz/) and create an account\\n2. Either login with Discord or create an email account and link your Discord\\n3. Come back here and run `/setup_alerts` again',
-          footer: { text: 'Coldtouch Market Analyzer • Free registration required' }
+          footer: { text: 'Albion Market Analyzer • Free registration required' }
         }] });
       }
 
@@ -1120,7 +1120,7 @@ client.on('interactionCreate', async interaction => {
           title: 'Alerts Configured',
           color: 0x00ff00,
           fields,
-          footer: { text: 'Coldtouch Market Analyzer • Use /set_confidence to change threshold later' }
+          footer: { text: 'Albion Market Analyzer • Use /set_confidence to change threshold later' }
         }]});
       });
     });
@@ -1133,7 +1133,7 @@ client.on('interactionCreate', async interaction => {
         title: 'Alerts Stopped',
         color: 0xff4444,
         description: `Alerts have been removed from <#${interaction.channelId}>.`,
-        footer: { text: 'Coldtouch Market Analyzer' }
+        footer: { text: 'Albion Market Analyzer' }
       }]});
     });
   }
@@ -1146,7 +1146,7 @@ client.on('interactionCreate', async interaction => {
           title: 'No Active Alerts',
           color: 0x888888,
           description: 'Use `/setup_alerts` to configure alerts in a channel.',
-          footer: { text: 'Coldtouch Market Analyzer' }
+          footer: { text: 'Albion Market Analyzer' }
         }] });
       }
       const lines = rows.map(r => {
@@ -1158,7 +1158,7 @@ client.on('interactionCreate', async interaction => {
         title: `Active Alerts (${rows.length})`,
         color: 0xffd700,
         description: lines.join('\\n'),
-        footer: { text: 'Coldtouch Market Analyzer • Use /set_confidence to filter by reliability' }
+        footer: { text: 'Albion Market Analyzer • Use /set_confidence to filter by reliability' }
       }] });
     });
   }
@@ -1180,7 +1180,7 @@ client.on('interactionCreate', async interaction => {
           { name: 'Min Confidence', value: label, inline: true }
         ],
         description: minConf > 0 ? 'Alerts will only fire for routes with historical confidence at or above this level.' : 'All profitable alerts will be sent regardless of historical confidence.',
-        footer: { text: 'Coldtouch Market Analyzer' }
+        footer: { text: 'Albion Market Analyzer' }
       }]});
     });
   }
@@ -1207,7 +1207,7 @@ client.on('interactionCreate', async interaction => {
           { name: 'Last Alert', value: lastAlertTime ? `<t:${Math.floor(lastAlertTime/1000)}:R>` : 'None yet', inline: true },
           { name: 'Market Scan', value: cacheTimestamp ? `${cacheItemCount.toLocaleString()} entries, last scan <t:${Math.floor(new Date(cacheTimestamp).getTime()/1000)}:R>` : 'Pending...', inline: false }
         ],
-        footer: { text: 'Coldtouch Market Analyzer' }
+        footer: { text: 'Albion Market Analyzer' }
       }]});
     });
   }
@@ -1285,7 +1285,7 @@ client.on('interactionCreate', async interaction => {
         color: 0x00ff00,
         thumbnail: { url: `https://render.albiononline.com/v1/item/${matchedId}.png` },
         description: priceLines || 'No price data available.',
-        footer: { text: `+1 scan contribution • Coldtouch Market Analyzer` }
+        footer: { text: `+1 scan contribution • Albion Market Analyzer` }
       }]});
     } catch (e) {
       interaction.editReply({ content: `Failed to scan: ${e.message}` });
@@ -1300,7 +1300,7 @@ client.on('interactionCreate', async interaction => {
           title: 'Leaderboard',
           color: 0xffd700,
           description: 'No contributions yet. Use `/scan` or refresh items on the website to start!',
-          footer: { text: 'Coldtouch Market Analyzer' }
+          footer: { text: 'Albion Market Analyzer' }
         }]});
       }
       const tierEmoji = { diamond: '💎', gold: '🥇', silver: '🥈', bronze: '🥉' };
@@ -1326,7 +1326,7 @@ client.on('interactionCreate', async interaction => {
           title: 'Your Stats',
           color: 0x888888,
           description: 'No scanning activity yet. Use `/scan` or refresh items on the website to get started!',
-          footer: { text: 'Coldtouch Market Analyzer' }
+          footer: { text: 'Albion Market Analyzer' }
         }] });
       }
       const tierEmoji = { diamond: '💎', gold: '🥇', silver: '🥈', bronze: '🥉' };
@@ -1347,7 +1347,7 @@ client.on('interactionCreate', async interaction => {
             { name: 'Total Scans', value: row.scans_total.toString(), inline: true },
             { name: 'Progress', value: progressLine, inline: false }
           ],
-          footer: { text: 'Coldtouch Market Analyzer' }
+          footer: { text: 'Albion Market Analyzer' }
         }] });
       });
     });
@@ -1981,7 +1981,7 @@ app.post('/api/register', registerLimiter, async (req, res) => {
           const verifyUrl = `https://${domain}/api/verify-email?token=${verifyToken}`;
           mailTransporter.sendMail({
             from: SMTP_FROM, to: emailLower,
-            subject: 'Verify your Coldtouch Market Analyzer account',
+            subject: 'Verify your Albion Market Analyzer account',
             html: `<div style="font-family:sans-serif;max-width:500px;margin:0 auto;padding:20px;background:#1a1a26;color:#e8e8f0;border-radius:8px"><h2 style="color:#d4af37">Welcome, ${escHtml(trimUser)}!</h2><p>Click below to verify your email address:</p><a href="${verifyUrl}" style="display:inline-block;padding:12px 24px;background:#d4af37;color:#000;text-decoration:none;border-radius:6px;font-weight:bold">Verify Email</a><p style="color:#8888a0;font-size:12px;margin-top:20px">This link expires in 24 hours. If you didn't create this account, ignore this email.</p></div>`
           }).catch(e => console.error('[SMTP] Verification email failed:', e.message));
         }
@@ -2079,7 +2079,7 @@ app.post('/api/resend-verification', registerLimiter, (req, res) => {
     const verifyUrl = `https://${domain}/api/verify-email?token=${newToken}`;
     mailTransporter.sendMail({
       from: SMTP_FROM, to: user.email,
-      subject: 'Verify your Coldtouch Market Analyzer account',
+      subject: 'Verify your Albion Market Analyzer account',
       html: `<div style="font-family:sans-serif;max-width:500px;margin:0 auto;padding:20px;background:#1a1a26;color:#e8e8f0;border-radius:8px"><h2 style="color:#d4af37">Hi ${user.username}!</h2><p>Click below to verify your email address:</p><a href="${verifyUrl}" style="display:inline-block;padding:12px 24px;background:#d4af37;color:#000;text-decoration:none;border-radius:6px;font-weight:bold">Verify Email</a><p style="color:#8888a0;font-size:12px;margin-top:20px">This link expires in 24 hours.</p></div>`
     }).then(() => res.json({ success: true, message: 'Verification email sent.' }))
       .catch(e => { console.error('[SMTP] Resend failed:', e.message); res.status(500).json({ error: 'Failed to send email.' }); });
@@ -2138,7 +2138,7 @@ app.post('/api/forgot-password', registerLimiter, (req, res) => {
         const resetUrl = SITE_URL + '?reset=' + token;
         mailTransporter.sendMail({
           from: SMTP_FROM, to: emailLower,
-          subject: 'Reset your Coldtouch Market Analyzer password',
+          subject: 'Reset your Albion Market Analyzer password',
           html: '<div style="font-family:sans-serif;max-width:500px;margin:0 auto;padding:20px;background:#1a1a26;color:#e8e8f0;border-radius:8px"><h2 style="color:#d4af37">Password Reset</h2><p>Hi ' + escHtml(user.username) + ', click below to reset your password:</p><a href="' + resetUrl + '" style="display:inline-block;padding:12px 24px;background:#d4af37;color:#000;text-decoration:none;border-radius:6px;font-weight:bold">Reset Password</a><p style="color:#8888a0;font-size:12px;margin-top:20px">This link expires in 1 hour. If you did not request this, ignore this email.</p></div>'
         }).catch(e => console.error('[SMTP] Password reset email failed:', e.message));
       }
@@ -5861,7 +5861,7 @@ function checkAndAlert(id, q) {
             color: embedColor,
             thumbnail: { url: thumbnailUrl },
             fields,
-            footer: { text: `Coldtouch Market Analyzer` },
+            footer: { text: `Albion Market Analyzer` },
             timestamp: new Date().toISOString(),
             url: SITE_URL
           }]

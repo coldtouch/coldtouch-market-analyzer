@@ -1,5 +1,5 @@
 // ============================================================
-// Coldtouch Market Analyzer – Main Application
+// Albion Market Analyzer – Main Application
 // ============================================================
 
 const API_URLS = {
@@ -1064,7 +1064,7 @@ function initTabs() {
                 syphon: 'Guild Syphon Check',
             };
             const tabLabel = TAB_TITLES[currentTab];
-            if (tabLabel) document.title = `${tabLabel} \u2014 Coldtouch Market Analyzer`;
+            if (tabLabel) document.title = `${tabLabel} \u2014 Albion Market Analyzer`;
 
             // Update URL with current tab (shareable deep link)
             if (!_suppressRouteUpdate) replaceRouteForTab(currentTab);

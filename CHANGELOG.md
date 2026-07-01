@@ -1,6 +1,13 @@
 # Changelog
 
-All notable changes to the Coldtouch Market Analyzer will be documented in this file.
+All notable changes to the Albion Market Analyzer will be documented in this file.
+
+### 2026-07-02 — Rebrand to "Albion Market Analyzer" + new header design; Live Flips benched
+
+- **The site is now "Albion Market Analyzer".** All user-facing branding switched from "Coldtouch Market Analyzer": page title, Open Graph / Twitter / JSON-LD metadata, PWA manifest, dynamic tab titles, Discord embed footers, and verification/reset email subjects. The GitHub repo name and Discord bot name are unchanged.
+- **New header design.** The centered shimmer title is replaced with a proper brand lockup: a gold shield-and-rising-chart logo mark (also the new favicon), "ALBION" in animated gold gradient + "MARKET ANALYZER" in white, and a "Live market intelligence for Albion Online" tagline. Left-aligned, compact, with the login/profile controls on the right. The landing page uses the same mark and name.
+- **Live Flips tab benched.** The real-time flip feed was unused, so its nav entry is retired for now (same treatment as Mounts Database / Community Builds — all code kept for revival). The underlying live-sync WebSocket is unaffected; it still powers live price sync.
+- **Full audit pass (site + Go client).** Both repos green: 11/11 tests, CI passing, `npm audit` clean, Go client builds/vets/tests clean. Findings and the crafting/refining overhaul plan captured in `FULL_AUDIT_2026-07-02.md`.
 
 ### 2026-06-29 — Item-map refresh for the June 29 game update (item-ID drift fix)
 
