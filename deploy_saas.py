@@ -66,6 +66,7 @@ FRONTEND_STATIC_FILES = [
     'itemweights.json',
     'itemmap.json',
     'og-image.png',
+    'icon-512.png',
     'robots.txt',
     'sitemap.xml',
 ]
